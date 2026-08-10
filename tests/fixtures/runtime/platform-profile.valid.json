@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0",
+  "platform": "opencode",
+  "generatedAt": "2026-08-10T08:00:00.000Z",
+  "agents": [
+    {
+      "id": "senior-qwen",
+      "tier": "senior",
+      "requestedModel": "gateway/qwen",
+      "resolvedModel": null,
+      "costWeight": 4,
+      "capabilities": ["review", "implementation"]
+    }
+  ],
+  "dispatch": { "managedMode": "background", "blockingPolicy": "reject" },
+  "operations": {
+    "spawn": { "supported": true, "tool": "task" },
+    "assign": { "supported": true, "tool": "task" },
+    "resume": { "supported": true, "tool": "session" },
+    "status": { "supported": true, "tool": "session.status" },
+    "stop": { "supported": true, "tool": "session.abort" },
+    "message": { "supported": false, "tool": null }
+  },
+  "limits": { "maxConcurrent": 5 },
+  "session": { "childSessions": true, "resume": true, "crossSessionProcessRecovery": false },
+  "ui": { "childNavigation": true, "splitView": false },
+  "degradations": [{ "code": "lead-relay", "description": "No direct subagent-to-subagent messaging" }],
+  "guides": [".team-work/platform/opencode/guides/team-work.md"]
+}

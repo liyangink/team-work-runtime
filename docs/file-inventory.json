@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "newImplementation": [
+    "AGENTS.md",
+    ".gitignore",
+    "CLAUDE.md",
+    "README.md",
+    "docs/file-inventory.json",
+    "docs/runtime-implementation-plan.md",
+    "docs/runtime-interface.md",
+    "docs/runtime-plugin-design.md",
+    "docs/runtime-roadmap.md",
+    "schemas/",
+    "tests/fixtures/runtime/",
+    "tests/repository-contract.test.mjs",
+    "tests/runtime-contract.test.mjs",
+    "tests/support/contract-validator.mjs"
+  ],
+  "sharedBuild": ["package.json", "package-lock.json"],
+  "planned": ["runtime/", "skills/workflow/", "skills/team-work/", "plugins/opencode/"],
+  "legacyArchive": ["archive/legacy-omo/", "archive/legacy-claude-code/"],
+  "rules": [
+    "New implementation code must not import or execute files under archive/.",
+    "Archive content is excluded from build and test discovery.",
+    "Update this inventory whenever a tracked implementation path is added, moved, or reclassified."
+  ]
+}

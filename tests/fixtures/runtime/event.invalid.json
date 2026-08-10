@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "event-001",
+  "taskId": "review-existing-code",
+  "type": "Work Submitted",
+  "actor": "senior-challenger",
+  "occurredAt": "yesterday",
+  "revision": -1,
+  "refs": [],
+  "sessionId": "platform-private"
+}

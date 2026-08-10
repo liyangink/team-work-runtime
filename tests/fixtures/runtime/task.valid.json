@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "taskId": "review-existing-code",
+  "title": "Review existing implementation",
+  "workflow": {
+    "id": "engineering",
+    "version": "1.0",
+    "path": ".team-work/workflows/engineering.json",
+    "digest": "sha256:0123456789abcdef"
+  },
+  "status": "active",
+  "stage": "code-review",
+  "entryStage": "code-review",
+  "revision": 0,
+  "spec": { "status": "not-started", "artifactRefs": [], "configDigest": "sha256:abcdef0123456789" },
+  "teamDecision": { "mode": "team", "reason": "Independent review requested" },
+  "gates": [],
+  "evidence": [],
+  "createdAt": "2026-08-10T08:00:00.000Z",
+  "updatedAt": "2026-08-10T08:00:00.000Z"
+}

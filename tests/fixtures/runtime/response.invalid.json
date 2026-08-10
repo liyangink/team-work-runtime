@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "apiVersion": "1.0",
+  "error": {
+    "code": "INTERNAL_ERROR",
+    "message": "Unexpected failure",
+    "retryable": false,
+    "blockers": [],
+    "remediation": []
+  }
+}

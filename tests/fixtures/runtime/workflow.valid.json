@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0",
+  "workflowId": "engineering",
+  "version": "1.0",
+  "initialStage": "research",
+  "stages": [
+    { "id": "research", "requiredInputs": [], "teamEvaluation": true, "terminal": false },
+    {
+      "id": "code-review",
+      "requiredInputs": [
+        { "kind": "source", "minCount": 1 },
+        { "kind": "review-scope", "minCount": 1 }
+      ],
+      "teamEvaluation": true,
+      "terminal": false
+    },
+    { "id": "finish", "requiredInputs": [], "teamEvaluation": false, "terminal": true }
+  ],
+  "transitions": [
+    { "from": "research", "outcome": "pass", "to": "code-review" },
+    { "from": "code-review", "outcome": "pass", "to": "finish" }
+  ],
+  "rollback": { "enabled": true, "requiresReason": true, "invalidatesLaterEvidence": true }
+}

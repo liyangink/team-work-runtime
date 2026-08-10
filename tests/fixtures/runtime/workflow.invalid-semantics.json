@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "workflowId": "broken",
+  "version": "1.0",
+  "initialStage": "missing",
+  "stages": [
+    { "id": "review", "requiredInputs": [], "teamEvaluation": true, "terminal": false },
+    { "id": "review", "requiredInputs": [], "teamEvaluation": true, "terminal": false },
+    { "id": "finish", "requiredInputs": [], "teamEvaluation": false, "terminal": true }
+  ],
+  "transitions": [
+    { "from": "review", "outcome": "pass", "to": "finish" },
+    { "from": "review", "outcome": "pass", "to": "unknown" },
+    { "from": "finish", "outcome": "pass", "to": "review" }
+  ],
+  "rollback": { "enabled": true, "requiresReason": true, "invalidatesLaterEvidence": true }
+}

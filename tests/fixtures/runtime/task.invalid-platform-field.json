@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "taskId": "review-existing-code",
+  "workflow": {
+    "id": "engineering",
+    "version": "1.0",
+    "path": ".team-work/workflows/engineering.json",
+    "digest": "sha256:0123456789abcdef"
+  },
+  "status": "active",
+  "stage": "code-review",
+  "entryStage": "code-review",
+  "revision": 0,
+  "gates": [],
+  "evidence": [],
+  "sessionId": "opencode-session-123",
+  "createdAt": "2026-08-10T08:00:00.000Z",
+  "updatedAt": "2026-08-10T08:00:00.000Z"
+}

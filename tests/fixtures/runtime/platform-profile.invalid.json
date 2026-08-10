@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "platform": "opencode",
+  "generatedAt": "2026-08-10T08:00:00.000Z",
+  "agents": [],
+  "dispatch": { "managedMode": "invalid", "blockingPolicy": "invalid" },
+  "operations": {},
+  "limits": { "maxConcurrent": 0 },
+  "session": {},
+  "ui": {},
+  "degradations": [],
+  "guides": []
+}

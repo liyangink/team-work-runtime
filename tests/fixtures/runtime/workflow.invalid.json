@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1.0",
+  "workflowId": "engineering",
+  "version": "1.0",
+  "initialStage": "research",
+  "stages": [],
+  "transitions": []
+}

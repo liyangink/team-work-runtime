@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "workItemId": "review-security",
+  "taskId": "review-existing-code",
+  "stage": "code-review",
+  "owner": "senior-challenger",
+  "status": "running",
+  "attempt": 0,
+  "attemptHistory": [],
+  "assignment": {
+    "scope": "Challenge security assumptions",
+    "doneWhen": [],
+    "artifactPaths": [],
+    "dependencies": []
+  },
+  "createdAt": "2026-08-10T08:00:00.000Z",
+  "updatedAt": "2026-08-10T08:00:00.000Z"
+}

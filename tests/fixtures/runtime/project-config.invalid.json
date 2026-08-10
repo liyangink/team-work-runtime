@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "workflow": {
+    "id": "engineering",
+    "version": "1.0",
+    "path": "../../outside.json",
+    "digest": "invalid"
+  },
+  "spec": {
+    "type": "openspec",
+    "skill": "openspec",
+    "root": "/absolute/openspec",
+    "status": "ready"
+  }
+}

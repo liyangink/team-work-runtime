@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { pathToFileURL } from "node:url"
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -56,7 +56,7 @@ async function atomicJson(target, value) {
 async function withLock(target, action) {
   await mkdir(path.dirname(target), { recursive: true })
   let handle
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
     try {
       handle = await open(target, "wx", 0o600)
       break
@@ -69,7 +69,13 @@ async function withLock(target, action) {
         const age = Date.now() - (await stat(target)).mtimeMs
         if (age < 5 * 60_000) throw failure("SESSION_MAPPING_LOCK_CORRUPT", "派发锁损坏且仍较新；请确认没有并发派发后再恢复")
       }
-      if (owner && processIsAlive(owner.pid)) throw failure("SESSION_MAPPING_LOCKED", "该 work item 正在派发，请稍后查询状态", { retryable: true })
+      if (owner && processIsAlive(owner.pid)) {
+        if (attempt < 24) {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          continue
+        }
+        throw failure("SESSION_MAPPING_LOCKED", "该 work item 正在更新，请稍后查询状态", { retryable: true })
+      }
       await rm(target, { force: true })
     }
   }
@@ -93,9 +99,32 @@ function processIsAlive(pid) {
   }
 }
 
+function errorSummary(value) {
+  if (typeof value === "string") return value.slice(0, 1000)
+  if (value?.message) return String(value.message).slice(0, 1000)
+  try {
+    return JSON.stringify(value).slice(0, 1000)
+  } catch {
+    return String(value).slice(0, 1000)
+  }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function eventFingerprint(value) {
+  return createHash("sha256").update(stableJson(value)).digest("hex")
+}
+
 export function createOpenCodeAdapter({ client, projectRoot, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
   if (!client?.session) throw failure("INVALID_CLIENT", "OpenCode client.session 不可用")
   const root = path.resolve(projectRoot)
+  const inFlightPlatformAudits = new Map()
 
   function mappingPath(taskId, workItemId) {
     return path.join(
@@ -183,6 +212,111 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
     })
   }
 
+  async function audit(mapping, eventType, reason) {
+    const result = await executeRuntime({
+      command: "event.record",
+      input: {
+        taskId: mapping.taskId,
+        eventType,
+        actor: "platform:opencode",
+        ...(reason ? { reason: errorSummary(reason) } : {}),
+        refs: [...new Set([mapping.workItemId, mapping.sessionId].filter(Boolean))],
+      },
+    })
+    runtimeData(result, "event.record")
+  }
+
+  async function auditSafe(mapping, eventType, reason) {
+    try {
+      await audit(mapping, eventType, reason)
+      return true
+    } catch {
+      // 审计是派发后的可恢复旁路；失败不得反向改变平台操作结果。
+      return false
+    }
+  }
+
+  async function updateMapping(taskId, workItemId, transform) {
+    const target = mappingPath(taskId, workItemId)
+    return withLock(`${target}.lock`, async () => {
+      const current = await readMapping(taskId, workItemId)
+      const next = transform(current)
+      if (next !== current) await atomicJson(target, next)
+      return next
+    })
+  }
+
+  async function markLost(mapping, reason) {
+    let ownsClaim = false
+    const claimed = await updateMapping(mapping.taskId, mapping.workItemId, (current) => {
+      const timestamp = now().toISOString()
+      const claimIsFresh = current.lostAuditClaimedAt
+        && new Date(timestamp).getTime() - new Date(current.lostAuditClaimedAt).getTime() < 60_000
+      ownsClaim = !current.lostAuditRecordedAt && !claimIsFresh
+      return {
+        ...current,
+        lostRecordedAt: current.lostRecordedAt ?? timestamp,
+        ...(ownsClaim ? { lostAuditClaimedAt: timestamp } : {}),
+        updatedAt: timestamp,
+      }
+    })
+    if (!ownsClaim) return claimed
+
+    const recorded = await auditSafe(claimed, "platform.session.lost", reason)
+    return updateMapping(mapping.taskId, mapping.workItemId, (current) => {
+      if (current.lostAuditClaimedAt !== claimed.lostAuditClaimedAt) return current
+      const next = { ...current, updatedAt: now().toISOString() }
+      delete next.lostAuditClaimedAt
+      if (recorded) {
+        next.lostAuditRecordedAt = next.updatedAt
+        delete next.lostAuditError
+      } else {
+        next.lostAuditError = "event.record failed; retry on the next lost observation"
+      }
+      return next
+    })
+  }
+
+  async function auditPlatformEventOnce(mapping, eventType, reason, identity) {
+    const fingerprint = eventFingerprint({ eventType, sessionId: mapping.sessionId, identity })
+    if (inFlightPlatformAudits.has(fingerprint)) return inFlightPlatformAudits.get(fingerprint)
+    const operation = (async () => {
+      let ownsClaim = false
+      const claimed = await updateMapping(mapping.taskId, mapping.workItemId, (current) => {
+        if (current.platformEventFingerprints?.includes(fingerprint)) return current
+        const timestamp = now().toISOString()
+        const existingClaim = current.pendingPlatformEvents?.[fingerprint]
+        const claimIsFresh = existingClaim
+          && new Date(timestamp).getTime() - new Date(existingClaim).getTime() < 60_000
+        if (claimIsFresh) return current
+        ownsClaim = true
+        return {
+          ...current,
+          pendingPlatformEvents: { ...(current.pendingPlatformEvents ?? {}), [fingerprint]: timestamp },
+          updatedAt: timestamp,
+        }
+      })
+      if (!ownsClaim) return false
+      const recorded = await auditSafe(claimed, eventType, reason)
+      await updateMapping(mapping.taskId, mapping.workItemId, (current) => {
+        const pending = { ...(current.pendingPlatformEvents ?? {}) }
+        delete pending[fingerprint]
+        const next = { ...current, updatedAt: now().toISOString() }
+        if (Object.keys(pending).length) next.pendingPlatformEvents = pending
+        else delete next.pendingPlatformEvents
+        if (recorded) next.platformEventFingerprints = [...(current.platformEventFingerprints ?? []), fingerprint].slice(-128)
+        return next
+      })
+      return recorded
+    })()
+    inFlightPlatformAudits.set(fingerprint, operation)
+    try {
+      return await operation
+    } finally {
+      inFlightPlatformAudits.delete(fingerprint)
+    }
+  }
+
   async function validateAssignment(input) {
     if (assignmentValidator) return assignmentValidator(input)
     let profile
@@ -216,7 +350,7 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
       await validateAssignment({ taskId, workItemId, agent })
 
       const target = mappingPath(taskId, workItemId)
-      return withLock(`${target}.lock`, async () => {
+      return withLock(`${target}.spawn.lock`, async () => {
         if (await readFile(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error))) {
           throw failure("SESSION_MAPPING_EXISTS", `work item ${taskId}/${workItemId} 已有 child session；请使用 resume`)
         }
@@ -240,21 +374,60 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
           createdAt: timestamp,
           updatedAt: timestamp,
         }
-        await atomicJson(target, mapping)
+        await withLock(`${target}.lock`, async () => {
+          if (await readFile(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error))) {
+            throw failure("SESSION_MAPPING_EXISTS", `work item ${taskId}/${workItemId} 已有 child session；请使用 resume`)
+          }
+          await atomicJson(target, mapping)
+        })
         try {
           await dispatch(created.id, agent, prompt)
         } catch (error) {
-          await atomicJson(target, { ...mapping, dispatchError: String(error?.message ?? error), updatedAt: now().toISOString() })
+          let failed = mapping
+          try {
+            failed = await updateMapping(taskId, workItemId, (current) => ({
+              ...current,
+              dispatchError: String(error?.message ?? error),
+              updatedAt: now().toISOString(),
+            }))
+          } catch (mappingError) {
+            try { error.mappingPersistenceError = { code: mappingError.code, message: mappingError.message } } catch {}
+          }
+          await auditSafe(failed, "platform.dispatch.failed", error)
           throw error
         }
+        await auditSafe(await readMapping(taskId, workItemId), "platform.dispatch.accepted")
         return { mode: "background", sessionId: created.id, taskId, workItemId, agent }
       })
     },
 
     async resume({ taskId, workItemId, prompt }) {
-      const mapping = await readMapping(taskId, workItemId)
-      await dispatch(mapping.sessionId, mapping.agent, prompt)
-      await atomicJson(mappingPath(taskId, workItemId), { ...mapping, updatedAt: now().toISOString() })
+      const mapping = await updateMapping(taskId, workItemId, (current) => current)
+      if (mapping.lostRecordedAt) throw failure("SESSION_LOST", "OpenCode child session 已失联；请创建新的 work item attempt 并重派", { retryable: false })
+      try {
+        await dispatch(mapping.sessionId, mapping.agent, prompt)
+      } catch (error) {
+        let failed = mapping
+        try {
+          failed = await updateMapping(taskId, workItemId, (current) => ({
+            ...current,
+            resumeError: String(error?.message ?? error),
+            updatedAt: now().toISOString(),
+          }))
+        } catch (mappingError) {
+          try { error.mappingPersistenceError = { code: mappingError.code, message: mappingError.message } } catch {}
+        }
+        await auditSafe(failed, "platform.resume.failed", error)
+        throw error
+      }
+      const next = await updateMapping(taskId, workItemId, (current) => {
+        if (current.lostRecordedAt) return current
+        const updated = { ...current, lastResumedAt: now().toISOString(), updatedAt: now().toISOString() }
+        delete updated.resumeError
+        return updated
+      })
+      if (next.lostRecordedAt) throw failure("SESSION_LOST", "OpenCode child session 在续派期间失联；请创建新的 work item attempt 并重派", { retryable: false })
+      await auditSafe(next, "platform.resume.accepted")
       return { mode: "background", sessionId: mapping.sessionId, taskId, workItemId }
     },
 
@@ -267,7 +440,8 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
         return { ...mapping, status: { type: "idle" } }
       } catch (error) {
         if (error.statusCode === 404) {
-          return { ...mapping, status: { type: "lost", retryable: false, remediation: "创建新的 work item attempt 并重派" } }
+          const lost = await markLost(mapping, "OpenCode 无法找到 child session")
+          return { ...lost, status: { type: "lost", retryable: false, remediation: "创建新的 work item attempt 并重派" } }
         }
         throw error
       }
@@ -283,10 +457,15 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
     },
 
     async stop({ taskId, workItemId }) {
-      const mapping = await readMapping(taskId, workItemId)
+      const mapping = await updateMapping(taskId, workItemId, (current) => current)
       const stopped = await callSdk("OpenCode session.abort", () => client.session.abort({ path: { id: mapping.sessionId }, query: { directory: root } }))
-      await atomicJson(mappingPath(taskId, workItemId), { ...mapping, stoppedAt: now().toISOString(), updatedAt: now().toISOString() })
-      return { ...mapping, stopped: Boolean(stopped) }
+      const next = await updateMapping(taskId, workItemId, (current) => ({
+        ...current,
+        stoppedAt: now().toISOString(),
+        updatedAt: now().toISOString(),
+      }))
+      await auditSafe(next, "platform.session.stopped")
+      return { ...next, stopped: Boolean(stopped) }
     },
 
     async contextForSession(sessionId) {
@@ -317,6 +496,27 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
 
     async runtime(request) {
       return executeRuntime(request)
+    },
+
+    async handleEvent(event) {
+      const properties = event?.properties ?? {}
+      const sessionId = properties.sessionID ?? properties.info?.id
+      if (typeof sessionId !== "string" || !IDENTIFIER.test(sessionId)) return false
+      const mapping = await findMapping(sessionId)
+      if (!mapping) return false
+      if (event.type === "session.status" && properties.status?.type === "retry") {
+        await auditPlatformEventOnce(mapping, "platform.session.retry", properties.status.message ?? `attempt ${properties.status.attempt ?? "unknown"}`, properties.status)
+        return true
+      }
+      if (event.type === "session.error") {
+        await auditPlatformEventOnce(mapping, "platform.session.error", properties.error, properties.error ?? null)
+        return true
+      }
+      if (event.type === "session.deleted") {
+        await markLost(mapping, "OpenCode child session 已删除")
+        return true
+      }
+      return false
     },
 
     async isManagedTeamSession(sessionId) {

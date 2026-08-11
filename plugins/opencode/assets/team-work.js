@@ -27,6 +27,13 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
   }
 
   return {
+    event: async ({ event }) => {
+      try {
+        await adapter.handleEvent(event)
+      } catch {
+        // 事件审计不得阻断 OpenCode 主循环；后续状态查询仍可恢复任务与映射。
+      }
+    },
     "tool.execute.before": async (input) => {
       if (input.tool !== "task") return
       if (await adapter.isManagedTeamSession(input.sessionID)) {

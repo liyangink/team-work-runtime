@@ -103,7 +103,7 @@ Type: Prototype
 
 安装生命周期采用 digest 清单。更新前备份全部旧受管文件，新路径碰撞和本地修改默认拒绝；`--force` 也必须先备份。smoke test 失败会回滚。卸载只处理清单内文件，修改项默认保留为 partial，任务、制品、Workflow/SPEC 配置和用户 OpenCode 文件始终保留。
 
-剩余工作是用真实网关完成七类模型的工具调用 E2E，补齐 OpenCode session/tool 故障事件审计和 OpenSpec 准备检查，再关闭本实施项。
+OpenCode session 故障事件审计、OpenSpec 准备检查和自动化故障注入已经补齐；安装器不会自动安装或初始化 OpenSpec，自定义 SPEC 路由保持不变。剩余工作是用真实网关完成已配置模型的工具调用 E2E，再关闭本实施项。
 
 验收产物：
 

@@ -19,6 +19,8 @@ node plugins/opencode/scripts/manage.mjs install \
 安装器要求 OpenCode `>= 1.18.0`，不限制更高版本。它会安装生产依赖、初始化缺失的 `.team-work` Workflow 配置，并生成安装清单。已有 Workflow/SPEC 配置不会被覆盖。
 写入完成后还会执行 `opencode agent list`，确认 Plugin 能加载且已解析模型的 Agent 可见；失败会回滚受管文件。
 
+默认 SPEC 路由是 OpenSpec。安装器检查 `openspec --version`，并在项目目录执行只读的 `openspec list --json` 就绪探针，只有返回合法的 `{ "changes": [...] }` 才视为可用；`config.yaml` 按官方约定是可选项。探针也兼容由 OpenSpec CLI 解析的外部 store/pointer 布局。install/update 会把默认路由双向同步为 `ready` 或 `missing`，doctor 只读检查。缺失时返回警告和修复建议，不会静默安装 CLI 或执行 `openspec init`。使用非默认可执行文件时传入 `--openspec /absolute/path/to/openspec`；自定义或禁用的 SPEC 路由原样保留。
+
 ## 更新与检查
 
 ```bash
@@ -30,6 +32,11 @@ node plugins/opencode/scripts/manage.mjs doctor --project /absolute/path/to/proj
 - 更新会先把当前受管文件完整备份到 `.team-work/platform/opencode/backups/`。
 - 受管文件有本地修改时默认拒绝覆盖；确认后使用 `update --force`，本地版本仍会先备份。
 - 新版本缺失的旧受管文件会安全移除；用户自己的 `.opencode` 文件不在清单中，不会被处理。
+- `doctor` 同时报告 OpenSpec CLI、只读就绪探针和不安全符号链接；这些问题只阻止 SPEC 路由就绪，不阻止 standalone Team-work。
+
+## 平台事件与恢复
+
+受管派发、续派、停止，以及 OpenCode 上报的重试、API 错误和 child session 删除，会以 `platform.*` 事件写入当前 Runtime 任务。事件审计是旁路：审计暂时失败不会把成功派发改成失败，也不会修改 work item 的验收状态。网关失败会保留 task/work-item/session 映射，恢复后用 `team_work_resume` 继续同一 work item。
 
 ## 卸载
 

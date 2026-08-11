@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -241,4 +241,222 @@ test("managed task guard fails closed when Runtime state cannot be read", async 
   runtimeFails = true
   assert.equal(await adapter.isManagedTeamSession("child-1"), true)
   assert.equal(await adapter.isManagedTeamSession("ordinary-session"), false)
+})
+
+test("dispatch and resume outcomes are normalized into best-effort Runtime audit events", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const events = []
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") {
+      events.push(request.input)
+      return { exitCode: 0, envelope: { data: { event: request.input } } }
+    }
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+  await adapter.spawn({ taskId: "task-audit", workItemId: "impl-1", parentSessionId: "lead-audit", agent: "junior-luna", prompt: "实现" })
+  await adapter.resume({ taskId: "task-audit", workItemId: "impl-1", prompt: "补充证据" })
+  await adapter.stop({ taskId: "task-audit", workItemId: "impl-1" })
+
+  assert.deepEqual(events.map(({ eventType }) => eventType), [
+    "platform.dispatch.accepted",
+    "platform.resume.accepted",
+    "platform.session.stopped",
+  ])
+  assert.ok(events.every(({ actor, refs }) => actor === "platform:opencode" && refs.includes("impl-1") && refs.includes("child-1")))
+})
+
+test("gateway failures remain retryable, preserve mapping, and emit infrastructure audit without masking the original error", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  client.session.promptAsync = async () => { throw new TypeError("gateway overloaded") }
+  const events = []
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") events.push(request.input)
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+
+  await assert.rejects(
+    adapter.spawn({ taskId: "task-fault", workItemId: "research-1", parentSessionId: "lead-fault", agent: "junior-flash", prompt: "调研" }),
+    (error) => error.code === "OPENCODE_API_ERROR" && /gateway overloaded/.test(error.message),
+  )
+  assert.deepEqual(events.map(({ eventType }) => eventType), ["platform.dispatch.failed"])
+  const mapping = await adapter.readMapping("task-fault", "research-1")
+  assert.equal(mapping.sessionId, "child-1")
+  assert.match(mapping.dispatchError, /gateway overloaded/)
+})
+
+test("OpenCode session events audit retries, errors, and lost children exactly once", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const events = []
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") events.push(request.input)
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+  await adapter.spawn({ taskId: "task-events", workItemId: "check-1", parentSessionId: "lead-events", agent: "senior-terra", prompt: "审查" })
+  events.length = 0
+
+  await adapter.handleEvent({ type: "session.status", properties: { sessionID: "child-1", status: { type: "retry", attempt: 2, message: "rate limited" } } })
+  await adapter.handleEvent({ type: "session.status", properties: { sessionID: "child-1", status: { type: "retry", attempt: 2, message: "rate limited" } } })
+  await adapter.handleEvent({ type: "session.error", properties: { sessionID: "child-1", error: { name: "APIError", message: "upstream unavailable" } } })
+  await adapter.handleEvent({ type: "session.error", properties: { sessionID: "child-1", error: { name: "APIError", message: "upstream unavailable" } } })
+  await adapter.handleEvent({ type: "session.deleted", properties: { info: { id: "child-1" } } })
+  await adapter.handleEvent({ type: "session.deleted", properties: { info: { id: "child-1" } } })
+  await adapter.handleEvent({ type: "session.error", properties: { sessionID: "unrelated", error: { message: "ignore" } } })
+
+  assert.deepEqual(events.map(({ eventType }) => eventType), [
+    "platform.session.retry",
+    "platform.session.error",
+    "platform.session.lost",
+  ])
+  assert.ok((await adapter.readMapping("task-events", "check-1")).lostRecordedAt)
+})
+
+test("lost detection and resume serialize mapping updates without erasing the terminal marker", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const events = []
+  let releaseLost
+  let announceLost
+  const lostHeld = new Promise((resolve) => { releaseLost = resolve })
+  const lostStarted = new Promise((resolve) => { announceLost = resolve })
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") {
+      if (request.input.eventType === "platform.session.lost") {
+        announceLost()
+        await lostHeld
+      }
+      events.push(request.input)
+    }
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+  await adapter.spawn({ taskId: "task-race", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  events.length = 0
+  client.session.status = async () => ({ data: {} })
+  client.session.get = async () => ({ error: { status: 404, data: { message: "not found" } } })
+
+  const status = adapter.status({ taskId: "task-race", workItemId: "impl-1" })
+  await lostStarted
+  const resumed = assert.rejects(
+    adapter.resume({ taskId: "task-race", workItemId: "impl-1", prompt: "继续" }),
+    (error) => error.code === "SESSION_LOST",
+  )
+  releaseLost()
+  assert.equal((await status).status.type, "lost")
+  await resumed
+
+  const mapping = await adapter.readMapping("task-race", "impl-1")
+  assert.ok(mapping.lostRecordedAt)
+  assert.deepEqual(events.map(({ eventType }) => eventType), ["platform.session.lost"])
+  assert.equal(client.calls.filter(([name]) => name === "promptAsync").length, 1)
+})
+
+test("audit failures never turn a successful background dispatch into a failed operation", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async (request) => request.command === "event.record"
+      ? { exitCode: 70, envelope: { code: "STATE_CORRUPT", message: "audit unavailable" } }
+      : { exitCode: 0, envelope: { data: {} } },
+  })
+  const result = await adapter.spawn({ taskId: "task-audit-fail", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  assert.equal(result.mode, "background")
+  assert.equal(result.sessionId, "child-1")
+
+  const plugin = await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js"), "utf8")
+  assert.match(plugin, /event:\s*async/)
+  assert.match(plugin, /adapter\.handleEvent/)
+})
+
+test("lost session state is authoritative even when its audit write fails and can be retried later", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  let auditFails = false
+  const events = []
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") {
+      if (auditFails) return { exitCode: 70, envelope: { code: "STATE_CORRUPT", message: "audit unavailable" } }
+      events.push(request.input)
+    }
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+  await adapter.spawn({ taskId: "task-lost-audit", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  events.length = 0
+  client.session.status = async () => ({ data: {} })
+  client.session.get = async () => ({ error: { status: 404, data: { message: "not found" } } })
+  auditFails = true
+
+  assert.equal((await adapter.status({ taskId: "task-lost-audit", workItemId: "impl-1" })).status.type, "lost")
+  let mapping = await adapter.readMapping("task-lost-audit", "impl-1")
+  assert.ok(mapping.lostRecordedAt)
+  assert.ok(mapping.lostAuditError)
+  await assert.rejects(
+    adapter.resume({ taskId: "task-lost-audit", workItemId: "impl-1", prompt: "错误续派" }),
+    (error) => error.code === "SESSION_LOST",
+  )
+
+  auditFails = false
+  await adapter.status({ taskId: "task-lost-audit", workItemId: "impl-1" })
+  mapping = await adapter.readMapping("task-lost-audit", "impl-1")
+  assert.ok(mapping.lostAuditRecordedAt)
+  assert.deepEqual(events.map(({ eventType }) => eventType), ["platform.session.lost"])
+})
+
+test("session error events remain auditable while a slow promptAsync resume is in flight", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const events = []
+  const runtimeExecutor = async (request) => {
+    if (request.command === "event.record") events.push(request.input)
+    return { exitCode: 0, envelope: { data: {} } }
+  }
+  const adapter = testAdapter(client, projectRoot, { runtimeExecutor })
+  await adapter.spawn({ taskId: "task-slow-resume", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  events.length = 0
+
+  let announcePrompt
+  let releasePrompt
+  const promptStarted = new Promise((resolve) => { announcePrompt = resolve })
+  const promptHeld = new Promise((resolve) => { releasePrompt = resolve })
+  client.session.promptAsync = async (input) => {
+    client.calls.push(["promptAsync", input])
+    announcePrompt()
+    await promptHeld
+    return { data: undefined }
+  }
+
+  const resumed = adapter.resume({ taskId: "task-slow-resume", workItemId: "impl-1", prompt: "继续" })
+  await promptStarted
+  await adapter.handleEvent({ type: "session.error", properties: { sessionID: "child-1", error: { message: "gateway retrying" } } })
+  assert.deepEqual(events.map(({ eventType }) => eventType), ["platform.session.error"])
+  releasePrompt()
+  assert.equal((await resumed).mode, "background")
+  assert.deepEqual(events.map(({ eventType }) => eventType), ["platform.session.error", "platform.resume.accepted"])
+})
+
+test("mapping lock contention never masks the original gateway error", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const lock = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-lock-error/impl-1.json.lock")
+  client.session.promptAsync = async () => {
+    await writeFile(lock, `${JSON.stringify({ pid: process.pid })}\n`)
+    throw new TypeError("gateway overloaded")
+  }
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+  })
+
+  await assert.rejects(
+    adapter.spawn({ taskId: "task-lock-error", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" }),
+    (error) => error.code === "OPENCODE_API_ERROR"
+      && /gateway overloaded/.test(error.message)
+      && error.mappingPersistenceError?.code === "SESSION_MAPPING_LOCKED",
+  )
+  await rm(lock, { force: true })
 })

@@ -221,6 +221,96 @@ async function detectHostVersion(opencodeCommand = "opencode") {
   }
 }
 
+async function inspectSpecReadiness(projectRoot, openspecCommand = "openspec", { synchronize = false } = {}) {
+  const configPath = targetPath(projectRoot, ".team-work/config.yaml")
+  const config = await readJson(configPath, "PROJECT_CONFIG_CORRUPT")
+  if (!config?.spec) return { spec: { managed: false, status: "unconfigured" }, warnings: [], issues: [] }
+  const configured = structuredClone(config.spec)
+  if (configured.type !== "openspec" || configured.status === "disabled") {
+    return {
+      spec: { managed: false, ...configured, ready: configured.status === "ready" },
+      warnings: [],
+      issues: [],
+    }
+  }
+
+  let cliVersion = null
+  let probeReady = false
+  let probeError = null
+  try {
+    const { stdout, stderr } = await execFile(openspecCommand, ["--version"], { encoding: "utf8", timeout: 10_000 })
+    cliVersion = (stdout || stderr).trim() || "available"
+  } catch {
+    // OpenSpec 是可替换的 SPEC 路由；缺失时只提供可恢复诊断。
+  }
+
+  let rootPresent = false
+  let configPresent = false
+  let rootSafe = true
+  try {
+    const specRoot = normalizeRelative(configured.root)
+    const configMarker = `${specRoot}/config.yaml`
+    for (const marker of [specRoot, configMarker]) await assertNoSymlink(projectRoot, marker)
+    rootPresent = await stat(targetPath(projectRoot, specRoot)).then((entry) => entry.isDirectory(), () => false)
+    configPresent = await stat(targetPath(projectRoot, configMarker)).then((entry) => entry.isFile(), () => false)
+  } catch (error) {
+    if (error.code !== "UNSAFE_PATH") throw error
+    rootSafe = false
+  }
+
+  const cliAvailable = Boolean(cliVersion)
+  if (cliAvailable && rootSafe) {
+    try {
+      const { stdout } = await execFile(openspecCommand, ["list", "--json"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+      const probe = JSON.parse(stdout)
+      if (!probe || !Array.isArray(probe.changes)) throw new Error("openspec list --json 未返回 { changes: [] }")
+      probeReady = true
+    } catch (error) {
+      probeError = String(error.stderr || error.stdout || error.message || error).trim().slice(0, 1000)
+    }
+  }
+  const initialized = probeReady
+  const ready = cliAvailable && initialized && rootSafe
+  const synchronizedStatus = ready ? "ready" : "missing"
+  if (synchronize && config.spec.status !== synchronizedStatus) {
+    config.spec.status = synchronizedStatus
+    await atomicWrite(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  }
+  const warnings = []
+  const issues = []
+  if (!rootSafe) issues.push({ code: "OPENSPEC_ROOT_UNSAFE", path: configured.root, message: "OpenSpec 根目录经过符号链接或越出项目边界" })
+  if (!cliAvailable) issues.push({ code: "OPENSPEC_CLI_MISSING", message: "未发现 OpenSpec CLI；安装后重新执行 update 或 doctor" })
+  if (!rootPresent && !probeReady && rootSafe) issues.push({ code: "OPENSPEC_NOT_INITIALIZED", path: configured.root, message: "执行 openspec init <project> --tools opencode 后重新检查" })
+  if (rootPresent && !probeReady && rootSafe && cliAvailable) issues.push({ code: "OPENSPEC_CHECK_FAILED", path: configured.root, message: probeError || "OpenSpec 只读就绪检查失败" })
+  if (!cliAvailable) warnings.push("OpenSpec CLI 不可用；SPEC 阶段暂不可进入")
+  if (!rootPresent && !probeReady && rootSafe) warnings.push("OpenSpec 项目尚未初始化；按需执行 openspec init <project> --tools opencode")
+  if (rootPresent && !probeReady && rootSafe && cliAvailable) warnings.push(`OpenSpec 项目检查失败；SPEC 阶段暂不可进入${probeError ? `：${probeError}` : ""}`)
+  if (!rootSafe) warnings.push("OpenSpec 根目录不安全；未读取或修改该目录")
+  return {
+    spec: {
+      managed: true,
+      ...configured,
+      status: synchronize ? synchronizedStatus : configured.status,
+      ready,
+      cliAvailable,
+      cliVersion,
+      rootPresent,
+      configPresent,
+      probeReady,
+      probeError,
+      initialized,
+      rootSafe,
+    },
+    warnings,
+    issues,
+  }
+}
+
 async function walkFiles(root, prefix = "") {
   const result = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -434,9 +524,10 @@ const RUNTIME_INIT_PATHS = [
 ]
 
 async function captureRuntimeBaseline(projectRoot) {
-  const baseline = new Set()
+  const baseline = new Map()
   for (const relativePath of RUNTIME_INIT_PATHS) {
-    if (await exists(targetPath(projectRoot, relativePath))) baseline.add(relativePath)
+    const target = targetPath(projectRoot, relativePath)
+    if (await exists(target)) baseline.set(relativePath, (await stat(target)).isFile() ? await readFile(target) : null)
   }
   return baseline
 }
@@ -444,6 +535,7 @@ async function captureRuntimeBaseline(projectRoot) {
 async function rollbackRuntimeInitialization(projectRoot, baseline) {
   for (const relativePath of RUNTIME_INIT_PATHS.slice(0, 2)) {
     if (!baseline.has(relativePath)) await rm(targetPath(projectRoot, relativePath), { force: true })
+    else if (baseline.get(relativePath)) await atomicWrite(targetPath(projectRoot, relativePath), baseline.get(relativePath))
   }
   for (const relativePath of RUNTIME_INIT_PATHS.slice(2).sort((left, right) => right.split("/").length - left.split("/").length)) {
     if (baseline.has(relativePath)) continue
@@ -482,7 +574,7 @@ async function smokeCheck(projectRoot, opencodeCommand, expectedAgents) {
   }
 }
 
-async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, now, hostVersion, packageVersion, warnings, command, opencodeCommand, agentIds, skipSmoke }) {
+async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, now, hostVersion, packageVersion, warnings, command, opencodeCommand, openspecCommand, agentIds, skipSmoke }) {
   const desiredEntries = manifestFiles(desired)
   const desiredByPath = new Map(desiredEntries.map((entry) => [entry.path, entry]))
   const priorFiles = prior?.managedFiles ?? []
@@ -515,7 +607,8 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
   ))
   const missing = desiredEntries.filter(({ path: relativePath }) => !priorByPath.has(relativePath))
   if (prior && !changed.length && !missing.length && !obsolete.length) {
-    return { status: "unchanged", manifestId: prior.manifestId, warnings }
+    const readiness = await inspectSpecReadiness(projectRoot, openspecCommand, { synchronize: true })
+    return { status: "unchanged", manifestId: prior.manifestId, warnings: [...warnings, ...readiness.warnings], spec: readiness.spec }
   }
 
   const backupCandidates = prior
@@ -531,6 +624,8 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
     for (const [relativePath, content] of desired) await atomicWrite(targetPath(projectRoot, relativePath), content)
     await initializeRuntime(sourceRoot, projectRoot, now)
     if (!skipSmoke) await smokeCheck(projectRoot, opencodeCommand, agentIds)
+    const readiness = await inspectSpecReadiness(projectRoot, openspecCommand, { synchronize: true })
+    const allWarnings = [...warnings, ...readiness.warnings]
     const timestamp = now().toISOString()
     const manifest = {
       schemaVersion: "1.0",
@@ -544,10 +639,10 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
       updatedAt: timestamp,
       lastOperation: command,
       managedFiles: desiredEntries,
-      warnings,
+      warnings: allWarnings,
     }
     await writeManifest(projectRoot, manifest)
-    return { status: prior ? "updated" : "installed", manifestId: manifest.manifestId, backupPath, warnings }
+    return { status: prior ? "updated" : "installed", manifestId: manifest.manifestId, backupPath, warnings: allWarnings, spec: readiness.spec }
   } catch (error) {
     await restoreBackup(projectRoot, backupPath, [...createdPaths, ...obsolete])
     await rollbackRuntimeInitialization(projectRoot, runtimeBaseline)
@@ -607,7 +702,7 @@ async function pruneEmptyManagedDirectories(projectRoot, removedFiles) {
   }
 }
 
-async function doctor({ projectRoot, prior, hostVersion }) {
+async function doctor({ projectRoot, prior, hostVersion, openspecCommand }) {
   const issues = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
@@ -619,7 +714,9 @@ async function doctor({ projectRoot, prior, hostVersion }) {
   for (const agent of profile?.agents ?? []) {
     if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
   }
-  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues }
+  const readiness = await inspectSpecReadiness(projectRoot, openspecCommand)
+  issues.push(...readiness.issues)
+  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, spec: readiness.spec, issues }
 }
 
 async function manageUnlocked(command, options) {
@@ -629,6 +726,7 @@ async function manageUnlocked(command, options) {
   const now = options.now ?? (() => new Date())
   const manifestTarget = targetPath(projectRoot, MANIFEST_PATH)
   await assertNoSymlink(projectRoot, MANIFEST_PATH)
+  await assertNoSymlink(projectRoot, ".team-work/config.yaml")
   const prior = await readJson(manifestTarget, "INSTALL_MANIFEST_CORRUPT")
   if (prior) validateManifest(prior, await allowedManagedPaths(sourceRoot))
 
@@ -638,7 +736,7 @@ async function manageUnlocked(command, options) {
   if (compareVersions(hostVersion, MINIMUM_OPENCODE_VERSION) < 0) {
     fail("OPENCODE_VERSION_TOO_OLD", `OpenCode ${hostVersion} 低于最低版本 ${MINIMUM_OPENCODE_VERSION}`)
   }
-  if (command === "doctor") return doctor({ projectRoot, prior, hostVersion })
+  if (command === "doctor") return doctor({ projectRoot, prior, hostVersion, openspecCommand: options.openspecCommand ?? "openspec" })
   if (command === "update" && prior?.status !== "installed") {
     fail("NOT_INSTALLED", "尚未安装 OpenCode PlatformPlugin，请先执行 install")
   }
@@ -666,6 +764,7 @@ async function manageUnlocked(command, options) {
     warnings: desired.warnings,
     command,
     opencodeCommand: options.opencodeCommand ?? "opencode",
+    openspecCommand: options.openspecCommand ?? "openspec",
     agentIds: desired.agentIds,
     skipSmoke: options.skipSmoke === undefined ? Boolean(options.skipDependencies) : Boolean(options.skipSmoke),
   })

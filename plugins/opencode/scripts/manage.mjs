@@ -27,6 +27,7 @@ try {
     projectRoot: path.resolve(options.project ?? process.cwd()),
     sourceRoot: scriptRoot,
     opencodeCommand: options.opencode ?? "opencode",
+    openspecCommand: options.openspec ?? "openspec",
     hostVersion: options["host-version"],
     modelMap,
     force: Boolean(options.force),

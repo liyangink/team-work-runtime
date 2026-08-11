@@ -80,6 +80,157 @@ test("install materializes runtime, skills, agents, plugin, profile, guides, and
   assert.ok(manifest.managedFiles.every(({ path: relativePath, sha256 }) => relativePath && /^[a-f0-9]{64}$/.test(sha256)))
 })
 
+test("install promotes the default OpenSpec route only when CLI and its read-only project probe are ready", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 0.22.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(fakeOpenSpec, 0o755)
+  await mkdir(path.join(projectRoot, "openspec/specs"), { recursive: true })
+  await mkdir(path.join(projectRoot, "openspec/changes"), { recursive: true })
+  await writeFile(path.join(projectRoot, "openspec/config.yaml"), "schema: spec-driven\n")
+
+  const result = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(result.spec.ready, true)
+  assert.equal(result.spec.cliVersion, "OpenSpec 0.22.0")
+  assert.equal(result.spec.initialized, true)
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.deepEqual(config.spec, { type: "openspec", skill: "openspec", root: "openspec/", status: "ready" })
+})
+
+test("install and update synchronize a stale ready OpenSpec route back to missing", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 0.22.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(fakeOpenSpec, 0o755)
+  await mkdir(path.join(projectRoot, "openspec"), { recursive: true })
+  await writeFile(path.join(projectRoot, "openspec/config.yaml"), "schema: spec-driven\n")
+  await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+
+  const missingCommand = path.join(projectRoot, "missing-openspec")
+  const repeated = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: missingCommand }))
+  assert.equal(repeated.spec.ready, false)
+  assert.equal(repeated.spec.status, "missing")
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.equal(config.spec.status, "missing")
+})
+
+test("OpenSpec config-only pointer projects rely on the CLI probe instead of local planning directories", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 2.0.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(fakeOpenSpec, 0o755)
+  await mkdir(path.join(projectRoot, "openspec"), { recursive: true })
+  await writeFile(path.join(projectRoot, "openspec/config.yaml"), "store: team-context\n")
+
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(installed.spec.ready, true)
+  assert.equal(installed.spec.probeReady, true)
+  assert.equal(await exists(path.join(projectRoot, "openspec/specs")), false)
+  assert.equal(await exists(path.join(projectRoot, "openspec/changes")), false)
+})
+
+test("OpenSpec projects without the optional config file can be ready when the CLI probe succeeds", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 2.0.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(fakeOpenSpec, 0o755)
+  await mkdir(path.join(projectRoot, "openspec/specs"), { recursive: true })
+  await mkdir(path.join(projectRoot, "openspec/changes"), { recursive: true })
+
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(installed.spec.ready, true)
+  assert.equal(installed.spec.configPresent, false)
+})
+
+test("a CLI-resolved default store can be ready without a local OpenSpec root or doctor contradiction", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 2.0.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(fakeOpenSpec, 0o755)
+
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(installed.spec.ready, true)
+  assert.equal(installed.spec.rootPresent, false)
+  assert.equal(installed.warnings.some((warning) => /尚未初始化/.test(warning)), false)
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(diagnosis.status, "ok")
+  assert.equal(diagnosis.issues.some(({ code }) => code === "OPENSPEC_NOT_INITIALIZED"), false)
+})
+
+test("a zero exit status without the documented OpenSpec JSON shape never marks the route ready", async () => {
+  const projectRoot = await tempProject()
+  await mkdir(path.join(projectRoot, "openspec"), { recursive: true })
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: "/usr/bin/true" }))
+  assert.equal(installed.spec.ready, false)
+  assert.equal(installed.spec.probeReady, false)
+  assert.match(installed.spec.probeError, /JSON|changes/)
+})
+
+test("missing OpenSpec prerequisites stay recoverable and doctor reports precise remediation", async () => {
+  const projectRoot = await tempProject()
+  const missingCommand = path.join(projectRoot, "missing-openspec")
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: missingCommand }))
+  assert.equal(installed.spec.ready, false)
+  assert.equal(installed.spec.cliAvailable, false)
+  assert.equal(installed.spec.initialized, false)
+  assert.ok(installed.warnings.some((warning) => /OpenSpec CLI/.test(warning)))
+  assert.ok(installed.warnings.some((warning) => /openspec init/.test(warning)))
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.equal(config.spec.status, "missing")
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, { openspecCommand: missingCommand }))
+  assert.ok(diagnosis.issues.some(({ code }) => code === "OPENSPEC_CLI_MISSING"))
+  assert.ok(diagnosis.issues.some(({ code }) => code === "OPENSPEC_NOT_INITIALIZED"))
+})
+
+test("custom or disabled SPEC routes are preserved and never diagnosed as missing OpenSpec", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.spec = { type: "spec-kit", skill: "spec-kit", root: "specs/", status: "ready" }
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, { openspecCommand: path.join(projectRoot, "missing") }))
+  assert.equal(diagnosis.spec.managed, false)
+  assert.equal(diagnosis.issues.some(({ code }) => code.startsWith("OPENSPEC_")), false)
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")).spec, config.spec)
+})
+
+test("OpenSpec readiness refuses a symlinked project config marker", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenSpec = path.join(projectRoot, "fake-openspec")
+  await writeFile(fakeOpenSpec, "#!/bin/sh\necho 'OpenSpec 0.22.0'\n")
+  await chmod(fakeOpenSpec, 0o755)
+  const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-openspec-outside-"))
+  await mkdir(path.join(projectRoot, "openspec"), { recursive: true })
+  const outsideConfig = path.join(outside, "config.yaml")
+  await writeFile(outsideConfig, "schema: spec-driven\n")
+  await symlink(outsideConfig, path.join(projectRoot, "openspec/config.yaml"))
+
+  const installed = await manageOpenCodePlugin("install", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.equal(installed.spec.ready, false)
+  assert.equal(installed.spec.rootSafe, false)
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, { openspecCommand: fakeOpenSpec }))
+  assert.ok(diagnosis.issues.some(({ code }) => code === "OPENSPEC_ROOT_UNSAFE"))
+})
+
+test("install refuses a symlinked Runtime project config before reading or replacing it", async () => {
+  const projectRoot = await tempProject()
+  const outside = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-config-outside-")), "config.json")
+  const content = `${JSON.stringify({ spec: { type: "openspec", skill: "openspec", root: "openspec/", status: "missing" } })}\n`
+  await writeFile(outside, content)
+  await mkdir(path.join(projectRoot, ".team-work"), { recursive: true })
+  await symlink(outside, path.join(projectRoot, ".team-work/config.yaml"))
+
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(projectRoot)),
+    (error) => error.code === "UNSAFE_PATH",
+  )
+  assert.equal(await readFile(outside, "utf8"), content)
+  assert.equal(await exists(path.join(projectRoot, ".opencode/plugins/team-work.js")), false)
+})
+
 test("update repairs missing managed files and doctor reports drift", async () => {
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot))

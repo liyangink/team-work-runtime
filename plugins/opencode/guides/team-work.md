@@ -7,4 +7,5 @@
 - 派发前先用 CoreRuntime 创建 work item，并把稳定的 `task_id`、`work_item_id` 传给工具。成员名称使用已安装的 `junior-*`、`senior-*`、`expert-*`。
 - Lead 不等待单个成员结束。继续处理独立工作，在场景同步点调用 `team_work_status`；需要读取结果时调用 `team_work_collect`。
 - 返工或第二、三轮收敛使用 `team_work_resume` 续派同一 child session。消息只传分歧、证据缺口、制品路径和完成条件。
+- OpenCode session 的 retry/error/deleted 事件由 Plugin 归一化到 Runtime 审计；平台错误不自动改变 work item 的验收状态。
 - `resolvedModel` 为空的成员不可派发。模型、provider、网关、凭据和 MCP 仍由 OpenCode 配置管理。

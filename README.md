@@ -2,7 +2,7 @@
 
 ## 简介
 
-team-work 是平台无关的 multiagent engineering loop。Lead Agent 管理研发阶段、任务上下文、制品与门禁，并在值得并行或需要独立审查时组建团队。
+team-work 是平台无关的 multiagent engineering loop。Lead Agent 只管理研发阶段、上下文、成本、派发、制品、证据与门禁，不承担具体工作或技术内容裁决；具体产出由 Owner 完成，挑战者复核，核心环节由 Expert 裁决。
 
 团队按 [Junior、Senior、Expert](#成本控制与团队分档) 三档控制成本。Junior 承担主要工作，Senior 负责复杂判断与挑战，Expert 用于高风险把关、关键攻坚或最终收口。
 
@@ -29,7 +29,7 @@ flowchart TB
 
   User --> Workflow
   User -. "显式团队任务" .-> Teamwork
-  Workflow -- "决定组团" --> Teamwork
+  Workflow -- "决定 solo / team 拓扑并派发" --> Teamwork
   Workflow -- "按配置路由" --> Spec
   Workflow --> Core
   Teamwork --> Core
@@ -69,7 +69,7 @@ opencode
 启动完整研发任务：
 
 ```text
-/workflow 实现这个需求；从实际阶段介入，并根据并行价值和独立审查价值决定 solo 或 team。
+/workflow 实现这个需求；从实际阶段介入，并根据是否需要多个 Owner 并行决定 solo 或 team。
 ```
 
 只使用团队能力：
@@ -84,7 +84,7 @@ opencode
 
 ### 完整研发任务
 
-使用 `/workflow` 创建或恢复任务、选择介入阶段、管理门禁，并按需调用 Team-work 或 SPEC Skill。
+使用 `/workflow` 创建或恢复任务、选择介入阶段和管理门禁。所有具体工作均通过 Team-work 派发给成员；SPEC 阶段再按配置路由 SPEC Skill。
 
 ```text
 /workflow 复用已有设计和代码，从 implementation 阶段继续，完成实现、测试、代码审查和收尾。
@@ -112,7 +112,7 @@ opencode
 
 ## 成本控制与团队分档
 
-档位只表示模型能力上限与相对成本，不限制具体研发分工。Team-work 根据场景决定每位成员的职责。
+档位只表示模型能力上限与相对成本，不限制具体研发分工。`solo` 是单一 Owner 串行执行，不是 Lead 亲自执行；`team` 才允许多个 Owner 并行。两种拓扑都需要非作者挑战者，核心环节需要非作者 Expert 作内容裁决或把关。
 
 | 档位 | 默认成本权重 | 主要用途 | 使用原则 |
 | --- | ---: | --- | --- |
@@ -126,7 +126,7 @@ opencode
 - Senior：`senior-terra`、`senior-glm`、`senior-qwen`
 - Expert：`expert-opus`、`expert-k3`
 
-同档多成员优先选择不同模型。正式团队必须由非当前制品作者的 Senior 或 Expert 兼任挑战者；Expert 既可把关，也可亲自承担复杂核心工作。
+同档多成员优先选择不同模型。挑战者通常由 Senior 或 Expert 兼任；Expert 既可把关，也可亲自承担复杂核心工作，但不能裁决本人制品。
 
 活跃成员软上限为 3–5 人，不含 Lead。第二位 Expert 只用于不可逆决策、关键证据冲突、重复验证失败、领域盲区，或用户明确要求的场景。
 
@@ -190,23 +190,30 @@ Team-work 在研发阶段内部提供团队循环，不建立第二套研发状�
 
 ```mermaid
 flowchart LR
-  Enter["进入当前阶段"] --> Gate{"Team Gate<br/>用户指定 / 并行价值 / 独立审查价值"}
-  Gate -- "solo" --> Solo["Lead 单独执行"]
-  Gate -- "team" --> Cost["成本核算<br/>Junior / Senior / Expert"]
-  Cost --> Topology["拓扑与分工<br/>唯一 Owner · 范围 · 制品 · 验证"]
+  Enter["进入当前阶段"] --> Gate{"执行拓扑<br/>用户指定 / 多 Owner 并行价值"}
+  Gate -- "solo" --> Solo["单一 Owner 串行执行"]
+  Gate -- "team" --> Cost["多个 Owner 成本核算<br/>Junior / Senior / Expert"]
+  Solo --> Topology["分工<br/>Owner · 挑战者 · 核心 Expert"]
+  Cost --> Topology
   Topology --> Brief["下发本轮目标"]
-  Brief --> Members["成员独立产出"]
-  Members --> Challenge["挑战者攻击本轮制品"]
-  Challenge --> Merge["Lead 汇总并修订"]
-  Merge --> Decision{"质量是否通过？"}
-  Decision -- "否，未满三轮" --> Brief
-  Decision -- "三轮仍未收敛" --> Human["提交用户裁决"]
-  Decision -- "通过" --> StageGate["Lead 验收制品与证据"]
-  Solo --> StageGate
-  StageGate --> Flow["推进或按归因返工"]
+  Brief --> Members["Owner 独立产出"]
+  Members --> Challenge["非作者挑战者攻击"]
+  Challenge --> Merge["Owner / 整合者修订"]
+  Merge --> Expert{"核心环节？"}
+  Expert -- "是" --> Verdict["非作者 Expert 内容裁决"]
+  Expert -- "否" --> StageGate["Lead 核对流程 · 制品 · 证据"]
+  Verdict --> StageGate
+  StageGate -- "返工且未满三轮" --> Brief
+  StageGate -- "三轮仍未收敛" --> Human["请求用户决定<br/>可授权有限追加轮次"]
+  StageGate -- "控制面完成" --> Flow["推进或按归因返工"]
+  Human -- "授权追加轮次" --> Brief
 ```
 
-挑战者参与每一轮，而不是只做最终签字。下一轮只处理分歧、证据缺口和修正项；最多三轮仍有重大分歧时停止自循环。
+挑战者参与每一轮，而不是只做最终签字。下一轮只处理分歧、证据缺口和修正项；三轮是自主循环上限，用户可以明确授权限定目标与预算的追加轮次，也可以换 Expert、接受风险或终止。
+
+Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者和 Expert 各有独立 work item；同一 work item 的多轮协作复用同一 session，跨阶段、换 Owner、失联或需要独立第二意见时才重建。
+
+需要人工介入时，Lead 用简短普通回复说明当前阶段、结果、可定位产物、分歧/风险和 Expert 建议，再提出一个明确问题。用户追问技术细节时，Lead 将问题转交原 Owner、挑战者或 Expert，不自行大量探索或猜测。
 
 ### OpenSpec 与工作流
 
@@ -284,7 +291,9 @@ flowchart LR
 
 Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagent，并把当前有效 Agent Profile 写入项目上下文。
 
-所有受管成员使用原生 child session 和非阻塞派发。Lead 在同步点查询状态、收集结果并续派下一轮；成员自报完成或平台显示完成都不等于验收通过。
+所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 用 resume 复用 child session。Lead 在同步点查询状态并收集结果；成员自报完成或平台显示完成都不等于验收通过。
+
+在 OpenCode 中向用户展示文件时，使用 `[label](file:///absolute/path)` 形式的标准 Markdown 可点击链接，不只输出裸路径。
 
 模型、Provider、网关、凭据和 MCP 仍由 OpenCode 管理。可用模型名称以 `opencode models` 为准；Agent 配置格式参见 [OpenCode Agents](https://opencode.ai/docs/agents/)。
 

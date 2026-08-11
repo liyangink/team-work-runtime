@@ -216,6 +216,8 @@ test("context injection selects lead or child profile without copying artifact b
   const lead = await adapter.contextForSession("lead-7")
   assert.match(lead, /profile: lead/)
   assert.match(lead, /src\/a\.js/)
+  assert.match(lead, /控制面索引/)
+  assert.match(lead, /不要扫描整个任务目录/)
   assert.equal(requests[0].input.sessionKey, "lead-7")
 
   await adapter.spawn({
@@ -229,6 +231,9 @@ test("context injection selects lead or child profile without copying artifact b
   requests.length = 0
   const child = await adapter.contextForSession("child-1")
   assert.match(child, /profile: check/)
+  assert.match(child, /work-item: check-1/)
+  assert.match(child, /agent: senior-terra/)
+  assert.match(child, /只读取分配范围/)
   assert.equal(requests[0].input.taskId, "task-7")
   assert.equal(requests[1].input.profile, "check")
 })
@@ -256,6 +261,46 @@ test("the same work item cannot create a second child session", async () => {
   assert.equal(client.calls.filter(([name]) => name === "create").length, 1)
 })
 
+test("spawn fails closed on a corrupt work-item session mapping", async () => {
+  const projectRoot = await tempProject()
+  const mappingRoot = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-corrupt")
+  await mkdir(mappingRoot, { recursive: true })
+  await writeFile(path.join(mappingRoot, "owner-1.json"), "{not-json\n")
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot)
+
+  await assert.rejects(
+    adapter.spawn({ taskId: "task-corrupt", workItemId: "owner-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" }),
+    (error) => error.code === "SESSION_MAPPING_CORRUPT",
+  )
+  assert.equal(client.calls.filter(([name]) => name === "create").length, 0)
+})
+
+test("a lost work-item session can be replaced without losing session history", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  let child = 0
+  client.session.create = async (input) => {
+    child += 1
+    const data = { id: `child-${child}`, parentID: input.body.parentID, title: input.body.title }
+    client.calls.push(["create", input])
+    return { data }
+  }
+  const adapter = testAdapter(client, projectRoot)
+  const assignment = { taskId: "task-reset", workItemId: "owner-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" }
+  await adapter.spawn(assignment)
+  await adapter.handleEvent({ type: "session.deleted", properties: { info: { id: "child-1" } } })
+
+  const replaced = await adapter.spawn({ ...assignment, prompt: "从最新制品恢复" })
+
+  assert.equal(replaced.sessionId, "child-2")
+  const mapping = await adapter.readMapping("task-reset", "owner-1")
+  assert.equal(mapping.sessionId, "child-2")
+  assert.deepEqual(mapping.sessionHistory.map(({ sessionId, reason }) => ({ sessionId, reason })), [
+    { sessionId: "child-1", reason: "lost" },
+  ])
+})
+
 test("spawn validates the installed agent and Runtime assignment before creating a session", async () => {
   const projectRoot = await tempProject()
   const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
@@ -276,6 +321,33 @@ test("spawn validates the installed agent and Runtime assignment before creating
     (error) => error.code === "AGENT_UNAVAILABLE",
   )
   assert.equal(client.calls.filter(([name]) => name === "create").length, 1)
+})
+
+test("solo mode dispatches one concrete worker instead of making Lead execute", async () => {
+  const projectRoot = await tempProject()
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
+  await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({
+    agents: [{ id: "junior-luna", resolvedModel: "gateway/gpt-5.6-luna" }],
+  })}\n`)
+  const client = fakeClient()
+  const runtimeExecutor = async (request) => {
+    if (request.command === "task.show") return { exitCode: 0, envelope: { data: { task: { status: "active", teamDecision: { mode: "solo" } } } } }
+    return { exitCode: 0, envelope: { data: { workItem: { owner: "junior-luna", status: "queued" } } } }
+  }
+  const adapter = createOpenCodeAdapter({ client, projectRoot, platformRoot, runtimeExecutor })
+
+  const result = await adapter.spawn({
+    taskId: "task-solo",
+    workItemId: "owner-1",
+    parentSessionId: "lead-solo",
+    agent: "junior-luna",
+    contextProfile: "implement",
+    prompt: "串行完成当前范围",
+  })
+
+  assert.equal(result.mode, "background")
+  assert.equal(result.sessionId, "child-1")
 })
 
 test("missing child sessions are reported as lost rather than idle", async () => {

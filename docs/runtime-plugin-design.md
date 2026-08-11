@@ -11,14 +11,14 @@
 3. **CoreRuntime**：执行确定性的上下文、状态和门禁操作；
 4. **PlatformPlugin**：完成安装装配和 CLI 平台适配。
 
-Multiagent engineering loop 是四者组合形成的产品能力，不再抽象第五个 Engine。初版不实现 N-to-N 消息总线、分布式调度、常驻 daemon、统一多 CLI UI，也不让 Hook 或 Runtime 代替 Lead 做语义判断。
+Multiagent engineering loop 是四者组合形成的产品能力，不再抽象第五个 Engine。初版不实现 N-to-N 消息总线、分布式调度、常驻 daemon、统一多 CLI UI，也不让 Hook、Runtime 或 Lead 代替工作成员与 Expert 作技术内容判断。
 
 ## 2. 四个 Module
 
 | Module | 负责 | 不负责 |
 | --- | --- | --- |
 | Workflow | 上下文计划、研发阶段、任务状态、流程门禁、solo/team 判断、SPEC Skill 路由、人工介入 | 文件事务、平台工具映射、团队内部拓扑 |
-| Team-work | 成本与预算、Junior/Senior/Expert 拓扑、成员选择、场景协作、三轮收敛、团队汇报、通用恢复规则 | 判断普通任务是否建团、持久化实现、直接解析平台配置 |
+| Team-work | 在既定 solo/team 模式下执行成员工作、成本与预算、Junior/Senior/Expert 拓扑、成员选择、场景协作、三轮收敛、团队汇报、通用恢复规则 | 选择 solo/team、持久化实现、直接解析平台配置 |
 | CoreRuntime | task/context/flow/work-item 的确定性操作、revision、锁、原子写入、事件、诊断和恢复 | 模型推理、成本/拓扑、SPEC 语义、平台 Agent 调度 |
 | PlatformPlugin | 安装与更新、Agent 定义、Hook、上下文注入、原生 multiagent 映射、平台指南、配置扫描、SPEC 工具准备 | 研发流程语义、团队策略、项目控制状态 |
 
@@ -50,7 +50,7 @@ flowchart TB
     end
 
     W -. "调用 Runtime Interface" .-> C
-    W -. "需要团队时调用" .-> T
+    W -. "派发具体工作时调用" .-> T
     W -. "读取" .-> WC
     W -. "按配置路由" .-> SPEC
 
@@ -171,15 +171,15 @@ flowchart LR
 Workflow 解释阶段目标和语义；CoreRuntime 校验合法状态边并记录：
 
 1. **确定性门禁**：文件、work item、验证命令和证据路径；
-2. **语义门禁**：方案、设计和审查质量，由 Lead/Expert 决策；
+2. **语义门禁**：方案、设计和审查质量，由非作者 Expert 作内容结论，Lead 只记录并核对裁决链；
 3. **人工门禁**：需求缺失、重大分歧和高风险操作。
 
 CoreRuntime 只验证后两类门禁是否具有合法决策、理由和证据，不生成结论。门禁失败返回 blocker 和可执行修复建议；override 必须保留原 blocker 与原因。
 
 ### 5.3 Team 与 SPEC 路由
 
-- 用户明确要求 team 时，Workflow 直接调用 Team-work；
-- 否则 Workflow 根据场景、并行价值、独立评审价值和成本判断 solo/team；
+- 用户明确要求 team 时，Workflow 选择 `team`；否则根据场景和并行价值判断 `solo/team`；
+- 两种模式都调用 Team-work：`solo` 派发一个成员 Owner，`team` 派发多个边界互斥的 Owner；Lead 均不承担具体工作；
 - 在 SPEC 路由点读取 `spec.type/skill/root/mode/status`；`auto` 可跳过，`required` 缺失时阻塞，`disabled` 始终跳过；
 - SPEC Skill 负责具体规范流程，Workflow 只负责阶段衔接、上下文和门禁。
 
@@ -192,12 +192,13 @@ Team-work 保留当前已积累的核心能力：
 - Junior/Senior/Expert 三档成本与预算建议；
 - 方案讨论、设计审查、代码 Review、并行实施、测试/E2E 等拓扑；
 - 唯一 Owner、范围、完成条件、产物路径和验证要求；
-- 独立首轮、每轮挑战、Lead 汇总、分歧再派发、最多三轮收敛；
-- Lead 验收、返工、团队汇报和可选同档评分；
-- 每个正式团队由现有 Senior/Expert 兼任非作者挑战者，以证据从成本、合理性、事实、推理、需求、边界和失败路径审查最终制品；
+- Owner 独立产出、非作者逐轮挑战、Owner/整合者修订、Expert 内容裁决和最多三轮自主收敛；
+- Lead 只核对流程、制品、证据与复核链，负责记录、返工派发、团队汇报和可选同档评分，不重写技术结论；
+- `solo` 与 `team` 的每个相对完整工作单元都由 Senior/Expert 挑战非本人制品；设计、SPEC、代码 Review、E2E 结果和高风险实现/测试还需非作者 Expert 裁决；
+- 三轮未收敛时直接向用户给出简明阶段摘要；只有用户显式授权目标、轮数和预算后才增加有限轮次；
 - 通用的成员失联、结果缺失和交付恢复规则。
 
-Team-work 通过 CoreRuntime 的通用 work item 记录 assignment，不要求 CoreRuntime 理解成本档位、团队拓扑或平台 Agent。候选随机选择仍属于 Team-work 的策略/工具，不进入 CoreRuntime。
+Team-work 通过 CoreRuntime 的通用 work item 记录 assignment，不要求 CoreRuntime 理解成本档位、团队拓扑或平台 Agent。一个 work item 对应一个成员会话：同一轮次链复用该会话；换 Owner、失联、职责实质改变或需要独立第二意见时才新建。Expert 裁决位在同一阶段保持同一 work item/session，跨阶段重新建立。候选随机选择仍属于 Team-work 的策略/工具，不进入 CoreRuntime。
 
 Platform Profile 为 Team-work 补充：
 
@@ -288,9 +289,9 @@ plugins/opencode/
 
 生命周期管理只拥有全局安装清单列出的文件：更新先快照旧受管文件，碰撞或本地修改默认失败，smoke test 失败回滚；卸载不扫描项目，因此所有 `.team-work/` 任务、制品、Workflow/SPEC 配置和平台 session 历史都被保留。最低 OpenCode 版本用于排除已知不兼容接口，不设置最高版本上限。
 
-OpenCode Adapter 对受管团队派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续规划、验证或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
+OpenCode Adapter 对受管 `solo/team` 派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续维护 Harness 或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果，禁止转而承担成员的具体工作。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
 
-首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过 `team_work_spawn`。spawn 在创建 child session 前必须验证 Platform Profile 中的已解析 Agent、活动 team task、Runtime work item、唯一 Owner 和可派发状态；SDK 返回错误与网络抛错统一为可恢复的平台错误。状态表缺少 child session 时再查询 session 实体，已删除会话报告为 `lost` 而不是伪装成 `idle`。
+首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `solo/team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过 `team_work_spawn`。spawn 在创建 child session 前必须验证 Platform Profile 中的已解析 Agent、活动任务拓扑、Runtime work item、唯一 Owner 和可派发状态；同一 work item 的后续轮次必须 `resume`，只有旧 session 已失联或停止时才能替换并保留历史。SDK 返回错误与网络抛错统一为可恢复的平台错误；已删除会话报告为 `lost` 而不是伪装成 `idle`。
 
 OpenCode 能力约束参考：[Plugins](https://opencode.ai/docs/plugins/)、[Agent Skills](https://opencode.ai/docs/skills/)、[Agents](https://opencode.ai/docs/agents/)、[Custom Tools](https://opencode.ai/docs/custom-tools/)。
 
@@ -312,16 +313,14 @@ sequenceDiagram
     W->>C: 读取 task、stage、context、gate
     C-->>W: 当前状态与最小上下文
 
-    alt 当前阶段需要 team
-        W->>T: 阶段目标、预算与必要产物
-        T->>PP: 读取 Agent 与平台指南
-        T->>C: 创建通用 work items
-        T-->>H: 拓扑、分工与原生工具操作指南
-        H->>A: spawn / assign / resume
-        P->>C: 记录归一化生命周期事件
-        A-->>H: 工程产物与结果
-        H->>C: accept 或 rework
-    end
+    W->>T: solo/team、阶段目标、预算与必要产物
+    T->>PP: 读取 Agent 与平台指南
+    T->>C: 为 Owner、挑战者和必要 Expert 创建 work items
+    T-->>H: 分工与原生工具操作指南
+    H->>A: background spawn / resume
+    P->>C: 记录归一化生命周期事件
+    A-->>H: Owner 制品、挑战结论、Expert 裁决
+    H->>C: 按裁决链记录 accept 或 rework
 
     W->>C: 检查门禁并请求阶段流转
     C-->>W: advanced 或 blockers

@@ -295,7 +295,7 @@ function platformProfile(agentConfig, resolved, generatedAt) {
     session: { childSessions: true, resume: true, crossSessionProcessRecovery: false },
     ui: { childNavigation: true, splitView: false },
     degradations: [
-      { code: "lead-relay", description: "OpenCode 不提供受管成员间直接消息，本插件采用 Lead 汇总再续派" },
+      { code: "lead-relay", description: "OpenCode 不提供受管成员间直接消息，本插件由 Lead 原样记录并转发成员或 Expert 结论后续派" },
       { code: "process-recovery", description: "跨进程只保证任务、制品和 session 映射恢复，不保证旧 child session 仍可运行" },
     ],
     guides: [

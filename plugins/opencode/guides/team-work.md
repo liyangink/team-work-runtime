@@ -5,7 +5,17 @@
 - OpenCode 中用 `team_work_runtime` 调用 CoreRuntime；它等价于平台无关 Skill 中的 `team-work ...` CLI 示例，并自动使用当前项目。`task.bind` 会自动采用当前 OpenCode session key；创建任务后仍需显式执行一次 `task.bind`。未绑定时，`task.show` 只会按 Runtime 的“项目唯一活动任务”规则解析，不会静默创建绑定。
 - 受管成员只能通过 `team_work_spawn` 派发。该工具创建原生 child session，并使用 `promptAsync` 非阻塞启动；不要用阻塞式 `task` 代替。
 - 派发前先用 CoreRuntime 创建 work item，并把稳定的 `task_id`、`work_item_id` 传给工具。成员名称使用已安装的 `junior-*`、`senior-*`、`expert-*`。
-- Lead 不等待单个成员结束。继续处理独立工作，在场景同步点调用 `team_work_status`；需要读取结果时调用 `team_work_collect`。
-- 返工或第二、三轮收敛使用 `team_work_resume` 续派同一 child session。消息只传分歧、证据缺口、制品路径和完成条件。
+- Lead 不等待单个成员结束，也不转而处理具体内容；继续维护 Harness、其他派发和同步点，在同步点调用 `team_work_status`，再用 `team_work_collect` 收集结果。
+- 同一 work item 的返工和后续轮次必须用 `team_work_resume` 续派同一 child session，不得每轮重新 spawn。Owner、挑战者和 Expert 各自持有独立 work item；Expert 在同一阶段收敛期间保持同一 session，跨阶段再建立新 work item。
 - OpenCode session 的 retry/error/deleted 事件由 Plugin 归一化到 Runtime 审计；平台错误不自动改变 work item 的验收状态。
 - `resolvedModel` 为空的成员不可派发。模型、provider、网关、凭据和 MCP 仍由 OpenCode 配置管理。
+
+## 用户可点击文件引用
+
+给用户展示代码、文档或其他制品时，使用标准 Markdown 链接和绝对 `file://` URL，不只输出裸路径：
+
+```text
+[label](file:///<absolute-path>)
+```
+
+空格等字符需 URL 编码。需要标明代码行时，把 `path:line` 写在 label 中，链接仍指向文件。OpenCode TUI 的助手消息由 Markdown renderer 显示；其 [Link 实现](https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/ui/link.tsx) 会把 href 交给系统打开。

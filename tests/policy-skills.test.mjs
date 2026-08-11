@@ -20,6 +20,7 @@ const requiredSkillFiles = [
   "skills/team-work/references/member-contract.md",
   "skills/team-work/references/topologies.md",
   "skills/team-work/references/artifacts-and-report.md",
+  "skills/team-work/references/context-and-sessions.md",
   "skills/team-work/references/solution-discussion.md",
   "skills/team-work/references/code-review.md",
   "skills/team-work/references/parallel-delivery.md",
@@ -57,7 +58,8 @@ test("Workflow preserves platform-neutral task, gate, team, and SPEC policy", as
   assert.match(skill, /CoreRuntime|Runtime/)
   assert.match(skill, /Platform Profile/)
   assert.match(routing, /并行价值/)
-  assert.match(routing, /独立评审价值/)
+  assert.match(routing, /独立挑战[^。\n]*不是[^。\n]*team/)
+  assert.match(routing, /两种模式[^。\n]*team-work/)
   assert.match(routing, /OpenSpec/)
   assert.match(routing, /auto.*跳过|跳过.*auto/s)
   assert.match(routing, /required.*阻塞|阻塞.*required/s)
@@ -94,6 +96,39 @@ test("Team-work preserves cost topology, convergence, ownership, and standalone 
   assert.match(skill, /创建后立即[^。]*Runtime[^。]*team/)
   assert.doesNotMatch(combined, /adhoc-team/)
   assert.doesNotMatch(combined, /team_create|team_send|\.opencode|\.claude/)
+})
+
+test("Lead controls the Harness while workers, challengers, and Experts own content", async () => {
+  const workflow = await read("skills/workflow/SKILL.md")
+  const teamwork = await read("skills/team-work/SKILL.md")
+  const topology = await read("skills/team-work/references/topologies.md")
+  const member = await read("skills/team-work/references/member-contract.md")
+  const combined = [workflow, teamwork, topology, member].join("\n")
+
+  assert.match(combined, /Lead[^。\n]*(?:不得|禁止)[^。\n]*(?:具体工作|具体内容)/)
+  assert.match(combined, /solo[^。\n]*(?:单一|一个)[^。\n]*Owner/i)
+  assert.match(combined, /solo[^。\n]*挑战者|挑战者[^。\n]*solo/i)
+  assert.match(combined, /核心[^。\n]*(?:Expert|专家)[^。\n]*(?:裁决|把关)|(?:Expert|专家)[^。\n]*核心[^。\n]*(?:裁决|把关)/)
+  assert.match(combined, /Lead[^。\n]*(?:流程|制品|证据)[^。\n]*(?:验收|核对)/)
+  assert.match(combined, /(?:Expert|专家)[^。\n]*(?:内容|技术)[^。\n]*(?:裁决|结论)/)
+  assert.doesNotMatch(combined, /Lead (?:单独执行|汇总为方案初稿|进行集成|决定工作流建议结果)/)
+})
+
+test("context, session continuity, and human synchronization remain bounded", async () => {
+  const context = await read("skills/team-work/references/context-and-sessions.md")
+  const teamwork = await read("skills/team-work/SKILL.md")
+  const handoff = await read("skills/workflow/references/recovery-and-handoff.md")
+  const reports = await read("skills/team-work/references/artifacts-and-report.md")
+  const combined = [context, teamwork, handoff, reports].join("\n")
+
+  assert.match(context, /Lead[^。\n]*(?:索引|摘要)[^。\n]*(?:不注入|禁止)[^。\n]*(?:整个任务目录|全部任务)/)
+  assert.match(context, /同一[^。\n]*work item[^。\n]*(?:续派|原会话)/i)
+  assert.match(context, /Expert[^。\n]*同一阶段[^。\n]*同一会话|同一阶段[^。\n]*Expert[^。\n]*同一会话/i)
+  assert.match(context, /跨阶段[^。\n]*(?:新|重新)[^。\n]*(?:work item|会话)/i)
+  assert.match(combined, /用户[^。\n]*授权[^。\n]*追加轮次/)
+  assert.match(handoff, /直接[^。\n]*(?:回复|消息)[^。\n]*用户/)
+  for (const field of ["当前阶段", "结果", "产物", "分歧", "建议"]) assert.match(handoff, new RegExp(field))
+  assert.match(handoff, /(?:Owner|挑战者|Expert)[^。\n]*(?:转发|续派|回答)/)
 })
 
 test("E2E is applicability-gated and keeps test-artifact rework inside its own loop", async () => {

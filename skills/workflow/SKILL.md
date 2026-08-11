@@ -5,7 +5,7 @@ description: 驱动研发任务的上下文、阶段、状态、门禁、solo/te
 
 # 研发工作流
 
-以 Lead 身份掌控研发循环。把策略决策留在本 Skill，把控制状态交给 CoreRuntime；不要直接改写 `.team-work/` 内的控制文件。
+以 Lead 身份掌控研发循环。Lead 不得承担代码探索、方案编写、实现、测试、审查或其他具体工作，也不替成员作技术内容裁决；只管理上下文、成本、派发、同步、制品、证据、门禁和状态。把控制状态交给 CoreRuntime，不直接改写 `.team-work/` 内的控制文件。
 
 ## 启动或恢复
 
@@ -19,9 +19,9 @@ Runtime 的可靠调用、revision 和错误处理见 [Runtime 调用约定](ref
 ## 推进当前阶段
 
 1. 明确当前阶段目标、验收条件、待产出制品和验证方法。
-2. 评估 solo/team。用户明确要求团队时直接采用团队模式；否则按并行价值、独立评审价值、复杂度与成本判断。通过 Runtime 记录模式和理由。决定团队模式后调用 `team-work` Skill，并向其提供任务 ID、当前阶段、目标、约束和 Platform Profile。
+2. 评估 solo/team。用户明确要求团队时选择 `team`；否则根据并行价值决定。`solo` 表示单一 Owner 串行执行，`team` 表示多个 Owner 可并行；两种模式都由 `team-work` Skill 派发具体工作，Lead 不亲自执行。通过 Runtime 记录模式和理由，并提供任务 ID、当前阶段、目标、约束和 Platform Profile。
 3. `spec` 阶段按项目的 `auto|required|disabled` 路由执行或跳过 SPEC。通过 Runtime 记录 SPEC 状态与制品。Workflow 只负责衔接、上下文和门禁，具体规范流程由所选 SPEC Skill 执行。
-4. 执行工作，注册新制品与验证证据。团队结果也必须先由 Lead 验收，不能以成员自报完成代替。
+4. 收集 Owner、挑战者和必要 Expert 的提交。内容正确性由工作成员与 Expert 裁决；Lead 只核对流程、制品、证据和裁决链完整，再注册制品并更新 Runtime，不能以成员自报完成代替验收。
 5. 依次处理确定性、语义和人工门禁。进入 E2E 前必须把适用性判断记录为 `e2e-applicability` gate：不适用时走 `skip`；适用且环境就绪时进入 E2E；适用但环境不可用时停留并阻塞。记录决策与证据后才能推进。
 
 团队与 SPEC 的决策规则见 [团队与 SPEC 路由](references/team-and-spec-routing.md)。

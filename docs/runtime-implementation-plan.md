@@ -74,9 +74,9 @@ Workflow 和 Team-work 如何只通过 Runtime Interface 协作，同时保持 s
 
 ### Answer
 
-Workflow 与 Team-work 已实现为中文、平台无关的 Policy Skill。Workflow 可从任意实际研发阶段创建或恢复任务，只检查当前阶段最低输入，持久化每阶段 solo/team 决策与 SPEC 生命周期，并在流转前预检目标阶段输入；Team-work 可在已有任务中工作，也可 standalone 从适配阶段创建轻量任务，随后显式写入 team 决策。
+Workflow 与 Team-work 已实现为中文、平台无关的 Policy Skill。Workflow 可从任意实际研发阶段创建或恢复任务，只检查当前阶段最低输入，持久化每阶段 solo/team 决策与 SPEC 生命周期，并在流转前预检目标阶段输入；两种拓扑的具体工作都由 Team-work 派发成员承担。Team-work 也可 standalone 从适配阶段创建轻量任务，随后显式写入 team 决策。
 
-Team-work 已覆盖 Junior/Senior/Expert 成本拓扑、非作者挑战者、最多三轮收敛、方案讨论、全视角代码 Review、并行施工、测试、制品汇报、有界恢复和可选同档评分。成员选择脚本在同档内无放回随机，并优先模型差异。两轮 Terra forward test 补齐了初始化、Profile 缺失等待、binding revision、返工目标输入、SPEC/team 状态，以及网关限流后的 work blockage、同档换 Owner 和最终错误审计。
+Team-work 已覆盖 Junior/Senior/Expert 成本拓扑、单成员 solo、并行 team、非作者挑战者、核心 Expert 裁决、最多三轮自主收敛与人工有限续轮、方案讨论、全视角代码 Review、并行施工、测试、制品汇报、有界恢复和可选同档评分。成员选择脚本在同档内无放回随机，并优先模型差异。两轮 Terra forward test 补齐了初始化、Profile 缺失等待、binding revision、返工目标输入、SPEC/team 状态，以及网关限流后的 work blockage、同档换 Owner 和最终错误审计。
 
 验收产物：
 
@@ -99,11 +99,11 @@ Type: Prototype
 
 ### Answer
 
-第一批平台能力已实现：用户级安装器物化 Workflow、Team-work、CoreRuntime、Plugin、Platform Profile 与指南，首次项目调用再初始化 `.team-work/`。Plugin 启动时读取版本化用户配置，动态注入七个分档 Agent 的 model/effort。受管派发使用 `session.create + promptAsync`，并以 task/work-item ID 保存 child session 映射。
+第一批平台能力已实现：用户级安装器物化 Workflow、Team-work、CoreRuntime、Plugin、Platform Profile 与指南，首次项目调用再初始化 `.team-work/`。Plugin 启动时读取版本化用户配置，动态注入七个分档 Agent 的 model/effort。`solo/team` 受管派发都使用 `session.create + promptAsync`，并以 task/work-item ID 保存 child session 映射；同一 work item 续派复用会话，失联或停止后才受控替换并保留历史。
 
 安装生命周期采用 digest 清单。更新前备份全部旧受管文件，新路径碰撞和本地修改默认拒绝；`--force` 也必须先备份。smoke test 失败会回滚。卸载只处理清单内文件，修改项默认保留为 partial，任务、制品、Workflow/SPEC 配置和用户 OpenCode 文件始终保留。
 
-OpenCode session 故障事件审计、OpenSpec 准备检查和自动化故障注入已经补齐；安装器不会自动安装或初始化 OpenSpec。真实网关已完成 DeepSeek/Luna 工具调用、双 Junior 后台派发和跨进程续派；剩余工作是补齐含 Senior 挑战者、Lead 验收和最终制品的正式 Workflow 场景 E2E。
+OpenCode session 故障事件审计、OpenSpec 准备检查和自动化故障注入已经补齐；安装器不会自动安装或初始化 OpenSpec。真实网关已完成 DeepSeek/Luna 工具调用、双 Junior 后台派发和跨进程续派；剩余工作是补齐含 Owner、Senior 挑战者、核心 Expert 裁决、Lead 控制面验收和最终制品的正式 Workflow 场景 E2E。
 
 验收产物：
 

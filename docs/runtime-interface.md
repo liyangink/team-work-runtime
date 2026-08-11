@@ -22,7 +22,7 @@ team-work event list|record
 
 任务创建时从 `config.yaml` 解析 Workflow，并把 `id/version/path/digest` 固定到 task。被任务引用的 Workflow 版本必须保留；加载时 digest 不匹配即返回 `STATE_CORRUPT`，禁止悄悄使用新配置。SPEC 的 `type/skill/root` 只存在于 Project Config；task 只保存执行状态、产物引用和配置 digest，不复制路由。
 
-`task team --mode <solo|team> --reason <reason>` 持久化当前阶段的组团决策。每次阶段推进或回退后重置为 `undecided`，避免沿用上一阶段的成本判断。`task spec --status <in-progress|completed|blocked|disabled> [--artifacts <paths>]` 只更新任务内 SPEC 执行状态与制品引用，不修改 Project Config 路由；`completed` 至少需要一个已存在制品。SPEC 返工可从 `completed|blocked|disabled` 回到 `in-progress`。
+`task team --mode <solo|team> --reason <reason>` 持久化当前阶段的执行拓扑：`solo` 是一个成员 Owner 串行工作，`team` 是多个 Owner 可并行工作；两者都不表示 Lead 亲自执行。每次阶段推进或回退后重置为 `undecided`，避免沿用上一阶段的成本判断。`task spec --status <in-progress|completed|blocked|disabled> [--artifacts <paths>]` 只更新任务内 SPEC 执行状态与制品引用，不修改 Project Config 路由；`completed` 至少需要一个已存在制品。SPEC 返工可从 `completed|blocked|disabled` 回到 `in-progress`。
 
 阶段门禁只检查当前阶段声明的最低必需输入。历史需求、设计、SPEC、测试和 Review 制品只有在当前阶段的 `requiredInputs` 中出现时才阻塞；其他缺失只产生 warning。默认工程 Workflow 中，`code-review` 只要求：
 
@@ -54,7 +54,7 @@ SPEC 路由同样由 Runtime 强制执行：`auto + missing` 和 `disabled` 只�
 - 确定性、语义和人工门禁决策及证据；
 - warning、blocker 和最小修复动作。
 
-语义/人工门禁由 Lead 或用户通过 `flow decide` 写入结论。CoreRuntime 只校验决策、理由和证据是否完整，不生成语义结论。override 必须保留原 blocker 与原因，不能形成无法人工恢复的死门。
+语义门禁的技术内容由工作成员与非作者 Expert 形成结论，Lead 仅通过 `flow decide` 记录该结论并核对制品、证据和复核链；人工门禁由用户决定。CoreRuntime 只校验决策、理由和证据是否完整，不生成语义结论。override 必须保留原 blocker 与原因，不能形成无法人工恢复的死门。
 
 task.json 中的 gates 与 evidence 是门禁、override 和 rollback 恢复的权威状态；events 只做审计。每个 overridden gate 必须同时保留 blocker、decision、decidedBy、reason 和 evidenceRefs。当前阶段之后的 gate 只能保持 pending，未来阶段 evidence 只能以 invalidated 状态保留回滚审计，禁止预写可用结论。
 

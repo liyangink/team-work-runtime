@@ -148,15 +148,20 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     )
   }
 
-  async function readMapping(taskId, workItemId) {
-    const target = mappingPath(taskId, workItemId)
+  async function readOptionalMapping(target) {
     try {
       return JSON.parse(await readFile(target, "utf8"))
     } catch (error) {
-      if (error.code === "ENOENT") throw failure("SESSION_MAPPING_NOT_FOUND", `未找到 ${taskId}/${workItemId} 的 OpenCode child session`)
+      if (error.code === "ENOENT") return null
       if (error instanceof SyntaxError) throw failure("SESSION_MAPPING_CORRUPT", `OpenCode session 映射损坏：${target}`)
       throw error
     }
+  }
+
+  async function readMapping(taskId, workItemId) {
+    const mapping = await readOptionalMapping(mappingPath(taskId, workItemId))
+    if (!mapping) throw failure("SESSION_MAPPING_NOT_FOUND", `未找到 ${taskId}/${workItemId} 的 OpenCode child session`)
+    return mapping
   }
 
   async function dispatch(sessionId, agent, prompt) {
@@ -432,8 +437,8 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     if (!candidate?.resolvedModel) throw failure("AGENT_UNAVAILABLE", `Agent ${input.agent} 未安装或模型未解析`)
 
     const task = runtimeData(await executeRuntime({ command: "task.show", input: { taskId: input.taskId } }), "task.show").task
-    if (task.status !== "active" || task.teamDecision?.mode !== "team") {
-      throw failure("TEAM_TASK_REQUIRED", `task ${input.taskId} 不是活动 team 任务`)
+    if (task.status !== "active" || !new Set(["solo", "team"]).has(task.teamDecision?.mode)) {
+      throw failure("TEAM_TASK_REQUIRED", `task ${input.taskId} 尚未选择可派发的 solo/team 拓扑`)
     }
     const workItem = runtimeData(await executeRuntime({ command: "work.show", input: { taskId: input.taskId, workItemId: input.workItemId } }), "work.show").workItem
     if (workItem.owner !== input.agent) throw failure("WORK_OWNER_MISMATCH", `work item Owner ${workItem.owner} 与 Agent ${input.agent} 不一致`)
@@ -454,7 +459,9 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
 
       const target = mappingPath(taskId, workItemId)
       return withLock(`${target}.spawn.lock`, async () => {
-        if (await readFile(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error))) {
+        const existing = await readOptionalMapping(target)
+        const replacementReason = existing?.lostRecordedAt ? "lost" : existing?.stoppedAt ? "stopped" : null
+        if (existing && !replacementReason) {
           throw failure("SESSION_MAPPING_EXISTS", `work item ${taskId}/${workItemId} 已有 child session；请使用 resume`)
         }
         const created = await callSdk("OpenCode session.create", () => client.session.create({
@@ -476,9 +483,23 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           dispatchMode: "background",
           createdAt: timestamp,
           updatedAt: timestamp,
+          ...(existing ? {
+            sessionHistory: [
+              ...(existing.sessionHistory ?? []),
+              {
+                sessionId: existing.sessionId,
+                agent: existing.agent,
+                contextProfile: existing.contextProfile,
+                createdAt: existing.createdAt,
+                endedAt: existing.lostRecordedAt ?? existing.stoppedAt ?? timestamp,
+                reason: replacementReason,
+              },
+            ].slice(-32),
+          } : {}),
         }
         await withLock(`${target}.lock`, async () => {
-          if (await readFile(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error))) {
+          const current = await readOptionalMapping(target)
+          if ((!existing && current) || (existing && current?.sessionId !== existing.sessionId)) {
             throw failure("SESSION_MAPPING_EXISTS", `work item ${taskId}/${workItemId} 已有 child session；请使用 resume`)
           }
           await atomicJson(target, mapping)
@@ -589,8 +610,13 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
         `task: ${task.taskId}`,
         `stage: ${task.stage}`,
         `profile: ${profile}`,
-        "只按需读取以下路径；摘要不能替代原文：",
       ]
+      if (mapping) {
+        lines.push(`work-item: ${mapping.workItemId}`, `agent: ${mapping.agent}`)
+        lines.push("只读取分配范围所需路径；摘要不能替代原文，不要扫描无关任务资产：")
+      } else {
+        lines.push("这是 Lead 控制面索引；不要扫描整个任务目录或代替成员处理具体内容：")
+      }
       for (const entry of rendered.envelope.data.entries) {
         lines.push(`- ${entry.mustRead ? "[必读] " : ""}${entry.path} (${entry.kind})${entry.summary ? `：${entry.summary}` : ""}`)
       }
@@ -634,7 +660,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           command: "task.show",
           input: mapping ? { taskId: mapping.taskId } : { platform: "opencode", sessionKey: sessionId },
         }), "task.show").task
-        return task.status === "active" && task.teamDecision?.mode === "team"
+        return task.status === "active" && new Set(["solo", "team"]).has(task.teamDecision?.mode)
       } catch {
         // 已有 child mapping 或 Runtime binding 就属于受管会话；状态损坏时必须
         // fail-closed，不能因此放行原生阻塞 task。完全无受管证据的会话仍放行。

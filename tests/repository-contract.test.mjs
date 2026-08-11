@@ -18,10 +18,21 @@ test("new implementation and legacy archives stay explicitly separated", async (
 test("repository contract preserves OpenCode and challenger invariants", async () => {
   const agents = await read("AGENTS.md")
   assert.match(agents, /任务允许从任意研发阶段创建并介入工作流/)
-  assert.match(agents, /Senior 或 Expert 挑战非本人制品/)
+  assert.match(agents, /非作者 Senior 或 Expert 挑战/)
   assert.match(agents, /background\/non-blocking 模式派发/)
   assert.match(agents, /禁止新实现反向依赖 `archive\/`/)
   assert.match(agents, /subagent 默认使用 `gpt-5\.6-terra`/)
+})
+
+test("OpenCode guide preserves child sessions and emits clickable file references", async () => {
+  const guide = await read("plugins/opencode/guides/team-work.md")
+  const recovery = await read("plugins/opencode/guides/recovery.md")
+  const combined = `${guide}\n${recovery}`
+
+  assert.match(combined, /同一 work item[^。\n]*(?:team_work_resume|同一 child session)/i)
+  assert.match(combined, /Expert[^。\n]*同一阶段[^。\n]*(?:session|会话)/i)
+  assert.match(combined, /\[.+\]\(file:\/\/\/<absolute-path>\)/)
+  assert.match(combined, /用户[^。\n]*(?:文件|制品|代码)[^。\n]*(?:Markdown|可点击)/i)
 })
 
 test("new implementation documents have valid local links", async () => {
@@ -31,7 +42,7 @@ test("new implementation documents have valid local links", async () => {
     const content = await read(relativeFile)
     for (const match of content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
       const target = match[1].replace(/^<|>$/g, "").split("#", 1)[0]
-      if (!target || /^(?:https?:|mailto:)/.test(target)) continue
+      if (!target || /^(?:https?:|mailto:|file:)/.test(target)) continue
       const resolved = path.resolve(projectRoot, path.dirname(relativeFile), decodeURIComponent(target))
       await assert.doesNotReject(access(resolved), `${relativeFile} links to missing ${target}`)
     }
@@ -59,6 +70,11 @@ test("README is the single user guide with intro, quick start, and one fixed con
   assert.match(usage, /auto.*required.*disabled/s)
   assert.match(usage, /E2E 小循环/)
   assert.match(usage, /挑战者参与每一轮/)
+  assert.match(usage, /Lead[^。\n]*(?:不得|不)[^。\n]*(?:具体工作|具体内容)/)
+  assert.match(usage, /solo[^。\n]*(?:单一|一个)[^。\n]*Owner/i)
+  assert.match(usage, /核心[^。\n]*(?:Expert|专家)[^。\n]*(?:裁决|把关)|(?:Expert|专家)[^。\n]*核心[^。\n]*(?:裁决|把关)/)
+  assert.match(usage, /三轮[^。\n]*用户[^。\n]*追加轮次/)
+  assert.match(usage, /同一 work item[^。\n]*(?:同一|复用)[^。\n]*(?:session|会话)/i)
   assert.match(usage, /"\$schema"/)
   assert.doesNotMatch(usage, /schemaVersion/)
   assert.match(usage, /"effort"/)

@@ -29,7 +29,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 初版使用文件、原子写入和文件锁，不引入数据库或常驻服务。
 - 原始制品不复制；`context.jsonl` 是索引，`index.md` 是生成视图。
 - OpenSpec 是默认 SPEC Skill；PlatformPlugin 安装期准备工具并写入项目 Workflow Config，Workflow 运行期只读取配置。
-- Workflow 决定是否建团，Team-work 只负责建团后的协作。
+- Workflow 决定 `solo/team` 执行拓扑；两种模式都由 Team-work 派发成员工作，Lead 不承担具体工作或技术内容裁决。
 - 先完成 OpenCode PlatformPlugin，再适配 Claude Code 和 OMO；首版不依赖平台原生 Team Agent。
 
 ## Phase 0：规则冻结
@@ -75,7 +75,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 状态：完成。
 
 - Workflow 驱动十阶段任务流、上下文计划、solo/team 判断和 SPEC Skill 路由；
-- Team-work 保留成本、拓扑、场景、三轮收敛、汇报和评分能力；
+- Team-work 保留成本、拓扑、Owner/挑战者/Expert 协作、三轮自主收敛、有限人工续轮、汇报和评分能力；
 - 两个 Skill 通过 CoreRuntime 记录状态，通过 Project Config/Profile 获取安装结果和平台增量信息。
 
 完成标准：两者可独立 forward test；Team-work 可 standalone 从适配的实际研发阶段创建轻量任务；不解析平台原始配置或复制 Runtime 状态机。
@@ -91,15 +91,15 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 通过 Plugin 的 session、message、tool 事件完成活动任务识别、上下文注入和生命周期记录；
 - 复用原生 subagent child session 与 session 导航，不实现第二套 Agent 调度器；
 - 所有受管 Team-work subagent 强制 background/non-blocking 派发；Lead 在显式同步点查询状态并收集结果，禁止阻塞等待单个成员；
-- 使用稳定 task/work-item ID 关联 child session，Lead 通过汇总、续派和共享制品协作；
-- 跨会话只恢复 Runtime 任务、制品与映射，失效 subagent 在需要时重新创建；
+- 使用稳定 task/work-item ID 关联 child session；同一 work item 跨轮次复用会话，Lead 只记录并转发成员与 Expert 结论；
+- 跨会话恢复 Runtime 任务、制品与映射；只有失联、停止、换 Owner、职责变化或独立第二意见才新建 child session，并保留旧映射历史；
 - 模型/provider/网关仍由 OpenCode 管理，PlatformPlugin 只解析用户 Agent 绑定并注入能力档位。
 
 完成标准：可独立创建、恢复和完成团队任务；多模型 Agent 能正常调用工具；受管派发测试证明不会进入阻塞模式；Lead 与 subagent 获得不同的最小上下文；Plugin 失败不损坏状态或形成死门；卸载不删除项目数据。
 
 已完成：最低版本校验、模型唯一解析、启动时动态 Agent model/effort 注入、跨平台用户配置路径、版本化配置 Schema、用户级 Skill/Plugin 装配、npm 安装器、项目懒初始化、安装清单、更新备份与回滚、安全卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、最小上下文 Hook、OpenSpec 模式路由、平台事件审计，以及网关失败—续派—成员失联的故障注入。
 
-真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中启用一个低成本 Senior，从实际研发阶段完成 Workflow 路由、挑战者、Lead 验收和最终制品的正式场景 E2E。除非场景达到升级条件，不调用 Expert。
+真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中从实际研发阶段完成 Workflow 路由、Owner、挑战者、核心 Expert 裁决、Lead 控制面验收和最终制品的正式场景 E2E。
 
 ## Phase 5：Claude Code 与 OMO PlatformPlugin
 

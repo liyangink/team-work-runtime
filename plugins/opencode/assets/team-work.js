@@ -54,7 +54,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
     "tool.execute.before": async (input) => {
       if (input.tool !== "task") return
       if (await adapter.isManagedTeamSession(input.sessionID)) {
-        throw new Error("TEAM_WORK_BLOCKING_TASK_REJECTED: team 任务必须使用 team_work_spawn 的非阻塞 child session")
+        throw new Error("TEAM_WORK_BLOCKING_TASK_REJECTED: solo/team 受管任务必须使用 team_work_spawn 的非阻塞 child session")
       }
     },
     "experimental.chat.system.transform": async (input, output) => {
@@ -87,7 +87,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         },
       }),
       team_work_spawn: tool({
-        description: "非阻塞创建受管 OpenCode child session 并派发团队 work item",
+        description: "非阻塞创建受管 OpenCode child session 并派发 solo/team work item；仅失联或已停止的旧 session 可受控替换",
         args: {
           task_id: taskId,
           work_item_id: workItemId,
@@ -109,7 +109,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         },
       }),
       team_work_resume: tool({
-        description: "非阻塞续派已有团队 child session，用于返工和多轮收敛",
+        description: "非阻塞续派已有 child session；同一 work item 的返工和多轮收敛必须优先复用",
         args: { task_id: taskId, work_item_id: workItemId, prompt },
         async execute(args) {
           return json(await adapter.resume({ taskId: args.task_id, workItemId: args.work_item_id, prompt: args.prompt }))
@@ -123,7 +123,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         },
       }),
       team_work_collect: tool({
-        description: "在同步点读取受管团队 child session 消息并由 Lead 验收",
+        description: "在同步点读取受管 child session 消息，供 Lead 核对制品、证据和裁决链",
         args: { task_id: taskId, work_item_id: workItemId, limit: tool.schema.number().int().positive().max(200).optional() },
         async execute(args) {
           return json(await adapter.messages({ taskId: args.task_id, workItemId: args.work_item_id, limit: args.limit }))

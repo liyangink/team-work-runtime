@@ -37,6 +37,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
     const { command, options } = parse(argv, cwd)
     let platform = {
       modelMap: undefined,
+      effortMap: undefined,
       opencodeCommand: "opencode",
       openspecCommand: "openspec",
     }
@@ -51,6 +52,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       projectRoot: options.projectRoot,
       sourceRoot,
       modelMap: platform.modelMap,
+      effortMap: platform.effortMap,
       opencodeCommand: platform.opencodeCommand,
       openspecCommand: platform.openspecCommand,
       force: options.force,

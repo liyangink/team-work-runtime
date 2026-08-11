@@ -42,8 +42,8 @@ function validateConfig(config) {
   assertObject(config.platforms, "platforms")
   assertKnownKeys(config.platforms, ["opencode"], "platforms")
   assertObject(config.platforms.opencode, "platforms.opencode")
-  assertKnownKeys(config.platforms.opencode, ["command", "models"], "platforms.opencode")
-  const { command, models } = config.platforms.opencode
+  assertKnownKeys(config.platforms.opencode, ["command", "models", "effort"], "platforms.opencode")
+  const { command, models, effort } = config.platforms.opencode
   if (command !== undefined && (typeof command !== "string" || !command.trim())) {
     fail("USER_CONFIG_INVALID", "platforms.opencode.command 必须是非空字符串")
   }
@@ -52,6 +52,14 @@ function validateConfig(config) {
     for (const [agentId, model] of Object.entries(models)) {
       if (!agentId || typeof model !== "string" || !model.trim()) {
         fail("USER_CONFIG_INVALID", "platforms.opencode.models 必须是 agent 到非空模型名称的映射")
+      }
+    }
+  }
+  if (effort !== undefined) {
+    assertObject(effort, "platforms.opencode.effort")
+    for (const [agentId, value] of Object.entries(effort)) {
+      if (!agentId || typeof value !== "string" || !value.trim()) {
+        fail("USER_CONFIG_INVALID", "platforms.opencode.effort 必须是 agent 到非空 effort 名称的映射")
       }
     }
   }
@@ -121,6 +129,7 @@ export async function loadUserConfig({ projectRoot, createIfMissing = false }) {
     platform: {
       id: "opencode",
       modelMap: opencode.models === "auto" ? undefined : opencode.models,
+      ...(opencode.effort === undefined ? {} : { effortMap: opencode.effort }),
       opencodeCommand: opencode.command ?? "opencode",
       openspecCommand: config.spec?.command ?? "openspec",
     },

@@ -80,6 +80,28 @@ test("install materializes runtime, skills, agents, plugin, profile, guides, and
   assert.ok(manifest.managedFiles.every(({ path: relativePath, sha256 }) => relativePath && /^[a-f0-9]{64}$/.test(sha256)))
 })
 
+test("install materializes per-agent effort as an OpenCode model option", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot, {
+    effortMap: { "junior-flash": "low", "senior-terra": "high" },
+  }))
+
+  const junior = await readFile(path.join(projectRoot, ".opencode/agents/junior-flash.md"), "utf8")
+  const senior = await readFile(path.join(projectRoot, ".opencode/agents/senior-terra.md"), "utf8")
+  const expert = await readFile(path.join(projectRoot, ".opencode/agents/expert-opus.md"), "utf8")
+  assert.match(junior, /^reasoningEffort: "low"$/m)
+  assert.match(senior, /^reasoningEffort: "high"$/m)
+  assert.doesNotMatch(expert, /^reasoningEffort:/m)
+})
+
+test("install rejects effort configured for an unknown Agent", async () => {
+  const projectRoot = await tempProject()
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(projectRoot, { effortMap: { "missing-agent": "high" } })),
+    (error) => error.code === "INVALID_EFFORT_MAP",
+  )
+})
+
 test("install promotes the default OpenSpec route only when CLI and its read-only project probe are ready", async () => {
   const projectRoot = await tempProject()
   const fakeOpenSpec = path.join(projectRoot, "fake-openspec")

@@ -37,9 +37,10 @@ test("install CLI creates and consumes the fixed project config", async () => {
 test("update CLI takes all model and command configuration from the fixed file", async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
   const models = { "junior-luna": "gateway/gpt-5.6-luna" }
+  const effort = { "junior-luna": "medium" }
   await writeFile(path.join(projectRoot, "team-work.config.json"), JSON.stringify({
     schemaVersion: "1.0",
-    platforms: { opencode: { command: "opencode-next", models } },
+    platforms: { opencode: { command: "opencode-next", models, effort } },
     spec: { type: "openspec", command: "openspec-next" },
   }))
   let received
@@ -55,6 +56,7 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(exitCode, 0)
   assert.equal(received.command, "update")
   assert.deepEqual(received.options.modelMap, models)
+  assert.deepEqual(received.options.effortMap, effort)
   assert.equal(received.options.opencodeCommand, "opencode-next")
   assert.equal(received.options.openspecCommand, "openspec-next")
   assert.equal(received.options.force, true)

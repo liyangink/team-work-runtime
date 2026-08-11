@@ -32,9 +32,13 @@ test("one config supports explicit model bindings and command overrides", async 
     "junior-flash": "gateway/deepseek-v4-flash",
     "senior-terra": "gateway/gpt-5.6-terra",
   }
+  const effort = {
+    "junior-flash": "low",
+    "senior-terra": "high",
+  }
   await writeFile(configPath, `${JSON.stringify({
     schemaVersion: "1.0",
-    platforms: { opencode: { command: "/opt/bin/opencode", models } },
+    platforms: { opencode: { command: "/opt/bin/opencode", models, effort } },
     spec: { type: "openspec", command: "/opt/bin/openspec" },
   }, null, 2)}\n`)
 
@@ -44,6 +48,7 @@ test("one config supports explicit model bindings and command overrides", async 
   assert.deepEqual(loaded.platform, {
     id: "opencode",
     modelMap: models,
+    effortMap: effort,
     opencodeCommand: "/opt/bin/opencode",
     openspecCommand: "/opt/bin/openspec",
   })
@@ -59,6 +64,17 @@ test("invalid or unsafe fixed config fails with stable error codes", async () =>
   await assert.rejects(
     loadUserConfig({ projectRoot: invalidRoot }),
     (error) => error.code === "USER_CONFIG_INVALID" && /models/.test(error.message),
+  )
+
+  const invalidEffortRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  await writeFile(path.join(invalidEffortRoot, "team-work.config.json"), JSON.stringify({
+    schemaVersion: "1.0",
+    platforms: { opencode: { models: "auto", effort: "high" } },
+    spec: { type: "openspec" },
+  }))
+  await assert.rejects(
+    loadUserConfig({ projectRoot: invalidEffortRoot }),
+    (error) => error.code === "USER_CONFIG_INVALID" && /effort/.test(error.message),
   )
 
   const unsafeRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))

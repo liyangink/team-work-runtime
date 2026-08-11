@@ -329,9 +329,10 @@ async function addTree(files, source, destination) {
   }
 }
 
-function agentMarkdown(agent, resolvedModel) {
+function agentMarkdown(agent, resolvedModel, effort) {
   const tierName = { junior: "Junior", senior: "Senior", expert: "Expert" }[agent.tier]
-  return Buffer.from(`---\ndescription: Team-work ${tierName} 通用成员；成本档位 ${agent.costWeight}，具体分工由团队场景决定。\nmode: subagent\nmodel: ${JSON.stringify(resolvedModel)}\npermission:\n  task: deny\n  team_work_spawn: deny\n  team_work_resume: deny\n  team_work_stop: deny\n---\n\n你是 Team-work 的 ${tierName} 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，发现缺口及时报告。不要自行组建下级团队。\n`)
+  const effortOption = effort === undefined ? "" : `reasoningEffort: ${JSON.stringify(effort)}\n`
+  return Buffer.from(`---\ndescription: Team-work ${tierName} 通用成员；成本档位 ${agent.costWeight}，具体分工由团队场景决定。\nmode: subagent\nmodel: ${JSON.stringify(resolvedModel)}\n${effortOption}permission:\n  task: deny\n  team_work_spawn: deny\n  team_work_resume: deny\n  team_work_stop: deny\n---\n\n你是 Team-work 的 ${tierName} 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，发现缺口及时报告。不要自行组建下级团队。\n`)
 }
 
 async function scanModels(opencodeCommand) {
@@ -367,6 +368,19 @@ function resolveModels(agentConfig, explicitMap, availableModels) {
   return { resolved, warnings }
 }
 
+function validateEffortMap(agentConfig, effortMap) {
+  if (effortMap === undefined) return {}
+  if (!effortMap || typeof effortMap !== "object" || Array.isArray(effortMap)) {
+    fail("INVALID_EFFORT_MAP", "effort 配置必须是 Agent 到 effort 名称的映射")
+  }
+  const knownAgents = new Set(agentConfig.agents.map(({ id }) => id))
+  for (const [agentId, effort] of Object.entries(effortMap)) {
+    if (!knownAgents.has(agentId)) fail("INVALID_EFFORT_MAP", `effort 配置包含未知 Agent：${agentId}`)
+    if (typeof effort !== "string" || !effort.trim()) fail("INVALID_EFFORT_MAP", `${agentId} 的 effort 必须是非空字符串`)
+  }
+  return effortMap
+}
+
 function platformProfile(agentConfig, resolved, generatedAt) {
   return {
     schemaVersion: "1.0",
@@ -400,7 +414,7 @@ function platformProfile(agentConfig, resolved, generatedAt) {
   }
 }
 
-async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, opencodeCommand, skipDependencies }) {
+async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableModels, opencodeCommand, skipDependencies }) {
   const files = new Map()
   await addTree(files, path.join(sourceRoot, "runtime"), ".opencode/team-work/runtime")
   await addTree(files, path.join(sourceRoot, "schemas"), ".opencode/team-work/schemas")
@@ -442,11 +456,12 @@ async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, openco
   }
 
   const agentConfig = JSON.parse(await readFile(path.join(sourceRoot, "plugins/opencode/config/agents.json"), "utf8"))
+  const efforts = validateEffortMap(agentConfig, effortMap)
   const scanned = availableModels ?? (modelMap ? [] : await scanModels(opencodeCommand))
   const { resolved, warnings } = resolveModels(agentConfig, modelMap, scanned)
   for (const agent of agentConfig.agents) {
     const model = resolved.get(agent.id)
-    if (model) files.set(`.opencode/agents/${agent.id}.md`, agentMarkdown(agent, model))
+    if (model) files.set(`.opencode/agents/${agent.id}.md`, agentMarkdown(agent, model, efforts[agent.id]))
   }
   return { files, warnings, packageVersion: packageConfig.version, agentIds: [...resolved.keys()], profile: platformProfile(agentConfig, resolved, "") }
 }
@@ -747,6 +762,7 @@ async function manageUnlocked(command, options) {
   const desired = await buildDesiredFiles({
     sourceRoot,
     modelMap: options.modelMap,
+    effortMap: options.effortMap,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
     skipDependencies: Boolean(options.skipDependencies),

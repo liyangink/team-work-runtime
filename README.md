@@ -11,7 +11,7 @@
 
 ## 当前进度
 
-Runtime Interface 1.0、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已实现；OpenCode PlatformPlugin 尚未开始。当前 Runtime 可直接通过源码运行：
+Runtime Interface 1.0、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已实现；OpenCode PlatformPlugin 已完成安装/更新/卸载、分档 Agent、非阻塞 child session、Runtime Tool 和上下文 Hook，真实多模型 E2E 仍在推进。安装说明见 [`plugins/opencode/README.md`](plugins/opencode/README.md)。当前 Runtime 也可直接通过源码运行：
 
 ```bash
 node runtime/cli.mjs init --project /path/to/project --json
@@ -26,4 +26,5 @@ node runtime/cli.mjs doctor --project /path/to/project --json
 npm test
 npm run test:runtime
 npm run test:policy
+npm run test:opencode
 ```

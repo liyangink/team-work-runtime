@@ -90,7 +90,7 @@ Team-work 已覆盖 Junior/Senior/Expert 成本拓扑、非作者挑战者、最
 ## opencode-plugin: 实现首个平台 Adapter
 
 Blocked by: workflow-teamwork
-Status: open
+Status: in-progress
 Type: Prototype
 
 ### Question
@@ -99,7 +99,11 @@ Type: Prototype
 
 ### Answer
 
-待完成。
+第一批平台能力已实现：项目级安装器物化 Workflow、Team-work、CoreRuntime、七个分档 Agent、Platform Profile 与增量指南；受管派发使用 OpenCode SDK `session.create + promptAsync`，不会阻塞 Lead，并以 task/work-item ID 保存 child session 映射。Plugin 暴露受限 Runtime Tool、spawn/resume/status/collect/stop 工具，并在 Lead、research、implement、check 会话注入最小上下文索引。
+
+安装生命周期采用 digest 清单。更新前备份全部旧受管文件，新路径碰撞和本地修改默认拒绝；`--force` 也必须先备份。smoke test 失败会回滚。卸载只处理清单内文件，修改项默认保留为 partial，任务、制品、Workflow/SPEC 配置和用户 OpenCode 文件始终保留。
+
+剩余工作是用真实网关完成七类模型的工具调用 E2E，补齐 OpenCode session/tool 故障事件审计和 OpenSpec 准备检查，再关闭本实施项。
 
 验收产物：
 

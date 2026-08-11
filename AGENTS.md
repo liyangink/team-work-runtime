@@ -50,4 +50,4 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 - 旧 OMO Skill 与旧 Claude Code Skill 已分别归档到 `archive/legacy-omo/`、`archive/legacy-claude-code/`，仅供参考，不参与构建与测试。
 - 第一版 PlatformPlugin 以 OpenCode 为实现目标，优先验证多模型兼容、subagent/session、上下文注入和 Lead 汇总协作；不得把 Claude Agent Teams 作为 Runtime 或 Workflow 的前置能力。
 - OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。
-- Runtime 1.0 契约、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已完成自动化测试和 Terra 交叉审查；OpenCode PlatformPlugin 尚未开始。
+- Runtime 1.0 契约、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已完成自动化测试和 Terra 交叉审查；OpenCode PlatformPlugin 已进入实现阶段，安装生命周期、原生异步 child session、Runtime Tool 和上下文 Hook 已落地，真实多模型 E2E 尚未完成。

@@ -82,7 +82,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 ## Phase 4：OpenCode PlatformPlugin
 
-状态：待开始。
+状态：进行中。
 
 打包 Workflow、Team-work、CoreRuntime、Junior/Senior/Expert Agent 和 OpenCode Plugin：
 
@@ -96,6 +96,8 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 模型/provider/网关仍由 OpenCode 管理，PlatformPlugin 只物化 Agent 与能力档位。
 
 完成标准：可独立创建、恢复和完成团队任务；多模型 Agent 能正常调用工具；受管派发测试证明不会进入阻塞模式；Lead 与 subagent 获得不同的最小上下文；Plugin 失败不损坏状态或形成死门；卸载不删除项目数据。
+
+已完成：最低版本校验、模型唯一解析、项目级 Skill/Agent/Plugin 装配、生产依赖安装、安装清单、更新备份与回滚、安全/强制卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、Runtime Tool、Lead/child 最小上下文 Hook 和 compaction 恢复提示。待完成：真实网关下的多模型 E2E、平台事件审计、OpenSpec 准备检查和故障注入收口。
 
 ## Phase 5：Claude Code 与 OMO PlatformPlugin
 

@@ -261,21 +261,24 @@ OpenCode 首版目录：
 
 ```text
 plugins/opencode/
-├── .opencode/
-│   ├── skills/workflow/SKILL.md
-│   ├── skills/team-work/SKILL.md
-│   ├── agents/
-│   ├── plugins/team-work.ts
-│   └── tools/team-work.ts
-├── runtime/team-work
-├── platform/profile-template.json
-├── platform/guides/
-└── scripts/install-or-update
+├── assets/team-work.js         # 安装为 .opencode/plugins/team-work.js
+├── config/
+│   ├── agents.json             # 七个通用成本档位定义
+│   └── model-map.example.json
+├── guides/                     # 安装为 Platform 增量指南
+├── scripts/manage.mjs          # install/update/doctor/uninstall
+└── src/
+    ├── lifecycle.mjs           # digest 清单、备份、回滚、smoke test
+    └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入
 ```
 
-平台无关 Skill 只有一份可编辑源码；Plugin 中是安装产物。OpenCode 负责模型/provider、Agent 调用和 child session，项目任务和配置始终留在项目根 `.team-work/`。首版以“Lead + 多 subagent + 共享制品/Lead 转发”为协作基线，不要求原生共享任务表、成员互发消息或可恢复的 Team 进程。
+平台无关 Skill 只有根目录 `skills/` 一份可编辑源码，安装器在目标项目物化副本；CoreRuntime 与 schema 同理。OpenCode 负责模型/provider、Agent 调用和 child session，项目任务和配置始终留在项目根 `.team-work/`。首版以“Lead + 多 subagent + 共享制品/Lead 转发”为协作基线，不要求原生共享任务表、成员互发消息或可恢复的 Team 进程。
+
+生命周期管理只拥有安装清单列出的文件：更新先快照旧受管文件，碰撞或本地修改默认失败，smoke test 失败回滚；卸载保留 `.team-work/tasks/`、制品、Workflow/SPEC 配置、平台 session 历史、备份和用户自有 OpenCode 文件。最低 OpenCode 版本用于排除已知不兼容接口，不设置最高版本上限。
 
 OpenCode Adapter 对受管团队派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续规划、验证或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
+
+首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过 `team_work_spawn`。spawn 在创建 child session 前必须验证 Platform Profile 中的已解析 Agent、活动 team task、Runtime work item、唯一 Owner 和可派发状态；SDK 返回错误与网络抛错统一为可恢复的平台错误。状态表缺少 child session 时再查询 session 实体，已删除会话报告为 `lost` 而不是伪装成 `idle`。
 
 OpenCode 能力约束参考：[Plugins](https://opencode.ai/docs/plugins/)、[Agent Skills](https://opencode.ai/docs/skills/)、[Agents](https://opencode.ai/docs/agents/)、[Custom Tools](https://opencode.ai/docs/custom-tools/)。
 

@@ -1,4 +1,4 @@
-# team-work Runtime Roadmap
+# team-work-runtime Roadmap
 
 状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，OpenCode PlatformPlugin 正在完成正式场景验收。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
 
@@ -36,7 +36,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 状态：完成。
 
-仓库已提供 `AGENTS.md`、本 Roadmap、Runtime 契约和约束测试；旧 OMO/Claude Code Skill 已移入 `archive/`，仅作为历史参考。后续 Agent 不依赖聊天历史或本地 memory 即可恢复方向。
+仓库已提供 `AGENTS.md`、本 Roadmap、Runtime 契约和约束测试，并只保留当前实现；旧 OMO/Claude Code 资产仅存在于拆分前的 Git 历史。后续 Agent 不依赖聊天历史或本地 memory 即可恢复方向。
 
 ## Phase 1：Runtime 契约
 

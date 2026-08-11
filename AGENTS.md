@@ -1,10 +1,10 @@
-# team-work 仓库开发契约
+# team-work-runtime 仓库开发契约
 
 本文件是跨平台开发 Agent 的项目约束。开始规划、实现或审查前，先阅读本文件和 [`docs/runtime-roadmap.md`](docs/runtime-roadmap.md)，检查工作区并保留用户已有改动。
 
 ## 目标
 
-`team-work` 是平台无关的多智能体研发 Harness，负责：
+`team-work-runtime` 是平台无关的多智能体研发 Harness，负责：
 
 1. 任务制品、活动任务和跨会话/子 Agent 上下文；
 2. 工作流状态、阶段门禁和可恢复控制；
@@ -40,7 +40,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 ## 变更要求
 
 - `AGENTS.md` 保存产品边界，Roadmap 保存进度，Skill 保存协作策略，Runtime 输出保存运行状态；不要重复定义。
-- `docs/file-inventory.json` 是新实现、历史归档和规划路径的清单；新增或迁移文件时必须同步，禁止新实现反向依赖 `archive/`。
+- `docs/file-inventory.json` 是当前实现与规划路径的清单；新增或迁移文件时必须同步。根目录不得重新引入 OMO、Claude Code 等旧版资产，历史实现只通过 Git 历史保留。
 - 开发本仓库时新建 subagent 默认使用 `gpt-5.6-terra` 以控制成本；只有任务明确需要更高能力或用户另行指定时才升级。
 - 修改 schema、状态机、门禁、Hook 或安装器时，补齐损坏输入、非法流转、并发、恢复和幂等测试。
 - 新增平台时复用 Workflow、Team-work 和 CoreRuntime，只新增 PlatformPlugin；不得复制任务状态机和通用团队策略。
@@ -48,7 +48,6 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 ## 当前基线
 
-- 旧 OMO Skill 与旧 Claude Code Skill 已分别归档到 `archive/legacy-omo/`、`archive/legacy-claude-code/`，仅供参考，不参与构建与测试。
 - 第一版 PlatformPlugin 以 OpenCode 为实现目标，优先验证多模型兼容、subagent/session、上下文注入和 Lead 控制面协作；不得把 Claude Agent Teams 作为 Runtime 或 Workflow 的前置能力。
 - OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。Agent model/effort 由 Plugin 启动时读取用户配置并动态注入。
 - Runtime 1.0 契约、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已完成自动化测试和 Terra 交叉审查；OpenCode PlatformPlugin 的安装生命周期、原生异步 child session、Runtime Tool 和上下文 Hook 已落地。低成本多模型平台链路 E2E 已完成，含 Senior 挑战者的正式 Workflow 场景 E2E 尚待完成。

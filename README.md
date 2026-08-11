@@ -1,8 +1,10 @@
-# team-work
+# team-work-runtime
 
 ## 简介
 
-team-work 是平台无关的 multiagent engineering loop。Lead Agent 只管理研发阶段、上下文、成本、派发、制品、证据与门禁，不承担具体工作或技术内容裁决；具体产出由 Owner 完成，挑战者复核，核心环节由 Expert 裁决。
+team-work-runtime 是平台无关的 multiagent engineering loop。Lead Agent 只管理研发阶段、上下文、成本、派发、制品、证据与门禁，不承担具体工作或技术内容裁决；具体产出由 Owner 完成，挑战者复核，核心环节由 Expert 裁决。
+
+仓库与 npm 包名使用 `team-work-runtime`；`/team-work` Skill、`team-work` CLI 和项目内 `.team-work/` 状态目录作为稳定用户协议继续保留。
 
 团队按 [Junior、Senior、Expert](#成本控制与团队分档) 三档控制成本。Junior 承担主要工作，Senior 负责复杂判断与挑战，Expert 用于高风险把关、关键攻坚或最终收口。
 

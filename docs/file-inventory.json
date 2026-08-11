@@ -35,10 +35,9 @@
   ],
   "sharedBuild": ["package.json", "package-lock.json"],
   "planned": [],
-  "legacyArchive": ["archive/legacy-omo/", "archive/legacy-claude-code/"],
   "rules": [
-    "New implementation code must not import or execute files under archive/.",
-    "Archive content is excluded from build and test discovery.",
+    "The repository root must not contain legacy OMO or Claude Code assets under archive/.",
+    "Historical implementations remain available only through Git history.",
     "Update this inventory whenever a tracked implementation path is added, moved, or reclassified."
   ]
 }

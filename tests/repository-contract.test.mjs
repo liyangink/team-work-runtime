@@ -7,12 +7,14 @@ import { fileURLToPath } from "node:url"
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const read = (relativePath) => readFile(path.join(projectRoot, relativePath), "utf8")
 
-test("new implementation and legacy archives stay explicitly separated", async () => {
+test("repository inventory contains only the current implementation", async () => {
   const inventory = JSON.parse(await read("docs/file-inventory.json"))
-  for (const relativePath of [...inventory.newImplementation, ...inventory.sharedBuild, ...inventory.legacyArchive]) {
+  for (const relativePath of [...inventory.newImplementation, ...inventory.sharedBuild]) {
     await assert.doesNotReject(access(path.join(projectRoot, relativePath)), relativePath)
   }
-  assert.ok(inventory.rules.some((rule) => rule.includes("must not import or execute")))
+  assert.equal("legacyArchive" in inventory, false)
+  await assert.rejects(access(path.join(projectRoot, "archive")), (error) => error.code === "ENOENT")
+  assert.ok(inventory.rules.some((rule) => rule.includes("Git history")))
 })
 
 test("repository contract preserves OpenCode and challenger invariants", async () => {
@@ -20,7 +22,7 @@ test("repository contract preserves OpenCode and challenger invariants", async (
   assert.match(agents, /任务允许从任意研发阶段创建并介入工作流/)
   assert.match(agents, /非作者 Senior 或 Expert 挑战/)
   assert.match(agents, /background\/non-blocking 模式派发/)
-  assert.match(agents, /禁止新实现反向依赖 `archive\/`/)
+  assert.match(agents, /不得重新引入[^。\n]*旧版资产/)
   assert.match(agents, /subagent 默认使用 `gpt-5\.6-terra`/)
 })
 

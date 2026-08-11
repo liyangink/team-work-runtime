@@ -1,4 +1,4 @@
-# team-work Multiagent Engineering Loop 设计
+# team-work-runtime Multiagent Engineering Loop 设计
 
 状态：设计基线，指导 Runtime、Workflow、Team-work 与首个平台 Plugin 的实现。产品约束见 [`AGENTS.md`](../AGENTS.md)，阶段计划见 [`runtime-roadmap.md`](runtime-roadmap.md)。
 
@@ -30,7 +30,7 @@ Workflow 与 Team-work 是平台无关 Policy Skill。CoreRuntime 是一个深 M
 
 ```mermaid
 flowchart TB
-    subgraph PRODUCT["team-work Product Modules"]
+    subgraph PRODUCT["team-work-runtime Product Modules"]
         W["Workflow<br/>研发任务流 Policy"]
         T["Team-work<br/>团队协作 Policy"]
         C["CoreRuntime<br/>确定性 Runtime Interface"]

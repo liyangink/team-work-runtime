@@ -63,7 +63,7 @@ test("npm package contains every installer input and excludes repository-only as
     "plugins/opencode/src/agent-config.mjs",
     "plugins/opencode/config/runtime-package-lock.json",
   ]) assert.ok(names.has(required), `npm package is missing ${required}`)
-  for (const excluded of ["USAGE.md", "AGENTS.md", "tests/user-config.test.mjs", "archive/legacy-omo/SKILL.md"]) {
+  for (const excluded of ["USAGE.md", "AGENTS.md", "tests/user-config.test.mjs", "docs/runtime-roadmap.md"]) {
     assert.equal(names.has(excluded), false, `npm package includes repository-only ${excluded}`)
   }
 

@@ -1,0 +1,103 @@
+{
+  "schemaVersion": "1.0",
+  "capturedDate": "2026-08-11",
+  "scope": "sanitized-live-opencode-gateway-evidence",
+  "host": {
+    "opencodeVersion": "1.18.15",
+    "projectKind": "isolated-temporary-project",
+    "credentialsCopiedToRepository": false
+  },
+  "directModelChecks": [
+    {
+      "commandShape": "opencode run --pure --format json --model netease-codemaker/deepseek-v4-flash <fixed-marker-prompt>",
+      "sessionId": "ses_010b09619ffeYhfMLEBmimI1dE",
+      "model": "deepseek-v4-flash",
+      "result": "DEEPSEEK_GATEWAY_OK",
+      "inputTokens": 14508,
+      "outputTokens": 9
+    },
+    {
+      "commandShape": "opencode run --pure --format json --model netease-codemaker/gpt-5.6-luna <fixed-marker-prompt>",
+      "sessionId": "ses_010b03a9effes0DqKHli466f7C",
+      "model": "gpt-5.6-luna",
+      "result": "LUNA_GATEWAY_OK",
+      "inputTokens": 12144,
+      "outputTokens": 9
+    }
+  ],
+  "toolChecks": [
+    {
+      "sessionId": "ses_010afb977ffe4A9l46izPApuiG",
+      "agentModel": "deepseek-v4-flash",
+      "toolSequence": ["glob", "read"],
+      "result": "DEEPSEEK_SEARCH_OK:left - right"
+    },
+    {
+      "sessionId": "ses_010af5552ffeu5npu4lLqncR0W",
+      "agentModel": "gpt-5.6-luna",
+      "toolSequence": ["read", "apply_patch", "read"],
+      "before": "return left - right",
+      "after": "return left + right",
+      "result": "LUNA_EDIT_OK"
+    }
+  ],
+  "installation": {
+    "commandShape": "node plugins/opencode/scripts/manage.mjs install --project <temporary-project> --model-map <local-model-map>",
+    "status": "installed",
+    "manifestId": "4a17ec84-b662-412a-8a0a-228abb06c2b5",
+    "resolvedAgents": ["junior-flash", "junior-luna"],
+    "openspecStatus": "missing-recoverable"
+  },
+  "backgroundTeamRun": {
+    "commandShape": "node real-team-e2e.mjs",
+    "taskId": "real-gateway-team",
+    "parentKind": "native-opencode-session",
+    "children": [
+      {
+        "workItemId": "deepseek-read",
+        "agent": "junior-flash",
+        "sessionId": "ses_010ab63c8ffez6azN9R3BqkZcI",
+        "spawnMode": "background",
+        "finalStatus": "idle",
+        "result": "DEEPSEEK_CHILD_OK"
+      },
+      {
+        "workItemId": "luna-read",
+        "agent": "junior-luna",
+        "sessionId": "ses_010ab63b0ffeZlzfmtqnNQgWFQ",
+        "spawnMode": "background",
+        "finalStatus": "idle",
+        "result": "LUNA_CHILD_OK"
+      }
+    ],
+    "runtimeEvents": [
+      "task.team-decided",
+      "work.created",
+      "work.created",
+      "platform.dispatch.accepted",
+      "platform.dispatch.accepted"
+    ]
+  },
+  "crossProcessResume": {
+    "commandShape": "restart OpenCode server; node real-resume-e2e.mjs",
+    "taskId": "real-gateway-team",
+    "workItemId": "deepseek-read",
+    "sessionIdBefore": "ses_010ab63c8ffez6azN9R3BqkZcI",
+    "sessionIdAfter": "ses_010ab63c8ffez6azN9R3BqkZcI",
+    "spawnMode": "background",
+    "result": "DEEPSEEK_RESUME_OK",
+    "newRuntimeEvent": "platform.resume.accepted"
+  },
+  "pureModeBoundary": {
+    "sessionId": "ses_010a83c1effeDRt9PQuzMTjVUh",
+    "commandShape": "opencode run --pure ... request team_work_runtime version",
+    "result": "team_work_runtime not provided",
+    "conclusion": "OpenCode 1.18.15 pure mode cannot run the project Team-work Plugin"
+  },
+  "limitations": [
+    "The background run validates platform dispatch and recovery, not a policy-complete challenger topology.",
+    "The effective global OpenCode configuration still contained OMO during this run.",
+    "No Expert model was invoked.",
+    "No real provider rate-limit or capacity fault was injected."
+  ]
+}

@@ -2,9 +2,14 @@
 
 本目录把平台无关的 Workflow、Team-work、CoreRuntime 装配到 OpenCode 项目中。安装目标使用 OpenCode 官方自动发现目录 `.opencode/skills/`、`.opencode/agents/` 和 `.opencode/plugins/`；不会修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
 
+- 首次配置、日常任务、状态查看与恢复：[`USAGE.md`](USAGE.md)
+- 当前真实网关验收结果：[`REAL-GATEWAY-E2E.md`](REAL-GATEWAY-E2E.md)
+
+OpenCode 配置会合并多个来源。安装器不会替用户移除全局 OMO 等旧插件；若要无 OMO 运行，必须先清理或隔离实际生效的全局配置。不要使用 `--pure` 启动 Team-work：OpenCode 1.18.15 实测会同时禁用项目本地 Team-work Plugin。
+
 ## 准备模型映射
 
-Agent 的 `model` 必须是 OpenCode 可识别的完整 `provider/model`。先复制 [`config/model-map.example.json`](config/model-map.example.json)，把 `your-provider` 改成 `opencode models` 输出中的 provider。未显式映射时安装器会尝试按模型名唯一匹配；零个或多个匹配都不会猜测，对应 Agent 不会生成，但会保留在 Platform Profile 中供诊断。
+Agent 的 `model` 必须是 OpenCode 可识别的完整 `provider/model`。先复制 [`config/model-map.example.json`](config/model-map.example.json)，把 `your-provider` 改成 `opencode models` 输出中的 provider。未显式映射时安装器会尝试按模型名唯一匹配；零个或多个匹配都不会猜测，对应 Agent 不会生成，但会保留在 Platform Profile 中供诊断。允许只映射少量成员做低成本 smoke；正式组团至少还要有一名可担任挑战者的 Senior 或 Expert。
 
 ## 安装
 

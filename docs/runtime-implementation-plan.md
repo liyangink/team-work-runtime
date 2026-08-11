@@ -42,7 +42,7 @@ Runtime Interface 1.0 已冻结。契约采用 JSON Schema Draft 2020-12 加跨�
 ## core-runtime-mvp: 实现文件型 CoreRuntime
 
 Blocked by: runtime-contract
-Status: open
+Status: resolved
 Type: Prototype
 
 ### Question
@@ -51,7 +51,7 @@ Type: Prototype
 
 ### Answer
 
-待完成。
+文件型 MVP 已实现：公开 CLI 覆盖 init/version/migrate/doctor、task、context、flow、work 和 event；使用 schema/语义双层校验、逐级 realpath/symlink 边界检查、带 owner 的排他文件锁、expected revision、同目录原子替换和可重放事务清单。端到端测试覆盖任意阶段介入、当前阶段门禁、返工历史、绑定歧义、任务终态、dry-run、并发写冲突、损坏状态诊断、中断事务恢复和陈旧锁治理。Terra 挑战审查提出的全部 P1 已补反例并关闭。
 
 验收产物：
 

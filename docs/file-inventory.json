@@ -10,14 +10,16 @@
     "docs/runtime-interface.md",
     "docs/runtime-plugin-design.md",
     "docs/runtime-roadmap.md",
+    "runtime/",
     "schemas/",
     "tests/fixtures/runtime/",
     "tests/repository-contract.test.mjs",
+    "tests/core-runtime.test.mjs",
     "tests/runtime-contract.test.mjs",
     "tests/support/contract-validator.mjs"
   ],
   "sharedBuild": ["package.json", "package-lock.json"],
-  "planned": ["runtime/", "skills/workflow/", "skills/team-work/", "plugins/opencode/"],
+  "planned": ["skills/workflow/", "skills/team-work/", "plugins/opencode/"],
   "legacyArchive": ["archive/legacy-omo/", "archive/legacy-claude-code/"],
   "rules": [
     "New implementation code must not import or execute files under archive/.",

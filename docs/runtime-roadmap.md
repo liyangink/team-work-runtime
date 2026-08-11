@@ -1,6 +1,6 @@
 # team-work Runtime Roadmap
 
-状态：方向与 Runtime 1.0 契约已确认，文件型 Runtime 尚未实现。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
+状态：Runtime 1.0 契约与文件型 MVP 已完成，下一步实现 Workflow 与 Team-work。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
 
 ## 目标结构
 
@@ -58,7 +58,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 ## Phase 2：Core Runtime MVP
 
-状态：下一步。
+状态：完成。
 
 实现任务初始化、活动绑定、上下文索引和渲染、workflow 加载、门禁、原子阶段切换、通用 work-item、事件和审计恢复。提供 `task/context/flow/work/event/doctor` 命令族。
 
@@ -72,7 +72,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 ## Phase 3：Workflow 与 Team-work
 
-状态：待开始。
+状态：下一步。
 
 - Workflow 驱动十阶段任务流、上下文计划、solo/team 判断和 SPEC Skill 路由；
 - Team-work 保留成本、拓扑、场景、三轮收敛、汇报和评分能力；

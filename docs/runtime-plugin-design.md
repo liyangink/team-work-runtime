@@ -101,7 +101,7 @@ flowchart TB
 
 | 资产 | 所有者与写入者 | 用途 |
 | --- | --- | --- |
-| `config.yaml`、`workflows/**` | 项目配置；Installer 初始化，用户可显式修改，CoreRuntime 校验 | Workflow、Runtime 和 SPEC 路由 |
+| `config.yaml`、`workflows/**` | 项目配置；PlatformPlugin 首次调用时通过 CoreRuntime 初始化，用户可显式修改，CoreRuntime 校验 | Workflow、Runtime 和 SPEC 路由 |
 | `bindings/<platform>/**` | 仅 CoreRuntime 写入；可重建 | 当前平台会话到稳定 task-id 的绑定 |
 | `platform/<platform>/profile.json` | PlatformPlugin 扫描并物化 | Team-work 获取 Agent、能力、限制和指南路径 |
 | task 控制文件、context、work-items、events、`.txn/` | 仅 CoreRuntime 写入 | 跨会话恢复、状态、门禁和审计 |
@@ -118,7 +118,7 @@ spec:
   status: ready
 ```
 
-PlatformPlugin 可以初始化或更新这段配置，但 Workflow 只依赖配置结果。切换 Claude Code、OpenCode 或其他 CLI 时，项目的 SPEC 选择保持不变。
+PlatformPlugin 首次接入项目时可以初始化默认路由并同步工具就绪状态，但 Workflow 只依赖配置结果。切换 Claude Code、OpenCode 或其他 CLI 时，项目的 SPEC 选择保持不变。
 
 ## 5. Workflow
 
@@ -150,12 +150,15 @@ flowchart LR
     S --> SR["spec-review"]
     SR -->|"pass"| I["implementation"]
     SR -->|"rework"| S
+    SR -->|"fail: structural"| D
     I --> T["test"]
     T -->|"pass"| CR["code-review"]
     T -->|"fail"| I
     CR -->|"pass"| E["e2e"]
     CR -->|"rework"| I
+    CR -->|"fail: test"| T
     E -->|"pass"| F["finish"]
+    E -->|"rework: test design"| T
     E -->|"fail"| I
 ```
 
@@ -229,13 +232,13 @@ PlatformPlugin 包含安装期与运行期两类职责。
 
 ### 8.1 安装与更新
 
-1. 安装或更新 CoreRuntime、Workflow、Team-work；
-2. 安装平台 Agent Definitions、Hook 和 Harness 指南；
+1. 在用户级平台目录安装或更新 CoreRuntime、Workflow、Team-work；
+2. 安装全局 Agent Definitions、Hook 和 Harness 指南；
 3. 扫描原生 multiagent、模型、工具、权限、并发和 UI 能力；
-4. 生成 `platform/<platform>/profile.json` 与增量 guides；
-5. 检查项目 SPEC 配置和工具；缺失时引导用户安装并初始化默认 OpenSpec；
-6. 将最终 SPEC 路由写入项目 Workflow Config；
-7. 执行版本、路径、Hook 和最小 team smoke test。
+4. 生成用户级 Platform Profile、增量 guides 与平台设置；
+5. 执行版本、路径、Hook 和最小 team smoke test；
+6. 首次项目调用时懒初始化 `.team-work/`，物化当前 Profile/指南并只读检查默认 OpenSpec；
+7. 缺少 SPEC 工具时保留可恢复的 `missing` 路由，不阻塞其他阶段。
 
 安装器不得静默覆盖已有 Workflow/SPEC 选择；修改前备份，重复执行必须幂等。模型网关、凭据、MCP 和用户权限仍由 CLI Host 管理，Plugin 只检查并报告。
 
@@ -261,10 +264,10 @@ OpenCode 首版目录：
 
 ```text
 plugins/opencode/
-├── assets/team-work.js         # 安装为 .opencode/plugins/team-work.js
+├── assets/team-work.js         # 安装为 ~/.config/opencode/plugins/team-work.js
 ├── config/
 │   ├── agents.json             # 七个通用成本档位定义
-│   └── runtime-package-lock.json # 目标项目 Runtime 依赖锁
+│   └── runtime-package-lock.json # 全局 Runtime 依赖锁
 ├── guides/                     # 安装为 Platform 增量指南
 ├── scripts/manage.mjs          # 统一 npm CLI 的源码入口包装
 └── src/
@@ -272,9 +275,9 @@ plugins/opencode/
     └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入
 ```
 
-平台无关 Skill 只有根目录 `skills/` 一份可编辑源码，安装器在目标项目物化副本；CoreRuntime 与 schema 同理。OpenCode 负责模型/provider、Agent 调用和 child session，项目任务和配置始终留在项目根 `.team-work/`。首版以“Lead + 多 subagent + 共享制品/Lead 转发”为协作基线，不要求原生共享任务表、成员互发消息或可恢复的 Team 进程。
+平台无关 Skill 只有根目录 `skills/` 一份可编辑源码，安装器在 OpenCode 全局配置目录物化副本；CoreRuntime 与 schema 同理。OpenCode 负责模型/provider、Agent 调用和 child session，项目任务和配置始终留在项目根 `.team-work/`，并在首次 Runtime Tool 调用时创建。首版以“Lead + 多 subagent + 共享制品/Lead 转发”为协作基线，不要求原生共享任务表、成员互发消息或可恢复的 Team 进程。
 
-生命周期管理只拥有安装清单列出的文件：更新先快照旧受管文件，碰撞或本地修改默认失败，smoke test 失败回滚；卸载保留 `.team-work/tasks/`、制品、Workflow/SPEC 配置、平台 session 历史、备份和用户自有 OpenCode 文件。最低 OpenCode 版本用于排除已知不兼容接口，不设置最高版本上限。
+生命周期管理只拥有全局安装清单列出的文件：更新先快照旧受管文件，碰撞或本地修改默认失败，smoke test 失败回滚；卸载不扫描项目，因此所有 `.team-work/` 任务、制品、Workflow/SPEC 配置和平台 session 历史都被保留。最低 OpenCode 版本用于排除已知不兼容接口，不设置最高版本上限。
 
 OpenCode Adapter 对受管团队派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续规划、验证或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "workflowId": "engineering",
-  "version": "1.0",
+  "version": "1.1",
   "initialStage": "research",
   "stages": [
     {
@@ -80,12 +80,15 @@
     { "from": "spec", "outcome": "pass", "to": "spec-review" },
     { "from": "spec-review", "outcome": "pass", "to": "implementation" },
     { "from": "spec-review", "outcome": "rework", "to": "spec" },
+    { "from": "spec-review", "outcome": "fail", "to": "design" },
     { "from": "implementation", "outcome": "pass", "to": "test" },
     { "from": "test", "outcome": "pass", "to": "code-review" },
     { "from": "test", "outcome": "fail", "to": "implementation" },
     { "from": "code-review", "outcome": "pass", "to": "e2e" },
     { "from": "code-review", "outcome": "rework", "to": "implementation" },
+    { "from": "code-review", "outcome": "fail", "to": "test" },
     { "from": "e2e", "outcome": "pass", "to": "finish" },
+    { "from": "e2e", "outcome": "rework", "to": "test" },
     { "from": "e2e", "outcome": "fail", "to": "implementation" }
   ],
   "rollback": { "enabled": true, "requiresReason": true, "invalidatesLaterEvidence": true }

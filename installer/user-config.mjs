@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
-import { link, lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
+import { link, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 
-export const USER_CONFIG_NAME = "team-work.config.json"
+export const USER_CONFIG_NAME = "config.json"
 
 const DEFAULT_CONFIG = {
   schemaVersion: "1.0",
@@ -98,15 +98,9 @@ async function createDefaultConfig(configPath) {
   }
 }
 
-export async function loadUserConfig({ projectRoot, createIfMissing = false }) {
-  let resolvedRoot
-  try {
-    resolvedRoot = await realpath(path.resolve(projectRoot))
-    if (!(await stat(resolvedRoot)).isDirectory()) fail("USER_CONFIG_PROJECT_INVALID", `项目路径不是目录：${projectRoot}`)
-  } catch (error) {
-    if (error.code === "ENOENT") fail("USER_CONFIG_PROJECT_NOT_FOUND", `项目路径不存在：${projectRoot}`)
-    throw error
-  }
+export async function loadUserConfig({ configRoot, createIfMissing = false }) {
+  if (typeof configRoot !== "string" || !configRoot.trim()) fail("USER_CONFIG_ROOT_INVALID", "用户配置目录不能为空")
+  const resolvedRoot = path.resolve(configRoot)
   const configPath = path.join(resolvedRoot, USER_CONFIG_NAME)
   try {
     if ((await lstat(configPath)).isSymbolicLink()) fail("USER_CONFIG_UNSAFE", `${USER_CONFIG_NAME} 不得是符号链接`)
@@ -120,7 +114,7 @@ export async function loadUserConfig({ projectRoot, createIfMissing = false }) {
     created = await createDefaultConfig(configPath)
     config = await readConfig(configPath)
   }
-  if (!config) fail("USER_CONFIG_MISSING", `缺少 ${USER_CONFIG_NAME}；请先执行 team-work install`)
+  if (!config) fail("USER_CONFIG_MISSING", `缺少用户配置 ${configPath}；请先执行 team-work install`)
 
   const opencode = config.platforms?.opencode ?? {}
   return {

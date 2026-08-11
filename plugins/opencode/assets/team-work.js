@@ -1,10 +1,12 @@
 import { tool } from "@opencode-ai/plugin"
+import { fileURLToPath } from "node:url"
 import { createOpenCodeAdapter } from "../team-work/opencode-adapter.mjs"
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`
 
 export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
-  const adapter = createOpenCodeAdapter({ client, projectRoot: worktree || directory })
+  const platformRoot = fileURLToPath(new URL("../team-work", import.meta.url))
+  const adapter = createOpenCodeAdapter({ client, projectRoot: worktree || directory, platformRoot })
   const taskId = tool.schema.string().describe("稳定的 team-work task id")
   const workItemId = tool.schema.string().describe("稳定的 Runtime work item id")
   const prompt = tool.schema.string().describe("成员本轮任务、范围、完成条件、制品路径和证据要求")

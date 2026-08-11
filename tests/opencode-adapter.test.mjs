@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { access, chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
 import { createOpenCodeAdapter } from "../plugins/opencode/src/opencode-adapter.mjs"
+import { executeRuntime } from "../runtime/core.mjs"
 
 const tempProject = () => mkdtemp(path.join(os.tmpdir(), "team-work-adapter-"))
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -50,6 +51,53 @@ function fakeClient() {
 function testAdapter(client, projectRoot, extras = {}) {
   return createOpenCodeAdapter({ client, projectRoot, assignmentValidator: async () => {}, ...extras })
 }
+
+test("first Runtime tool call lazily initializes project state from the global platform installation", async () => {
+  const projectRoot = await tempProject()
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
+  await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({ agents: [], guides: [".team-work/platform/opencode/guides/team-work.md"] })}\n`)
+  await writeFile(path.join(platformRoot, "guides/team-work.md"), "# OpenCode guide\n")
+  const adapter = createOpenCodeAdapter({
+    client: fakeClient(),
+    projectRoot,
+    platformRoot,
+    runtimeExecutor: (request) => executeRuntime({ ...request, projectRoot }),
+  })
+
+  const result = await adapter.runtime({ command: "doctor", input: {} })
+
+  assert.equal(result.exitCode, 0)
+  await assert.doesNotReject(access(path.join(projectRoot, ".team-work/config.yaml")))
+  assert.equal(JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8")).spec.status, "missing")
+  assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, ".team-work/platform/opencode/profile.json"), "utf8")), {
+    agents: [],
+    guides: [".team-work/platform/opencode/guides/team-work.md"],
+  })
+  assert.equal(await readFile(path.join(projectRoot, ".team-work/platform/opencode/guides/team-work.md"), "utf8"), "# OpenCode guide\n")
+})
+
+test("lazy project initialization promotes an initialized OpenSpec route using the user-level command", async () => {
+  const projectRoot = await tempProject()
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  const openspec = path.join(platformRoot, "openspec-test")
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
+  await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({ agents: [], guides: [] })}\n`)
+  await writeFile(path.join(platformRoot, "settings.json"), `${JSON.stringify({ schemaVersion: "1.0", spec: { type: "openspec", command: openspec } })}\n`)
+  await writeFile(openspec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 2.0.0'; else echo '{\"changes\":[]}'; fi\n")
+  await chmod(openspec, 0o755)
+  const adapter = createOpenCodeAdapter({
+    client: fakeClient(),
+    projectRoot,
+    platformRoot,
+    runtimeExecutor: (request) => executeRuntime({ ...request, projectRoot }),
+  })
+
+  await adapter.runtime({ command: "doctor", input: {} })
+
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.equal(config.spec.status, "ready")
+})
 
 test("managed spawn and resume always use native promptAsync child sessions", async () => {
   const projectRoot = await tempProject()
@@ -167,15 +215,16 @@ test("the same work item cannot create a second child session", async () => {
 
 test("spawn validates the installed agent and Runtime assignment before creating a session", async () => {
   const projectRoot = await tempProject()
-  const profilePath = path.join(projectRoot, ".team-work/platform/opencode/profile.json")
-  await mkdir(path.dirname(profilePath), { recursive: true })
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  const profilePath = path.join(platformRoot, "profile.json")
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
   await writeFile(profilePath, `${JSON.stringify({ agents: [{ id: "senior-terra", resolvedModel: "gateway/gpt-5.6-terra" }] })}\n`)
   const client = fakeClient()
   const runtimeExecutor = async (request) => {
     if (request.command === "task.show") return { exitCode: 0, envelope: { data: { task: { status: "active", teamDecision: { mode: "team" } } } } }
     return { exitCode: 0, envelope: { data: { workItem: { owner: "senior-terra", status: "queued" } } } }
   }
-  const adapter = createOpenCodeAdapter({ client, projectRoot, runtimeExecutor })
+  const adapter = createOpenCodeAdapter({ client, projectRoot, platformRoot, runtimeExecutor })
   await adapter.spawn({ taskId: "task-10", workItemId: "review-1", parentSessionId: "lead-10", agent: "senior-terra", prompt: "审查" })
   assert.equal(client.calls.filter(([name]) => name === "create").length, 1)
 

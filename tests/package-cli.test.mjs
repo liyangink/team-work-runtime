@@ -26,9 +26,10 @@ test("one package CLI routes runtime and lifecycle commands", async () => {
   assert.equal(JSON.parse(explicitRuntime.stdout).data.runtimeVersion, "0.1.0")
 
   await assert.rejects(
-    run(process.execPath, [path.join(projectRoot, "cli.mjs"), "doctor", "--project", projectRoot], {
+    run(process.execPath, [path.join(projectRoot, "cli.mjs"), "doctor"], {
       cwd: projectRoot,
       encoding: "utf8",
+      env: { ...process.env, XDG_CONFIG_HOME: await mkdtemp(path.join(os.tmpdir(), "team-work-empty-config-")) },
     }),
     (error) => JSON.parse(error.stderr).code === "USER_CONFIG_MISSING",
   )

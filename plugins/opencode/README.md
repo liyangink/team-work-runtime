@@ -1,71 +1,51 @@
 # OpenCode PlatformPlugin
 
-本目录把平台无关的 Workflow、Team-work、CoreRuntime 装配到 OpenCode 项目中。
+本模块把平台无关的 Workflow、Team-work 和 CoreRuntime 装配到 OpenCode。面向用户的安装、配置和使用说明见 [`../../README.md`](../../README.md)。
 
-安装目标使用 OpenCode 官方自动发现目录 `.opencode/skills/`、`.opencode/agents/` 和 `.opencode/plugins/`；不会修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
+## 安装边界
 
-- 面向用户的简介、QuickStart、配置和日常使用：[`../../README.md`](../../README.md)
-
-不要使用 `--pure` 启动 Team-work：OpenCode 1.18.15 实测会同时禁用项目本地 Team-work Plugin。
-
-## 模型解析
-
-安装器只读取项目根目录的 `team-work.config.json`。`models: "auto"` 会按模型名唯一匹配；零个或多个匹配都不会猜测，对应 Agent 不会生成，但会保留在 Platform Profile 中供诊断。
-
-显式映射时，值必须是 OpenCode 可识别的完整 `provider/model`。允许只启用少量成员做低成本 smoke；正式组团至少还要有一名可担任挑战者的 Senior 或 Expert。
-
-可选的 `effort` 按 Agent 映射。安装器将其物化为 Agent frontmatter 的 `reasoningEffort`；OpenCode 会把该附加选项透传给 Provider，因此不支持的模型或网关应省略该项。
-
-## 安装
-
-公开入口由 npm 包的统一 CLI 提供：
+公开入口是：
 
 ```bash
 npx team-work-runtime@latest install
 ```
 
-安装器要求 OpenCode `>= 1.18.0`，不限制更高版本。它会安装生产依赖、初始化缺失的 `.team-work` Workflow 配置，并生成安装清单。已有 Workflow/SPEC 配置不会被覆盖。
-写入完成后还会执行 `opencode agent list`，确认 Plugin 能加载且已解析模型的 Agent 可见；失败会回滚受管文件。
+安装是用户级操作，不依赖当前项目。默认位置：
 
-默认 SPEC 路由是 OpenSpec。安装器检查 `openspec --version`，并在项目目录执行只读的 `openspec list --json` 就绪探针。只有返回合法的 `{ "changes": [...] }` 才视为可用；`config.yaml` 按官方约定是可选项。
+- 用户配置：`~/.config/team-work/config.json`
+- Skill：`~/.config/opencode/skills/`
+- Agent：`~/.config/opencode/agents/`
+- Plugin：`~/.config/opencode/plugins/team-work.js`
+- Runtime、Profile、指南和安装清单：`~/.config/opencode/team-work/`
 
-探针也兼容由 OpenSpec CLI 解析的外部 store/pointer 布局。install/update 会把默认路由双向同步为 `ready` 或 `missing`，doctor 只读检查。缺失时返回警告和修复建议，不会静默安装 CLI 或执行 `openspec init`。
+设置 `XDG_CONFIG_HOME` 时，上述 `.config` 根目录随之变化。路径符合 OpenCode 的全局 Skill、Agent 与 Plugin 自动发现约定；安装器不修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
 
-使用非默认可执行文件时在 `team-work.config.json` 中设置 `spec.command`；自定义或禁用的 Runtime SPEC 路由原样保留。
+首次在项目内调用 Team-work Runtime Tool 时，Plugin 才初始化项目 `.team-work/`，并物化当前 Platform Profile 与增量指南。安装、更新和卸载都不扫描或删除各项目任务数据。
 
-## 更新与检查
+## 模型与 effort
+
+安装器只读取固定用户配置。`models: "auto"` 按模型名唯一匹配；没有匹配或存在歧义时不猜测，不生成对应 Agent，并在 Platform Profile 中保留诊断信息。
+
+显式映射必须使用 OpenCode 可识别的完整 `provider/model`。可选 `effort` 会物化为 Agent frontmatter 的 `reasoningEffort`；模型、Provider 或网关不支持时应省略。
+
+## OpenSpec
+
+用户配置中的 `spec.command` 会物化到全局 Platform 设置。项目首次初始化时，Plugin 用 `--version` 和只读的 `list --json` 检查 OpenSpec；只有返回 `{ "changes": [...] }` 才把项目 SPEC 路由标为 `ready`。
+
+OpenSpec 缺失或项目未初始化时只保持 `missing`，不会阻止非 SPEC 阶段，也不会静默安装工具或修改 OpenSpec 资产。
+
+## 生命周期
 
 ```bash
-npx team-work-runtime@latest update
 npx team-work-runtime@latest doctor
-```
-
-- 内容未变化时返回 `unchanged`。
-- 更新会先把当前受管文件完整备份到 `.team-work/platform/opencode/backups/`。
-- 受管文件有本地修改时默认拒绝覆盖；确认后使用 `update --force`，本地版本仍会先备份。
-- 新版本缺失的旧受管文件会安全移除；用户自己的 `.opencode` 文件不在清单中，不会被处理。
-- `doctor` 同时报告 OpenSpec CLI、只读就绪探针和不安全符号链接；这些问题只阻止 SPEC 路由就绪，不阻止 standalone Team-work。
-
-## 平台事件与恢复
-
-受管派发、续派、停止，以及 OpenCode 上报的重试、API 错误和 child session 删除，会以 `platform.*` 事件写入当前 Runtime 任务。
-
-事件审计是旁路：审计暂时失败不会把成功派发改成失败，也不会修改 work item 的验收状态。网关失败会保留 task/work-item/session 映射，恢复后用 `team_work_resume` 继续同一 work item。
-
-## 卸载
-
-```bash
+npx team-work-runtime@latest update
 npx team-work-runtime@latest uninstall
 ```
 
-卸载只删除清单中且 digest 未变化的文件。修改过的受管文件默认保留并返回 `partial`；确认后使用 `uninstall --force`，安装器会备份再删除。
+更新会检查 digest，并在强制覆盖前备份受管文件。卸载只处理安装清单中的用户级资产；本地修改默认保留，`--force` 会先备份再删除。用户配置和项目 `.team-work/` 始终保留。
 
-以下内容始终保留：
+## 平台运行规则
 
-- `.team-work/tasks/`、任务制品、事件和归档；
-- Workflow/SPEC 项目配置；
-- provider、模型网关、凭据和 MCP 配置；
-- 不在安装清单中的 Skill、Agent、Plugin 和其他项目文件；
-- 安装审计、卸载 tombstone 和历史备份。
+受管成员使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；禁止用阻塞式 `task` 工具替代受管派发。
 
-仓库测试通过编程接口注入假模型和跳过外部 smoke；这些选项不属于公开 CLI。
+网关错误、重试、续派、停止和 child session 失联会记录为 `platform.*` 事件。事件审计失败不改变 work item 验收状态，也不会把成功派发改成失败。

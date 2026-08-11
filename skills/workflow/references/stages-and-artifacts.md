@@ -8,11 +8,11 @@
 | `design` | 形成可实施方案并处理分歧 | `requirement` | `design`、决策与风险 |
 | `design-review` | 独立审查方案的事实、边界和可行性 | `design` | 评审报告、通过或返工证据 |
 | `spec` | 将通过的方案物化为规范与任务 | `design` | `spec`、测试策略、实施拆分 |
-| `spec-review` | 交叉检查规范的完整性和可执行性 | `spec` | SPEC 审查报告、通过或返工证据 |
+| `spec-review` | 交叉检查规范的完整性和可执行性 | `spec` | SPEC 审查报告；局部问题回 SPEC，结构问题回方案 |
 | `implementation` | 实现当前范围并保持项目风格 | `requirement` | `source`、实现说明、局部验证证据 |
 | `test` | 编写并运行单元与集成测试 | `source` | 测试代码、测试结果、失败诊断 |
-| `code-review` | 覆盖全部审查视角并确认修改质量 | `source`、`review-scope` | Review 报告、问题清单、复核证据 |
-| `e2e` | 用真实路径和夹具验证端到端行为 | `source`、`test-scope` | E2E 夹具、结果与失败诊断 |
+| `code-review` | 覆盖全部审查视角并确认修改质量 | `source`、`review-scope` | Review 报告；实现问题回实施，测试问题回测试 |
+| `e2e` | 用真实路径和夹具验证端到端行为 | `source`、`test-scope` | E2E 夹具与结果；测试设计问题回测试，实现问题回实施 |
 | `finish` | 汇总 SPEC/实现/测试/Review 并提交 | 无固定历史输入；仍需任务验收 | 收尾摘要、验收证据、提交或交接信息 |
 
 ## 介入规则

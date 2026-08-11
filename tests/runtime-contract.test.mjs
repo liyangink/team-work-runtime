@@ -131,12 +131,15 @@ test("engineering workflow publishes the complete legal transition table", async
     "spec:pass->spec-review",
     "spec-review:pass->implementation",
     "spec-review:rework->spec",
+    "spec-review:fail->design",
     "implementation:pass->test",
     "test:pass->code-review",
     "test:fail->implementation",
     "code-review:pass->e2e",
     "code-review:rework->implementation",
+    "code-review:fail->test",
     "e2e:pass->finish",
+    "e2e:rework->test",
     "e2e:fail->implementation",
   ])
 })

@@ -18,18 +18,18 @@ import {
 } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
 
 const execFile = promisify(execFileCallback)
 export const MINIMUM_OPENCODE_VERSION = "1.18.0"
-const MANIFEST_PATH = ".team-work/platform/opencode/install.json"
-const BACKUP_ROOT = ".team-work/platform/opencode/backups"
-const PLATFORM_ROOT = ".team-work/platform/opencode"
+const MANIFEST_PATH = "team-work/install.json"
+const BACKUP_ROOT = "team-work/backups"
+const PLATFORM_ROOT = "team-work"
 const LIFECYCLE_LOCK = `${PLATFORM_ROOT}/.lifecycle.lock`
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const MANAGED_AGENT_PATHS = new Set([
   "junior-flash", "junior-luna", "senior-terra", "senior-glm", "senior-qwen", "expert-opus", "expert-k3",
-].map((id) => `.opencode/agents/${id}.md`))
+].map((id) => `agents/${id}.md`))
 
 class LifecycleError extends Error {
   constructor(code, message, details = {}) {
@@ -57,10 +57,10 @@ function normalizeRelative(relativePath) {
   return normalized
 }
 
-function targetPath(projectRoot, relativePath) {
+function targetPath(installRoot, relativePath) {
   const normalized = normalizeRelative(relativePath)
-  const target = path.resolve(projectRoot, normalized)
-  if (!target.startsWith(`${projectRoot}${path.sep}`)) fail("UNSAFE_PATH", `安装路径越界：${relativePath}`)
+  const target = path.resolve(installRoot, normalized)
+  if (!target.startsWith(`${installRoot}${path.sep}`)) fail("UNSAFE_PATH", `安装路径越界：${relativePath}`)
   return target
 }
 
@@ -71,8 +71,8 @@ async function exists(target) {
   })
 }
 
-async function assertNoSymlink(projectRoot, relativePath) {
-  let cursor = projectRoot
+async function assertNoSymlink(installRoot, relativePath) {
+  let cursor = installRoot
   for (const segment of normalizeRelative(relativePath).split("/")) {
     cursor = path.join(cursor, segment)
     try {
@@ -102,14 +102,14 @@ function processIsAlive(pid) {
   }
 }
 
-async function withLifecycleLock(projectRoot, force, action) {
-  const lockPath = targetPath(projectRoot, LIFECYCLE_LOCK)
-  const parentCandidates = [".team-work", ".team-work/platform", PLATFORM_ROOT]
+async function withLifecycleLock(installRoot, force, action) {
+  const lockPath = targetPath(installRoot, LIFECYCLE_LOCK)
+  const parentCandidates = [PLATFORM_ROOT]
   const preexistingParents = new Set()
   for (const relativePath of parentCandidates) {
-    if (await exists(targetPath(projectRoot, relativePath))) preexistingParents.add(relativePath)
+    if (await exists(targetPath(installRoot, relativePath))) preexistingParents.add(relativePath)
   }
-  await assertNoSymlink(projectRoot, LIFECYCLE_LOCK)
+  await assertNoSymlink(installRoot, LIFECYCLE_LOCK)
   await mkdir(path.dirname(lockPath), { recursive: true })
   let handle
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -140,7 +140,7 @@ async function withLifecycleLock(projectRoot, force, action) {
     for (const relativePath of [...parentCandidates].reverse()) {
       if (preexistingParents.has(relativePath)) continue
       try {
-        await rmdir(targetPath(projectRoot, relativePath))
+        await rmdir(targetPath(installRoot, relativePath))
       } catch (error) {
         if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error
       }
@@ -160,13 +160,13 @@ async function readJson(target, code) {
 
 async function allowedManagedPaths(sourceRoot) {
   const allowed = new Set([
-    ".opencode/plugins/team-work.js",
+    "plugins/team-work.js",
     `${PLATFORM_ROOT}/profile.json`,
     ...MANAGED_AGENT_PATHS,
   ])
   for (const [source, destination] of [
-    ["skills/workflow", ".opencode/skills/workflow"],
-    ["skills/team-work", ".opencode/skills/team-work"],
+    ["skills/workflow", "skills/workflow"],
+    ["skills/team-work", "skills/team-work"],
     ["plugins/opencode/guides", `${PLATFORM_ROOT}/guides`],
   ]) {
     for (const relativePath of await walkFiles(path.join(sourceRoot, source))) allowed.add(`${destination}/${relativePath}`)
@@ -187,7 +187,7 @@ function validateManifest(manifest, allowedPaths) {
       fail("INSTALL_MANIFEST_INVALID", "安装清单包含未知文件字段")
     }
     const relativePath = normalizeRelative(entry.path)
-    if (!relativePath.startsWith(".opencode/team-work/") && !allowedPaths.has(relativePath)) {
+    if (!relativePath.startsWith("team-work/") && !allowedPaths.has(relativePath)) {
       fail("INSTALL_MANIFEST_UNSAFE", `清单包含当前安装源未物化的路径：${relativePath}`)
     }
     if (!/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")) fail("INSTALL_MANIFEST_INVALID", `清单 digest 无效：${relativePath}`)
@@ -218,96 +218,6 @@ async function detectHostVersion(opencodeCommand = "opencode") {
     return (stdout || stderr).trim()
   } catch (error) {
     fail("OPENCODE_NOT_FOUND", `无法执行 ${opencodeCommand} --version`, { cause: error })
-  }
-}
-
-async function inspectSpecReadiness(projectRoot, openspecCommand = "openspec", { synchronize = false } = {}) {
-  const configPath = targetPath(projectRoot, ".team-work/config.yaml")
-  const config = await readJson(configPath, "PROJECT_CONFIG_CORRUPT")
-  if (!config?.spec) return { spec: { managed: false, status: "unconfigured" }, warnings: [], issues: [] }
-  const configured = structuredClone(config.spec)
-  if (configured.type !== "openspec" || configured.status === "disabled") {
-    return {
-      spec: { managed: false, ...configured, ready: configured.status === "ready" },
-      warnings: [],
-      issues: [],
-    }
-  }
-
-  let cliVersion = null
-  let probeReady = false
-  let probeError = null
-  try {
-    const { stdout, stderr } = await execFile(openspecCommand, ["--version"], { encoding: "utf8", timeout: 10_000 })
-    cliVersion = (stdout || stderr).trim() || "available"
-  } catch {
-    // OpenSpec 是可替换的 SPEC 路由；缺失时只提供可恢复诊断。
-  }
-
-  let rootPresent = false
-  let configPresent = false
-  let rootSafe = true
-  try {
-    const specRoot = normalizeRelative(configured.root)
-    const configMarker = `${specRoot}/config.yaml`
-    for (const marker of [specRoot, configMarker]) await assertNoSymlink(projectRoot, marker)
-    rootPresent = await stat(targetPath(projectRoot, specRoot)).then((entry) => entry.isDirectory(), () => false)
-    configPresent = await stat(targetPath(projectRoot, configMarker)).then((entry) => entry.isFile(), () => false)
-  } catch (error) {
-    if (error.code !== "UNSAFE_PATH") throw error
-    rootSafe = false
-  }
-
-  const cliAvailable = Boolean(cliVersion)
-  if (cliAvailable && rootSafe) {
-    try {
-      const { stdout } = await execFile(openspecCommand, ["list", "--json"], {
-        cwd: projectRoot,
-        encoding: "utf8",
-        timeout: 15_000,
-        maxBuffer: 4 * 1024 * 1024,
-      })
-      const probe = JSON.parse(stdout)
-      if (!probe || !Array.isArray(probe.changes)) throw new Error("openspec list --json 未返回 { changes: [] }")
-      probeReady = true
-    } catch (error) {
-      probeError = String(error.stderr || error.stdout || error.message || error).trim().slice(0, 1000)
-    }
-  }
-  const initialized = probeReady
-  const ready = cliAvailable && initialized && rootSafe
-  const synchronizedStatus = ready ? "ready" : "missing"
-  if (synchronize && config.spec.status !== synchronizedStatus) {
-    config.spec.status = synchronizedStatus
-    await atomicWrite(configPath, `${JSON.stringify(config, null, 2)}\n`)
-  }
-  const warnings = []
-  const issues = []
-  if (!rootSafe) issues.push({ code: "OPENSPEC_ROOT_UNSAFE", path: configured.root, message: "OpenSpec 根目录经过符号链接或越出项目边界" })
-  if (!cliAvailable) issues.push({ code: "OPENSPEC_CLI_MISSING", message: "未发现 OpenSpec CLI；安装后重新执行 update 或 doctor" })
-  if (!rootPresent && !probeReady && rootSafe) issues.push({ code: "OPENSPEC_NOT_INITIALIZED", path: configured.root, message: "执行 openspec init <project> --tools opencode 后重新检查" })
-  if (rootPresent && !probeReady && rootSafe && cliAvailable) issues.push({ code: "OPENSPEC_CHECK_FAILED", path: configured.root, message: probeError || "OpenSpec 只读就绪检查失败" })
-  if (!cliAvailable) warnings.push("OpenSpec CLI 不可用；SPEC 阶段暂不可进入")
-  if (!rootPresent && !probeReady && rootSafe) warnings.push("OpenSpec 项目尚未初始化；按需执行 openspec init <project> --tools opencode")
-  if (rootPresent && !probeReady && rootSafe && cliAvailable) warnings.push(`OpenSpec 项目检查失败；SPEC 阶段暂不可进入${probeError ? `：${probeError}` : ""}`)
-  if (!rootSafe) warnings.push("OpenSpec 根目录不安全；未读取或修改该目录")
-  return {
-    spec: {
-      managed: true,
-      ...configured,
-      status: synchronize ? synchronizedStatus : configured.status,
-      ready,
-      cliAvailable,
-      cliVersion,
-      rootPresent,
-      configPresent,
-      probeReady,
-      probeError,
-      initialized,
-      rootSafe,
-    },
-    warnings,
-    issues,
   }
 }
 
@@ -414,15 +324,15 @@ function platformProfile(agentConfig, resolved, generatedAt) {
   }
 }
 
-async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableModels, opencodeCommand, skipDependencies }) {
+async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableModels, opencodeCommand, openspecCommand, skipDependencies }) {
   const files = new Map()
-  await addTree(files, path.join(sourceRoot, "runtime"), ".opencode/team-work/runtime")
-  await addTree(files, path.join(sourceRoot, "schemas"), ".opencode/team-work/schemas")
-  await addTree(files, path.join(sourceRoot, "skills/workflow"), ".opencode/skills/workflow")
-  await addTree(files, path.join(sourceRoot, "skills/team-work"), ".opencode/skills/team-work")
-  await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), ".team-work/platform/opencode/guides")
-  files.set(".opencode/team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
-  files.set(".opencode/plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
+  await addTree(files, path.join(sourceRoot, "runtime"), "team-work/runtime")
+  await addTree(files, path.join(sourceRoot, "schemas"), "team-work/schemas")
+  await addTree(files, path.join(sourceRoot, "skills/workflow"), "skills/workflow")
+  await addTree(files, path.join(sourceRoot, "skills/team-work"), "skills/team-work")
+  await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
+  files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
+  files.set("plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
 
   const packageConfig = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"))
   const runtimePackage = {
@@ -434,8 +344,12 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
   }
   const packageContent = Buffer.from(`${JSON.stringify(runtimePackage, null, 2)}\n`)
   const packageLockContent = await readFile(path.join(sourceRoot, "plugins/opencode/config/runtime-package-lock.json"))
-  files.set(".opencode/team-work/package.json", packageContent)
-  files.set(".opencode/team-work/package-lock.json", packageLockContent)
+  files.set("team-work/package.json", packageContent)
+  files.set("team-work/package-lock.json", packageLockContent)
+  files.set("team-work/settings.json", Buffer.from(`${JSON.stringify({
+    schemaVersion: "1.0",
+    spec: { type: "openspec", command: openspecCommand },
+  }, null, 2)}\n`))
 
   if (!skipDependencies && Object.keys(runtimePackage.dependencies).length) {
     const staging = await mkdtemp(path.join(os.tmpdir(), "team-work-deps-"))
@@ -447,7 +361,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024,
       })
-      await addTree(files, path.join(staging, "node_modules"), ".opencode/team-work/node_modules")
+      await addTree(files, path.join(staging, "node_modules"), "team-work/node_modules")
     } catch (error) {
       fail("DEPENDENCY_INSTALL_FAILED", "Runtime 依赖安装失败；项目文件尚未修改", { cause: error })
     } finally {
@@ -461,7 +375,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
   const { resolved, warnings } = resolveModels(agentConfig, modelMap, scanned)
   for (const agent of agentConfig.agents) {
     const model = resolved.get(agent.id)
-    if (model) files.set(`.opencode/agents/${agent.id}.md`, agentMarkdown(agent, model, efforts[agent.id]))
+    if (model) files.set(`agents/${agent.id}.md`, agentMarkdown(agent, model, efforts[agent.id]))
   }
   return { files, warnings, packageVersion: packageConfig.version, agentIds: [...resolved.keys()], profile: platformProfile(agentConfig, resolved, "") }
 }
@@ -472,9 +386,9 @@ function withoutGeneratedAt(profile) {
   return copy
 }
 
-async function materializeProfile(projectRoot, desired, now) {
-  const target = targetPath(projectRoot, `${PLATFORM_ROOT}/profile.json`)
-  await assertNoSymlink(projectRoot, `${PLATFORM_ROOT}/profile.json`)
+async function materializeProfile(installRoot, desired, now) {
+  const target = targetPath(installRoot, `${PLATFORM_ROOT}/profile.json`)
+  await assertNoSymlink(installRoot, `${PLATFORM_ROOT}/profile.json`)
   let current = null
   try {
     current = JSON.parse(await readFile(target, "utf8"))
@@ -487,8 +401,8 @@ async function materializeProfile(projectRoot, desired, now) {
   desired.files.set(`${PLATFORM_ROOT}/profile.json`, Buffer.from(`${JSON.stringify(desired.profile, null, 2)}\n`))
 }
 
-async function currentDigest(projectRoot, relativePath) {
-  const target = targetPath(projectRoot, relativePath)
+async function currentDigest(installRoot, relativePath) {
+  const target = targetPath(installRoot, relativePath)
   return await exists(target) ? hash(await readFile(target)) : null
 }
 
@@ -496,87 +410,47 @@ function manifestFiles(files) {
   return [...files.entries()].map(([relativePath, content]) => ({ path: relativePath, sha256: hash(content) })).sort((a, b) => a.path.localeCompare(b.path))
 }
 
-async function createBackup(projectRoot, relativePaths, now) {
+async function createBackup(installRoot, relativePaths, now) {
   const existing = []
   for (const relativePath of [...new Set(relativePaths)].sort()) {
-    await assertNoSymlink(projectRoot, relativePath)
-    const source = targetPath(projectRoot, relativePath)
+    await assertNoSymlink(installRoot, relativePath)
+    const source = targetPath(installRoot, relativePath)
     if (await exists(source)) existing.push(relativePath)
   }
   if (!existing.length) return null
   const stamp = now().toISOString().replace(/[:.]/g, "-")
   const relativeBackup = `${BACKUP_ROOT}/${stamp}-${randomUUID().slice(0, 8)}`
-  await assertNoSymlink(projectRoot, relativeBackup)
-  const backupPath = targetPath(projectRoot, relativeBackup)
+  await assertNoSymlink(installRoot, relativeBackup)
+  const backupPath = targetPath(installRoot, relativeBackup)
   for (const relativePath of existing) {
-    const content = await readFile(targetPath(projectRoot, relativePath))
+    const content = await readFile(targetPath(installRoot, relativePath))
     await atomicWrite(path.join(backupPath, relativePath), content)
   }
   await atomicWrite(path.join(backupPath, "backup.json"), `${JSON.stringify({ schemaVersion: "1.0", createdAt: now().toISOString(), files: existing }, null, 2)}\n`)
   return backupPath
 }
 
-async function restoreBackup(projectRoot, backupPath, pathsToRemove) {
-  for (const relativePath of pathsToRemove) await rm(targetPath(projectRoot, relativePath), { force: true })
+async function restoreBackup(installRoot, backupPath, pathsToRemove) {
+  for (const relativePath of pathsToRemove) await rm(targetPath(installRoot, relativePath), { force: true })
   if (!backupPath) return
-  const relativeBackup = normalizeRelative(path.relative(projectRoot, backupPath).split(path.sep).join("/"))
+  const relativeBackup = normalizeRelative(path.relative(installRoot, backupPath).split(path.sep).join("/"))
   if (!relativeBackup.startsWith(`${BACKUP_ROOT}/`)) fail("UNSAFE_PATH", "备份路径不属于 OpenCode PlatformPlugin")
-  await assertNoSymlink(projectRoot, relativeBackup)
+  await assertNoSymlink(installRoot, relativeBackup)
   const backup = JSON.parse(await readFile(path.join(backupPath, "backup.json"), "utf8"))
   for (const relativePath of backup.files) {
-    await assertNoSymlink(projectRoot, `${relativeBackup}/${relativePath}`)
-    await atomicWrite(targetPath(projectRoot, relativePath), await readFile(path.join(backupPath, relativePath)))
+    await assertNoSymlink(installRoot, `${relativeBackup}/${relativePath}`)
+    await atomicWrite(targetPath(installRoot, relativePath), await readFile(path.join(backupPath, relativePath)))
   }
 }
 
-const RUNTIME_INIT_PATHS = [
-  ".team-work/config.yaml",
-  ".team-work/workflows/engineering.json",
-  ".team-work/tasks",
-  ".team-work/bindings",
-  ".team-work/archive",
-  ".team-work/workflows",
-]
-
-async function captureRuntimeBaseline(projectRoot) {
-  const baseline = new Map()
-  for (const relativePath of RUNTIME_INIT_PATHS) {
-    const target = targetPath(projectRoot, relativePath)
-    if (await exists(target)) baseline.set(relativePath, (await stat(target)).isFile() ? await readFile(target) : null)
-  }
-  return baseline
+async function writeManifest(installRoot, manifest) {
+  await atomicWrite(targetPath(installRoot, MANIFEST_PATH), `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
-async function rollbackRuntimeInitialization(projectRoot, baseline) {
-  for (const relativePath of RUNTIME_INIT_PATHS.slice(0, 2)) {
-    if (!baseline.has(relativePath)) await rm(targetPath(projectRoot, relativePath), { force: true })
-    else if (baseline.get(relativePath)) await atomicWrite(targetPath(projectRoot, relativePath), baseline.get(relativePath))
-  }
-  for (const relativePath of RUNTIME_INIT_PATHS.slice(2).sort((left, right) => right.split("/").length - left.split("/").length)) {
-    if (baseline.has(relativePath)) continue
-    try {
-      await rmdir(targetPath(projectRoot, relativePath))
-    } catch (error) {
-      if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error
-    }
-  }
-}
-
-async function initializeRuntime(sourceRoot, projectRoot, now) {
-  if (await exists(path.join(projectRoot, ".team-work/config.yaml"))) return
-  const { executeRuntime } = await import(pathToFileURL(path.join(sourceRoot, "runtime/core.mjs")).href)
-  const result = await executeRuntime({ command: "init", projectRoot, input: {} }, { clock: now })
-  if (result.exitCode !== 0) fail("RUNTIME_INIT_FAILED", result.envelope?.message ?? "CoreRuntime 初始化失败")
-}
-
-async function writeManifest(projectRoot, manifest) {
-  await atomicWrite(targetPath(projectRoot, MANIFEST_PATH), `${JSON.stringify(manifest, null, 2)}\n`)
-}
-
-async function smokeCheck(projectRoot, opencodeCommand, expectedAgents) {
+async function smokeCheck(installRoot, opencodeCommand, expectedAgents) {
   try {
     const { stdout } = await execFile(opencodeCommand, ["agent", "list"], {
-      cwd: projectRoot,
+      cwd: installRoot,
       encoding: "utf8",
       maxBuffer: 8 * 1024 * 1024,
       timeout: 30_000,
@@ -589,7 +463,7 @@ async function smokeCheck(projectRoot, opencodeCommand, expectedAgents) {
   }
 }
 
-async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, now, hostVersion, packageVersion, warnings, command, opencodeCommand, openspecCommand, agentIds, skipSmoke }) {
+async function applyInstall({ installRoot, desired, prior, force, now, hostVersion, packageVersion, warnings, command, opencodeCommand, agentIds, skipSmoke }) {
   const desiredEntries = manifestFiles(desired)
   const desiredByPath = new Map(desiredEntries.map((entry) => [entry.path, entry]))
   const priorFiles = prior?.managedFiles ?? []
@@ -600,15 +474,15 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
   const preexistingDesired = new Set()
 
   for (const entry of desiredEntries) {
-    await assertNoSymlink(projectRoot, entry.path)
-    const digest = await currentDigest(projectRoot, entry.path)
+    await assertNoSymlink(installRoot, entry.path)
+    const digest = await currentDigest(installRoot, entry.path)
     actualDigests.set(entry.path, digest)
     if (digest !== null) preexistingDesired.add(entry.path)
     if ((!prior || !priorByPath.has(entry.path)) && digest !== null) collisions.push(entry.path)
   }
   for (const entry of priorFiles) {
-    await assertNoSymlink(projectRoot, entry.path)
-    const digest = await currentDigest(projectRoot, entry.path)
+    await assertNoSymlink(installRoot, entry.path)
+    const digest = await currentDigest(installRoot, entry.path)
     if (digest !== null && digest !== entry.sha256) modified.push(entry.path)
   }
   if (collisions.length && !force) fail("INSTALL_COLLISION", "安装目标包含非受管文件；未做任何修改", { files: collisions })
@@ -622,25 +496,20 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
   ))
   const missing = desiredEntries.filter(({ path: relativePath }) => !priorByPath.has(relativePath))
   if (prior && !changed.length && !missing.length && !obsolete.length) {
-    const readiness = await inspectSpecReadiness(projectRoot, openspecCommand, { synchronize: true })
-    return { status: "unchanged", manifestId: prior.manifestId, warnings: [...warnings, ...readiness.warnings], spec: readiness.spec }
+    return { status: "unchanged", manifestId: prior.manifestId, warnings }
   }
 
   const backupCandidates = prior
     ? [...priorFiles.map(({ path: relativePath }) => relativePath), ...collisions]
     : collisions
-  const backupPath = await createBackup(projectRoot, backupCandidates, now)
+  const backupPath = await createBackup(installRoot, backupCandidates, now)
   const createdPaths = desiredEntries
     .filter(({ path: relativePath }) => !priorByPath.has(relativePath) && !preexistingDesired.has(relativePath))
     .map(({ path: relativePath }) => relativePath)
-  const runtimeBaseline = await captureRuntimeBaseline(projectRoot)
   try {
-    for (const relativePath of obsolete) await rm(targetPath(projectRoot, relativePath), { force: true })
-    for (const [relativePath, content] of desired) await atomicWrite(targetPath(projectRoot, relativePath), content)
-    await initializeRuntime(sourceRoot, projectRoot, now)
-    if (!skipSmoke) await smokeCheck(projectRoot, opencodeCommand, agentIds)
-    const readiness = await inspectSpecReadiness(projectRoot, openspecCommand, { synchronize: true })
-    const allWarnings = [...warnings, ...readiness.warnings]
+    for (const relativePath of obsolete) await rm(targetPath(installRoot, relativePath), { force: true })
+    for (const [relativePath, content] of desired) await atomicWrite(targetPath(installRoot, relativePath), content)
+    if (!skipSmoke) await smokeCheck(installRoot, opencodeCommand, agentIds)
     const timestamp = now().toISOString()
     const manifest = {
       schemaVersion: "1.0",
@@ -654,35 +523,34 @@ async function applyInstall({ projectRoot, sourceRoot, desired, prior, force, no
       updatedAt: timestamp,
       lastOperation: command,
       managedFiles: desiredEntries,
-      warnings: allWarnings,
+      warnings,
     }
-    await writeManifest(projectRoot, manifest)
-    return { status: prior ? "updated" : "installed", manifestId: manifest.manifestId, backupPath, warnings: allWarnings, spec: readiness.spec }
+    await writeManifest(installRoot, manifest)
+    return { status: prior ? "updated" : "installed", manifestId: manifest.manifestId, backupPath, warnings }
   } catch (error) {
-    await restoreBackup(projectRoot, backupPath, [...createdPaths, ...obsolete])
-    await rollbackRuntimeInitialization(projectRoot, runtimeBaseline)
-    await pruneEmptyManagedDirectories(projectRoot, createdPaths)
+    await restoreBackup(installRoot, backupPath, [...createdPaths, ...obsolete])
+    await pruneEmptyManagedDirectories(installRoot, createdPaths)
     throw error
   }
 }
 
-async function uninstall({ projectRoot, prior, force, now }) {
+async function uninstall({ installRoot, prior, force, now }) {
   if (!prior || !["installed", "partial"].includes(prior.status)) return { status: "not-installed", retained: [] }
   const retained = []
   const removable = []
   for (const entry of prior.managedFiles ?? []) {
-    await assertNoSymlink(projectRoot, entry.path)
-    const digest = await currentDigest(projectRoot, entry.path)
+    await assertNoSymlink(installRoot, entry.path)
+    const digest = await currentDigest(installRoot, entry.path)
     if (digest === null) continue
     if (digest !== entry.sha256 && !force) retained.push(entry)
     else removable.push(entry.path)
   }
-  const backupPath = force ? await createBackup(projectRoot, removable, now) : null
-  for (const relativePath of removable) await rm(targetPath(projectRoot, relativePath), { force: true })
-  await pruneEmptyManagedDirectories(projectRoot, removable)
+  const backupPath = force ? await createBackup(installRoot, removable, now) : null
+  for (const relativePath of removable) await rm(targetPath(installRoot, relativePath), { force: true })
+  await pruneEmptyManagedDirectories(installRoot, removable)
 
   const timestamp = now().toISOString()
-  await writeManifest(projectRoot, {
+  await writeManifest(installRoot, {
     ...prior,
     status: retained.length ? "partial" : "uninstalled",
     updatedAt: timestamp,
@@ -698,8 +566,8 @@ async function uninstall({ projectRoot, prior, force, now }) {
   }
 }
 
-async function pruneEmptyManagedDirectories(projectRoot, removedFiles) {
-  const protectedDirectories = new Set([".opencode", ".team-work", PLATFORM_ROOT])
+async function pruneEmptyManagedDirectories(installRoot, removedFiles) {
+  const protectedDirectories = new Set(["agents", "plugins", "skills", PLATFORM_ROOT])
   const directories = new Set()
   for (const relativePath of removedFiles) {
     let directory = path.posix.dirname(relativePath)
@@ -710,48 +578,45 @@ async function pruneEmptyManagedDirectories(projectRoot, removedFiles) {
   }
   for (const relativePath of [...directories].sort((left, right) => right.split("/").length - left.split("/").length)) {
     try {
-      await rmdir(targetPath(projectRoot, relativePath))
+      await rmdir(targetPath(installRoot, relativePath))
     } catch (error) {
       if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) throw error
     }
   }
 }
 
-async function doctor({ projectRoot, prior, hostVersion, openspecCommand }) {
+async function doctor({ installRoot, prior, hostVersion }) {
   const issues = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
-    const digest = await currentDigest(projectRoot, entry.path)
+    const digest = await currentDigest(installRoot, entry.path)
     if (digest === null) issues.push({ code: "MANAGED_FILE_MISSING", path: entry.path })
     else if (digest !== entry.sha256) issues.push({ code: "MANAGED_FILE_MODIFIED", path: entry.path })
   }
-  const profile = await readJson(targetPath(projectRoot, `${PLATFORM_ROOT}/profile.json`), "PROFILE_CORRUPT")
+  const profile = await readJson(targetPath(installRoot, `${PLATFORM_ROOT}/profile.json`), "PROFILE_CORRUPT")
   for (const agent of profile?.agents ?? []) {
     if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
   }
-  const readiness = await inspectSpecReadiness(projectRoot, openspecCommand)
-  issues.push(...readiness.issues)
-  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, spec: readiness.spec, issues }
+  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues }
 }
 
 async function manageUnlocked(command, options) {
   if (!new Set(["install", "update", "uninstall", "doctor"]).has(command)) fail("INVALID_COMMAND", `未知生命周期命令：${command}`)
-  const projectRoot = await realpath(options.projectRoot)
+  const installRoot = await realpath(options.installRoot)
   const sourceRoot = await realpath(options.sourceRoot ?? DEFAULT_SOURCE_ROOT)
   const now = options.now ?? (() => new Date())
-  const manifestTarget = targetPath(projectRoot, MANIFEST_PATH)
-  await assertNoSymlink(projectRoot, MANIFEST_PATH)
-  await assertNoSymlink(projectRoot, ".team-work/config.yaml")
+  const manifestTarget = targetPath(installRoot, MANIFEST_PATH)
+  await assertNoSymlink(installRoot, MANIFEST_PATH)
   const prior = await readJson(manifestTarget, "INSTALL_MANIFEST_CORRUPT")
   if (prior) validateManifest(prior, await allowedManagedPaths(sourceRoot))
 
-  if (command === "uninstall") return uninstall({ projectRoot, prior, force: Boolean(options.force), now })
+  if (command === "uninstall") return uninstall({ installRoot, prior, force: Boolean(options.force), now })
 
   const hostVersion = options.hostVersion ?? await detectHostVersion(options.opencodeCommand)
   if (compareVersions(hostVersion, MINIMUM_OPENCODE_VERSION) < 0) {
     fail("OPENCODE_VERSION_TOO_OLD", `OpenCode ${hostVersion} 低于最低版本 ${MINIMUM_OPENCODE_VERSION}`)
   }
-  if (command === "doctor") return doctor({ projectRoot, prior, hostVersion, openspecCommand: options.openspecCommand ?? "openspec" })
+  if (command === "doctor") return doctor({ installRoot, prior, hostVersion })
   if (command === "update" && prior?.status !== "installed") {
     fail("NOT_INSTALLED", "尚未安装 OpenCode PlatformPlugin，请先执行 install")
   }
@@ -765,12 +630,12 @@ async function manageUnlocked(command, options) {
     effortMap: options.effortMap,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
+    openspecCommand: options.openspecCommand ?? "openspec",
     skipDependencies: Boolean(options.skipDependencies),
   })
-  await materializeProfile(projectRoot, desired, now)
+  await materializeProfile(installRoot, desired, now)
   return applyInstall({
-    projectRoot,
-    sourceRoot,
+    installRoot,
     desired: desired.files,
     prior: prior?.status === "installed" ? prior : null,
     force: Boolean(options.force),
@@ -780,7 +645,6 @@ async function manageUnlocked(command, options) {
     warnings: desired.warnings,
     command,
     opencodeCommand: options.opencodeCommand ?? "opencode",
-    openspecCommand: options.openspecCommand ?? "openspec",
     agentIds: desired.agentIds,
     skipSmoke: options.skipSmoke === undefined ? Boolean(options.skipDependencies) : Boolean(options.skipSmoke),
   })
@@ -788,9 +652,17 @@ async function manageUnlocked(command, options) {
 
 export async function manageOpenCodePlugin(command, options) {
   if (!new Set(["install", "update", "uninstall", "doctor"]).has(command)) fail("INVALID_COMMAND", `未知生命周期命令：${command}`)
-  const projectRoot = await realpath(options.projectRoot)
-  if (command === "doctor") return manageUnlocked(command, { ...options, projectRoot })
-  return withLifecycleLock(projectRoot, Boolean(options.force), () => manageUnlocked(command, { ...options, projectRoot }))
+  if (command === "install") await mkdir(path.resolve(options.installRoot), { recursive: true })
+  let installRoot
+  try {
+    installRoot = await realpath(options.installRoot)
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    if (command === "uninstall") return { status: "not-installed", retained: [] }
+    fail("NOT_INSTALLED", "OpenCode PlatformPlugin 尚未安装，请先执行 install")
+  }
+  if (command === "doctor") return manageUnlocked(command, { ...options, installRoot })
+  return withLifecycleLock(installRoot, Boolean(options.force), () => manageUnlocked(command, { ...options, installRoot }))
 }
 
 export { LifecycleError }

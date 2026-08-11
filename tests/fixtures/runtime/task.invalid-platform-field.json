@@ -3,7 +3,7 @@
   "taskId": "review-existing-code",
   "workflow": {
     "id": "engineering",
-    "version": "1.0",
+    "version": "1.1",
     "path": ".team-work/workflows/engineering.json",
     "digest": "sha256:0123456789abcdef"
   },

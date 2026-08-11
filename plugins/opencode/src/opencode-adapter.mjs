@@ -1,7 +1,11 @@
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { access, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
+import { execFile as execFileCallback } from "node:child_process"
+import { promisify } from "node:util"
 import { pathToFileURL } from "node:url"
+
+const execFile = promisify(execFileCallback)
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MANAGED_AGENT = /^(?:junior-(?:flash|luna)|senior-(?:terra|glm|qwen)|expert-(?:opus|k3))$/
@@ -47,9 +51,13 @@ async function callSdk(label, operation) {
 }
 
 async function atomicJson(target, value) {
+  await atomicFile(target, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+async function atomicFile(target, content) {
   await mkdir(path.dirname(target), { recursive: true })
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" })
+  await writeFile(temporary, content, { flag: "wx" })
   await rename(temporary, target)
 }
 
@@ -121,10 +129,12 @@ function eventFingerprint(value) {
   return createHash("sha256").update(stableJson(value)).digest("hex")
 }
 
-export function createOpenCodeAdapter({ client, projectRoot, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
+export function createOpenCodeAdapter({ client, projectRoot, platformRoot, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
   if (!client?.session) throw failure("INVALID_CLIENT", "OpenCode client.session 不可用")
   const root = path.resolve(projectRoot)
+  const installedPlatformRoot = path.resolve(platformRoot ?? path.join(root, ".opencode/team-work"))
   const inFlightPlatformAudits = new Map()
+  let projectReady
 
   function mappingPath(taskId, workItemId) {
     return path.join(
@@ -199,8 +209,88 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
 
   async function executeRuntime(request) {
     if (runtimeExecutor) return runtimeExecutor(request)
-    const runtime = await import(pathToFileURL(path.join(root, ".opencode/team-work/runtime/core.mjs")).href)
+    const runtime = await import(pathToFileURL(path.join(installedPlatformRoot, "runtime/core.mjs")).href)
     return runtime.executeRuntime({ ...request, projectRoot: root })
+  }
+
+  async function pathExists(target) {
+    return access(target).then(() => true, (error) => error.code === "ENOENT" ? false : Promise.reject(error))
+  }
+
+  async function assertProjectPathSafe(relativePath) {
+    let cursor = root
+    for (const segment of relativePath.split("/")) {
+      cursor = path.join(cursor, segment)
+      try {
+        if ((await lstat(cursor)).isSymbolicLink()) throw failure("STATE_CORRUPT", `受管项目路径不得经过符号链接：${relativePath}`)
+      } catch (error) {
+        if (error.code === "ENOENT") return
+        throw error
+      }
+    }
+  }
+
+  async function copyPlatformContext() {
+    const profileSource = path.join(installedPlatformRoot, "profile.json")
+    const profile = await readFile(profileSource).catch((error) => {
+      throw failure("PLATFORM_PROFILE_UNAVAILABLE", `无法读取 OpenCode Platform Profile：${error.message}`)
+    })
+    const destinationRoot = ".team-work/platform/opencode"
+    await assertProjectPathSafe(destinationRoot)
+    await atomicJson(path.join(root, destinationRoot, "profile.json"), JSON.parse(profile))
+    const guideSource = path.join(installedPlatformRoot, "guides")
+    for (const entry of await readdir(guideSource, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+      const relativePath = `${destinationRoot}/guides/${entry.name}`
+      await assertProjectPathSafe(relativePath)
+      await atomicFile(path.join(root, relativePath), await readFile(path.join(guideSource, entry.name)))
+    }
+  }
+
+  async function synchronizeSpecReadiness() {
+    let settings
+    try {
+      settings = JSON.parse(await readFile(path.join(installedPlatformRoot, "settings.json"), "utf8"))
+    } catch {
+      // 可选 SPEC 设置损坏或缺失不能阻塞 standalone 与非 SPEC 阶段。
+      return
+    }
+    if (settings?.spec?.type !== "openspec" || typeof settings.spec.command !== "string") return
+    const configPath = path.join(root, ".team-work/config.yaml")
+    const config = JSON.parse(await readFile(configPath, "utf8"))
+    if (config.spec?.type !== "openspec" || config.spec.status === "disabled") return
+    let ready = false
+    try {
+      await execFile(settings.spec.command, ["--version"], { cwd: root, encoding: "utf8", timeout: 10_000 })
+      const { stdout } = await execFile(settings.spec.command, ["list", "--json"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 15_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+      ready = Array.isArray(JSON.parse(stdout)?.changes)
+    } catch {
+      // SPEC 是可选路由；未安装或未初始化只保持 missing，不阻塞其他阶段。
+    }
+    const status = ready ? "ready" : "missing"
+    if (config.spec.status !== status) await atomicJson(configPath, { ...config, spec: { ...config.spec, status } })
+  }
+
+  async function ensureProjectReady() {
+    if (!projectReady) {
+      projectReady = (async () => {
+        if (!await pathExists(path.join(root, ".team-work/config.yaml"))) {
+          const initialized = await executeRuntime({ command: "init", input: {} })
+          runtimeData(initialized, "init")
+        }
+        await copyPlatformContext()
+        await synchronizeSpecReadiness()
+      })().catch((error) => {
+        projectReady = undefined
+        throw error
+      })
+    }
+    await projectReady
   }
 
   function runtimeData(result, operation) {
@@ -319,6 +409,7 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
 
   async function validateAssignment(input) {
     if (assignmentValidator) return assignmentValidator(input)
+    await ensureProjectReady()
     let profile
     try {
       profile = JSON.parse(await readFile(path.join(root, ".team-work/platform/opencode/profile.json"), "utf8"))
@@ -495,6 +586,8 @@ export function createOpenCodeAdapter({ client, projectRoot, now = () => new Dat
     },
 
     async runtime(request) {
+      await ensureProjectReady()
+      if (request.command === "doctor") await synchronizeSpecReadiness()
       return executeRuntime(request)
     },
 

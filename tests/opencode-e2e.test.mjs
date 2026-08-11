@@ -22,7 +22,7 @@ const modelMap = {
 
 function lifecycleOptions(projectRoot) {
   return {
-    projectRoot,
+    installRoot: projectRoot,
     sourceRoot,
     hostVersion: "1.18.15",
     modelMap,
@@ -37,6 +37,7 @@ test("lifecycle, adapter, and Runtime integration survives a gateway fault witho
   await writeFile(path.join(projectRoot, "result.md"), "pending\n")
 
   const run = (request) => executeRuntime({ ...request, projectRoot })
+  assert.equal((await run({ command: "init", input: {} })).exitCode, 0)
   assert.equal((await run({ command: "task.create", input: { taskId: "gateway-recovery", entryStage: "implementation" } })).exitCode, 0)
   assert.equal((await run({
     command: "task.team",
@@ -74,7 +75,7 @@ test("lifecycle, adapter, and Runtime integration survives a gateway fault witho
       },
     },
   }
-  const adapter = createOpenCodeAdapter({ client, projectRoot, runtimeExecutor: run })
+  const adapter = createOpenCodeAdapter({ client, projectRoot, platformRoot: path.join(projectRoot, "team-work"), runtimeExecutor: run })
 
   await assert.rejects(
     adapter.spawn({

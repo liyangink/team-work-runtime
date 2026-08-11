@@ -99,15 +99,15 @@ Type: Prototype
 
 ### Answer
 
-第一批平台能力已实现：用户级安装器在 OpenCode 全局目录物化 Workflow、Team-work、CoreRuntime、七个分档 Agent、Platform Profile 与增量指南，首次项目调用再懒初始化 `.team-work/`；受管派发使用 OpenCode SDK `session.create + promptAsync`，不会阻塞 Lead，并以 task/work-item ID 保存 child session 映射。Plugin 暴露受限 Runtime Tool、spawn/resume/status/collect/stop 工具，并在 Lead、research、implement、check 会话注入最小上下文索引。
+第一批平台能力已实现：用户级安装器物化 Workflow、Team-work、CoreRuntime、Plugin、Platform Profile 与指南，首次项目调用再初始化 `.team-work/`。Plugin 启动时读取版本化用户配置，动态注入七个分档 Agent 的 model/effort。受管派发使用 `session.create + promptAsync`，并以 task/work-item ID 保存 child session 映射。
 
 安装生命周期采用 digest 清单。更新前备份全部旧受管文件，新路径碰撞和本地修改默认拒绝；`--force` 也必须先备份。smoke test 失败会回滚。卸载只处理清单内文件，修改项默认保留为 partial，任务、制品、Workflow/SPEC 配置和用户 OpenCode 文件始终保留。
 
-OpenCode session 故障事件审计、OpenSpec 准备检查和自动化故障注入已经补齐；安装器不会自动安装或初始化 OpenSpec，自定义 SPEC 路由保持不变。剩余工作是用真实网关完成已配置模型的工具调用 E2E，再关闭本实施项。
+OpenCode session 故障事件审计、OpenSpec 准备检查和自动化故障注入已经补齐；安装器不会自动安装或初始化 OpenSpec。真实网关已完成 DeepSeek/Luna 工具调用、双 Junior 后台派发和跨进程续派；剩余工作是补齐含 Senior 挑战者、Lead 验收和最终制品的正式 Workflow 场景 E2E。
 
 验收产物：
 
-- `plugins/opencode/`：安装器、Skills、Junior/Senior/Expert Agents、Plugin Hook、Runtime Tool 和 Platform Profile；
+- `plugins/opencode/`：安装器、Skills、Junior/Senior/Expert 动态 Agent 配置、Plugin Hook、Runtime Tool 和 Platform Profile；
 - 活动 task/session/work-item 映射与最小上下文注入；
 - 受管派发只暴露 background/non-blocking Interface，阻塞式请求被拒绝或确定性改写；
 - 多模型工具调用、child session 导航、结果收集、跨会话重新绑定和卸载保留项目数据测试。

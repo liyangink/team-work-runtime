@@ -70,6 +70,7 @@ test("first Runtime tool call lazily initializes project state from the global p
   assert.equal(result.exitCode, 0)
   await assert.doesNotReject(access(path.join(projectRoot, ".team-work/config.yaml")))
   assert.equal(JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8")).spec.status, "missing")
+  assert.equal(JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8")).spec.mode, "auto")
   assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, ".team-work/platform/opencode/profile.json"), "utf8")), {
     agents: [],
     guides: [".team-work/platform/opencode/guides/team-work.md"],
@@ -83,7 +84,7 @@ test("lazy project initialization promotes an initialized OpenSpec route using t
   const openspec = path.join(platformRoot, "openspec-test")
   await mkdir(path.join(platformRoot, "guides"), { recursive: true })
   await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({ agents: [], guides: [] })}\n`)
-  await writeFile(path.join(platformRoot, "settings.json"), `${JSON.stringify({ schemaVersion: "1.0", spec: { type: "openspec", command: openspec } })}\n`)
+  await writeFile(path.join(platformRoot, "settings.json"), `${JSON.stringify({ spec: { provider: "openspec", mode: "required", command: openspec } })}\n`)
   await writeFile(openspec, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'OpenSpec 2.0.0'; else echo '{\"changes\":[]}'; fi\n")
   await chmod(openspec, 0o755)
   const adapter = createOpenCodeAdapter({
@@ -97,6 +98,48 @@ test("lazy project initialization promotes an initialized OpenSpec route using t
 
   const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
   assert.equal(config.spec.status, "ready")
+  assert.equal(config.spec.mode, "required")
+})
+
+test("lazy project initialization disables the optional SPEC route when configured", async () => {
+  const projectRoot = await tempProject()
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
+  await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({ agents: [], guides: [] })}\n`)
+  await writeFile(path.join(platformRoot, "settings.json"), `${JSON.stringify({ spec: { provider: "openspec", mode: "disabled", command: "openspec" } })}\n`)
+  const adapter = createOpenCodeAdapter({
+    client: fakeClient(),
+    projectRoot,
+    platformRoot,
+    runtimeExecutor: (request) => executeRuntime({ ...request, projectRoot }),
+  })
+
+  await adapter.runtime({ command: "doctor", input: {} })
+
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.deepEqual(config.spec, { type: "openspec", skill: "openspec", root: "openspec/", mode: "disabled", status: "disabled" })
+})
+
+test("lazy project initialization persists the restart-time effective Agent profile", async () => {
+  const projectRoot = await tempProject()
+  const platformRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-platform-"))
+  await mkdir(path.join(platformRoot, "guides"), { recursive: true })
+  await writeFile(path.join(platformRoot, "profile.json"), `${JSON.stringify({ agents: [], guides: [] })}\n`)
+  const effectiveProfile = {
+    agents: [{ id: "expert-opus", resolvedModel: "official/claude-opus-5" }],
+    guides: [],
+  }
+  const adapter = createOpenCodeAdapter({
+    client: fakeClient(),
+    projectRoot,
+    platformRoot,
+    platformProfile: effectiveProfile,
+    runtimeExecutor: (request) => executeRuntime({ ...request, projectRoot }),
+  })
+
+  await adapter.runtime({ command: "doctor", input: {} })
+
+  assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, ".team-work/platform/opencode/profile.json"), "utf8")), effectiveProfile)
 })
 
 test("managed spawn and resume always use native promptAsync child sessions", async () => {

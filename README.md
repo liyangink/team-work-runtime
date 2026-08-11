@@ -2,9 +2,9 @@
 
 ## 简介
 
-team-work 是一个平台无关的 multiagent engineering loop。它让 Lead Agent 管理研发阶段、任务上下文、制品和门禁，并在值得并行或需要独立审查时组建团队。
+team-work 是平台无关的 multiagent engineering loop。Lead Agent 管理研发阶段、任务上下文、制品与门禁，并在值得并行或需要独立审查时组建团队。
 
-团队不是简单堆叠高价模型。team-work 使用 [Junior、Senior、Expert 三档成本体系](#成本控制与团队分档)：Junior 承担主要工作，Senior 负责复杂判断与挑战，Expert 用于高风险把关、关键攻坚或最终收口。
+团队按 [Junior、Senior、Expert](#成本控制与团队分档) 三档控制成本。Junior 承担主要工作，Senior 负责复杂判断与挑战，Expert 用于高风险把关、关键攻坚或最终收口。
 
 ```mermaid
 flowchart TB
@@ -13,7 +13,7 @@ flowchart TB
   subgraph Policy["策略层"]
     Workflow["Workflow<br/>上下文 · 阶段 · 门禁 · solo/team 路由"]
     Teamwork["Team-work<br/>成本 · 拓扑 · 协作 · 收敛"]
-    Spec["SPEC Skill<br/>规格制品流程"]
+    Spec["SPEC Skill<br/>可选规范流程"]
   end
 
   subgraph Runtime["确定性运行层"]
@@ -30,7 +30,7 @@ flowchart TB
   User --> Workflow
   User -. "显式团队任务" .-> Teamwork
   Workflow -- "决定组团" --> Teamwork
-  Workflow -- "路由 SPEC" --> Spec
+  Workflow -- "按配置路由" --> Spec
   Workflow --> Core
   Teamwork --> Core
   Plugin -. "平台能力" .-> Workflow
@@ -41,135 +41,152 @@ flowchart TB
   Core --> Files
 ```
 
-Workflow 和 Team-work 只依赖 CoreRuntime 的稳定接口。CoreRuntime 只依赖项目文件系统；PlatformPlugin 把不同 Agent CLI 的模型、工具和 multiagent 能力接入进来。首版支持 OpenCode。
+Workflow 和 Team-work 只调用 CoreRuntime 的稳定接口。CoreRuntime 只依赖项目文件系统；PlatformPlugin 接入不同 CLI 的模型、工具和 multiagent 能力。首版支持 OpenCode。
 
 ## QuickStart
 
-需要 Node.js 18+ 和 OpenCode 1.18.0+。安装是用户级操作，可在任意目录执行，不需要先进入项目：
+需要 Node.js 18+ 和 OpenCode 1.18.0+。安装是用户级操作，可在任意目录执行：
 
 ```bash
 npx team-work-runtime@latest install
 ```
 
-安装器会创建唯一用户配置：
+安装器会创建用户配置。Linux 与 macOS 默认位置为：
 
 ```text
 ~/.config/team-work/config.json
 ```
 
-如果设置了 `XDG_CONFIG_HOME`，则使用 `$XDG_CONFIG_HOME/team-work/config.json`。OpenCode Skill、Agent、Plugin 和 Runtime 安装到其全局配置目录 `~/.config/opencode/`。
+Windows 默认使用 `%APPDATA%\team-work\config.json`。设置 `TEAM_WORK_CONFIG_HOME` 可直接指定目录；设置 `XDG_CONFIG_HOME` 时使用 `$XDG_CONFIG_HOME/team-work/config.json`。
 
-然后进入任意项目启动 OpenCode：
+进入项目并启动 OpenCode：
 
 ```bash
-cd /path/to/your-project
+cd /path/to/project
 opencode
 ```
 
-输入：
+启动完整研发任务：
 
 ```text
-使用 workflow 处理这个需求。从实际阶段介入；根据并行价值和独立审查价值
-决定 solo 或 team，组团时优先使用 Junior，所有成员后台派发。
+/workflow 实现这个需求；从实际阶段介入，并根据并行价值和独立审查价值决定 solo 或 team。
 ```
 
-首次调用 Workflow 或 Team-work 时，插件会在当前项目自动创建 `.team-work/` 工作目录。安装过程不会向项目根目录写配置。
+只使用团队能力：
+
+```text
+/team-work 审查 src/imap/；安排非作者挑战者，最多三轮收敛并输出 Review 制品。
+```
+
+首次调用时，插件会在当前项目创建 `.team-work/`。用户级安装不会提前修改项目目录。
 
 ## 使用说明
 
 ### 完整研发任务
 
-从 Workflow 开始。它会创建或恢复任务、判断介入阶段、管理门禁，并在需要时调用 Team-work 或 SPEC Skill。
+使用 `/workflow` 创建或恢复任务、选择介入阶段、管理门禁，并按需调用 Team-work 或 SPEC Skill。
 
 ```text
-使用 workflow 实现这个需求。复用已有设计和代码，从 implementation 阶段介入，
-完成实现、测试、代码审查和收尾。
+/workflow 复用已有设计和代码，从 implementation 阶段继续，完成实现、测试、代码审查和收尾。
 ```
 
 ### 单独使用团队能力
 
-直接调用 Team-work，适合方案讨论、设计审查、并行实施、测试或代码 Review。它会创建当前场景所需的轻量任务，不要求先补跑完整流程。
+使用 `/team-work` 处理方案讨论、设计审查、并行实施、测试或代码 Review。它会建立当前场景所需的轻量任务，不要求补跑完整流程。
 
 ```text
-使用 team-work 审查 src/imap/。从 code-review 阶段介入，覆盖全部审查视角，
-安排非作者挑战者，最多三轮收敛并输出 Review 制品。
+/team-work 对当前方案进行团队审查。每轮都由挑战者检查事实、推理、成本和需求偏移。
 ```
 
 ### 从已有制品介入
 
-任务可以从任意阶段开始。只有代码时可直接进入 `code-review`；已有方案可进入 `design-review` 或 `spec`；已有实现需要补测试时可进入 `test`。门禁只检查当前阶段的最低输入。
+任务可从任意阶段开始。只有代码时可进入 `code-review`；已有方案可进入 `design-review`；需要补测试时可进入 `test`。门禁只检查当前阶段的最低输入。
 
 ### 查看或继续任务
 
 ```text
-汇报当前任务的阶段、成员、work item、制品、阻塞和下一同步点，不要启动新成员。
+/workflow 汇报当前任务的阶段、成员、work item、制品、阻塞和下一同步点，不要启动新成员。
 ```
 
-跨会话继续时优先提供 task ID；不知道时让 Workflow 解析当前会话绑定或项目唯一活动任务。任务状态与制品索引保存在项目 `.team-work/` 中。
+跨会话时优先提供 task ID。不知道时由 Workflow 解析会话绑定或项目唯一活动任务。状态与制品索引保存在项目 `.team-work/` 中。
 
 ## 成本控制与团队分档
 
-安装器提供三档通用 Agent。档位只描述模型能力上限与相对成本，不限制具体研发分工；分工由 Team-work 根据当前场景决定。
+档位只表示模型能力上限与相对成本，不限制具体研发分工。Team-work 根据场景决定每位成员的职责。
 
 | 档位 | 默认成本权重 | 主要用途 | 使用原则 |
 | --- | ---: | --- | --- |
-| Junior | 1 | 事实探索、常规实现、测试、第一轮审查 | 默认主力；通常应参与正式团队 |
-| Senior | 5 | 跨模块判断、高风险实现、独立方案、挑战者 | 多数正式场景配置一位 |
-| Expert | 50 | 架构把关、关键攻坚、复杂重构、最终收口 | 大部分复杂场景保留一位；不机械增加第二位 |
+| Junior | 1 | 事实探索、常规实现、测试、第一轮审查 | 默认主力，通常参与正式团队 |
+| Senior | 10 | 跨模块判断、高风险实现、独立方案、挑战者 | 多数正式场景配置一位 |
+| Expert | 50 | 架构把关、关键攻坚、复杂重构、最终收口 | 复杂场景通常保留一位，不机械增员 |
 
-权重用于相对预算判断，不代表供应商真实价格。默认成员池为：
+默认成员池：
 
 - Junior：`junior-flash`、`junior-luna`
 - Senior：`senior-terra`、`senior-glm`、`senior-qwen`
 - Expert：`expert-opus`、`expert-k3`
 
-同档引入多名成员时优先选择不同模型，减少单一模型偏差。正式团队必须由一位非当前制品作者的 Senior 或 Expert 兼任挑战者；Expert 既可把关，也可亲自承担复杂核心工作。
+同档多成员优先选择不同模型。正式团队必须由非当前制品作者的 Senior 或 Expert 兼任挑战者；Expert 既可把关，也可亲自承担复杂核心工作。
 
-默认活跃成员软上限为 3–5 人，不含 Lead。第二位 Expert 只用于不可逆或高风险决策、关键证据冲突、重复验证失败、明显领域盲区，或用户明确要求的场景。
+活跃成员软上限为 3–5 人，不含 Lead。第二位 Expert 只用于不可逆决策、关键证据冲突、重复验证失败、领域盲区，或用户明确要求的场景。
 
 ## 工作流
 
 ### 十阶段研发循环
 
-Workflow 主导十阶段循环。下图是 Runtime 当前实现的合法状态边；返工按问题来源回到真正负责的阶段，而不是统一退回实施。
+任务可以从任意阶段介入。SPEC 和 E2E 都有明确的跳过条件；返工按问题归因返回真正负责的阶段。
 
 ```mermaid
 flowchart TB
   R["1 需求调研"] --> D["2 方案设计"]
   D --> DR["3 方案审查"]
   DR -- "返工" --> D
-  DR -- "通过" --> S["4 SPEC"]
+  DR -- "SPEC 可用或必需" --> S["4 SPEC"]
+  DR -- "SPEC 跳过" --> I["6 实施"]
   S --> SR["5 SPEC 审查"]
   SR -- "局部问题" --> S
   SR -- "结构问题" --> D
-  SR -- "通过" --> I["6 实施"]
+  SR -- "通过" --> I
   I --> T["7 单元 / 集成测试"]
   T -- "实现缺陷" --> I
   T -- "通过" --> CR["8 代码审查"]
   CR -- "实现问题" --> I
   CR -- "测试问题" --> T
-  CR -- "通过" --> E["9 E2E"]
-  E -- "实现问题" --> I
-  E -- "测试设计问题" --> T
-  E -- "通过" --> F["10 SPEC 收尾 / 提交"]
+  CR -- "E2E 不适用" --> F["10 收尾与提交"]
+  CR -- "E2E 适用" --> E["9 E2E"]
+  E -- "E2E 制品返工" --> E
+  E -- "产品代码缺陷" --> I
+  E -- "上游测试策略缺口" --> T
+  E -- "通过" --> F
 ```
 
 | 阶段 | 核心工作与典型制品 |
 | --- | --- |
-| 1. 需求调研 | 需求、项目架构、相关代码、外部事实、未知项和代码地图 |
-| 2. 方案设计 | 方案初稿、权衡、风险、实施拆分和验证策略；团队讨论最多三轮 |
-| 3. 方案审查 | 非作者独立审查事实、边界、成本、风险与需求符合度 |
-| 4. SPEC | 将通过的方案转化为可实施、可验收的规范与任务 |
-| 5. SPEC 审查 | 严格验证、交叉审查；局部问题回 SPEC，结构问题回方案 |
-| 6. 实施 | 按互斥范围并行编码，保持既有架构与风格；Expert 可承担复杂核心工作 |
-| 7. 测试 | 单元与集成测试，区分实现缺陷、测试缺陷和基础设施问题 |
+| 1. 需求调研 | 需求、架构、代码地图、外部事实、约束与未知项 |
+| 2. 方案设计 | 方案、权衡、风险、实施拆分与验证策略 |
+| 3. 方案审查 | 独立审查事实、边界、成本、风险与需求符合度 |
+| 4–5. SPEC | 可选地生成并审查可实施、可验收的规范 |
+| 6. 实施 | 按互斥范围编码，保持既有架构与风格 |
+| 7. 测试 | 单元与集成测试，区分实现、测试和基础设施问题 |
 | 8. 代码审查 | 覆盖需求、缺陷、安全、错误处理、逻辑、测试、类型、规范和影响范围 |
-| 9. E2E | 开发夹具并验证真实用户路径，按归因回到实施或测试 |
-| 10. 收尾 | 汇总 SPEC、实现、测试、Review 与 E2E 证据，准备提交和归档 |
+| 9. E2E | 设计、用例审查、夹具/脚本、实现审查、执行与结果复核 |
+| 10. 收尾 | 汇总实际执行阶段的制品和证据，准备提交与归档 |
+
+### E2E 小循环
+
+进入 E2E 前必须判断适用性。不适用时记录理由并跳过；适用但环境不可用时阻塞；用户明确要求时不得自动跳过。
+
+```text
+测试设计 → 用例审查 → 夹具/脚本实现 → 实现审查 → 执行 → 结果复核
+    ↑                                                        │
+    └──────────────── E2E 制品修订 ──────────────────────────┘
+```
+
+用例、夹具、脚本和执行问题留在 E2E；产品代码缺陷返回实施；只有系统性的上游测试策略缺口返回测试。
 
 ### 每个阶段的 Team-work 协作环
 
-Team-work 的独特部分发生在每个研发阶段内部，而不是额外增加一套研发状态机。
+Team-work 在研发阶段内部提供团队循环，不建立第二套研发状态机。
 
 ```mermaid
 flowchart LR
@@ -177,98 +194,117 @@ flowchart LR
   Gate -- "solo" --> Solo["Lead 单独执行"]
   Gate -- "team" --> Cost["成本核算<br/>Junior / Senior / Expert"]
   Cost --> Topology["拓扑与分工<br/>唯一 Owner · 范围 · 制品 · 验证"]
-  Topology --> Round1["第 1 轮<br/>成员后台独立工作"]
-  Round1 --> Merge["Lead 汇总事实、共识与冲突"]
-  Merge --> Challenge["非作者挑战者找漏洞"]
-  Challenge --> Decision{"制品是否通过？"}
-  Decision -- "否，仍可修复" --> Redispatch["只续派分歧、证据缺口和修正项"]
-  Redispatch --> Merge
+  Topology --> Brief["下发本轮目标"]
+  Brief --> Members["成员独立产出"]
+  Members --> Challenge["挑战者攻击本轮制品"]
+  Challenge --> Merge["Lead 汇总并修订"]
+  Merge --> Decision{"质量是否通过？"}
+  Decision -- "否，未满三轮" --> Brief
   Decision -- "三轮仍未收敛" --> Human["提交用户裁决"]
-  Decision -- "通过" --> StageGate["Lead 验收制品与证据<br/>通过当前阶段门禁"]
+  Decision -- "通过" --> StageGate["Lead 验收制品与证据"]
   Solo --> StageGate
   StageGate --> Flow["推进或按归因返工"]
 ```
 
-第一轮成员不得先互看结论，降低锚定；第二轮只处理分歧与证据缺口；第三轮由挑战者或必要 Expert 验证最终制品。最多三轮仍有重大分歧时停止自循环，由用户裁决。
-
-所有 OpenCode 团队成员都使用后台 child session。成员自报完成、平台显示完成或消息送达都不等于通过；只有 Lead 核验证据并验收 work item 后，Workflow 才能推进阶段。
+挑战者参与每一轮，而不是只做最终签字。下一轮只处理分歧、证据缺口和修正项；最多三轮仍有重大分歧时停止自循环。
 
 ### OpenSpec 与工作流
 
-[OpenSpec](https://github.com/Fission-AI/OpenSpec) 是首版默认 SPEC Skill，负责第 4、5 阶段的 SPEC 制品流程，以及第 10 阶段的 SPEC 收尾。它不是 team-work 的状态存储，也不负责多 Agent 调度。
+[OpenSpec](https://github.com/Fission-AI/OpenSpec) 是默认 SPEC Skill，不是状态存储或多 Agent 调度器。`spec.mode` 控制路由：
 
-未进入 SPEC 阶段时，缺少 OpenSpec 不影响调研、方案讨论、实现、测试或代码审查。需要 SPEC 流程时，在目标项目安装并初始化 OpenSpec；未来可通过同一 SPEC 路由接入 Spec Kit 等工具。
+- `auto`：OpenSpec ready 时使用，missing 时跳过 SPEC。
+- `required`：OpenSpec missing 时阻塞。
+- `disabled`：始终跳过 SPEC。
+
+未使用 OpenSpec 时，Workflow 可根据方案直接进入实施，收尾阶段也只汇总实际存在的制品。未来可通过同一路由接入 Spec Kit 等工具。
 
 ## 配置
 
-唯一用户配置是 `~/.config/team-work/config.json`；设置 `XDG_CONFIG_HOME` 时路径随之变化。首次 `install` 会生成：
+配置路径按以下顺序解析：
+
+1. `TEAM_WORK_CONFIG_HOME`
+2. `XDG_CONFIG_HOME/team-work`
+3. Windows `%APPDATA%\team-work`
+4. Linux/macOS `~/.config/team-work`
+
+首次安装生成：
 
 ```json
 {
-  "schemaVersion": "1.0",
+  "$schema": "./schemas/user-config.v1.schema.json",
+  "agents": "auto",
   "platforms": {
-    "opencode": {
-      "models": "auto"
-    }
+    "opencode": {}
   },
   "spec": {
-    "type": "openspec"
+    "provider": "openspec",
+    "mode": "auto"
   }
 }
 ```
 
-自动解析有歧义，或需要指定模型与 reasoning effort 时，修改同一文件：
+安装器会在配置目录生成对应的本地 JSON Schema。需要指定模型和 effort 时，将 `agents` 改为对象：
 
 ```json
 {
-  "schemaVersion": "1.0",
-  "platforms": {
-    "opencode": {
-      "models": {
-        "junior-flash": "aigw/deepseek-v4-flash",
-        "junior-luna": "aigw/gpt-5.6-luna",
-        "senior-terra": "aigw/gpt-5.6-terra",
-        "expert-opus": "official/claude-opus-5"
-      },
-      "effort": {
-        "junior-flash": "low",
-        "junior-luna": "medium",
-        "senior-terra": "high"
-      }
+  "$schema": "./schemas/user-config.v1.schema.json",
+  "agents": {
+    "junior-flash": {
+      "model": "aigw/deepseek-v4-flash",
+      "effort": "low"
+    },
+    "junior-luna": {
+      "model": "aigw/gpt-5.6-luna",
+      "effort": "medium"
+    },
+    "senior-terra": {
+      "model": "aigw/gpt-5.6-terra",
+      "effort": "high"
+    },
+    "expert-opus": {
+      "model": "official/claude-opus-5",
+      "effort": "high"
     }
   },
+  "platforms": {
+    "opencode": {}
+  },
   "spec": {
-    "type": "openspec"
+    "provider": "openspec",
+    "mode": "auto"
   }
 }
 ```
 
-`models` 必须使用 `opencode models` 返回的完整 `provider/model`。`effort` 按 Agent 配置，安装器会将其写为 OpenCode Agent 的 `reasoningEffort`。
+`model` 必须是 OpenCode 可见的完整 `provider/model`。`effort` 会映射为 Agent 级 `reasoningEffort`；可用值取决于模型、Provider 和网关。
 
-可用 effort 值取决于模型、Provider 和网关，不支持时省略。参见 [OpenCode Agent 配置](https://opencode.ai/docs/agents/)。
+修改配置后只需重启 OpenCode。`install/update` 管理程序与静态资产，不承担配置同步。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
 
-自定义可执行文件时可设置 `platforms.opencode.command` 或 `spec.command`。项目 `.team-work/config.yaml` 是 Runtime 自动生成的内部配置，不是第二份用户配置。
+## OpenCode 平台
 
-修改配置后执行：
+Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagent，并把当前有效 Agent Profile 写入项目上下文。
 
-```bash
-npx team-work-runtime@latest update
-```
+所有受管成员使用原生 child session 和非阻塞派发。Lead 在同步点查询状态、收集结果并续派下一轮；成员自报完成或平台显示完成都不等于验收通过。
+
+模型、Provider、网关、凭据和 MCP 仍由 OpenCode 管理。可用模型名称以 `opencode models` 为准；Agent 配置格式参见 [OpenCode Agents](https://opencode.ai/docs/agents/)。
 
 ## 更新与卸载
 
 ```bash
-npx team-work-runtime@latest doctor
 npx team-work-runtime@latest update
 npx team-work-runtime@latest uninstall
 ```
 
-更新会保护并备份受管文件。卸载只移除用户级 OpenCode Skill、Agent、Plugin 和 Runtime；用户配置与各项目的 `.team-work/` 任务、制品、事件和归档全部保留。
+更新会保护并备份受管文件。卸载只移除用户级 Skill、Plugin 和 Runtime；用户配置及项目 `.team-work/` 中的任务、制品、事件和归档都会保留。
 
 ## 常见问题
 
 ### Agent 不可用
 
-运行 `npx team-work-runtime@latest doctor`。`AGENT_UNAVAILABLE` 通常表示模型名称错误、模型不可见、effort 不受 Provider 支持或 Agent 未安装。
+先确认 `model` 与 `opencode models` 输出完全一致，并重启 OpenCode。若仍然失败，运行：
 
-按 `opencode models` 返回的完整名称修改 `~/.config/team-work/config.json`，必要时移除对应 `effort`，然后执行 `update`。
+```bash
+npx team-work-runtime@latest doctor
+```
+
+`doctor` 用于诊断版本、安装清单、受管文件漂移和 Agent 可用性，不是更新或卸载的必需步骤。

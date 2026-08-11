@@ -59,6 +59,9 @@ test("Workflow preserves platform-neutral task, gate, team, and SPEC policy", as
   assert.match(routing, /并行价值/)
   assert.match(routing, /独立评审价值/)
   assert.match(routing, /OpenSpec/)
+  assert.match(routing, /auto.*跳过|跳过.*auto/s)
+  assert.match(routing, /required.*阻塞|阻塞.*required/s)
+  assert.match(routing, /disabled.*跳过|跳过.*disabled/s)
   assert.match(commands, /team-work task create/)
   assert.match(commands, /--entry-stage/)
   for (const stage of ["research", "design", "design-review", "spec", "spec-review", "implementation", "test", "code-review", "e2e", "finish"]) {
@@ -82,6 +85,7 @@ test("Team-work preserves cost topology, convergence, ownership, and standalone 
   assert.match(combined, /挑战者/)
   assert.match(combined, /Senior 或 Expert/)
   assert.match(combined, /最多三轮|最多 3 轮/)
+  assert.match(combined, /每一轮[^。\n]*挑战者|挑战者[^。\n]*每一轮/)
   assert.match(combined, /唯一 Owner/)
   assert.match(evaluation, /同档/)
   assert.match(evaluation, /不.*流程|不进入.*循环/)
@@ -90,6 +94,21 @@ test("Team-work preserves cost topology, convergence, ownership, and standalone 
   assert.match(skill, /创建后立即[^。]*Runtime[^。]*team/)
   assert.doesNotMatch(combined, /adhoc-team/)
   assert.doesNotMatch(combined, /team_create|team_send|\.opencode|\.claude/)
+})
+
+test("E2E is applicability-gated and keeps test-artifact rework inside its own loop", async () => {
+  const workflow = await read("skills/workflow/SKILL.md")
+  const stages = await read("skills/workflow/references/stages-and-artifacts.md")
+  const testing = await read("skills/team-work/references/testing.md")
+  const combined = [workflow, stages, testing].join("\n")
+
+  assert.match(combined, /E2E.*适用性|适用性.*E2E/s)
+  for (const step of ["测试设计", "用例审查", "夹具", "实现审查", "执行", "结果复核"]) {
+    assert.match(testing, new RegExp(step))
+  }
+  assert.match(combined, /产品代码缺陷[^。\n]*实施/)
+  assert.match(combined, /测试策略[^。\n]*测试/)
+  assert.match(combined, /环境[^。\n]*阻塞/)
 })
 
 test("code review covers every perspective independently from model cost", async () => {

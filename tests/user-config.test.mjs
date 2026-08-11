@@ -1,10 +1,24 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 
-import { loadUserConfig } from "../installer/user-config.mjs"
+import { loadUserConfig, resolveUserConfigRoot } from "../installer/user-config.mjs"
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+
+test("user config root follows explicit, XDG, Windows, and home fallback precedence", () => {
+  assert.equal(resolveUserConfigRoot({
+    env: { TEAM_WORK_CONFIG_HOME: "/custom/team-work", XDG_CONFIG_HOME: "/xdg" },
+    platform: "linux",
+    homeDir: "/home/dev",
+  }), path.resolve("/custom/team-work"))
+  assert.equal(resolveUserConfigRoot({ env: { XDG_CONFIG_HOME: "/xdg" }, platform: "linux", homeDir: "/home/dev" }), "/xdg/team-work")
+  assert.equal(resolveUserConfigRoot({ env: { APPDATA: "C:\\Users\\dev\\AppData\\Roaming" }, platform: "win32", homeDir: "C:\\Users\\dev" }), "C:\\Users\\dev\\AppData\\Roaming\\team-work")
+  assert.equal(resolveUserConfigRoot({ env: {}, platform: "darwin", homeDir: "/Users/dev" }), "/Users/dev/.config/team-work")
+})
 
 test("first install creates one fixed user-level config with automatic OpenCode defaults", async () => {
   const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
@@ -17,12 +31,15 @@ test("first install creates one fixed user-level config with automatic OpenCode 
     modelMap: undefined,
     opencodeCommand: "opencode",
     openspecCommand: "openspec",
+    specMode: "auto",
   })
   assert.deepEqual(JSON.parse(await readFile(loaded.path, "utf8")), {
-    schemaVersion: "1.0",
-    platforms: { opencode: { models: "auto" } },
-    spec: { type: "openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
   })
+  await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
 })
 
 test("one config supports explicit model bindings and command overrides", async () => {
@@ -32,45 +49,65 @@ test("one config supports explicit model bindings and command overrides", async 
     "junior-flash": "gateway/deepseek-v4-flash",
     "senior-terra": "gateway/gpt-5.6-terra",
   }
-  const effort = {
-    "junior-flash": "low",
-    "senior-terra": "high",
-  }
   await writeFile(configPath, `${JSON.stringify({
-    schemaVersion: "1.0",
-    platforms: { opencode: { command: "/opt/bin/opencode", models, effort } },
-    spec: { type: "openspec", command: "/opt/bin/openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: {
+      "junior-flash": { model: models["junior-flash"], effort: "low" },
+      "senior-terra": { model: models["senior-terra"], effort: "high" },
+    },
+    platforms: { opencode: { command: "/opt/bin/opencode" } },
+    spec: { provider: "openspec", mode: "required", command: "/opt/bin/openspec" },
   }, null, 2)}\n`)
 
   const loaded = await loadUserConfig({ configRoot })
 
   assert.equal(loaded.created, false)
+  await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
   assert.deepEqual(loaded.platform, {
     id: "opencode",
     modelMap: models,
-    effortMap: effort,
     opencodeCommand: "/opt/bin/opencode",
     openspecCommand: "/opt/bin/openspec",
+    specMode: "required",
   })
+})
+
+test("loading config repairs a stale local schema sidecar", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  await mkdir(path.join(configRoot, "schemas"), { recursive: true })
+  await writeFile(path.join(configRoot, "schemas/user-config.v1.schema.json"), "{}\n")
+  await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
+  }))
+
+  await loadUserConfig({ configRoot })
+
+  const expected = await readFile(path.join(repositoryRoot, "schemas/user-config.v1.schema.json"), "utf8")
+  assert.equal(await readFile(path.join(configRoot, "schemas/user-config.v1.schema.json"), "utf8"), expected)
 })
 
 test("invalid or unsafe fixed config fails with stable error codes", async () => {
   const invalidRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   await writeFile(path.join(invalidRoot, "config.json"), JSON.stringify({
-    schemaVersion: "1.0",
-    platforms: { opencode: { models: 42 } },
-    spec: { type: "openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: { "junior-flash": { model: 42 } },
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
   }))
   await assert.rejects(
     loadUserConfig({ configRoot: invalidRoot }),
-    (error) => error.code === "USER_CONFIG_INVALID" && /models/.test(error.message),
+    (error) => error.code === "USER_CONFIG_INVALID" && /model/.test(error.message),
   )
 
   const invalidEffortRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   await writeFile(path.join(invalidEffortRoot, "config.json"), JSON.stringify({
-    schemaVersion: "1.0",
-    platforms: { opencode: { models: "auto", effort: "high" } },
-    spec: { type: "openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: { "junior-flash": { model: "gateway/deepseek", effort: 42 } },
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
   }))
   await assert.rejects(
     loadUserConfig({ configRoot: invalidEffortRoot }),
@@ -79,7 +116,7 @@ test("invalid or unsafe fixed config fails with stable error codes", async () =>
 
   const unsafeRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   const outside = path.join(unsafeRoot, "outside.json")
-  await writeFile(outside, JSON.stringify({ schemaVersion: "1.0" }))
+  await writeFile(outside, JSON.stringify({ $schema: "./schemas/user-config.v1.schema.json" }))
   await symlink(outside, path.join(unsafeRoot, "config.json"))
   await assert.rejects(
     loadUserConfig({ configRoot: unsafeRoot }),
@@ -105,8 +142,9 @@ test("a missing user config directory is created on first install", async () => 
   const loaded = await loadUserConfig({ configRoot, createIfMissing: true })
   assert.equal(loaded.path, path.join(configRoot, "config.json"))
   assert.deepEqual(JSON.parse(await readFile(loaded.path, "utf8")), {
-    schemaVersion: "1.0",
-    platforms: { opencode: { models: "auto" } },
-    spec: { type: "openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
   })
 })

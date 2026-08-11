@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "workflowId": "engineering",
-  "version": "1.1",
+  "version": "1.2",
   "initialStage": "research",
   "stages": [
     {
@@ -76,6 +76,7 @@
     { "from": "research", "outcome": "pass", "to": "design" },
     { "from": "design", "outcome": "pass", "to": "design-review" },
     { "from": "design-review", "outcome": "pass", "to": "spec" },
+    { "from": "design-review", "outcome": "skip", "to": "implementation" },
     { "from": "design-review", "outcome": "rework", "to": "design" },
     { "from": "spec", "outcome": "pass", "to": "spec-review" },
     { "from": "spec-review", "outcome": "pass", "to": "implementation" },
@@ -84,12 +85,14 @@
     { "from": "implementation", "outcome": "pass", "to": "test" },
     { "from": "test", "outcome": "pass", "to": "code-review" },
     { "from": "test", "outcome": "fail", "to": "implementation" },
-    { "from": "code-review", "outcome": "pass", "to": "e2e" },
+    { "from": "code-review", "outcome": "pass", "to": "e2e", "requiredGate": "e2e-applicability" },
+    { "from": "code-review", "outcome": "skip", "to": "finish", "requiredGate": "e2e-applicability" },
     { "from": "code-review", "outcome": "rework", "to": "implementation" },
     { "from": "code-review", "outcome": "fail", "to": "test" },
     { "from": "e2e", "outcome": "pass", "to": "finish" },
-    { "from": "e2e", "outcome": "rework", "to": "test" },
-    { "from": "e2e", "outcome": "fail", "to": "implementation" }
+    { "from": "e2e", "outcome": "rework", "to": "e2e" },
+    { "from": "e2e", "outcome": "fail", "to": "implementation" },
+    { "from": "e2e", "outcome": "test-gap", "to": "test" }
   ],
   "rollback": { "enabled": true, "requiresReason": true, "invalidatesLaterEvidence": true }
 }

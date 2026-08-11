@@ -3,7 +3,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { manageOpenCodePlugin } from "../plugins/opencode/src/lifecycle.mjs"
-import { loadUserConfig } from "./user-config.mjs"
+import { loadUserConfig, resolveUserConfigRoot } from "./user-config.mjs"
 
 export const LIFECYCLE_COMMANDS = new Set(["install", "update", "doctor", "uninstall"])
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -27,19 +27,25 @@ export async function runInstallerCli(argv, dependencies = {}) {
   const writeOut = dependencies.writeOut ?? ((text) => process.stdout.write(text))
   const writeError = dependencies.writeError ?? ((text) => process.stderr.write(text))
   const sourceRoot = dependencies.sourceRoot ?? DEFAULT_SOURCE_ROOT
+  const env = dependencies.env ?? process.env
+  const platformName = dependencies.platform ?? process.platform
+  const homeDir = dependencies.homeDir ?? os.homedir()
   const configBase = dependencies.configBase
-    ?? process.env.XDG_CONFIG_HOME
-    ?? path.join(dependencies.homeDir ?? os.homedir(), ".config")
-  const configRoot = path.resolve(dependencies.configRoot ?? path.join(configBase, "team-work"))
+    ?? env.XDG_CONFIG_HOME
+    ?? (platformName === "win32" ? env.APPDATA : undefined)
+    ?? path.join(homeDir, ".config")
+  const configRoot = dependencies.configRoot
+    ? path.resolve(dependencies.configRoot)
+    : resolveUserConfigRoot({ env, platform: platformName, homeDir })
   const opencodeRoot = path.resolve(dependencies.opencodeRoot ?? path.join(configBase, "opencode"))
 
   try {
     const { command, options } = parse(argv)
     let platform = {
       modelMap: undefined,
-      effortMap: undefined,
       opencodeCommand: "opencode",
       openspecCommand: "openspec",
+      specMode: "auto",
     }
     if (command !== "uninstall") {
       const loaded = await loadUserConfig({
@@ -52,9 +58,9 @@ export async function runInstallerCli(argv, dependencies = {}) {
       installRoot: opencodeRoot,
       sourceRoot,
       modelMap: platform.modelMap,
-      effortMap: platform.effortMap,
       opencodeCommand: platform.opencodeCommand,
       openspecCommand: platform.openspecCommand,
+      specMode: platform.specMode,
       force: options.force,
     })
     writeOut(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`)

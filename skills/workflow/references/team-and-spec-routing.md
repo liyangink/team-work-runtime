@@ -25,11 +25,12 @@ Workflow 通过 `task team` 记录 `solo` 或 `team` 决策及理由；进入新
 
 ## SPEC 路由
 
-进入 `spec` 阶段时读取项目配置中的 `spec.type`、`spec.skill`、`spec.root` 和 `spec.status`：
+进入 SPEC 路由点时读取项目配置中的 `spec.type`、`spec.skill`、`spec.root`、`spec.mode` 和 `spec.status`：
 
 - 默认路由为 OpenSpec；
-- 配置存在且可用时调用对应 SPEC Skill；
-- 配置缺失或工具未准备时形成可修复 blocker，提示初始化，不静默改用另一套规范；
+- `auto`：工具 ready 时调用；missing 时记录跳过依据，从 `design-review` 直接进入 `implementation`；
+- `required`：工具 missing 时阻塞并形成可修复 blocker，提示初始化，不得跳过；
+- `disabled`：明确跳过 SPEC，不调用 SPEC Skill；
 - SPEC Skill 返回状态、制品引用、验证证据、开放问题和建议下一阶段；Workflow 通过 `task spec` 持久化执行状态与制品；
 - Workflow 注册返回制品，检查当前门禁，再决定进入 `spec-review` 或等待/返工。
 

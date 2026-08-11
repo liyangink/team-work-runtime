@@ -86,18 +86,18 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 打包 Workflow、Team-work、CoreRuntime、Junior/Senior/Expert Agent 和 OpenCode Plugin：
 
-- 用户级安装时扫描模型并物化 Platform Profile，用 OpenCode 全局目录安装 Workflow、Team-work、Runtime 与分档 Agent；
+- 用户级安装时扫描模型并物化 Platform Profile，用 OpenCode 全局目录安装 Workflow、Team-work、Runtime 与 Plugin；Agent 在 OpenCode 启动时由用户配置动态注入；
 - 首次项目调用时懒初始化 `.team-work/`，物化当前平台 Profile/指南并探测默认 OpenSpec；
 - 通过 Plugin 的 session、message、tool 事件完成活动任务识别、上下文注入和生命周期记录；
 - 复用原生 subagent child session 与 session 导航，不实现第二套 Agent 调度器；
 - 所有受管 Team-work subagent 强制 background/non-blocking 派发；Lead 在显式同步点查询状态并收集结果，禁止阻塞等待单个成员；
 - 使用稳定 task/work-item ID 关联 child session，Lead 通过汇总、续派和共享制品协作；
 - 跨会话只恢复 Runtime 任务、制品与映射，失效 subagent 在需要时重新创建；
-- 模型/provider/网关仍由 OpenCode 管理，PlatformPlugin 只物化 Agent 与能力档位。
+- 模型/provider/网关仍由 OpenCode 管理，PlatformPlugin 只解析用户 Agent 绑定并注入能力档位。
 
 完成标准：可独立创建、恢复和完成团队任务；多模型 Agent 能正常调用工具；受管派发测试证明不会进入阻塞模式；Lead 与 subagent 获得不同的最小上下文；Plugin 失败不损坏状态或形成死门；卸载不删除项目数据。
 
-已完成：最低版本校验、模型唯一解析、按 Agent 配置 effort、用户级 Skill/Agent/Plugin 装配、npm 安装器包、固定 `~/.config/team-work/config.json` 用户配置、项目首次调用懒初始化、生产依赖安装、安装清单、更新备份与回滚、安全/强制卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、Runtime Tool、Lead/child 最小上下文 Hook、compaction 恢复提示、OpenSpec 就绪检查、平台事件审计，以及网关失败—续派—成员失联的自动化故障注入。
+已完成：最低版本校验、模型唯一解析、启动时动态 Agent model/effort 注入、跨平台用户配置路径、版本化配置 Schema、用户级 Skill/Plugin 装配、npm 安装器、项目懒初始化、安装清单、更新备份与回滚、安全卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、最小上下文 Hook、OpenSpec 模式路由、平台事件审计，以及网关失败—续派—成员失联的故障注入。
 
 真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中启用一个低成本 Senior，从实际研发阶段完成 Workflow 路由、挑战者、Lead 验收和最终制品的正式场景 E2E。除非场景达到升级条件，不调用 Expert。
 

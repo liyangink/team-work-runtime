@@ -28,6 +28,7 @@ function options(projectRoot, overrides = {}) {
     sourceRoot,
     hostVersion: "1.18.15",
     modelMap,
+    availableModels: Object.values(modelMap),
     skipDependencies: true,
     now: () => new Date("2026-08-11T08:00:00.000Z"),
     ...overrides,
@@ -60,7 +61,7 @@ test("lifecycle commands report a stable result when the global install root is 
   )
 })
 
-test("install materializes runtime, skills, agents, plugin, profile, guides, and manifest", async () => {
+test("install materializes runtime, skills, dynamic Agent config, plugin, profile, guides, and manifest", async () => {
   const projectRoot = await tempProject()
   const result = await manageOpenCodePlugin("install", options(projectRoot))
 
@@ -68,57 +69,36 @@ test("install materializes runtime, skills, agents, plugin, profile, guides, and
   for (const relativePath of [
     "skills/workflow/SKILL.md",
     "skills/team-work/SKILL.md",
-    "agents/junior-flash.md",
-    "agents/expert-opus.md",
     "plugins/team-work.js",
     "team-work/runtime/cli.mjs",
     "team-work/opencode-adapter.mjs",
+    "team-work/opencode-agent-config.mjs",
+    "team-work/installer/user-config.mjs",
     "team-work/settings.json",
     "team-work/profile.json",
     "team-work/guides/team-work.md",
     "team-work/guides/recovery.md",
     "team-work/install.json",
   ]) assert.equal(await exists(path.join(projectRoot, relativePath)), true, relativePath)
+  assert.equal(await exists(path.join(projectRoot, "agents/junior-flash.md")), false)
 
   const profile = JSON.parse(await readFile(path.join(projectRoot, "team-work/profile.json"), "utf8"))
   assert.equal(profile.dispatch.managedMode, "background")
   assert.equal(profile.dispatch.blockingPolicy, "reject")
   assert.equal(profile.agents.length, 7)
   assert.ok(profile.agents.every((agent) => agent.resolvedModel?.includes("/")))
+  assert.equal(profile.agents.find(({ id }) => id === "senior-terra").costWeight, 10)
   assert.equal(profile.operations.spawn.tool, "team_work_spawn")
   const profileSchema = JSON.parse(await readFile(path.join(sourceRoot, "schemas/platform-profile.schema.json"), "utf8"))
   assert.deepEqual(createContractValidator([profileSchema])(profileSchema.$id, profile), [])
   assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, "team-work/settings.json"), "utf8")), {
-    schemaVersion: "1.0",
-    spec: { type: "openspec", command: "openspec" },
+    spec: { provider: "openspec", mode: "auto", command: "openspec" },
   })
 
   const manifest = JSON.parse(await readFile(path.join(projectRoot, "team-work/install.json"), "utf8"))
   assert.equal(manifest.status, "installed")
   assert.ok(manifest.managedFiles.length > 20)
   assert.ok(manifest.managedFiles.every(({ path: relativePath, sha256 }) => relativePath && /^[a-f0-9]{64}$/.test(sha256)))
-})
-
-test("install materializes per-agent effort as an OpenCode model option", async () => {
-  const projectRoot = await tempProject()
-  await manageOpenCodePlugin("install", options(projectRoot, {
-    effortMap: { "junior-flash": "low", "senior-terra": "high" },
-  }))
-
-  const junior = await readFile(path.join(projectRoot, "agents/junior-flash.md"), "utf8")
-  const senior = await readFile(path.join(projectRoot, "agents/senior-terra.md"), "utf8")
-  const expert = await readFile(path.join(projectRoot, "agents/expert-opus.md"), "utf8")
-  assert.match(junior, /^reasoningEffort: "low"$/m)
-  assert.match(senior, /^reasoningEffort: "high"$/m)
-  assert.doesNotMatch(expert, /^reasoningEffort:/m)
-})
-
-test("install rejects effort configured for an unknown Agent", async () => {
-  const projectRoot = await tempProject()
-  await assert.rejects(
-    manageOpenCodePlugin("install", options(projectRoot, { effortMap: { "missing-agent": "high" } })),
-    (error) => error.code === "INVALID_EFFORT_MAP",
-  )
 })
 
 test("update repairs missing managed files and doctor reports drift", async () => {
@@ -135,14 +115,41 @@ test("update repairs missing managed files and doctor reports drift", async () =
   assert.equal(await exists(target), true)
 })
 
-test("unresolved model aliases remain visible but do not create unusable agents", async () => {
+test("unresolved model aliases remain visible and dynamic config can omit them", async () => {
   const projectRoot = await tempProject()
   const result = await manageOpenCodePlugin("install", options(projectRoot, { modelMap: undefined, availableModels: ["gateway/gpt-5.6-terra"] }))
   assert.ok(result.warnings.length >= 6)
-  assert.equal(await exists(path.join(projectRoot, "agents/senior-terra.md")), true)
+  assert.equal(await exists(path.join(projectRoot, "agents/senior-terra.md")), false)
   assert.equal(await exists(path.join(projectRoot, "agents/expert-opus.md")), false)
   const profile = JSON.parse(await readFile(path.join(projectRoot, "team-work/profile.json"), "utf8"))
   assert.equal(profile.agents.find(({ id }) => id === "expert-opus").resolvedModel, null)
+})
+
+test("doctor does not report stale unresolved Agents outside the current explicit config", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot, {
+    modelMap: undefined,
+    availableModels: ["gateway/gpt-5.6-terra"],
+  }))
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    modelMap: { "expert-opus": "official/claude-opus-5" },
+  }))
+
+  assert.equal(diagnosis.issues.some(({ code }) => code === "MODEL_UNRESOLVED"), false)
+})
+
+test("doctor reports an explicit Agent model that OpenCode cannot resolve", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    modelMap: { "junior-flash": "gateway/missing-model" },
+  }))
+
+  assert.ok(diagnosis.issues.some(({ code, agent, model }) => (
+    code === "MODEL_UNAVAILABLE" && agent === "junior-flash" && model === "gateway/missing-model"
+  )))
 })
 
 test("failed OpenCode smoke test rolls back all managed files", async () => {
@@ -224,6 +231,12 @@ test("update rejects symlinked obsolete managed files before backup or deletion"
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot))
   const managed = path.join(projectRoot, "agents/expert-k3.md")
+  await mkdir(path.dirname(managed), { recursive: true })
+  await writeFile(managed, "legacy managed agent\n")
+  const manifestPath = path.join(projectRoot, "team-work/install.json")
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+  manifest.managedFiles.push({ path: "agents/expert-k3.md", sha256: createHash("sha256").update("legacy managed agent\n").digest("hex") })
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   const outside = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-outside-")), "external.md")
   await writeFile(outside, "outside\n")
   await rm(managed)
@@ -409,7 +422,7 @@ test("uninstall retains modified managed files by default and force backs them u
 
 async function copySourceFixture(from, to) {
   const { cp } = await import("node:fs/promises")
-  for (const relativePath of ["runtime", "schemas", "skills", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "package.json"]) {
+  for (const relativePath of ["runtime", "schemas", "skills", "installer", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "package.json"]) {
     await cp(path.join(from, relativePath), path.join(to, relativePath), { recursive: true })
   }
 }

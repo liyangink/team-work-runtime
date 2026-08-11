@@ -87,6 +87,7 @@ test("engineering workflow permits direct code-review entry with only its minimu
   assert.ok(!codeReviewInputs.includes("design"))
   assert.ok(!codeReviewInputs.includes("spec"))
   assert.ok(workflow.transitions.some(({ from, outcome, to }) => from === "code-review" && outcome === "rework" && to === "implementation"))
+  assert.ok(workflow.transitions.filter(({ from, outcome }) => from === "code-review" && ["pass", "skip"].includes(outcome)).every(({ requiredGate }) => requiredGate === "e2e-applicability"))
 
   const sourceOnly = evaluateStageGate(workflow, "code-review", [{ kind: "source" }])
   assert.equal(sourceOnly.ok, false)
@@ -127,6 +128,7 @@ test("engineering workflow publishes the complete legal transition table", async
     "research:pass->design",
     "design:pass->design-review",
     "design-review:pass->spec",
+    "design-review:skip->implementation",
     "design-review:rework->design",
     "spec:pass->spec-review",
     "spec-review:pass->implementation",
@@ -136,11 +138,13 @@ test("engineering workflow publishes the complete legal transition table", async
     "test:pass->code-review",
     "test:fail->implementation",
     "code-review:pass->e2e",
+    "code-review:skip->finish",
     "code-review:rework->implementation",
     "code-review:fail->test",
     "e2e:pass->finish",
-    "e2e:rework->test",
+    "e2e:rework->e2e",
     "e2e:fail->implementation",
+    "e2e:test-gap->test",
   ])
 })
 

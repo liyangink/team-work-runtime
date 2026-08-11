@@ -129,7 +129,7 @@ function eventFingerprint(value) {
   return createHash("sha256").update(stableJson(value)).digest("hex")
 }
 
-export function createOpenCodeAdapter({ client, projectRoot, platformRoot, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
+export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platformProfile, platformSettings, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
   if (!client?.session) throw failure("INVALID_CLIENT", "OpenCode client.session 不可用")
   const root = path.resolve(projectRoot)
   const installedPlatformRoot = path.resolve(platformRoot ?? path.join(root, ".opencode/team-work"))
@@ -231,13 +231,16 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, now =
   }
 
   async function copyPlatformContext() {
-    const profileSource = path.join(installedPlatformRoot, "profile.json")
-    const profile = await readFile(profileSource).catch((error) => {
-      throw failure("PLATFORM_PROFILE_UNAVAILABLE", `无法读取 OpenCode Platform Profile：${error.message}`)
-    })
+    let profile = platformProfile
+    if (!profile) {
+      const profileSource = path.join(installedPlatformRoot, "profile.json")
+      profile = JSON.parse(await readFile(profileSource, "utf8").catch((error) => {
+        throw failure("PLATFORM_PROFILE_UNAVAILABLE", `无法读取 OpenCode Platform Profile：${error.message}`)
+      }))
+    }
     const destinationRoot = ".team-work/platform/opencode"
     await assertProjectPathSafe(destinationRoot)
-    await atomicJson(path.join(root, destinationRoot, "profile.json"), JSON.parse(profile))
+    await atomicJson(path.join(root, destinationRoot, "profile.json"), profile)
     const guideSource = path.join(installedPlatformRoot, "guides")
     for (const entry of await readdir(guideSource, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue
@@ -248,17 +251,25 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, now =
   }
 
   async function synchronizeSpecReadiness() {
-    let settings
-    try {
-      settings = JSON.parse(await readFile(path.join(installedPlatformRoot, "settings.json"), "utf8"))
-    } catch {
-      // 可选 SPEC 设置损坏或缺失不能阻塞 standalone 与非 SPEC 阶段。
-      return
+    let settings = platformSettings
+    if (!settings) {
+      try {
+        settings = JSON.parse(await readFile(path.join(installedPlatformRoot, "settings.json"), "utf8"))
+      } catch {
+        // 可选 SPEC 设置损坏或缺失不能阻塞 standalone 与非 SPEC 阶段。
+        return
+      }
     }
-    if (settings?.spec?.type !== "openspec" || typeof settings.spec.command !== "string") return
+    if (settings?.spec?.provider !== "openspec" || typeof settings.spec.command !== "string") return
     const configPath = path.join(root, ".team-work/config.yaml")
     const config = JSON.parse(await readFile(configPath, "utf8"))
-    if (config.spec?.type !== "openspec" || config.spec.status === "disabled") return
+    if (config.spec?.type !== "openspec") return
+    const mode = ["auto", "required", "disabled"].includes(settings.spec.mode) ? settings.spec.mode : "auto"
+    if (mode === "disabled") {
+      const spec = { ...config.spec, mode, status: "disabled" }
+      if (JSON.stringify(config.spec) !== JSON.stringify(spec)) await atomicJson(configPath, { ...config, spec })
+      return
+    }
     let ready = false
     try {
       await execFile(settings.spec.command, ["--version"], { cwd: root, encoding: "utf8", timeout: 10_000 })
@@ -273,7 +284,8 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, now =
       // SPEC 是可选路由；未安装或未初始化只保持 missing，不阻塞其他阶段。
     }
     const status = ready ? "ready" : "missing"
-    if (config.spec.status !== status) await atomicJson(configPath, { ...config, spec: { ...config.spec, status } })
+    const spec = { ...config.spec, mode, status }
+    if (JSON.stringify(config.spec) !== JSON.stringify(spec)) await atomicJson(configPath, { ...config, spec })
   }
 
   async function ensureProjectReady() {

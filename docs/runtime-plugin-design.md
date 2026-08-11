@@ -115,6 +115,7 @@ spec:
   type: openspec
   skill: openspec
   root: openspec/
+  mode: auto
   status: ready
 ```
 
@@ -146,6 +147,7 @@ flowchart LR
     R["research"] --> D["design"]
     D --> DR["design-review"]
     DR -->|"pass"| S["spec"]
+    DR -->|"skip spec"| I["implementation"]
     DR -->|"rework"| D
     S --> SR["spec-review"]
     SR -->|"pass"| I["implementation"]
@@ -155,12 +157,16 @@ flowchart LR
     T -->|"pass"| CR["code-review"]
     T -->|"fail"| I
     CR -->|"pass"| E["e2e"]
+    CR -->|"skip e2e"| F["finish"]
     CR -->|"rework"| I
     CR -->|"fail: test"| T
     E -->|"pass"| F["finish"]
-    E -->|"rework: test design"| T
+    E -->|"rework: e2e artifacts"| E
+    E -->|"test-gap"| T
     E -->|"fail"| I
 ```
+
+`code-review` 的 `pass/skip` 边都声明 `requiredGate: e2e-applicability`。因此是否执行 E2E 必须留下决定与证据，不能仅靠 Skill 提示词约束。
 
 Workflow 解释阶段目标和语义；CoreRuntime 校验合法状态边并记录：
 
@@ -174,8 +180,10 @@ CoreRuntime 只验证后两类门禁是否具有合法决策、理由和证据�
 
 - 用户明确要求 team 时，Workflow 直接调用 Team-work；
 - 否则 Workflow 根据场景、并行价值、独立评审价值和成本判断 solo/team；
-- 进入 `spec` 阶段时读取 `spec.type/skill/root/status`，路由对应 SPEC Skill；
+- 在 SPEC 路由点读取 `spec.type/skill/root/mode/status`；`auto` 可跳过，`required` 缺失时阻塞，`disabled` 始终跳过；
 - SPEC Skill 负责具体规范流程，Workflow 只负责阶段衔接、上下文和门禁。
+
+CoreRuntime 根据 Workflow 的 `specRoute` 标记和项目 SPEC 状态校验进入/跳过边，避免直接调用 Runtime 命令绕过 `required` 或跳过已 ready 的默认路由。
 
 ## 6. Team-work
 
@@ -184,7 +192,7 @@ Team-work 保留当前已积累的核心能力：
 - Junior/Senior/Expert 三档成本与预算建议；
 - 方案讨论、设计审查、代码 Review、并行实施、测试/E2E 等拓扑；
 - 唯一 Owner、范围、完成条件、产物路径和验证要求；
-- 独立首轮、Lead 汇总、分歧再派发、最多三轮收敛；
+- 独立首轮、每轮挑战、Lead 汇总、分歧再派发、最多三轮收敛；
 - Lead 验收、返工、团队汇报和可选同档评分；
 - 每个正式团队由现有 Senior/Expert 兼任非作者挑战者，以证据从成本、合理性、事实、推理、需求、边界和失败路径审查最终制品；
 - 通用的成员失联、结果缺失和交付恢复规则。
@@ -233,12 +241,12 @@ PlatformPlugin 包含安装期与运行期两类职责。
 ### 8.1 安装与更新
 
 1. 在用户级平台目录安装或更新 CoreRuntime、Workflow、Team-work；
-2. 安装全局 Agent Definitions、Hook 和 Harness 指南；
+2. 安装 Hook、Harness 指南和启动时 Agent 配置适配器；
 3. 扫描原生 multiagent、模型、工具、权限、并发和 UI 能力；
 4. 生成用户级 Platform Profile、增量 guides 与平台设置；
 5. 执行版本、路径、Hook 和最小 team smoke test；
 6. 首次项目调用时懒初始化 `.team-work/`，物化当前 Profile/指南并只读检查默认 OpenSpec；
-7. 缺少 SPEC 工具时保留可恢复的 `missing` 路由，不阻塞其他阶段。
+7. 缺少 SPEC 工具时按 `auto|required|disabled` 处理，不影响无关阶段。
 
 安装器不得静默覆盖已有 Workflow/SPEC 选择；修改前备份，重复执行必须幂等。模型网关、凭据、MCP 和用户权限仍由 CLI Host 管理，Plugin 只检查并报告。
 
@@ -272,10 +280,11 @@ plugins/opencode/
 ├── scripts/manage.mjs          # 统一 npm CLI 的源码入口包装
 └── src/
     ├── lifecycle.mjs           # digest 清单、备份、回滚、smoke test
+    ├── agent-config.mjs        # 启动时动态注入 Agent model/effort
     └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入
 ```
 
-平台无关 Skill 只有根目录 `skills/` 一份可编辑源码，安装器在 OpenCode 全局配置目录物化副本；CoreRuntime 与 schema 同理。OpenCode 负责模型/provider、Agent 调用和 child session，项目任务和配置始终留在项目根 `.team-work/`，并在首次 Runtime Tool 调用时创建。首版以“Lead + 多 subagent + 共享制品/Lead 转发”为协作基线，不要求原生共享任务表、成员互发消息或可恢复的 Team 进程。
+平台无关 Skill 只有根目录 `skills/` 一份源码，安装器物化 Skill、Runtime、schema 和 Plugin。Plugin 启动时读取用户配置并动态注入 Agent；修改 model/effort 后重启 OpenCode 即可。项目任务留在 `.team-work/`，协作基线是“Lead + 多 subagent + 共享制品/Lead 转发”。
 
 生命周期管理只拥有全局安装清单列出的文件：更新先快照旧受管文件，碰撞或本地修改默认失败，smoke test 失败回滚；卸载不扫描项目，因此所有 `.team-work/` 任务、制品、Workflow/SPEC 配置和平台 session 历史都被保留。最低 OpenCode 版本用于排除已知不兼容接口，不设置最高版本上限。
 

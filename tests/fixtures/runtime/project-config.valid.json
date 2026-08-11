@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "workflow": {
     "id": "engineering",
     "version": "1.0",
@@ -10,6 +10,7 @@
     "type": "openspec",
     "skill": "openspec",
     "root": "openspec/",
+    "mode": "auto",
     "status": "ready"
   }
 }

@@ -56,9 +56,11 @@ test("npm package contains every installer input and excludes repository-only as
     "installer/user-config.mjs",
     "runtime/core.mjs",
     "schemas/task.schema.json",
+    "schemas/user-config.v1.schema.json",
     "skills/workflow/SKILL.md",
     "skills/team-work/SKILL.md",
     "plugins/opencode/src/lifecycle.mjs",
+    "plugins/opencode/src/agent-config.mjs",
     "plugins/opencode/config/runtime-package-lock.json",
   ]) assert.ok(names.has(required), `npm package is missing ${required}`)
   for (const excluded of ["USAGE.md", "AGENTS.md", "tests/user-config.test.mjs", "archive/legacy-omo/SKILL.md"]) {

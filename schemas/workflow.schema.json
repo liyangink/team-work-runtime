@@ -45,8 +45,9 @@
         "required": ["from", "outcome", "to"],
         "properties": {
           "from": { "type": "string", "minLength": 1 },
-          "outcome": { "enum": ["pass", "rework", "fail"] },
-          "to": { "type": "string", "minLength": 1 }
+          "outcome": { "enum": ["pass", "skip", "rework", "fail", "test-gap"] },
+          "to": { "type": "string", "minLength": 1 },
+          "requiredGate": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" }
         }
       }
     },

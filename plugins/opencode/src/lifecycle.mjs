@@ -239,12 +239,6 @@ async function addTree(files, source, destination) {
   }
 }
 
-function agentMarkdown(agent, resolvedModel, effort) {
-  const tierName = { junior: "Junior", senior: "Senior", expert: "Expert" }[agent.tier]
-  const effortOption = effort === undefined ? "" : `reasoningEffort: ${JSON.stringify(effort)}\n`
-  return Buffer.from(`---\ndescription: Team-work ${tierName} 通用成员；成本档位 ${agent.costWeight}，具体分工由团队场景决定。\nmode: subagent\nmodel: ${JSON.stringify(resolvedModel)}\n${effortOption}permission:\n  task: deny\n  team_work_spawn: deny\n  team_work_resume: deny\n  team_work_stop: deny\n---\n\n你是 Team-work 的 ${tierName} 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，发现缺口及时报告。不要自行组建下级团队。\n`)
-}
-
 async function scanModels(opencodeCommand) {
   try {
     const { stdout } = await execFile(opencodeCommand, ["models"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 })
@@ -273,22 +267,9 @@ function resolveModels(agentConfig, explicitMap, availableModels) {
     if (matches.length === 1) resolved.set(agent.id, matches[0])
     else warnings.push(matches.length > 1
       ? `${agent.id} 的模型别名 ${agent.requestedModel} 匹配多个 provider，未自动选择`
-      : `${agent.id} 的模型 ${agent.requestedModel} 不可用，未安装对应 Agent`)
+      : `${agent.id} 的模型 ${agent.requestedModel} 不可用，自动模式不会启用该 Agent`)
   }
   return { resolved, warnings }
-}
-
-function validateEffortMap(agentConfig, effortMap) {
-  if (effortMap === undefined) return {}
-  if (!effortMap || typeof effortMap !== "object" || Array.isArray(effortMap)) {
-    fail("INVALID_EFFORT_MAP", "effort 配置必须是 Agent 到 effort 名称的映射")
-  }
-  const knownAgents = new Set(agentConfig.agents.map(({ id }) => id))
-  for (const [agentId, effort] of Object.entries(effortMap)) {
-    if (!knownAgents.has(agentId)) fail("INVALID_EFFORT_MAP", `effort 配置包含未知 Agent：${agentId}`)
-    if (typeof effort !== "string" || !effort.trim()) fail("INVALID_EFFORT_MAP", `${agentId} 的 effort 必须是非空字符串`)
-  }
-  return effortMap
 }
 
 function platformProfile(agentConfig, resolved, generatedAt) {
@@ -324,7 +305,7 @@ function platformProfile(agentConfig, resolved, generatedAt) {
   }
 }
 
-async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableModels, opencodeCommand, openspecCommand, skipDependencies }) {
+async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
   const files = new Map()
   await addTree(files, path.join(sourceRoot, "runtime"), "team-work/runtime")
   await addTree(files, path.join(sourceRoot, "schemas"), "team-work/schemas")
@@ -332,6 +313,8 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
   await addTree(files, path.join(sourceRoot, "skills/team-work"), "skills/team-work")
   await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
   files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
+  files.set("team-work/opencode-agent-config.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/agent-config.mjs")))
+  files.set("team-work/installer/user-config.mjs", await readFile(path.join(sourceRoot, "installer/user-config.mjs")))
   files.set("plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
 
   const packageConfig = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"))
@@ -347,8 +330,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
   files.set("team-work/package.json", packageContent)
   files.set("team-work/package-lock.json", packageLockContent)
   files.set("team-work/settings.json", Buffer.from(`${JSON.stringify({
-    schemaVersion: "1.0",
-    spec: { type: "openspec", command: openspecCommand },
+    spec: { provider: "openspec", mode: specMode ?? "auto", command: openspecCommand },
   }, null, 2)}\n`))
 
   if (!skipDependencies && Object.keys(runtimePackage.dependencies).length) {
@@ -370,13 +352,8 @@ async function buildDesiredFiles({ sourceRoot, modelMap, effortMap, availableMod
   }
 
   const agentConfig = JSON.parse(await readFile(path.join(sourceRoot, "plugins/opencode/config/agents.json"), "utf8"))
-  const efforts = validateEffortMap(agentConfig, effortMap)
   const scanned = availableModels ?? (modelMap ? [] : await scanModels(opencodeCommand))
   const { resolved, warnings } = resolveModels(agentConfig, modelMap, scanned)
-  for (const agent of agentConfig.agents) {
-    const model = resolved.get(agent.id)
-    if (model) files.set(`agents/${agent.id}.md`, agentMarkdown(agent, model, efforts[agent.id]))
-  }
   return { files, warnings, packageVersion: packageConfig.version, agentIds: [...resolved.keys()], profile: platformProfile(agentConfig, resolved, "") }
 }
 
@@ -585,7 +562,7 @@ async function pruneEmptyManagedDirectories(installRoot, removedFiles) {
   }
 }
 
-async function doctor({ installRoot, prior, hostVersion }) {
+async function doctor({ installRoot, prior, hostVersion, modelMap, availableModels, opencodeCommand }) {
   const issues = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
@@ -594,8 +571,17 @@ async function doctor({ installRoot, prior, hostVersion }) {
     else if (digest !== entry.sha256) issues.push({ code: "MANAGED_FILE_MODIFIED", path: entry.path })
   }
   const profile = await readJson(targetPath(installRoot, `${PLATFORM_ROOT}/profile.json`), "PROFILE_CORRUPT")
-  for (const agent of profile?.agents ?? []) {
-    if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
+  if (modelMap === undefined) {
+    for (const agent of profile?.agents ?? []) {
+      if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
+    }
+  } else {
+    const known = new Set((profile?.agents ?? []).map(({ id }) => id))
+    const visibleModels = new Set(availableModels ?? await scanModels(opencodeCommand))
+    for (const [agent, model] of Object.entries(modelMap)) {
+      if (!known.has(agent)) issues.push({ code: "AGENT_UNKNOWN", agent })
+      else if (!visibleModels.has(model)) issues.push({ code: "MODEL_UNAVAILABLE", agent, model })
+    }
   }
   return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues }
 }
@@ -616,7 +602,14 @@ async function manageUnlocked(command, options) {
   if (compareVersions(hostVersion, MINIMUM_OPENCODE_VERSION) < 0) {
     fail("OPENCODE_VERSION_TOO_OLD", `OpenCode ${hostVersion} 低于最低版本 ${MINIMUM_OPENCODE_VERSION}`)
   }
-  if (command === "doctor") return doctor({ installRoot, prior, hostVersion })
+  if (command === "doctor") return doctor({
+    installRoot,
+    prior,
+    hostVersion,
+    modelMap: options.modelMap,
+    availableModels: options.availableModels,
+    opencodeCommand: options.opencodeCommand ?? "opencode",
+  })
   if (command === "update" && prior?.status !== "installed") {
     fail("NOT_INSTALLED", "尚未安装 OpenCode PlatformPlugin，请先执行 install")
   }
@@ -627,10 +620,10 @@ async function manageUnlocked(command, options) {
   const desired = await buildDesiredFiles({
     sourceRoot,
     modelMap: options.modelMap,
-    effortMap: options.effortMap,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
     openspecCommand: options.openspecCommand ?? "openspec",
+    specMode: options.specMode ?? "auto",
     skipDependencies: Boolean(options.skipDependencies),
   })
   await materializeProfile(installRoot, desired, now)

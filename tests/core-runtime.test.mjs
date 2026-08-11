@@ -168,8 +168,8 @@ test("user advances on an explicit edge and rolls back with auditable evidence",
 
   const decided = await run(
     projectRoot,
-    "flow", "decide", "--task", "review", "--gate", "review-accepted", "--kind", "semantic",
-    "--status", "passed", "--reason", "Lead accepted independent review", "--actor", "lead",
+    "flow", "decide", "--task", "review", "--gate", "e2e-applicability", "--kind", "semantic",
+    "--status", "passed", "--reason", "Lead accepted review and E2E applies", "--actor", "lead",
     "--evidence", "review-proof", "--evidence-path", "review.md", "--expected-revision", "2",
   )
   assert.equal(decided.revision, 3)
@@ -192,6 +192,78 @@ test("user advances on an explicit edge and rolls back with auditable evidence",
 
   const illegal = await runResult(projectRoot, "flow", "advance", "--task", "review", "--outcome", "fail", "--expected-revision", "5")
   assert.equal(illegal.envelope.error.code, "ILLEGAL_TRANSITION")
+})
+
+test("optional SPEC and E2E branches follow the declared skip and internal rework edges", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "requirement.md"), "implement approved design\n")
+  await writeFile(path.join(projectRoot, "design.md"), "approved design\n")
+  await writeFile(path.join(projectRoot, "source.md"), "source\n")
+  await writeFile(path.join(projectRoot, "scope.md"), "scope\n")
+  await run(projectRoot, "init")
+
+  await run(projectRoot, "task", "create", "--task", "skip-spec", "--entry-stage", "design-review")
+  await run(projectRoot, "context", "register", "--task", "skip-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+  await run(projectRoot, "context", "register", "--task", "skip-spec", "--context", "requirement", "--kind", "requirement", "--path", "requirement.md", "--profiles", "lead,implement", "--expected-revision", "1")
+  const unavailableSpec = await runResult(projectRoot, "flow", "advance", "--task", "skip-spec", "--outcome", "pass", "--expected-revision", "2")
+  assert.equal(unavailableSpec.envelope.error.code, "GATE_BLOCKED")
+  assert.equal(unavailableSpec.envelope.error.blockers[0].code, "SPEC_ROUTE_BLOCKED")
+  const skippedSpec = await run(projectRoot, "flow", "advance", "--task", "skip-spec", "--outcome", "skip", "--expected-revision", "2")
+  assert.equal(skippedSpec.data.to, "implementation")
+
+  await run(projectRoot, "task", "create", "--task", "skip-e2e", "--entry-stage", "code-review")
+  await run(projectRoot, "context", "register", "--task", "skip-e2e", "--context", "source", "--kind", "source", "--path", "source.md", "--profiles", "lead,check", "--expected-revision", "0")
+  await run(projectRoot, "context", "register", "--task", "skip-e2e", "--context", "review-scope", "--kind", "review-scope", "--path", "scope.md", "--profiles", "lead,check", "--expected-revision", "1")
+  const undecidedE2e = await runResult(projectRoot, "flow", "advance", "--task", "skip-e2e", "--outcome", "skip", "--expected-revision", "2")
+  assert.equal(undecidedE2e.envelope.error.code, "GATE_BLOCKED")
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "skip-e2e", "--gate", "e2e-applicability", "--kind", "semantic",
+    "--status", "passed", "--reason", "No cross-system user path", "--actor", "lead",
+    "--evidence", "e2e-applicability-proof", "--evidence-path", "scope.md", "--expected-revision", "2",
+  )
+  const skippedE2e = await run(projectRoot, "flow", "advance", "--task", "skip-e2e", "--outcome", "skip", "--expected-revision", "3")
+  assert.equal(skippedE2e.data.to, "finish")
+
+  await run(projectRoot, "task", "create", "--task", "e2e-loop", "--entry-stage", "e2e")
+  await run(projectRoot, "context", "register", "--task", "e2e-loop", "--context", "source", "--kind", "source", "--path", "source.md", "--profiles", "lead,check", "--expected-revision", "0")
+  await run(projectRoot, "context", "register", "--task", "e2e-loop", "--context", "test-scope", "--kind", "test-scope", "--path", "scope.md", "--profiles", "lead,check", "--expected-revision", "1")
+  const reworked = await run(projectRoot, "flow", "advance", "--task", "e2e-loop", "--outcome", "rework", "--expected-revision", "2")
+  assert.equal(reworked.data.from, "e2e")
+  assert.equal(reworked.data.to, "e2e")
+})
+
+test("SPEC routing mode cannot be bypassed through direct flow commands", async () => {
+  const requiredRoot = await project()
+  await writeFile(path.join(requiredRoot, "design.md"), "approved design\n")
+  await run(requiredRoot, "init")
+  const requiredConfigPath = path.join(requiredRoot, ".team-work/config.yaml")
+  const requiredConfig = JSON.parse(await readFile(requiredConfigPath, "utf8"))
+  requiredConfig.spec = { ...requiredConfig.spec, mode: "required", status: "missing" }
+  await writeFile(requiredConfigPath, `${JSON.stringify(requiredConfig, null, 2)}\n`)
+  await run(requiredRoot, "task", "create", "--task", "required-spec", "--entry-stage", "design-review")
+  await run(requiredRoot, "context", "register", "--task", "required-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+
+  for (const outcome of ["pass", "skip"]) {
+    const blocked = await runResult(requiredRoot, "flow", "advance", "--task", "required-spec", "--outcome", outcome, "--expected-revision", "1")
+    assert.equal(blocked.envelope.error.code, "GATE_BLOCKED")
+    assert.equal(blocked.envelope.error.blockers[0].code, "SPEC_ROUTE_BLOCKED")
+  }
+
+  const readyRoot = await project()
+  await writeFile(path.join(readyRoot, "design.md"), "approved design\n")
+  await run(readyRoot, "init")
+  const readyConfigPath = path.join(readyRoot, ".team-work/config.yaml")
+  const readyConfig = JSON.parse(await readFile(readyConfigPath, "utf8"))
+  readyConfig.spec = { ...readyConfig.spec, mode: "auto", status: "ready" }
+  await writeFile(readyConfigPath, `${JSON.stringify(readyConfig, null, 2)}\n`)
+  await run(readyRoot, "task", "create", "--task", "ready-spec", "--entry-stage", "design-review")
+  await run(readyRoot, "context", "register", "--task", "ready-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+
+  const skipped = await runResult(readyRoot, "flow", "advance", "--task", "ready-spec", "--outcome", "skip", "--expected-revision", "1")
+  assert.equal(skipped.envelope.error.code, "GATE_BLOCKED")
+  const entered = await run(readyRoot, "flow", "advance", "--task", "ready-spec", "--outcome", "pass", "--expected-revision", "1")
+  assert.equal(entered.data.to, "spec")
 })
 
 test("Lead can rework and accept a work item without losing attempt history", async () => {
@@ -493,7 +565,7 @@ test("initialization is idempotent and never overwrites explicit project configu
   await run(projectRoot, "init")
   const configPath = path.join(projectRoot, ".team-work/config.yaml")
   const config = JSON.parse(await readFile(configPath, "utf8"))
-  config.spec = { type: "openspec", skill: "openspec", root: "openspec/", status: "ready" }
+  config.spec = { type: "openspec", skill: "openspec", root: "openspec/", mode: "required", status: "ready" }
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
 
   const second = await run(projectRoot, "init")

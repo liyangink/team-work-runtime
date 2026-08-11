@@ -43,7 +43,9 @@ active | awaiting-user | completed | cancelled
 
 `task complete|cancel|archive` 语义不同：complete/cancel 改变业务状态，archive 只移动已结束任务的存储位置，不能代替完成或取消。
 
-`flow advance --outcome <pass|rework|fail>` 只能走 Workflow 明确声明的边。Workflow 以 stages 数组定义规范顺序；`flow rollback --to` 只能从 active task 回到顺序更早的阶段，必须提供 reason 和 evidence。回退事务将目标阶段之后的 gate 重置为 pending，并把相关 evidence 标记为 invalidated，记录 revision 与原因。不存在的阶段、向前“回退”、终态任务或缺少理由/证据都必须拒绝。
+`flow advance --outcome <pass|skip|rework|fail|test-gap>` 只能走 Workflow 明确声明的边。边可以声明 `requiredGate`；对应阶段的 gate 未通过时不得流转。默认流程用 `e2e-applicability` 强制记录 E2E 适用性决定。`flow rollback --to` 只能回到更早阶段，必须提供 reason 和 evidence，并失效后续 gate 与 evidence。
+
+SPEC 路由同样由 Runtime 强制执行：`auto + missing` 和 `disabled` 只能走 `skip`，ready 时进入声明了 `specRoute` 的阶段；`required + missing` 对进入和跳过都返回可恢复 blocker。直接调用 `flow advance` 不能绕过该约束。
 
 `flow check` 保持只读，返回：
 

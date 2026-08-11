@@ -1,12 +1,24 @@
 import { tool } from "@opencode-ai/plugin"
+import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { createOpenCodeAdapter } from "../team-work/opencode-adapter.mjs"
+import { applyOpenCodeAgentConfig, resolveEffectivePlatformProfile } from "../team-work/opencode-agent-config.mjs"
+import { loadUserConfig, resolveUserConfigRoot } from "../team-work/installer/user-config.mjs"
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`
 
 export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
   const platformRoot = fileURLToPath(new URL("../team-work", import.meta.url))
-  const adapter = createOpenCodeAdapter({ client, projectRoot: worktree || directory, platformRoot })
+  const loaded = await loadUserConfig({ configRoot: resolveUserConfigRoot() })
+  const profile = JSON.parse(await readFile(fileURLToPath(new URL("../team-work/profile.json", import.meta.url)), "utf8"))
+  const effectiveProfile = resolveEffectivePlatformProfile(profile, loaded.config)
+  const adapter = createOpenCodeAdapter({
+    client,
+    projectRoot: worktree || directory,
+    platformRoot,
+    platformProfile: effectiveProfile,
+    platformSettings: { spec: loaded.config.spec },
+  })
   const taskId = tool.schema.string().describe("稳定的 team-work task id")
   const workItemId = tool.schema.string().describe("稳定的 Runtime work item id")
   const prompt = tool.schema.string().describe("成员本轮任务、范围、完成条件、制品路径和证据要求")
@@ -29,6 +41,9 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
   }
 
   return {
+    config: async (config) => {
+      applyOpenCodeAgentConfig(config, { profile, userConfig: loaded.config })
+    },
     event: async ({ event }) => {
       try {
         await adapter.handleEvent(event)

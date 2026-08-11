@@ -245,14 +245,14 @@ async function initialize(projectRoot, clock) {
   const workflowRaw = await readFile(resolvedWorkflowTarget, "utf8")
   const workflow = JSON.parse(workflowRaw)
   const config = {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     workflow: {
       id: workflow.workflowId,
       version: workflow.version,
       path: ".team-work/workflows/engineering.json",
       digest: digest(workflowRaw),
     },
-    spec: { type: "openspec", skill: "openspec", root: "openspec/", status: "missing" },
+    spec: { type: "openspec", skill: "openspec", root: "openspec/", mode: "auto", status: "missing" },
   }
   await validate("workflow", workflow)
   await validate("project-config", config)
@@ -615,6 +615,38 @@ async function decideFlow(project, input, clock, dryRun) {
   return success({ dryRun: Boolean(dryRun), gate, evidence }, persisted)
 }
 
+function enforceSpecRoute(project, task, transition) {
+  const stages = new Map(project.workflow.stages.map((stage) => [stage.id, stage]))
+  const entersSpec = Boolean(stages.get(transition.to)?.specRoute)
+  const skipsSpec = transition.outcome === "skip" && project.workflow.transitions.some(({ from, to }) => (
+    from === task.stage && stages.get(to)?.specRoute
+  ))
+  if (!entersSpec && !skipsSpec) return
+
+  const { mode, status } = project.config.spec
+  const ready = status === "ready" && mode !== "disabled"
+  const allowed = entersSpec
+    ? ready
+    : mode === "disabled" || (mode === "auto" && !ready)
+  if (allowed) return
+
+  const reason = mode === "required" && !ready
+    ? "required SPEC route is unavailable"
+    : entersSpec
+      ? "SPEC route is not available"
+      : "available SPEC route cannot be skipped"
+  throw new RuntimeError("GATE_BLOCKED", reason, {
+    exitCode: 4,
+    task,
+    blockers: [{ code: "SPEC_ROUTE_BLOCKED", kind: "semantic", mode, status }],
+    remediation: mode === "required" && !ready
+      ? ["Install and initialize the configured SPEC provider, then restart the platform host"]
+      : entersSpec
+        ? ["Use the declared skip transition or make the SPEC route ready"]
+        : ["Use the declared transition into the ready SPEC stage"],
+  })
+}
+
 async function advanceFlow(project, input, clock, dryRun) {
   const task = await loadTask(project, input.taskId)
   assertRevision(task, input.expectedRevision)
@@ -623,8 +655,20 @@ async function advanceFlow(project, input, clock, dryRun) {
   if (!transition) throw new RuntimeError("ILLEGAL_TRANSITION", `no ${input.outcome} transition from ${task.stage}`, { exitCode: 4, task })
   const { gate } = await evaluateCurrentStage(project, task)
   if (!gate.ok) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} is blocked`, { exitCode: 4, task, blockers: gate.blockers, remediation: ["Resolve current-stage gate blockers"] })
+  enforceSpecRoute(project, task, transition)
+  if (transition.requiredGate) {
+    const decision = task.gates.find(({ gateId, stage, status }) => (
+      gateId === transition.requiredGate && stage === task.stage && ["passed", "overridden"].includes(status)
+    ))
+    if (!decision) throw new RuntimeError("GATE_BLOCKED", `transition requires gate ${transition.requiredGate}`, {
+      exitCode: 4,
+      task,
+      blockers: [{ code: "REQUIRED_GATE_MISSING", kind: "semantic", gateId: transition.requiredGate }],
+      remediation: [`Record ${transition.requiredGate} with decision evidence before advancing`],
+    })
+  }
   const nextTask = { ...task, stage: transition.to, teamDecision: { mode: "undecided" }, revision: task.revision + 1, updatedAt: now(clock) }
-  const persisted = await persistTask(project, task, nextTask, "flow.advanced", clock, { refs: [task.stage, transition.to], dryRun })
+  const persisted = await persistTask(project, task, nextTask, "flow.advanced", clock, { refs: [...new Set([task.stage, transition.to, transition.requiredGate].filter(Boolean))], dryRun })
   return success({ dryRun: Boolean(dryRun), from: task.stage, to: transition.to, outcome: input.outcome, task: persisted }, persisted)
 }
 

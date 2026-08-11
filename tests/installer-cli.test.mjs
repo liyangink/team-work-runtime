@@ -32,10 +32,12 @@ test("install CLI creates user config and targets the global OpenCode directory 
   assert.equal(calls[0].options.modelMap, undefined)
   assert.equal(calls[0].options.opencodeCommand, "opencode")
   assert.equal(calls[0].options.openspecCommand, "openspec")
+  assert.equal(calls[0].options.specMode, "auto")
   assert.deepEqual(JSON.parse(await readFile(path.join(configRoot, "config.json"), "utf8")), {
-    schemaVersion: "1.0",
-    platforms: { opencode: { models: "auto" } },
-    spec: { type: "openspec" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: {} },
+    spec: { provider: "openspec", mode: "auto" },
   })
   assert.equal(JSON.parse(output).status, "installed")
 })
@@ -46,11 +48,11 @@ test("update CLI takes all model and command configuration from the fixed file",
   const opencodeRoot = path.join(userRoot, ".config", "opencode")
   await mkdir(configRoot, { recursive: true })
   const models = { "junior-luna": "gateway/gpt-5.6-luna" }
-  const effort = { "junior-luna": "medium" }
   await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
-    schemaVersion: "1.0",
-    platforms: { opencode: { command: "opencode-next", models, effort } },
-    spec: { type: "openspec", command: "openspec-next" },
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: { "junior-luna": { model: models["junior-luna"], effort: "medium" } },
+    platforms: { opencode: { command: "opencode-next" } },
+    spec: { provider: "openspec", mode: "required", command: "openspec-next" },
   }))
   let received
 
@@ -67,9 +69,9 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(exitCode, 0)
   assert.equal(received.command, "update")
   assert.deepEqual(received.options.modelMap, models)
-  assert.deepEqual(received.options.effortMap, effort)
   assert.equal(received.options.opencodeCommand, "opencode-next")
   assert.equal(received.options.openspecCommand, "openspec-next")
+  assert.equal(received.options.specMode, "required")
   assert.equal(received.options.force, true)
   assert.equal(received.options.installRoot, opencodeRoot)
 })

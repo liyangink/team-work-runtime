@@ -23,6 +23,7 @@
     "tests/policy-skills.test.mjs",
     "tests/runtime-contract.test.mjs",
     "tests/opencode-adapter.test.mjs",
+    "tests/opencode-agent-config.test.mjs",
     "tests/opencode-e2e.test.mjs",
     "tests/opencode-lifecycle.test.mjs",
     "tests/installer-cli.test.mjs",

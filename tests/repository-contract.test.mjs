@@ -38,15 +38,20 @@ test("new implementation documents have valid local links", async () => {
   }
 })
 
-test("OpenCode operator docs cover setup, standalone use, recovery, and real gateway boundaries", async () => {
-  const usage = await read("plugins/opencode/USAGE.md")
-  const report = await read("plugins/opencode/REAL-GATEWAY-E2E.md")
-  const evidence = JSON.parse(await read("plugins/opencode/evidence/2026-08-11-real-gateway.json"))
+test("global user guide stays quick, platform-sectioned, and separate from validation plans", async () => {
+  const usage = await read("USAGE.md")
+  const report = await read("docs/validation/opencode-real-gateway-2026-08-11.md")
+  const evidence = JSON.parse(await read("docs/validation/opencode-real-gateway-2026-08-11.json"))
+  const quickStart = usage.slice(usage.indexOf("## QuickStart"), usage.indexOf("## 常用方式"))
+  assert.ok(usage.indexOf("## QuickStart") < usage.indexOf("## 平台配置"))
+  assert.match(usage, /### OpenCode/)
   assert.match(usage, /从 Workflow 开始/)
-  assert.match(usage, /显式使用 Team-work/)
+  assert.match(usage, /直接使用 Team-work/)
   assert.match(usage, /从任意阶段介入/)
-  assert.match(usage, /跨会话继续与故障恢复/)
-  assert.match(usage, /不要把 `opencode --pure` 当作 Team-work 的日常启动方式/)
+  assert.match(usage, /查看与继续任务/)
+  assert.doesNotMatch(quickStart, /doctor|debug agent|model-map/)
+  assert.doesNotMatch(usage, /发布前真实网关验收|下一项最小验收/)
+  assert.doesNotMatch(report, /下一项最小验收/)
   assert.match(report, /双成员后台派发/)
   assert.match(report, /跨进程续派/)
   assert.match(report, /不是完整 Team-work 策略验收/)

@@ -13,7 +13,9 @@
 
 ## 已通过
 
-本节结论对应的脱敏机器可读记录见 [`evidence/2026-08-11-real-gateway.json`](evidence/2026-08-11-real-gateway.json)。该记录保留了实际命令类别、模型、OpenCode session、任务、child session、工具序列、输出标记和 Runtime 事件；不包含网关地址或凭据。
+本节结论对应的脱敏机器可读记录见 [`opencode-real-gateway-2026-08-11.json`](opencode-real-gateway-2026-08-11.json)。
+
+记录保留实际命令类别、模型、OpenCode session、任务、child session、工具序列、输出标记和 Runtime 事件，不包含网关地址或凭据。
 
 | 验收项 | 结果 | 证据摘要 |
 |---|---|---|
@@ -47,14 +49,6 @@
 ## 尚未宣称通过
 
 - 本轮双成员派发是 PlatformPlugin 传输与恢复 E2E，不是完整 Team-work 策略验收。两个成员均为 Junior，没有满足正式团队必须存在 Senior/Expert 非作者挑战者的拓扑规则。
-- 当前全局 OpenCode 配置仍包含 OMO。虽然 adapter、原生 child session、模型工具调用和恢复链路均已验证，但还需要在移除 OMO 或独立无 OMO 配置环境中完成一次由 Lead 直接调用 `team_work_*` 工具的场景 E2E。
+- 当前全局 OpenCode 配置仍包含 OMO。本轮没有提供无 OMO 环境中由 Lead 直接调用 `team_work_*` 工具的场景证据。
 - 未调用 Expert 模型，也未验证高成本模型的工具兼容性；这是本轮主动的成本控制，不是已通过项。
 - 尚未做真实限流或供应商容量故障注入；当前只验证了跨进程恢复，模拟网关失败仍由自动化测试覆盖。
-
-## 下一项最小验收
-
-1. 清理或隔离全局 OMO 配置；
-2. 保留 DeepSeek、Luna 作为 Lead/Junior 主链路，并启用一个最低可接受成本的 Senior；
-3. 从 `code-review` 或 `implementation` 阶段启动一个小型正式团队；
-4. 验证 Workflow 路由、Senior 挑战者、Lead 验收、一次 resume 和最终制品；
-5. 不启用 Expert，除非场景本身达到升级条件。

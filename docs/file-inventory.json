@@ -5,6 +5,7 @@
     ".gitignore",
     "CLAUDE.md",
     "README.md",
+    "USAGE.md",
     "docs/file-inventory.json",
     "docs/runtime-implementation-plan.md",
     "docs/runtime-interface.md",
@@ -24,9 +25,8 @@
     "tests/opencode-e2e.test.mjs",
     "tests/opencode-lifecycle.test.mjs",
     "tests/support/contract-validator.mjs",
-    "plugins/opencode/USAGE.md",
-    "plugins/opencode/REAL-GATEWAY-E2E.md",
-    "plugins/opencode/evidence/2026-08-11-real-gateway.json"
+    "docs/validation/opencode-real-gateway-2026-08-11.md",
+    "docs/validation/opencode-real-gateway-2026-08-11.json"
   ],
   "sharedBuild": ["package.json", "package-lock.json"],
   "planned": [],

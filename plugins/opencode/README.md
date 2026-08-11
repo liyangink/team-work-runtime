@@ -2,8 +2,7 @@
 
 本目录把平台无关的 Workflow、Team-work、CoreRuntime 装配到 OpenCode 项目中。安装目标使用 OpenCode 官方自动发现目录 `.opencode/skills/`、`.opencode/agents/` 和 `.opencode/plugins/`；不会修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
 
-- 首次配置、日常任务、状态查看与恢复：[`USAGE.md`](USAGE.md)
-- 当前真实网关验收结果：[`REAL-GATEWAY-E2E.md`](REAL-GATEWAY-E2E.md)
+- 面向用户的 QuickStart、日常任务与恢复：[`../../USAGE.md`](../../USAGE.md)
 
 OpenCode 配置会合并多个来源。安装器不会替用户移除全局 OMO 等旧插件；若要无 OMO 运行，必须先清理或隔离实际生效的全局配置。不要使用 `--pure` 启动 Team-work：OpenCode 1.18.15 实测会同时禁用项目本地 Team-work Plugin。
 

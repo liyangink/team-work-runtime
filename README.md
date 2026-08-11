@@ -3,6 +3,7 @@
 平台无关的 multiagent engineering loop。当前从零实现 Workflow、Team-work、CoreRuntime 与 OpenCode PlatformPlugin。
 
 - 开发契约：[`AGENTS.md`](AGENTS.md)
+- 使用指南：[`USAGE.md`](USAGE.md)
 - 架构设计：[`docs/runtime-plugin-design.md`](docs/runtime-plugin-design.md)
 - 实施计划：[`docs/runtime-implementation-plan.md`](docs/runtime-implementation-plan.md)
 - 文件清单：[`docs/file-inventory.json`](docs/file-inventory.json)
@@ -11,7 +12,9 @@
 
 ## 当前进度
 
-Runtime Interface 1.0、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已实现；OpenCode PlatformPlugin 已完成安装/更新/卸载、分档 Agent、非阻塞 child session、Runtime Tool 和上下文 Hook。DeepSeek/Luna 真实网关的检索、修改、双 child 后台派发和跨进程续派已经通过；无 OMO 的正式挑战者拓扑验收仍待完成。安装配置见 [`plugins/opencode/README.md`](plugins/opencode/README.md)，实际使用见 [`plugins/opencode/USAGE.md`](plugins/opencode/USAGE.md)。当前 Runtime 也可直接通过源码运行：
+Runtime Interface 1.0、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已实现；OpenCode PlatformPlugin 已完成安装/更新/卸载、分档 Agent、非阻塞 child session、Runtime Tool 和上下文 Hook。DeepSeek/Luna 真实网关的检索、修改、双 child 后台派发和跨进程续派已经通过。
+
+面向用户的操作见 [`USAGE.md`](USAGE.md)，OpenCode 安装器技术说明见 [`plugins/opencode/README.md`](plugins/opencode/README.md)，研发验收记录见 [`docs/validation/opencode-real-gateway-2026-08-11.md`](docs/validation/opencode-real-gateway-2026-08-11.md)。当前 Runtime 也可直接通过源码运行：
 
 ```bash
 node runtime/cli.mjs init --project /path/to/project --json

@@ -1,5 +1,6 @@
 {
   "schemaVersion": "1.0",
+  "documentKind": "validation-evidence",
   "capturedDate": "2026-08-11",
   "scope": "sanitized-live-opencode-gateway-evidence",
   "host": {

@@ -1,6 +1,6 @@
 # team-work Runtime Roadmap
 
-状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，下一步是 OpenCode PlatformPlugin。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
+状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，OpenCode PlatformPlugin 正在完成正式场景验收。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
 
 ## 目标结构
 
@@ -97,7 +97,9 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 完成标准：可独立创建、恢复和完成团队任务；多模型 Agent 能正常调用工具；受管派发测试证明不会进入阻塞模式；Lead 与 subagent 获得不同的最小上下文；Plugin 失败不损坏状态或形成死门；卸载不删除项目数据。
 
-已完成：最低版本校验、模型唯一解析、项目级 Skill/Agent/Plugin 装配、生产依赖安装、安装清单、更新备份与回滚、安全/强制卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、Runtime Tool、Lead/child 最小上下文 Hook、compaction 恢复提示、OpenSpec 就绪检查、平台事件审计，以及网关失败—续派—成员失联的自动化故障注入。待完成：在用户真实网关下完成多模型工具调用 E2E。
+已完成：最低版本校验、模型唯一解析、项目级 Skill/Agent/Plugin 装配、生产依赖安装、安装清单、更新备份与回滚、安全/强制卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、Runtime Tool、Lead/child 最小上下文 Hook、compaction 恢复提示、OpenSpec 就绪检查、平台事件审计，以及网关失败—续派—成员失联的自动化故障注入。
+
+真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中启用一个低成本 Senior，从实际研发阶段完成 Workflow 路由、挑战者、Lead 验收和最终制品的正式场景 E2E。除非场景达到升级条件，不调用 Expert。
 
 ## Phase 5：Claude Code 与 OMO PlatformPlugin
 

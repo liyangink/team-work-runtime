@@ -7,10 +7,10 @@
 ```text
 team-work init|doctor|version|migrate
 team-work task create --entry-stage <stage>
-team-work task bind|show|await|resume|complete|cancel|archive
+team-work task bind|show|team|spec|await|resume|complete|cancel|archive
 team-work context register|list|render|rebuild
 team-work flow status|check|advance|rollback --to <stage>|decide
-team-work work create|start|submit|accept|rework|cancel
+team-work work create|start|submit|accept|rework|block|cancel
 team-work event list|record
 ```
 
@@ -21,6 +21,8 @@ team-work event list|record
 `task create --entry-stage` 接受 Workflow 中任意已声明阶段。`entryStage` 保存首次介入点，`stage` 保存当前位置；历史阶段不会被伪造为已经执行，也不要求补跑。
 
 任务创建时从 `config.yaml` 解析 Workflow，并把 `id/version/path/digest` 固定到 task。被任务引用的 Workflow 版本必须保留；加载时 digest 不匹配即返回 `STATE_CORRUPT`，禁止悄悄使用新配置。SPEC 的 `type/skill/root` 只存在于 Project Config；task 只保存执行状态、产物引用和配置 digest，不复制路由。
+
+`task team --mode <solo|team> --reason <reason>` 持久化当前阶段的组团决策。每次阶段推进或回退后重置为 `undecided`，避免沿用上一阶段的成本判断。`task spec --status <in-progress|completed|blocked|disabled> [--artifacts <paths>]` 只更新任务内 SPEC 执行状态与制品引用，不修改 Project Config 路由；`completed` 至少需要一个已存在制品。SPEC 返工可从 `completed|blocked|disabled` 回到 `in-progress`。
 
 阶段门禁只检查当前阶段声明的最低必需输入。历史需求、设计、SPEC、测试和 Review 制品只有在当前阶段的 `requiredInputs` 中出现时才阻塞；其他缺失只产生 warning。默认工程 Workflow 中，`code-review` 只要求：
 
@@ -60,7 +62,7 @@ Work item 只表达 Owner、阶段、范围、完成条件、产物、依赖、a
 
 `work-items.json` 使用带 taskId/revision 的 document envelope，而不是裸数组；workItemId 必须唯一，依赖必须引用同一 document 中的既有 ID，禁止自依赖。
 
-合法生命周期：`queued -> running|cancelled`，`running -> submitted|blocked|cancelled`，`submitted -> accepted|rework`，`rework|blocked -> running|cancelled`；accepted/cancelled 为终态。submitted/rework/accepted 必须保留本轮 submission；accepted/rework 必须保留带有效 evidence 的 Lead acceptance 决策。返工重新进入 running 前，把上一轮 submission/acceptance 移入 `attemptHistory` 并递增 attempt；历史必须完整覆盖 `1..attempt-1`，且每个历史验收结论只能是 rework。每项 assignment 至少声明一个产物路径。
+合法生命周期：`queued -> running|cancelled`，`running -> submitted|blocked|cancelled`，`submitted -> accepted|rework`，`rework|blocked -> running|cancelled`；accepted/cancelled 为终态。submitted/rework/accepted 必须保留本轮 submission；accepted/rework 必须保留带有效 evidence 的 Lead acceptance 决策。`work block` 只记录基础设施失败的 code、reason、refs、Owner 和时间，不代替任务返工。返工或基础设施阻塞重新进入 running 前，把上一 attempt 的 submission/acceptance 或 blockage 移入 `attemptHistory` 并递增 attempt；仅 blocked→start 可通过 `--owner` 在同一 work item 内受限换 Owner。blocked→cancelled 保留当前 blockage，确保最终错误仍可追溯。历史必须完整覆盖 `1..attempt-1`，任务验收历史只能以 rework 结束。每项 assignment 至少声明一个产物路径。
 
 Team-work 场景完成时通过 work submission 返回以下通用语义：
 

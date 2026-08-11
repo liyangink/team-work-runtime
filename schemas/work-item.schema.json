@@ -16,14 +16,28 @@
     "attemptHistory": {
       "type": "array",
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["attempt", "submission", "acceptance"],
-        "properties": {
-          "attempt": { "type": "integer", "minimum": 1 },
-          "submission": { "$ref": "#/$defs/submission" },
-          "acceptance": { "$ref": "#/$defs/historyAcceptance" }
-        }
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt", "submission", "acceptance"],
+            "properties": {
+              "attempt": { "type": "integer", "minimum": 1 },
+              "submission": { "$ref": "#/$defs/submission" },
+              "acceptance": { "$ref": "#/$defs/historyAcceptance" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["attempt", "owner", "blockage"],
+            "properties": {
+              "attempt": { "type": "integer", "minimum": 1 },
+              "owner": { "type": "string", "minLength": 1 },
+              "blockage": { "$ref": "#/$defs/blockage" }
+            }
+          }
+        ]
       }
     },
     "assignment": {
@@ -39,6 +53,7 @@
     },
     "submission": { "$ref": "#/$defs/submission" },
     "acceptance": { "$ref": "#/$defs/acceptance" },
+    "blockage": { "$ref": "#/$defs/blockage" },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
@@ -52,12 +67,34 @@
       "then": { "required": ["acceptance"] }
     },
     {
-      "if": { "properties": { "status": { "enum": ["queued", "running", "blocked", "cancelled"] } }, "required": ["status"] },
+      "if": { "properties": { "status": { "enum": ["queued", "running", "blocked"] } }, "required": ["status"] },
       "then": { "not": { "anyOf": [{ "required": ["submission"] }, { "required": ["acceptance"] }] } }
     },
     {
       "if": { "properties": { "status": { "const": "submitted" } }, "required": ["status"] },
       "then": { "not": { "required": ["acceptance"] } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "blocked" } }, "required": ["status"] },
+      "then": { "required": ["blockage"] }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["queued", "running", "submitted", "accepted", "rework"] } }, "required": ["status"] },
+      "then": { "not": { "required": ["blockage"] } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "cancelled" } }, "required": ["status"] },
+      "then": {
+        "oneOf": [
+          { "not": { "anyOf": [{ "required": ["submission"] }, { "required": ["acceptance"] }] } },
+          {
+            "required": ["submission", "acceptance"],
+            "properties": {
+              "acceptance": { "type": "object", "properties": { "decision": { "const": "rework" } } }
+            }
+          }
+        ]
+      }
     },
     {
       "if": { "properties": { "status": { "const": "accepted" } }, "required": ["status"] },
@@ -77,6 +114,19 @@
     }
   ],
   "$defs": {
+    "blockage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "reason", "refs", "owner", "blockedAt"],
+      "properties": {
+        "kind": { "const": "infrastructure" },
+        "code": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "refs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "owner": { "type": "string", "minLength": 1 },
+        "blockedAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "submission": {
       "type": "object",
       "additionalProperties": false,

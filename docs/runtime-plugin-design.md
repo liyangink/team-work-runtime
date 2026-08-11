@@ -195,7 +195,7 @@ Platform Profile 为 Team-work 补充：
 - 并发硬限制、session/UI 能力和已知降级；
 - 仅当前平台需要的恢复、通信或兼容规则。
 
-平台指南必须采用增量规则：通用恢复保留在 Team-work，只有观察到平台事实问题后才增加特殊协议。Team-work 直接使用且没有活动任务时，通过 CoreRuntime 创建 `adhoc-team` 任务，不强制进入完整 Workflow。
+平台指南必须采用增量规则：通用恢复保留在 Team-work，只有观察到平台事实问题后才增加特殊协议。Team-work 直接使用且没有活动任务时，根据场景通过 CoreRuntime 从 `design`、`code-review`、`implementation`、`test` 等实际研发阶段创建轻量任务，只满足当前阶段最低输入，不强制补跑完整 Workflow。
 
 ## 7. CoreRuntime
 
@@ -203,10 +203,10 @@ CoreRuntime 初版只提供一个 CLI + JSON Interface：
 
 ```text
 team-work init|doctor|version|migrate
-team-work task create|bind|show|await|resume|complete|cancel|archive
+team-work task create|bind|show|team|spec|await|resume|complete|cancel|archive
 team-work context register|list|render|rebuild
 team-work flow status|check|advance|rollback|decide
-team-work work create|start|submit|accept|rework|cancel
+team-work work create|start|submit|accept|rework|block|cancel
 team-work event list|record
 ```
 

@@ -27,6 +27,7 @@ function parse(argv) {
       sessionKey: options.session,
       title: options.title,
       entryStage: options["entry-stage"],
+      mode: options.mode,
       contextId: options.context,
       kind: options.kind,
       path: options.path,
@@ -61,6 +62,7 @@ function parse(argv) {
       repair: Boolean(options.repair),
       force: Boolean(options.force),
       eventType: options.type,
+      errorCode: options["error-code"],
       refs: options.refs?.split(",").filter(Boolean),
     },
   }

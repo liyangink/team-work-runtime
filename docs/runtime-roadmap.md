@@ -1,6 +1,6 @@
 # team-work Runtime Roadmap
 
-状态：Runtime 1.0 契约与文件型 MVP 已完成，下一步实现 Workflow 与 Team-work。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
+状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，下一步是 OpenCode PlatformPlugin。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
 
 ## 目标结构
 
@@ -72,13 +72,13 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 ## Phase 3：Workflow 与 Team-work
 
-状态：下一步。
+状态：完成。
 
 - Workflow 驱动十阶段任务流、上下文计划、solo/team 判断和 SPEC Skill 路由；
 - Team-work 保留成本、拓扑、场景、三轮收敛、汇报和评分能力；
 - 两个 Skill 通过 CoreRuntime 记录状态，通过 Project Config/Profile 获取安装结果和平台增量信息。
 
-完成标准：两者可独立 forward test；Team-work 可 standalone 创建 adhoc task；不解析平台原始配置或复制 Runtime 状态机。
+完成标准：两者可独立 forward test；Team-work 可 standalone 从适配的实际研发阶段创建轻量任务；不解析平台原始配置或复制 Runtime 状态机。
 
 ## Phase 4：OpenCode PlatformPlugin
 

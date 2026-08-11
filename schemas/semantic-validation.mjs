@@ -153,8 +153,8 @@ export function validateWorkItemsSemantics(document) {
     if (JSON.stringify([...historyAttempts].sort((a, b) => a - b)) !== JSON.stringify(expectedHistory)) {
       issues.push(issue(`items[${index}].attemptHistory`, "attempt history must contain every prior attempt exactly once"))
     }
-    if (item.attemptHistory.some(({ acceptance }) => acceptance.decision !== "rework")) {
-      issues.push(issue(`items[${index}].attemptHistory`, "every historical attempt must end in rework"))
+    if (item.attemptHistory.some(({ acceptance, blockage }) => acceptance ? acceptance.decision !== "rework" : !blockage)) {
+      issues.push(issue(`items[${index}].attemptHistory`, "every historical attempt must end in rework or infrastructure blockage"))
     }
     for (const dependency of item.assignment.dependencies) {
       if (!known.has(dependency)) issues.push(issue(`items[${index}].assignment.dependencies`, `unknown dependency: ${dependency}`))

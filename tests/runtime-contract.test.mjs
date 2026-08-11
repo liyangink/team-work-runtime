@@ -100,7 +100,10 @@ test("runtime interface fixes stage-entry, lifecycle, gate, binding and error se
   assert.match(contract, /task create --entry-stage/)
   assert.match(contract, /只检查当前阶段声明的最低必需输入/)
   assert.match(contract, /task complete\|cancel\|archive/)
+  assert.match(contract, /task team --mode/)
+  assert.match(contract, /task spec --status/)
   assert.match(contract, /flow rollback --to/)
+  assert.match(contract, /work block/)
   assert.match(contract, /bindings\/<platform>\/<session-key>\.json/)
   assert.match(contract, /"ok": true/)
   assert.match(contract, /"ok": false/)
@@ -288,6 +291,65 @@ test("work-item state controls submission and Lead acceptance records", async ()
       submittedAt: "2026-08-10T08:00:00.000Z"
     }
   }), [])
+
+  const blocked = {
+    ...workItem,
+    status: "blocked",
+    blockage: {
+      kind: "infrastructure",
+      code: "RATE_LIMITED",
+      reason: "Gateway returned 429",
+      refs: ["gateway-log-1"],
+      owner: workItem.owner,
+      blockedAt: "2026-08-10T08:05:00.000Z",
+    },
+  }
+  assert.deepEqual(validate(schemaId("work-item"), blocked), [])
+  assert.deepEqual(validate(schemaId("work-item"), { ...blocked, status: "cancelled" }), [])
+  delete blocked.blockage
+  assert.notDeepEqual(validate(schemaId("work-item"), blocked), [])
+
+  const retried = {
+    ...workItem,
+    owner: "senior-alternate",
+    attempt: 2,
+    attemptHistory: [{
+      attempt: 1,
+      owner: workItem.owner,
+      blockage: {
+        kind: "infrastructure",
+        code: "RATE_LIMITED",
+        reason: "Gateway returned 429",
+        refs: ["gateway-log-1"],
+        owner: workItem.owner,
+        blockedAt: "2026-08-10T08:05:00.000Z",
+      },
+    }],
+  }
+  assert.deepEqual(validate(schemaId("work-item"), retried), [])
+  assert.deepEqual(validateWorkItemsSemantics({ schemaVersion: "1.0", taskId: retried.taskId, revision: 2, items: [retried] }), [])
+
+  const cancelledAfterRework = {
+    ...workItem,
+    status: "cancelled",
+    submission: {
+      scenario: "code-review",
+      stageRef: "code-review",
+      scopeRefs: ["review-scope"],
+      outcome: "rework",
+      artifactRefs: ["artifacts/review.md"],
+      evidenceRefs: ["review-evidence"],
+      summary: "Needs revision",
+      submittedAt: "2026-08-10T08:05:00.000Z",
+    },
+    acceptance: {
+      acceptedBy: "lead",
+      acceptedAt: "2026-08-10T08:06:00.000Z",
+      decision: "rework",
+      evidenceRefs: ["review-evidence"],
+    },
+  }
+  assert.deepEqual(validate(schemaId("work-item"), cancelledAfterRework), [])
 })
 
 test("work-item history and dependency graph remain auditable", async () => {

@@ -12,14 +12,17 @@
     "docs/runtime-roadmap.md",
     "runtime/",
     "schemas/",
+    "skills/workflow/",
+    "skills/team-work/",
     "tests/fixtures/runtime/",
     "tests/repository-contract.test.mjs",
     "tests/core-runtime.test.mjs",
+    "tests/policy-skills.test.mjs",
     "tests/runtime-contract.test.mjs",
     "tests/support/contract-validator.mjs"
   ],
   "sharedBuild": ["package.json", "package-lock.json"],
-  "planned": ["skills/workflow/", "skills/team-work/", "plugins/opencode/"],
+  "planned": ["plugins/opencode/"],
   "legacyArchive": ["archive/legacy-omo/", "archive/legacy-claude-code/"],
   "rules": [
     "New implementation code must not import or execute files under archive/.",

@@ -623,7 +623,7 @@ async function advanceFlow(project, input, clock, dryRun) {
   if (!transition) throw new RuntimeError("ILLEGAL_TRANSITION", `no ${input.outcome} transition from ${task.stage}`, { exitCode: 4, task })
   const { gate } = await evaluateCurrentStage(project, task)
   if (!gate.ok) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} is blocked`, { exitCode: 4, task, blockers: gate.blockers, remediation: ["Resolve current-stage gate blockers"] })
-  const nextTask = { ...task, stage: transition.to, revision: task.revision + 1, updatedAt: now(clock) }
+  const nextTask = { ...task, stage: transition.to, teamDecision: { mode: "undecided" }, revision: task.revision + 1, updatedAt: now(clock) }
   const persisted = await persistTask(project, task, nextTask, "flow.advanced", clock, { refs: [task.stage, transition.to], dryRun })
   return success({ dryRun: Boolean(dryRun), from: task.stage, to: transition.to, outcome: input.outcome, task: persisted }, persisted)
 }
@@ -644,6 +644,7 @@ async function rollbackFlow(project, input, clock, dryRun) {
   const nextTask = {
     ...task,
     stage: input.to,
+    teamDecision: { mode: "undecided" },
     revision: nextRevision,
     gates: task.gates.map((gate) => gatesToReset.has(gate.gateId)
       ? { gateId: gate.gateId, stage: gate.stage, kind: gate.kind, status: "pending", evidenceRefs: [] }
@@ -749,7 +750,7 @@ async function transitionWork(project, input, action, clock, dryRun) {
   if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "work mutation requires an active task", { exitCode: 4, task })
   const document = await loadWorkItems(project, task)
   const item = findWorkItem(document, input.workItemId, task)
-  const targetByAction = { start: "running", submit: "submitted", accept: "accepted", rework: "rework", cancel: "cancelled" }
+  const targetByAction = { start: "running", submit: "submitted", accept: "accepted", rework: "rework", block: "blocked", cancel: "cancelled" }
   const target = targetByAction[action]
   if (!canTransitionWorkItem(item.status, target)) throw new RuntimeError("ILLEGAL_TRANSITION", `cannot move work item from ${item.status} to ${target}`, { exitCode: 4, task })
   const timestamp = now(clock)
@@ -762,6 +763,27 @@ async function transitionWork(project, input, action, clock, dryRun) {
     }
     delete nextItem.submission
     delete nextItem.acceptance
+  }
+  if (action === "start" && item.status === "blocked") {
+    nextItem = {
+      ...nextItem,
+      owner: input.owner ?? item.owner,
+      attempt: item.attempt + 1,
+      attemptHistory: [...item.attemptHistory, { attempt: item.attempt, owner: item.owner, blockage: item.blockage }],
+    }
+    delete nextItem.blockage
+  }
+  if (action === "block") {
+    if (typeof input.errorCode !== "string" || !input.errorCode.trim()) throw new RuntimeError("INVALID_ARGUMENT", "work blockage requires an error code", { task })
+    if (typeof input.reason !== "string" || !input.reason.trim()) throw new RuntimeError("INVALID_ARGUMENT", "work blockage requires a reason", { task })
+    nextItem.blockage = {
+      kind: "infrastructure",
+      code: input.errorCode,
+      reason: input.reason,
+      refs: input.refs ?? [],
+      owner: item.owner,
+      blockedAt: timestamp,
+    }
   }
   if (action === "submit") {
     for (const artifact of input.artifactPaths ?? []) await safeProjectEntry(project, artifact)
@@ -826,6 +848,58 @@ async function listEvents(project, taskId) {
   const events = await readJsonLines(path.join(project.stateRoot, `tasks/${task.taskId}/events.jsonl`), "events log")
   for (const event of events) await validate("event", event)
   return success({ events }, task)
+}
+
+async function decideTeam(project, input, clock, dryRun) {
+  const task = await loadTask(project, input.taskId)
+  assertRevision(task, input.expectedRevision)
+  if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "team decisions require an active task", { exitCode: 4, task })
+  if (!["solo", "team"].includes(input.mode)) throw new RuntimeError("INVALID_ARGUMENT", "team mode must be solo or team", { task })
+  if (typeof input.reason !== "string" || !input.reason.trim()) throw new RuntimeError("INVALID_ARGUMENT", "team decision requires a reason", { task })
+  const nextTask = {
+    ...task,
+    teamDecision: { mode: input.mode, reason: input.reason },
+    revision: task.revision + 1,
+    updatedAt: now(clock),
+  }
+  const persisted = await persistTask(project, task, nextTask, "task.team-decided", clock, {
+    refs: [task.stage, input.mode],
+    reason: input.reason,
+    dryRun,
+  })
+  return success({ dryRun: Boolean(dryRun), task: persisted }, persisted)
+}
+
+const specTransitions = {
+  "not-started": new Set(["in-progress", "blocked", "disabled"]),
+  "in-progress": new Set(["in-progress", "completed", "blocked", "disabled"]),
+  blocked: new Set(["in-progress", "blocked", "disabled"]),
+  completed: new Set(["in-progress", "completed"]),
+  disabled: new Set(["in-progress", "disabled"]),
+}
+
+async function updateSpec(project, input, clock, dryRun) {
+  const task = await loadTask(project, input.taskId)
+  assertRevision(task, input.expectedRevision)
+  if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "SPEC updates require an active task", { exitCode: 4, task })
+  if (!specTransitions[task.spec.status]?.has(input.status)) {
+    throw new RuntimeError("ILLEGAL_TRANSITION", `cannot move SPEC from ${task.spec.status} to ${input.status}`, { exitCode: 4, task })
+  }
+  const artifactRefs = input.artifactPaths ?? task.spec.artifactRefs
+  for (const artifact of artifactRefs) await safeProjectEntry(project, artifact)
+  if (input.status === "completed" && !artifactRefs.length) throw new RuntimeError("INVALID_ARGUMENT", "completed SPEC requires at least one artifact", { task })
+  const nextTask = {
+    ...task,
+    spec: { ...task.spec, status: input.status, artifactRefs },
+    revision: task.revision + 1,
+    updatedAt: now(clock),
+  }
+  const persisted = await persistTask(project, task, nextTask, "task.spec-updated", clock, {
+    refs: [input.status, ...artifactRefs],
+    reason: input.reason,
+    dryRun,
+  })
+  return success({ dryRun: Boolean(dryRun), task: persisted }, persisted)
 }
 
 async function transitionTask(project, input, action, clock, dryRun) {
@@ -1037,6 +1111,8 @@ export async function executeRuntime(request, dependencies = {}) {
       return success({ task }, task)
     }
     if (request.command === "task.bind") return await bindTask(project, request.input, clock, request.dryRun)
+    if (request.command === "task.team") return await decideTeam(project, request.input, clock, request.dryRun)
+    if (request.command === "task.spec") return await updateSpec(project, request.input, clock, request.dryRun)
     if (["task.await", "task.resume", "task.complete", "task.cancel"].includes(request.command)) {
       return await transitionTask(project, request.input, request.command.split(".")[1], clock, request.dryRun)
     }
@@ -1050,7 +1126,7 @@ export async function executeRuntime(request, dependencies = {}) {
     if (request.command === "flow.advance") return await advanceFlow(project, request.input, clock, request.dryRun)
     if (request.command === "flow.rollback") return await rollbackFlow(project, request.input, clock, request.dryRun)
     if (request.command === "work.create") return await createWork(project, request.input, clock, request.dryRun)
-    if (["work.start", "work.submit", "work.accept", "work.rework", "work.cancel"].includes(request.command)) {
+    if (["work.start", "work.submit", "work.accept", "work.rework", "work.block", "work.cancel"].includes(request.command)) {
       return await transitionWork(project, request.input, request.command.split(".")[1], clock, request.dryRun)
     }
     if (request.command === "work.show") return await showWork(project, request.input)

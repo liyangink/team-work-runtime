@@ -61,6 +61,61 @@ test("user can initialize a project and create a task at any workflow stage", as
   assert.equal(persisted.teamDecision.mode, "undecided")
 })
 
+test("Workflow persists team decisions and SPEC lifecycle through Runtime", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "design.md"), "approved design\n")
+  await writeFile(path.join(projectRoot, "spec.md"), "implementation spec\n")
+  await writeFile(path.join(projectRoot, "requirement.md"), "research requirement\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "policy-state", "--entry-stage", "spec")
+
+  const team = await run(
+    projectRoot,
+    "task", "team", "--task", "policy-state", "--mode", "team",
+    "--reason", "Independent SPEC review has high value", "--expected-revision", "0",
+  )
+  assert.deepEqual(team.data.task.teamDecision, { mode: "team", reason: "Independent SPEC review has high value" })
+  assert.equal(team.revision, 1)
+
+  const started = await run(
+    projectRoot,
+    "task", "spec", "--task", "policy-state", "--status", "in-progress", "--expected-revision", "1",
+  )
+  assert.equal(started.data.task.spec.status, "in-progress")
+  assert.deepEqual(started.data.task.spec.artifactRefs, [])
+
+  const completed = await run(
+    projectRoot,
+    "task", "spec", "--task", "policy-state", "--status", "completed",
+    "--artifacts", "spec.md", "--expected-revision", "2",
+  )
+  assert.equal(completed.data.task.spec.status, "completed")
+  assert.deepEqual(completed.data.task.spec.artifactRefs, ["spec.md"])
+  assert.equal(completed.revision, 3)
+
+  const missingArtifact = await runResult(
+    projectRoot,
+    "task", "spec", "--task", "policy-state", "--status", "completed",
+    "--artifacts", "missing.md", "--expected-revision", "3",
+  )
+  assert.equal(missingArtifact.envelope.error.code, "INVALID_ARGUMENT")
+
+  await run(projectRoot, "task", "create", "--task", "stage-team-reset", "--entry-stage", "research")
+  await run(
+    projectRoot,
+    "context", "register", "--task", "stage-team-reset", "--context", "requirement",
+    "--kind", "requirement", "--path", "requirement.md", "--profiles", "lead,research", "--expected-revision", "0",
+  )
+  await run(
+    projectRoot,
+    "task", "team", "--task", "stage-team-reset", "--mode", "solo",
+    "--reason", "Research is narrow", "--expected-revision", "1",
+  )
+  const advanced = await run(projectRoot, "flow", "advance", "--task", "stage-team-reset", "--outcome", "pass", "--expected-revision", "2")
+  assert.equal(advanced.data.task.stage, "design")
+  assert.deepEqual(advanced.data.task.teamDecision, { mode: "undecided" })
+})
+
 test("user registers minimal context and checks only the current stage gate", async () => {
   const projectRoot = await project()
   await mkdir(path.join(projectRoot, "src"))
@@ -195,6 +250,56 @@ test("Lead can rework and accept a work item without losing attempt history", as
 
   const shown = await run(projectRoot, "work", "show", "--task", "team-review", "--work", "security-review")
   assert.deepEqual(shown.data.workItem, accepted.data.workItem)
+})
+
+test("infrastructure blockage can retry or reassign the same work item with audit history", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "report.md"), "partial report\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "gateway-recovery", "--entry-stage", "research")
+  await run(
+    projectRoot,
+    "work", "create", "--task", "gateway-recovery", "--work", "facts", "--owner", "junior-a",
+    "--scope", "Collect code facts", "--done-when", "Report has evidence", "--artifacts", "report.md", "--expected-revision", "0",
+  )
+  await run(projectRoot, "work", "start", "--task", "gateway-recovery", "--work", "facts", "--expected-revision", "1")
+
+  const blocked = await run(
+    projectRoot,
+    "work", "block", "--task", "gateway-recovery", "--work", "facts",
+    "--error-code", "RATE_LIMITED", "--reason", "Gateway returned 429", "--refs", "gateway-log-1",
+    "--expected-revision", "2",
+  )
+  assert.equal(blocked.data.workItem.status, "blocked")
+  assert.equal(blocked.data.workItem.blockage.code, "RATE_LIMITED")
+  assert.equal(blocked.data.workItem.blockage.owner, "junior-a")
+
+  const reassigned = await run(
+    projectRoot,
+    "work", "start", "--task", "gateway-recovery", "--work", "facts", "--owner", "junior-b",
+    "--expected-revision", "3",
+  )
+  assert.equal(reassigned.data.workItem.status, "running")
+  assert.equal(reassigned.data.workItem.owner, "junior-b")
+  assert.equal(reassigned.data.workItem.attempt, 2)
+  assert.equal(reassigned.data.workItem.attemptHistory[0].owner, "junior-a")
+  assert.equal(reassigned.data.workItem.attemptHistory[0].blockage.code, "RATE_LIMITED")
+
+  await run(
+    projectRoot,
+    "work", "block", "--task", "gateway-recovery", "--work", "facts",
+    "--error-code", "UPSTREAM_UNAVAILABLE", "--reason", "Replacement provider unavailable",
+    "--refs", "gateway-log-2",
+    "--expected-revision", "4",
+  )
+  const cancelled = await run(
+    projectRoot,
+    "work", "cancel", "--task", "gateway-recovery", "--work", "facts",
+    "--reason", "User chose solo fallback", "--expected-revision", "5",
+  )
+  assert.equal(cancelled.data.workItem.status, "cancelled")
+  assert.equal(cancelled.data.workItem.blockage.code, "UPSTREAM_UNAVAILABLE")
+  assert.deepEqual(cancelled.data.workItem.blockage.refs, ["gateway-log-2"])
 })
 
 test("active task resolution never guesses and session binding is only an index", async () => {

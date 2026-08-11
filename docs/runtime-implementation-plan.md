@@ -65,7 +65,7 @@ Type: Prototype
 ## workflow-teamwork: 接入研发流程与团队 Policy
 
 Blocked by: core-runtime-mvp
-Status: open
+Status: resolved
 Type: Prototype
 
 ### Question
@@ -74,7 +74,9 @@ Workflow 和 Team-work 如何只通过 Runtime Interface 协作，同时保持 s
 
 ### Answer
 
-待完成。
+Workflow 与 Team-work 已实现为中文、平台无关的 Policy Skill。Workflow 可从任意实际研发阶段创建或恢复任务，只检查当前阶段最低输入，持久化每阶段 solo/team 决策与 SPEC 生命周期，并在流转前预检目标阶段输入；Team-work 可在已有任务中工作，也可 standalone 从适配阶段创建轻量任务，随后显式写入 team 决策。
+
+Team-work 已覆盖 Junior/Senior/Expert 成本拓扑、非作者挑战者、最多三轮收敛、方案讨论、全视角代码 Review、并行施工、测试、制品汇报、有界恢复和可选同档评分。成员选择脚本在同档内无放回随机，并优先模型差异。两轮 Terra forward test 补齐了初始化、Profile 缺失等待、binding revision、返工目标输入、SPEC/team 状态，以及网关限流后的 work blockage、同档换 Owner 和最终错误审计。
 
 验收产物：
 
@@ -83,7 +85,7 @@ Workflow 和 Team-work 如何只通过 Runtime Interface 协作，同时保持 s
 - 阶段制品契约及 code-review/方案讨论/并行实施/测试场景 forward test；
 - standalone Team-work 与已存在 Workflow task 的双路径测试。
 
-退出条件：Skill 不直接写控制状态、不解析平台原始配置，任意阶段可由最低必需制品启动。
+退出条件：已满足。Skill 不直接写控制状态、不解析平台原始配置；策略与 Runtime 回归覆盖任意阶段介入、standalone、成本拓扑、三轮收敛和基础设施恢复。实际 Agent 派发由下一项 OpenCode PlatformPlugin 实现。
 
 ## opencode-plugin: 实现首个平台 Adapter
 

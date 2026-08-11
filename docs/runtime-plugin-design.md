@@ -264,9 +264,9 @@ plugins/opencode/
 ├── assets/team-work.js         # 安装为 .opencode/plugins/team-work.js
 ├── config/
 │   ├── agents.json             # 七个通用成本档位定义
-│   └── model-map.example.json
+│   └── runtime-package-lock.json # 目标项目 Runtime 依赖锁
 ├── guides/                     # 安装为 Platform 增量指南
-├── scripts/manage.mjs          # install/update/doctor/uninstall
+├── scripts/manage.mjs          # 统一 npm CLI 的源码入口包装
 └── src/
     ├── lifecycle.mjs           # digest 清单、备份、回滚、smoke test
     └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入

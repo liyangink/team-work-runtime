@@ -1,0 +1,84 @@
+import assert from "node:assert/strict"
+import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import test from "node:test"
+
+import { runInstallerCli } from "../installer/cli.mjs"
+
+test("install CLI creates and consumes the fixed project config", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  const calls = []
+  let output = ""
+
+  const exitCode = await runInstallerCli(["install", "--project", projectRoot], {
+    manage: async (command, options) => {
+      calls.push({ command, options })
+      return { status: "installed" }
+    },
+    writeOut: (text) => { output += text },
+  })
+
+  assert.equal(exitCode, 0)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].command, "install")
+  assert.equal(calls[0].options.projectRoot, projectRoot)
+  assert.equal(calls[0].options.modelMap, undefined)
+  assert.equal(calls[0].options.opencodeCommand, "opencode")
+  assert.equal(calls[0].options.openspecCommand, "openspec")
+  assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, "team-work.config.json"), "utf8")), {
+    schemaVersion: "1.0",
+    platforms: { opencode: { models: "auto" } },
+    spec: { type: "openspec" },
+  })
+  assert.equal(JSON.parse(output).status, "installed")
+})
+
+test("update CLI takes all model and command configuration from the fixed file", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  const models = { "junior-luna": "gateway/gpt-5.6-luna" }
+  await writeFile(path.join(projectRoot, "team-work.config.json"), JSON.stringify({
+    schemaVersion: "1.0",
+    platforms: { opencode: { command: "opencode-next", models } },
+    spec: { type: "openspec", command: "openspec-next" },
+  }))
+  let received
+
+  const exitCode = await runInstallerCli(["update", "--project", projectRoot, "--force"], {
+    manage: async (command, options) => {
+      received = { command, options }
+      return { status: "installed" }
+    },
+    writeOut: () => {},
+  })
+
+  assert.equal(exitCode, 0)
+  assert.equal(received.command, "update")
+  assert.deepEqual(received.options.modelMap, models)
+  assert.equal(received.options.opencodeCommand, "opencode-next")
+  assert.equal(received.options.openspecCommand, "openspec-next")
+  assert.equal(received.options.force, true)
+})
+
+test("installer CLI reports stable JSON errors and uninstall remains recoverable without config", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  let errorOutput = ""
+  const missingExit = await runInstallerCli(["doctor", "--project", projectRoot], {
+    manage: async () => assert.fail("manager must not run without config"),
+    writeOut: () => {},
+    writeError: (text) => { errorOutput += text },
+  })
+  assert.equal(missingExit, 1)
+  assert.equal(JSON.parse(errorOutput).code, "USER_CONFIG_MISSING")
+
+  let uninstallCommand
+  const uninstallExit = await runInstallerCli(["uninstall", "--project", projectRoot], {
+    manage: async (command) => {
+      uninstallCommand = command
+      return { status: "uninstalled" }
+    },
+    writeOut: () => {},
+  })
+  assert.equal(uninstallExit, 0)
+  assert.equal(uninstallCommand, "uninstall")
+})

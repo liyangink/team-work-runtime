@@ -419,7 +419,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, openco
     dependencies: packageConfig.dependencies ?? {},
   }
   const packageContent = Buffer.from(`${JSON.stringify(runtimePackage, null, 2)}\n`)
-  const packageLockContent = await readFile(path.join(sourceRoot, "package-lock.json"))
+  const packageLockContent = await readFile(path.join(sourceRoot, "plugins/opencode/config/runtime-package-lock.json"))
   files.set(".opencode/team-work/package.json", packageContent)
   files.set(".opencode/team-work/package-lock.json", packageLockContent)
 

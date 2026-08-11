@@ -1,9 +1,0 @@
-{
-  "junior-flash": "your-provider/deepseek-v4-flash",
-  "junior-luna": "your-provider/gpt-5.6-luna",
-  "senior-terra": "your-provider/gpt-5.6-terra",
-  "senior-glm": "your-provider/glm-5.2",
-  "senior-qwen": "your-provider/qwen3.8-max",
-  "expert-opus": "your-provider/claude-opus-5",
-  "expert-k3": "your-provider/kimi-k3"
-}

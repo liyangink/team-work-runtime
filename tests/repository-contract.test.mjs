@@ -38,18 +38,22 @@ test("new implementation documents have valid local links", async () => {
   }
 })
 
-test("global user guide stays quick, platform-sectioned, and separate from validation plans", async () => {
-  const usage = await read("USAGE.md")
+test("README is the single user guide with intro, quick start, and one fixed config", async () => {
+  const usage = await read("README.md")
   const report = await read("docs/validation/opencode-real-gateway-2026-08-11.md")
   const evidence = JSON.parse(await read("docs/validation/opencode-real-gateway-2026-08-11.json"))
   const quickStart = usage.slice(usage.indexOf("## QuickStart"), usage.indexOf("## 常用方式"))
-  assert.ok(usage.indexOf("## QuickStart") < usage.indexOf("## 平台配置"))
-  assert.match(usage, /### OpenCode/)
+  assert.ok(usage.indexOf("## 插件简介") < usage.indexOf("## QuickStart"))
+  assert.ok(usage.indexOf("## QuickStart") < usage.indexOf("## 配置"))
+  assert.match(usage, /npx team-work-runtime@latest install/)
+  assert.match(usage, /team-work\.config\.json/)
+  assert.match(usage, /## OpenCode 注意事项/)
   assert.match(usage, /从 Workflow 开始/)
   assert.match(usage, /直接使用 Team-work/)
   assert.match(usage, /从任意阶段介入/)
   assert.match(usage, /查看与继续任务/)
-  assert.doesNotMatch(quickStart, /doctor|debug agent|model-map/)
+  assert.doesNotMatch(quickStart, /doctor|debug agent|model-map|plugins\/opencode\/scripts/)
+  assert.doesNotMatch(usage, /USAGE\.md|--model-map/)
   assert.doesNotMatch(usage, /发布前真实网关验收|下一项最小验收/)
   assert.doesNotMatch(report, /下一项最小验收/)
   assert.match(report, /双成员后台派发/)

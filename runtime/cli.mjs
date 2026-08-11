@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { executeRuntime } from "./core.mjs"
+import { pathToFileURL } from "node:url"
 
-function parse(argv) {
+export function parseRuntimeArgs(argv) {
   const positionals = []
   const options = {}
   for (let index = 0; index < argv.length; index += 1) {
@@ -68,6 +69,14 @@ function parse(argv) {
   }
 }
 
-const result = await executeRuntime(parse(process.argv.slice(2)))
-process.stdout.write(`${JSON.stringify(result.envelope)}\n`)
-process.exitCode = result.exitCode
+export async function runRuntimeCli(argv, dependencies = {}) {
+  const execute = dependencies.execute ?? executeRuntime
+  const writeOut = dependencies.writeOut ?? ((text) => process.stdout.write(text))
+  const result = await execute(parseRuntimeArgs(argv))
+  writeOut(`${JSON.stringify(result.envelope)}\n`)
+  return result.exitCode
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  process.exitCode = await runRuntimeCli(process.argv.slice(2))
+}

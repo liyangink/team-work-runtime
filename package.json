@@ -1,13 +1,14 @@
 {
   "name": "team-work-runtime",
   "version": "0.1.0",
-  "private": true,
+  "description": "平台无关的 multiagent engineering loop 与 PlatformPlugin 安装器",
   "type": "module",
   "bin": {
-    "team-work": "runtime/cli.mjs"
+    "team-work": "cli.mjs"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
+    "prepublishOnly": "npm test",
     "test:contract": "node --test tests/runtime-contract.test.mjs",
     "test:runtime": "node --test tests/core-runtime.test.mjs",
     "test:policy": "node --test tests/policy-skills.test.mjs",
@@ -16,6 +17,24 @@
   "engines": {
     "node": ">=18"
   },
+  "files": [
+    "cli.mjs",
+    "installer/",
+    "runtime/",
+    "schemas/",
+    "skills/workflow/",
+    "skills/team-work/",
+    "plugins/opencode/assets/",
+    "plugins/opencode/config/",
+    "plugins/opencode/guides/",
+    "plugins/opencode/src/"
+  ],
+  "keywords": [
+    "multiagent",
+    "workflow",
+    "opencode",
+    "ai-agent"
+  ],
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1"

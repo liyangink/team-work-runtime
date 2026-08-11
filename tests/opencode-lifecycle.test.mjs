@@ -522,7 +522,7 @@ test("uninstall retains modified managed files by default and force backs them u
 
 async function copySourceFixture(from, to) {
   const { cp } = await import("node:fs/promises")
-  for (const relativePath of ["runtime", "schemas", "skills", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "package.json", "package-lock.json"]) {
+  for (const relativePath of ["runtime", "schemas", "skills", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "package.json"]) {
     await cp(path.join(from, relativePath), path.join(to, relativePath), { recursive: true })
   }
 }

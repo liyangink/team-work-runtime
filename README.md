@@ -331,3 +331,7 @@ npx team-work-runtime@latest doctor
 ```
 
 `doctor` 用于诊断版本、安装清单、受管文件漂移和 Agent 可用性，不是更新或卸载的必需步骤。
+
+## License
+
+本项目采用 [Apache License 2.0](LICENSE)。

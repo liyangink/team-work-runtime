@@ -10,6 +10,7 @@
   "bugs": {
     "url": "https://github.com/liyangink/team-work-runtime/issues"
   },
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "team-work": "cli.mjs"

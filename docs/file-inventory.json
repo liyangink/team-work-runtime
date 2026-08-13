@@ -4,6 +4,7 @@
     "AGENTS.md",
     ".gitignore",
     "CLAUDE.md",
+    "LICENSE",
     "README.md",
     "cli.mjs",
     "installer/",

@@ -132,6 +132,58 @@ test("context, session continuity, and human synchronization remain bounded", as
   assert.match(handoff, /直接[^。\n]*(?:回复|消息)[^。\n]*用户/)
   for (const field of ["当前阶段", "结果", "产物", "分歧", "建议"]) assert.match(handoff, new RegExp(field))
   assert.match(handoff, /(?:Owner|挑战者|Expert)[^。\n]*(?:转发|续派|回答)/)
+  assert.match(handoff, /(?:说人话|普通语言)/)
+  assert.match(handoff, /(?:内部|推理)[^。\n]*(?:编号|标识)[^。\n]*(?:替代|代替)/)
+  assert.match(handoff, /人工复核[^。\n]*(?:用户预先指定|高风险)/)
+})
+
+test("research produces a concise project briefing instead of an unverifiable expertise claim", async () => {
+  const stages = await read("skills/workflow/references/stages-and-artifacts.md")
+  for (const field of ["项目目标", "核心设计", "关键模块", "关键实现", "风险", "未知项"]) {
+    assert.match(stages, new RegExp(field))
+  }
+  assert.match(stages, /项目简介/)
+  assert.match(stages, /简洁|言简意赅/)
+  assert.doesNotMatch(stages, /成为.*专家/)
+})
+
+test("owners can challenge expert findings while Lead remains a process authority", async () => {
+  const teamwork = await read("skills/team-work/SKILL.md")
+  const member = await read("skills/team-work/references/member-contract.md")
+  const topology = await read("skills/team-work/references/topologies.md")
+  const combined = [teamwork, member, topology].join("\n")
+
+  assert.match(combined, /Owner[^。\n]*(?:独立判断|核验)[^。\n]*(?:接受|异议|辩驳)/)
+  assert.match(combined, /Expert[^。\n]*(?:不可质疑|绝对权威|无条件执行)/)
+  assert.match(combined, /Lead[^。\n]*(?:不得|不)[^。\n]*(?:技术分歧|内容结论)[^。\n]*(?:强行|替代|裁决)/)
+  assert.match(combined, /三轮[^。\n]*(?:用户|人工)[^。\n]*(?:决定|裁决)/)
+})
+
+test("rework follows confirmation, execution, self-check, and independent review", async () => {
+  const member = await read("skills/team-work/references/member-contract.md")
+  for (const step of ["理解并确认", "修复计划", "执行修改", "自检", "非作者复核"]) {
+    assert.match(member, new RegExp(step))
+  }
+  assert.match(member, /不理解|疑问/)
+  assert.match(member, /人工复核[^。\n]*(?:显式|高风险)/)
+})
+
+test("challenger stays adversarial and covers delivery quality risks", async () => {
+  const topology = await read("skills/team-work/references/topologies.md")
+  const review = await read("skills/team-work/references/code-review.md")
+  const combined = `${topology}\n${review}`
+  assert.match(combined, /挑战者[^。\n]*(?:不负责|不得)[^。\n]*(?:策划|实施)/)
+  for (const concern of ["实现成本", "代码风格", "可读性", "代码结构", "性能风险", "业务风险", "过度设计", "遗漏"]) {
+    assert.match(combined, new RegExp(concern))
+  }
+})
+
+test("human-facing reports use a compact plain-language decision summary", async () => {
+  const reports = await read("skills/team-work/references/artifacts-and-report.md")
+  for (const field of ["结论", "依据", "产物", "分歧", "风险", "建议"]) assert.match(reports, new RegExp(field))
+  assert.match(reports, /说人话|普通语言/)
+  assert.match(reports, /内部[^。\n]*(?:编号|标识)/)
+  assert.match(reports, /详细[^。\n]*制品/)
 })
 
 test("E2E is applicability-gated and keeps test-artifact rework inside its own loop", async () => {

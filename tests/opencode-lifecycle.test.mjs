@@ -71,9 +71,13 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
     "skills/workflow/SKILL.md",
     "skills/team-work/SKILL.md",
     "plugins/team-work.js",
+    "plugins/team-work-tui.tsx",
     "team-work/runtime/cli.mjs",
     "team-work/opencode-adapter.mjs",
     "team-work/opencode-agent-config.mjs",
+    "team-work/tui/team-work-tui.tsx",
+    "team-work/tui/team-sidebar.tsx",
+    "team-work/tui/team-sessions.mjs",
     "team-work/installer/user-config.mjs",
     "team-work/settings.json",
     "team-work/profile.json",
@@ -439,7 +443,7 @@ test("uninstall retains modified managed files by default and force backs them u
 
 async function copySourceFixture(from, to) {
   const { cp } = await import("node:fs/promises")
-  for (const relativePath of ["runtime", "schemas", "skills", "installer", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "package.json"]) {
+  for (const relativePath of ["runtime", "schemas", "skills", "installer", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "plugins/opencode/tui", "package.json"]) {
     await cp(path.join(from, relativePath), path.join(to, relativePath), { recursive: true })
   }
 }

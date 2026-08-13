@@ -1144,7 +1144,7 @@ async function createTask(project, input, clock) {
 export async function executeRuntime(request, dependencies = {}) {
   const clock = dependencies.clock ?? (() => new Date())
   try {
-    if (request.command === "version") return success({ runtimeVersion: "0.1.0", apiVersion: "1.0", schemaVersion: "1.0" })
+    if (request.command === "version") return success({ runtimeVersion: "0.1.0-beta.0", apiVersion: "1.0", schemaVersion: "1.0" })
     if (request.command === "init") return await initialize(request.projectRoot, clock)
     if (request.command === "doctor") return await doctorProject(request.projectRoot, request.input.repair, request.input.force)
     const project = await loadProject(request.projectRoot)

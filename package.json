@@ -1,7 +1,15 @@
 {
   "name": "team-work-runtime",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.0",
   "description": "平台无关的 multiagent engineering loop 与 PlatformPlugin 安装器",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liyangink/team-work-runtime.git"
+  },
+  "homepage": "https://github.com/liyangink/team-work-runtime#readme",
+  "bugs": {
+    "url": "https://github.com/liyangink/team-work-runtime/issues"
+  },
   "type": "module",
   "bin": {
     "team-work": "cli.mjs"
@@ -17,6 +25,10 @@
   "engines": {
     "node": ">=18"
   },
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  },
   "files": [
     "cli.mjs",
     "installer/",
@@ -27,7 +39,8 @@
     "plugins/opencode/assets/",
     "plugins/opencode/config/",
     "plugins/opencode/guides/",
-    "plugins/opencode/src/"
+    "plugins/opencode/src/",
+    "plugins/opencode/tui/"
   ],
   "keywords": [
     "multiagent",
@@ -36,7 +49,10 @@
     "ai-agent"
   ],
   "dependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "solid-js": "1.9.12"
   }
 }

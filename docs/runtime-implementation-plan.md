@@ -99,7 +99,7 @@ Type: Prototype
 
 ### Answer
 
-第一批平台能力已实现：用户级安装器物化 Workflow、Team-work、CoreRuntime、Plugin、Platform Profile 与指南，首次项目调用再初始化 `.team-work/`。Plugin 启动时读取版本化用户配置，动态注入七个分档 Agent 的 model/effort。`solo/team` 受管派发都使用 `session.create + promptAsync`，并以 task/work-item ID 保存 child session 映射；同一 work item 续派复用会话，失联或停止后才受控替换并保留历史。
+第一批平台能力已实现：用户级安装器物化 Workflow、Team-work、CoreRuntime、Plugin、Platform Profile 与指南，首次项目调用再初始化 `.team-work/`。Plugin 启动时读取版本化用户配置，动态注入七个分档 Agent 的 model/effort。`solo/team` 受管派发都使用 `session.create + promptAsync`，并以 task/work-item ID 保存 child session 映射；同一 work item 续派复用会话，失联或停止后才受控替换并保留历史。OpenCode PlatformPlugin 内部的 TUI 子模块复用这些映射，在右侧栏展示成员实时状态并直接跳转 child/Lead session，不维护第二份状态。
 
 安装生命周期采用 digest 清单。更新前备份全部旧受管文件，新路径碰撞和本地修改默认拒绝；`--force` 也必须先备份。smoke test 失败会回滚。卸载只处理清单内文件，修改项默认保留为 partial，任务、制品、Workflow/SPEC 配置和用户 OpenCode 文件始终保留。
 

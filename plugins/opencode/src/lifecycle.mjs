@@ -161,6 +161,7 @@ async function readJson(target, code) {
 async function allowedManagedPaths(sourceRoot) {
   const allowed = new Set([
     "plugins/team-work.js",
+    "plugins/team-work-tui.tsx",
     `${PLATFORM_ROOT}/profile.json`,
     ...MANAGED_AGENT_PATHS,
   ])
@@ -221,20 +222,23 @@ async function detectHostVersion(opencodeCommand = "opencode") {
   }
 }
 
-async function walkFiles(root, prefix = "") {
+async function walkFiles(root, prefix = "", options = {}) {
   const result = []
   for (const entry of await readdir(root, { withFileTypes: true })) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name
     const absolutePath = path.join(root, entry.name)
-    if (entry.isSymbolicLink()) fail("SOURCE_SYMLINK_UNSUPPORTED", `安装源不得包含符号链接：${absolutePath}`)
-    if (entry.isDirectory()) result.push(...await walkFiles(absolutePath, relativePath))
+    if (entry.isSymbolicLink()) {
+      if (options.skipSymlinks) continue
+      fail("SOURCE_SYMLINK_UNSUPPORTED", `安装源不得包含符号链接：${absolutePath}`)
+    }
+    if (entry.isDirectory()) result.push(...await walkFiles(absolutePath, relativePath, options))
     else if (entry.isFile()) result.push(relativePath)
   }
   return result.sort()
 }
 
-async function addTree(files, source, destination) {
-  for (const relativePath of await walkFiles(source)) {
+async function addTree(files, source, destination, options) {
+  for (const relativePath of await walkFiles(source, "", options)) {
     files.set(normalizeRelative(`${destination}/${relativePath}`), await readFile(path.join(source, relativePath)))
   }
 }
@@ -327,10 +331,12 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
   await addTree(files, path.join(sourceRoot, "skills/workflow"), "skills/workflow")
   await addTree(files, path.join(sourceRoot, "skills/team-work"), "skills/team-work")
   await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
+  await addTree(files, path.join(sourceRoot, "plugins/opencode/tui"), "team-work/tui")
   files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
   files.set("team-work/opencode-agent-config.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/agent-config.mjs")))
   files.set("team-work/installer/user-config.mjs", await readFile(path.join(sourceRoot, "installer/user-config.mjs")))
   files.set("plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
+  files.set("plugins/team-work-tui.tsx", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work-tui.tsx")))
 
   const packageConfig = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"))
   const runtimePackage = {
@@ -358,7 +364,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024,
       })
-      await addTree(files, path.join(staging, "node_modules"), "team-work/node_modules")
+      await addTree(files, path.join(staging, "node_modules"), "team-work/node_modules", { skipSymlinks: true })
     } catch (error) {
       fail("DEPENDENCY_INSTALL_FAILED", "Runtime 依赖安装失败；项目文件尚未修改", { cause: error })
     } finally {

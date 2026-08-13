@@ -257,6 +257,7 @@ PlatformPlugin 包含安装期与运行期两类职责。
 - 调用 CoreRuntime `context render` 并注入相应 profile；
 - 将原生 member/task/session/model/failure 归一化后记录为 Runtime event 或 work-item metadata；
 - 提供原生 multiagent 工具映射和平台增量恢复指南；
+- 通过平台原生 UI 扩展点提供受管成员状态与 session 导航，但只读取 Runtime 映射，不另建团队状态源；
 - 允许普通非受管 Agent 调用无影响地通过。
 
 PlatformPlugin 不直接决定团队拓扑，也不在后台启动第二套调度器。Lead 按 Team-work 与 Platform Profile 使用 CLI Host 原生 multiagent 工具。
@@ -273,16 +274,23 @@ OpenCode 首版目录：
 
 ```text
 plugins/opencode/
-├── assets/team-work.js         # 安装为 ~/.config/opencode/plugins/team-work.js
+├── assets/
+│   ├── team-work.js            # OpenCode Server Plugin 入口
+│   └── team-work-tui.tsx       # OpenCode TUI Plugin 入口
 ├── config/
 │   ├── agents.json             # 七个通用成本档位定义
 │   └── runtime-package-lock.json # 全局 Runtime 依赖锁
 ├── guides/                     # 安装为 Platform 增量指南
 ├── scripts/manage.mjs          # 统一 npm CLI 的源码入口包装
-└── src/
-    ├── lifecycle.mjs           # digest 清单、备份、回滚、smoke test
-    ├── agent-config.mjs        # 启动时动态注入 Agent model/effort
-    └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入
+├── src/                        # Server 子模块
+│   ├── lifecycle.mjs           # digest 清单、备份、回滚、smoke test
+│   ├── agent-config.mjs        # 启动时动态注入 Agent model/effort
+│   └── opencode-adapter.mjs    # promptAsync、session 映射、上下文注入
+└── tui/                        # TUI 子模块
+    ├── team-work-tui.tsx       # TUI target 与 sidebar slot 注册
+    ├── team-sidebar.tsx        # 成员状态、Lead 返回和 session 跳转
+    ├── team-sessions.mjs       # 只读 task/session 映射视图
+    └── team-tui-plugin.mjs     # 可测试的平台注册边界
 ```
 
 平台无关 Skill 只有根目录 `skills/` 一份源码，安装器物化 Skill、Runtime、schema 和 Plugin。Plugin 启动时读取用户配置并动态注入 Agent；修改 model/effort 后重启 OpenCode 即可。项目任务留在 `.team-work/`，协作基线是“Lead + 多 subagent + 共享制品/Lead 转发”。

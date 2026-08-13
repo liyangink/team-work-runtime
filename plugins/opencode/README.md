@@ -14,7 +14,7 @@ npx team-work-runtime@latest install
 
 - 用户配置：`~/.config/team-work/config.json`
 - Skill：`~/.config/opencode/skills/`
-- Plugin：`~/.config/opencode/plugins/team-work.js`
+- Plugin：`~/.config/opencode/plugins/team-work.js`、`team-work-tui.tsx`
 - Runtime、Profile、指南和安装清单：`~/.config/opencode/team-work/`
 
 用户配置支持 `TEAM_WORK_CONFIG_HOME`、`XDG_CONFIG_HOME` 和 Windows `%APPDATA%`。OpenCode 安装根遵循其全局目录；安装器不修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
@@ -47,6 +47,8 @@ npx team-work-runtime@latest uninstall
 `doctor` 只用于故障诊断，会检查显式绑定的模型是否仍出现在 `opencode models` 中；它不是更新或卸载的前置步骤。
 
 ## 平台运行规则
+
+OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中展示当前任务成员状态并调用原生 session route 跳转；Installer 统一安装、更新和卸载两类入口及其依赖。
 
 `solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；同一 work item 默认复用 child session，失联或停止后才受控替换并保留历史。禁止用阻塞式 `task` 工具替代受管派发。
 

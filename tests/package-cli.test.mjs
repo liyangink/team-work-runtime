@@ -17,13 +17,13 @@ test("one package CLI routes runtime and lifecycle commands", async () => {
   })
   const envelope = JSON.parse(version.stdout)
   assert.equal(envelope.ok, true)
-  assert.equal(envelope.data.runtimeVersion, "0.1.0")
+  assert.equal(envelope.data.runtimeVersion, "0.1.0-beta.0")
 
   const explicitRuntime = await run(process.execPath, [path.join(projectRoot, "cli.mjs"), "runtime", "version"], {
     cwd: projectRoot,
     encoding: "utf8",
   })
-  assert.equal(JSON.parse(explicitRuntime.stdout).data.runtimeVersion, "0.1.0")
+  assert.equal(JSON.parse(explicitRuntime.stdout).data.runtimeVersion, "0.1.0-beta.0")
 
   await assert.rejects(
     run(process.execPath, [path.join(projectRoot, "cli.mjs"), "doctor"], {

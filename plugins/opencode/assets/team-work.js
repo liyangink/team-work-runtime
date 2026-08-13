@@ -114,7 +114,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         },
       }),
       team_work_resume: tool({
-        description: "非阻塞续派已有 child session；同一 work item 的返工和多轮收敛必须优先复用",
+        description: "非阻塞续派已有 child session；同一 work item 的返工和多轮收敛必须优先复用；只传 task_id、work_item_id 和 prompt，不要传 session_id、run_in_background 或 background，本工具自身始终非阻塞",
         args: { task_id: taskId, work_item_id: workItemId, prompt },
         async execute(args) {
           return json(await adapter.resume({ taskId: args.task_id, workItemId: args.work_item_id, prompt: args.prompt }))

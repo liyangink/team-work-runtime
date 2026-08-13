@@ -7,6 +7,8 @@
 - 派发前先用 CoreRuntime 创建 work item，并把稳定的 `task_id`、`work_item_id` 传给工具。成员名称使用已安装的 `junior-*`、`senior-*`、`expert-*`。
 - Lead 不等待单个成员结束，也不转而处理具体内容；继续维护 Harness、其他派发和同步点，在同步点调用 `team_work_status`，再用 `team_work_collect` 收集结果。
 - 同一 work item 的返工和后续轮次必须用 `team_work_resume` 续派同一 child session，不得每轮重新 spawn。Owner、挑战者和 Expert 各自持有独立 work item；Expert 在同一阶段收敛期间保持同一 session，跨阶段再建立新 work item。
+- `team_work_resume` 自身始终通过 `promptAsync` 非阻塞续派，只传稳定的 Runtime `task_id`、`work_item_id` 和本轮 `prompt`；这里的 `task_id` 不是 OpenCode 原生委托工具返回的 child session ID。不要传 `session_id`、`run_in_background` 或 `background`，也不要改用原生 `task`、可选增强工具或同步模式继续受管成员。
+- OpenCode 原生 `task` 使用 `task_id` 与可选 `background`，部分增强插件则使用 `session_id` 与 `run_in_background`；这些是其他工具的私有协议，不能套用到 `team_work_resume`。参数错误或误用不代表 session 或网关失效，不得进入降级、容灾或重建流程；立即改用正确的 `team_work_resume` 参数重试。
 - OpenCode session 的 retry/error/deleted 事件由 Plugin 归一化到 Runtime 审计；平台错误不自动改变 work item 的验收状态。
 - `resolvedModel` 为空的成员不可派发。模型、provider、网关、凭据和 MCP 仍由 OpenCode 配置管理。
 - 用户配置了独立 `helper` 模型时，受管成员可用 `team_work_assist` 后台派发 `explore` 或 `librarian` 只读助手，并用 `team_work_assist_status`、`team_work_assist_collect` 在同步点收集。助手不创建 Runtime work item；调用成员负责核验和整合结果。

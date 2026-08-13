@@ -37,6 +37,20 @@ test("OpenCode guide preserves child sessions and emits clickable file reference
   assert.match(combined, /用户[^。\n]*(?:文件|制品|代码)[^。\n]*(?:Markdown|可点击)/i)
 })
 
+test("OpenCode managed resume distinguishes its arguments from generic delegation tools", async () => {
+  const plugin = await read("plugins/opencode/assets/team-work.js")
+  const guide = await read("plugins/opencode/guides/team-work.md")
+  const recovery = await read("plugins/opencode/guides/recovery.md")
+  const combined = `${plugin}\n${guide}\n${recovery}`
+
+  assert.match(plugin, /team_work_resume[^]*只传[^。\n]*task_id[^。\n]*work_item_id[^。\n]*prompt/)
+  assert.match(combined, /不要传[^。\n]*session_id[^。\n]*run_in_background[^。\n]*background/)
+  assert.match(guide, /team_work_resume[^。\n]*自身[^。\n]*非阻塞/)
+  assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不代表|不是)[^。\n]*(?:session|网关)/i)
+  assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不得|不要)[^。\n]*(?:降级|容灾|重建)/)
+  assert.match(recovery, /team_work_resume[^。\n]*(?:网关|session)[^。\n]*(?:status|恢复)/i)
+})
+
 test("new implementation documents have valid local links", async () => {
   const inventory = JSON.parse(await read("docs/file-inventory.json"))
   const markdownFiles = inventory.newImplementation.filter((file) => file.endsWith(".md"))

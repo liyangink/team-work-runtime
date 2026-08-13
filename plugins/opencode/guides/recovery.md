@@ -2,6 +2,7 @@
 
 - 网关限流、容量不足或 API 失败时，保留 Runtime work item 和已有制品；用 `team_work_status` 判断 child session 状态，再决定续派或重建。
 - `team_work_resume` 失败不代表任务状态损坏。记录基础设施 blocker，稍后重试；不得把平台错误解释为成员验收失败。
+- 只有 `team_work_resume` 使用正确参数后仍返回网关错误或 session 错误，才调用 `team_work_status` 并进入本指南的恢复判断；通用委托工具提示 `session_id/task_id`、`run_in_background/background` 或 sync 模式冲突，只说明工具选错或参数误用，直接回到 `team_work_resume`，不要停止、重建或降级。
 - child session 映射位于 `.team-work/platform/opencode/sessions/<task-id>/<work-item-id>.json`。以 task/work-item ID 恢复，不要求用户记忆 session ID。
 - Runtime 事件中使用 `platform.dispatch.*`、`platform.resume.*` 和 `platform.session.*` 区分平台故障与工作结果；事件缺失时不据此判定制品失败。
 - 进程或 Lead 会话切换后，先读取活动任务、work item 和制品索引；映射仍有效时继续 `team_work_resume` 原 child session。只有 session 已失联、Owner/职责变化或需要独立第二意见时才重派，不能因为进入新一轮就重建成员。

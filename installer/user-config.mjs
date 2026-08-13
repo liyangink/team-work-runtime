@@ -134,6 +134,7 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
     config,
     platform: {
       id: "opencode",
+      ...(config.helper ? { helper: config.helper } : {}),
       modelMap,
       opencodeCommand: opencode.command ?? "opencode",
       openspecCommand: config.spec?.command ?? "openspec",

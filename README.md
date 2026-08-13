@@ -130,6 +130,8 @@ opencode
 
 同档多成员优先选择不同模型。挑战者通常由 Senior 或 Expert 兼任；Expert 既可把关，也可亲自承担复杂核心工作，但不能裁决本人制品。
 
+成员需要并行检索时，可调用两个临时只读助手：`team-work-explore` 负责代码探索，`team-work-librarian` 负责外部资料。它们共用一个独立 `helper` 模型，不占 Junior/Senior/Expert 席位，也不承担制品、挑战或裁决责任；调用成员负责核验并整合结果。
+
 活跃成员软上限为 3–5 人，不含 Lead。第二位 Expert 只用于不可逆决策、关键证据冲突、重复验证失败、领域盲区，或用户明确要求的场景。
 
 ## 工作流
@@ -257,6 +259,10 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 ```json
 {
   "$schema": "./schemas/user-config.v1.schema.json",
+  "helper": {
+    "model": "aigw/deepseek-v4-flash",
+    "effort": "low"
+  },
   "agents": {
     "junior-flash": {
       "model": "aigw/deepseek-v4-flash",
@@ -287,6 +293,8 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 `model` 必须是 OpenCode 可见的完整 `provider/model`。`effort` 会映射为 Agent 级 `reasoningEffort`；可用值取决于模型、Provider 和网关。
 
+顶层 `helper` 可选且不继承 Junior。配置后，Plugin 用同一绑定生成职责不同的 `team-work-explore` 与 `team-work-librarian`；未配置时不注入这两个助手。
+
 修改配置后只需重启 OpenCode。`install/update` 管理程序与静态资产，不承担配置同步。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
 
 ## OpenCode 平台
@@ -294,6 +302,8 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagent，并把当前有效 Agent Profile 写入项目上下文。
 
 所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 用 resume 复用 child session。Lead 在同步点查询状态并收集结果；成员自报完成或平台显示完成都不等于验收通过。
+
+受管成员的只读辅助同样使用非阻塞 child session。助手只做代码探索或资料检索，不创建 Runtime work item；成员在同步点收集结果后自行核验和整合。
 
 在 OpenCode 中向用户展示文件时，使用 `[label](file:///absolute/path)` 形式的标准 Markdown 可点击链接，不只输出裸路径。
 

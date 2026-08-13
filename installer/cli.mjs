@@ -58,6 +58,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       installRoot: opencodeRoot,
       sourceRoot,
       modelMap: platform.modelMap,
+      helper: platform.helper,
       opencodeCommand: platform.opencodeCommand,
       openspecCommand: platform.openspecCommand,
       specMode: platform.specMode,

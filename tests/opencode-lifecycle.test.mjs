@@ -28,6 +28,7 @@ function options(projectRoot, overrides = {}) {
     sourceRoot,
     hostVersion: "1.18.15",
     modelMap,
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     availableModels: Object.values(modelMap),
     skipDependencies: true,
     now: () => new Date("2026-08-11T08:00:00.000Z"),
@@ -88,7 +89,10 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   assert.equal(profile.agents.length, 7)
   assert.ok(profile.agents.every((agent) => agent.resolvedModel?.includes("/")))
   assert.equal(profile.agents.find(({ id }) => id === "senior-terra").costWeight, 10)
+  assert.deepEqual(profile.helpers.map(({ id }) => id), ["team-work-explore", "team-work-librarian"])
+  assert.ok(profile.helpers.every(({ resolvedModel }) => resolvedModel === "gateway/deepseek-v4-flash"))
   assert.equal(profile.operations.spawn.tool, "team_work_spawn")
+  assert.equal(profile.operations.assist.tool, "team_work_assist")
   const profileSchema = JSON.parse(await readFile(path.join(sourceRoot, "schemas/platform-profile.schema.json"), "utf8"))
   assert.deepEqual(createContractValidator([profileSchema])(profileSchema.$id, profile), [])
   assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, "team-work/settings.json"), "utf8")), {
@@ -149,6 +153,19 @@ test("doctor reports an explicit Agent model that OpenCode cannot resolve", asyn
 
   assert.ok(diagnosis.issues.some(({ code, agent, model }) => (
     code === "MODEL_UNAVAILABLE" && agent === "junior-flash" && model === "gateway/missing-model"
+  )))
+})
+
+test("doctor reports an independently configured helper model that OpenCode cannot resolve", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    helper: { model: "gateway/missing-helper", effort: "low" },
+  }))
+
+  assert.ok(diagnosis.issues.some(({ code, model }) => (
+    code === "HELPER_MODEL_UNAVAILABLE" && model === "gateway/missing-helper"
   )))
 })
 

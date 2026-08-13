@@ -7,6 +7,7 @@
   "required": ["$schema", "agents", "platforms", "spec"],
   "properties": {
     "$schema": { "const": "./schemas/user-config.v1.schema.json" },
+    "helper": { "$ref": "#/$defs/agent" },
     "agents": {
       "oneOf": [
         { "const": "auto" },

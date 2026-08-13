@@ -80,6 +80,8 @@ test("README is the single user guide with intro, quick start, and one fixed con
   assert.match(usage, /"\$schema"/)
   assert.doesNotMatch(usage, /schemaVersion/)
   assert.match(usage, /"effort"/)
+  assert.match(usage, /"helper"/)
+  assert.match(usage, /team-work-explore.*team-work-librarian/s)
   assert.match(usage, /reasoningEffort/)
   assert.match(usage, /\/workflow/)
   assert.match(usage, /\/team-work/)

@@ -27,6 +27,8 @@ npx team-work-runtime@latest install
 
 显式 Agent 必须使用 OpenCode 可识别的完整 `provider/model`。Plugin 启动时动态注入 Agent，`effort` 映射为 Agent 级 `reasoningEffort`。修改后重启 OpenCode 即可。
 
+可选的顶层 `helper` 使用独立模型和 effort，同时生成隐藏的 `team-work-explore` 与 `team-work-librarian`。它不继承 Junior；未配置时不注入只读助手。
+
 ## OpenSpec
 
 Plugin 启动时读取 `spec.command` 和 `spec.mode`。项目首次初始化时用 `--version` 与只读的 `list --json` 检查 OpenSpec；只有返回 `{ "changes": [...] }` 才标为 `ready`。
@@ -47,5 +49,7 @@ npx team-work-runtime@latest uninstall
 ## 平台运行规则
 
 `solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；同一 work item 默认复用 child session，失联或停止后才受控替换并保留历史。禁止用阻塞式 `task` 工具替代受管派发。
+
+受管成员可通过 `team_work_assist` 创建临时只读 helper child session。该链路同样使用 `promptAsync`，只允许代码探索或资料检索；助手不能继续委托或成为 Runtime work item Owner。
 
 网关错误、重试、续派、停止和 child session 失联会记录为 `platform.*` 事件。事件审计失败不改变 work item 验收状态，也不会把成功派发改成失败。

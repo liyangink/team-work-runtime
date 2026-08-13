@@ -272,7 +272,18 @@ function resolveModels(agentConfig, explicitMap, availableModels) {
   return { resolved, warnings }
 }
 
-function platformProfile(agentConfig, resolved, generatedAt) {
+function platformProfile(agentConfig, resolved, helper, generatedAt) {
+  if (helper && (typeof helper.model !== "string" || !/^[^\s/]+\/.+/.test(helper.model))) {
+    fail("INVALID_HELPER_CONFIG", "helper.model 必须是 provider/model")
+  }
+  const helpers = [
+    { id: "team-work-explore", kind: "explore", capability: "code-search" },
+    { id: "team-work-librarian", kind: "librarian", capability: "web-research" },
+  ].map(({ capability, ...entry }) => ({
+    ...entry,
+    resolvedModel: helper?.model ?? null,
+    capabilities: helper ? ["read-only", capability] : ["unavailable"],
+  }))
   return {
     schemaVersion: "1.0",
     platform: "opencode",
@@ -282,6 +293,7 @@ function platformProfile(agentConfig, resolved, generatedAt) {
       resolvedModel: resolved.get(agent.id) ?? null,
       capabilities: resolved.has(agent.id) ? ["general"] : ["unavailable"],
     })),
+    helpers,
     dispatch: { managedMode: "background", blockingPolicy: "reject" },
     operations: {
       spawn: { supported: true, tool: "team_work_spawn" },
@@ -290,6 +302,9 @@ function platformProfile(agentConfig, resolved, generatedAt) {
       status: { supported: true, tool: "team_work_status" },
       stop: { supported: true, tool: "team_work_stop" },
       message: { supported: false, tool: null },
+      assist: { supported: Boolean(helper), tool: helper ? "team_work_assist" : null },
+      assistStatus: { supported: Boolean(helper), tool: helper ? "team_work_assist_status" : null },
+      assistCollect: { supported: Boolean(helper), tool: helper ? "team_work_assist_collect" : null },
     },
     limits: { maxConcurrent: null },
     session: { childSessions: true, resume: true, crossSessionProcessRecovery: false },
@@ -305,7 +320,7 @@ function platformProfile(agentConfig, resolved, generatedAt) {
   }
 }
 
-async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
+async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
   const files = new Map()
   await addTree(files, path.join(sourceRoot, "runtime"), "team-work/runtime")
   await addTree(files, path.join(sourceRoot, "schemas"), "team-work/schemas")
@@ -354,7 +369,13 @@ async function buildDesiredFiles({ sourceRoot, modelMap, availableModels, openco
   const agentConfig = JSON.parse(await readFile(path.join(sourceRoot, "plugins/opencode/config/agents.json"), "utf8"))
   const scanned = availableModels ?? (modelMap ? [] : await scanModels(opencodeCommand))
   const { resolved, warnings } = resolveModels(agentConfig, modelMap, scanned)
-  return { files, warnings, packageVersion: packageConfig.version, agentIds: [...resolved.keys()], profile: platformProfile(agentConfig, resolved, "") }
+  return {
+    files,
+    warnings,
+    packageVersion: packageConfig.version,
+    agentIds: [...resolved.keys(), ...(helper ? ["team-work-explore", "team-work-librarian"] : [])],
+    profile: platformProfile(agentConfig, resolved, helper, ""),
+  }
 }
 
 function withoutGeneratedAt(profile) {
@@ -562,7 +583,7 @@ async function pruneEmptyManagedDirectories(installRoot, removedFiles) {
   }
 }
 
-async function doctor({ installRoot, prior, hostVersion, modelMap, availableModels, opencodeCommand }) {
+async function doctor({ installRoot, prior, hostVersion, modelMap, helper, availableModels, opencodeCommand }) {
   const issues = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
@@ -582,6 +603,10 @@ async function doctor({ installRoot, prior, hostVersion, modelMap, availableMode
       if (!known.has(agent)) issues.push({ code: "AGENT_UNKNOWN", agent })
       else if (!visibleModels.has(model)) issues.push({ code: "MODEL_UNAVAILABLE", agent, model })
     }
+  }
+  if (helper) {
+    const visibleModels = new Set(availableModels ?? await scanModels(opencodeCommand))
+    if (!visibleModels.has(helper.model)) issues.push({ code: "HELPER_MODEL_UNAVAILABLE", model: helper.model })
   }
   return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues }
 }
@@ -607,6 +632,7 @@ async function manageUnlocked(command, options) {
     prior,
     hostVersion,
     modelMap: options.modelMap,
+    helper: options.helper,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
   })
@@ -620,6 +646,7 @@ async function manageUnlocked(command, options) {
   const desired = await buildDesiredFiles({
     sourceRoot,
     modelMap: options.modelMap,
+    helper: options.helper,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
     openspecCommand: options.openspecCommand ?? "openspec",

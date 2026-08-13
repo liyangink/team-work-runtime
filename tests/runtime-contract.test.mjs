@@ -459,6 +459,21 @@ test("response and platform capability contracts reject ambiguous envelopes", as
   const duplicateAgent = structuredClone(profile)
   duplicateAgent.agents.push({ ...duplicateAgent.agents[0], requestedModel: "gateway/other" })
   assert.match(validatePlatformProfileSemantics(duplicateAgent).map(({ message }) => message).join("\n"), /duplicate agent id/)
+
+  const duplicateHelper = {
+    ...structuredClone(profile),
+    helpers: [
+      { id: "team-work-explore", kind: "explore", resolvedModel: "gateway/helper", capabilities: ["read-only"] },
+      { id: "team-work-explore", kind: "explore", resolvedModel: "gateway/helper", capabilities: ["read-only"] },
+    ],
+  }
+  assert.match(validatePlatformProfileSemantics(duplicateHelper).map(({ message }) => message).join("\n"), /duplicate helper id/)
+
+  const mismatchedHelper = {
+    ...structuredClone(profile),
+    helpers: [{ id: "team-work-explore", kind: "librarian", resolvedModel: "gateway/helper", capabilities: ["read-only"] }],
+  }
+  assert.match(validatePlatformProfileSemantics(mismatchedHelper).map(({ message }) => message).join("\n"), /helper id\/kind mismatch/)
 })
 
 test("OpenCode fixture enforces background dispatch without constraining other platforms", async () => {

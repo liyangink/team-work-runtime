@@ -36,6 +36,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 13. 团队评分只用于后续选模优化，不进入当前任务循环；默认由 Lead 记录、转发成员和 Expert 的结论再续派，不依赖 N-to-N 实时通信，也不得由 Lead 重写技术结论。
 14. standalone 使用不得被无关平台 Hook 或可选 SPEC Skill 阻塞。错误必须保留最后有效制品，并可诊断、重试和恢复。
 15. SPEC 与 E2E 都是显式路由：SPEC 按 `auto|required|disabled` 处理；E2E 必须判断适用性但可在有证据时跳过。E2E 制品问题留在内部小循环，产品缺陷回实施，系统性测试策略缺口才回测试。
+16. PlatformPlugin 可为受管成员提供独立模型配置的临时只读助手，用于代码探索和资料检索。助手不是团队成员或 work-item Owner，不进入收敛、评分和技术裁决，不得修改文件或继续委托；调用成员必须核验并整合结果。辅助派发仍必须 background/non-blocking，且不得依赖 OMO 等可选增强。
 
 ## 变更要求
 

@@ -25,6 +25,22 @@
         }
       }
     },
+    "helpers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "resolvedModel", "capabilities"],
+        "properties": {
+          "id": { "enum": ["team-work-explore", "team-work-librarian"] },
+          "kind": { "enum": ["explore", "librarian"] },
+          "resolvedModel": { "type": ["string", "null"] },
+          "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        }
+      },
+      "maxItems": 2,
+      "uniqueItems": true
+    },
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
@@ -44,7 +60,10 @@
         "resume": { "$ref": "#/$defs/operation" },
         "status": { "$ref": "#/$defs/operation" },
         "stop": { "$ref": "#/$defs/operation" },
-        "message": { "$ref": "#/$defs/operation" }
+        "message": { "$ref": "#/$defs/operation" },
+        "assist": { "$ref": "#/$defs/operation" },
+        "assistStatus": { "$ref": "#/$defs/operation" },
+        "assistCollect": { "$ref": "#/$defs/operation" }
       }
     },
     "limits": {

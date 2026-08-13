@@ -51,6 +51,7 @@ test("one config supports explicit model bindings and command overrides", async 
   }
   await writeFile(configPath, `${JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     agents: {
       "junior-flash": { model: models["junior-flash"], effort: "low" },
       "senior-terra": { model: models["senior-terra"], effort: "high" },
@@ -63,8 +64,10 @@ test("one config supports explicit model bindings and command overrides", async 
 
   assert.equal(loaded.created, false)
   await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
+  assert.deepEqual(loaded.platform.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
   assert.deepEqual(loaded.platform, {
     id: "opencode",
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     modelMap: models,
     opencodeCommand: "/opt/bin/opencode",
     openspecCommand: "/opt/bin/openspec",

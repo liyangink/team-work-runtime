@@ -21,6 +21,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
   })
   const taskId = tool.schema.string().describe("稳定的 team-work task id")
   const workItemId = tool.schema.string().describe("稳定的 Runtime work item id")
+  const helperSessionId = tool.schema.string().describe("team_work_assist 返回的只读 helper session id")
   const prompt = tool.schema.string().describe("成员本轮任务、范围、完成条件、制品路径和证据要求")
   const runtimeCommands = [
     "init", "doctor", "version", "migrate",
@@ -52,8 +53,12 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
       }
     },
     "tool.execute.before": async (input) => {
-      if (input.tool !== "task") return
-      if (await adapter.isManagedTeamSession(input.sessionID)) {
+      const helperRestricted = new Set(["task", "edit", "write", "patch", "bash"]).has(input.tool)
+        || input.tool.startsWith("team_work_")
+      if (helperRestricted && await adapter.isManagedHelperSession(input.sessionID)) {
+        throw new Error("TEAM_WORK_HELPER_READ_ONLY_REJECTED: 只读助手不得修改文件、执行命令、继续委托或控制团队")
+      }
+      if (input.tool === "task" && await adapter.isManagedTeamSession(input.sessionID)) {
         throw new Error("TEAM_WORK_BLOCKING_TASK_REJECTED: solo/team 受管任务必须使用 team_work_spawn 的非阻塞 child session")
       }
     },
@@ -113,6 +118,40 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         args: { task_id: taskId, work_item_id: workItemId, prompt },
         async execute(args) {
           return json(await adapter.resume({ taskId: args.task_id, workItemId: args.work_item_id, prompt: args.prompt }))
+        },
+      }),
+      team_work_assist: tool({
+        description: "由受管成员非阻塞派发一个临时只读 explore/librarian 助手；助手不成为团队成员或 work item Owner",
+        args: {
+          kind: tool.schema.enum(["explore", "librarian"]),
+          prompt: tool.schema.string().describe("窄范围检索问题和期望证据；不得要求助手修改文件或作最终裁决"),
+          title: tool.schema.string().optional(),
+        },
+        async execute(args, context) {
+          return json(await adapter.assist({
+            parentSessionId: context.sessionID,
+            kind: args.kind,
+            prompt: args.prompt,
+            title: args.title,
+          }))
+        },
+      }),
+      team_work_assist_status: tool({
+        description: "查询当前受管成员创建的只读 helper session 状态，不阻塞成员",
+        args: { session_id: helperSessionId },
+        async execute(args, context) {
+          return json(await adapter.assistStatus({ parentSessionId: context.sessionID, sessionId: args.session_id }))
+        },
+      }),
+      team_work_assist_collect: tool({
+        description: "收集当前受管成员创建的只读 helper session 输出，由成员自行核验并整合",
+        args: { session_id: helperSessionId, limit: tool.schema.number().int().positive().max(200).optional() },
+        async execute(args, context) {
+          return json(await adapter.assistMessages({
+            parentSessionId: context.sessionID,
+            sessionId: args.session_id,
+            limit: args.limit,
+          }))
         },
       }),
       team_work_status: tool({

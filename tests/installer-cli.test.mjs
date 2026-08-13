@@ -50,6 +50,7 @@ test("update CLI takes all model and command configuration from the fixed file",
   const models = { "junior-luna": "gateway/gpt-5.6-luna" }
   await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     agents: { "junior-luna": { model: models["junior-luna"], effort: "medium" } },
     platforms: { opencode: { command: "opencode-next" } },
     spec: { provider: "openspec", mode: "required", command: "openspec-next" },
@@ -69,6 +70,7 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(exitCode, 0)
   assert.equal(received.command, "update")
   assert.deepEqual(received.options.modelMap, models)
+  assert.deepEqual(received.options.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
   assert.equal(received.options.opencodeCommand, "opencode-next")
   assert.equal(received.options.openspecCommand, "openspec-next")
   assert.equal(received.options.specMode, "required")

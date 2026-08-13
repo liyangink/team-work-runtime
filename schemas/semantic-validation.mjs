@@ -207,6 +207,17 @@ export function validatePlatformProfileSemantics(profile) {
   for (const id of new Set(ids.filter((value, index) => ids.indexOf(value) !== index))) {
     issues.push(issue("agents", `duplicate agent id: ${id}`))
   }
+  const helpers = profile.helpers ?? []
+  const helperIds = helpers.map(({ id }) => id)
+  for (const id of new Set(helperIds.filter((value, index) => helperIds.indexOf(value) !== index))) {
+    issues.push(issue("helpers", `duplicate helper id: ${id}`))
+  }
+  const expectedKinds = { "team-work-explore": "explore", "team-work-librarian": "librarian" }
+  for (const helper of helpers) {
+    if (expectedKinds[helper.id] && expectedKinds[helper.id] !== helper.kind) {
+      issues.push(issue("helpers", `helper id/kind mismatch: ${helper.id} must use ${expectedKinds[helper.id]}`))
+    }
+  }
   return issues
 }
 

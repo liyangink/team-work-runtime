@@ -9,6 +9,10 @@ const execFile = promisify(execFileCallback)
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MANAGED_AGENT = /^(?:junior-(?:flash|luna)|senior-(?:terra|glm|qwen)|expert-(?:opus|k3))$/
+const HELPER_AGENT = {
+  explore: "team-work-explore",
+  librarian: "team-work-librarian",
+}
 
 function failure(code, message, details = {}) {
   const error = new Error(message)
@@ -201,6 +205,65 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       }
     }
     return null
+  }
+
+  async function findHelperSession(sessionId) {
+    requireIdentifier(sessionId, "sessionId")
+    const sessionsRoot = path.join(root, ".team-work/platform/opencode/sessions")
+    let taskDirectories
+    try {
+      taskDirectories = await readdir(sessionsRoot, { withFileTypes: true })
+    } catch (error) {
+      if (error.code === "ENOENT") return null
+      throw error
+    }
+    for (const taskDirectory of taskDirectories) {
+      if (!taskDirectory.isDirectory() || !IDENTIFIER.test(taskDirectory.name)) continue
+      const taskRoot = path.join(sessionsRoot, taskDirectory.name)
+      for (const entry of await readdir(taskRoot, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue
+        try {
+          const mapping = JSON.parse(await readFile(path.join(taskRoot, entry.name), "utf8"))
+          const helper = mapping.helpers?.find((candidate) => candidate.sessionId === sessionId)
+          if (helper) return { mapping, helper }
+        } catch (error) {
+          if (!(error instanceof SyntaxError)) throw error
+        }
+      }
+    }
+    return null
+  }
+
+  async function helperProfile(kind) {
+    const agent = HELPER_AGENT[kind]
+    if (!agent) throw failure("HELPER_KIND_INVALID", "helper kind 必须是 explore 或 librarian")
+    let profile = platformProfile
+    if (!profile) {
+      await ensureProjectReady()
+      profile = JSON.parse(await readFile(path.join(root, ".team-work/platform/opencode/profile.json"), "utf8"))
+    }
+    const helpers = profile.helpers ?? []
+    const ids = helpers.map(({ id }) => id)
+    const duplicate = ids.find((id, index) => ids.indexOf(id) !== index)
+    const mismatch = helpers.find((candidate) => HELPER_AGENT[candidate.kind] !== candidate.id)
+    if (duplicate || mismatch) {
+      throw failure("HELPER_PROFILE_INVALID", duplicate
+        ? `Platform Profile helper 重复：${duplicate}`
+        : `Platform Profile helper id/kind 不匹配：${mismatch.id}/${mismatch.kind}`)
+    }
+    const helper = helpers.find((candidate) => candidate.id === agent && candidate.kind === kind)
+    if (!helper?.resolvedModel) throw failure("HELPER_UNAVAILABLE", `只读助手 ${kind} 未配置独立模型`)
+    return helper
+  }
+
+  async function ownedHelper(parentSessionId, sessionId) {
+    requireIdentifier(parentSessionId, "parentSessionId")
+    requireIdentifier(sessionId, "sessionId")
+    const mapping = await findMapping(parentSessionId)
+    if (!mapping) throw failure("ASSIST_PARENT_REQUIRED", "只允许受管 Team-work 成员调用只读助手")
+    const helper = mapping.helpers?.find((candidate) => candidate.sessionId === sessionId)
+    if (!helper) throw failure("HELPER_SESSION_NOT_FOUND", `未找到当前成员创建的 helper session ${sessionId}`)
+    return { mapping, helper }
   }
 
   async function hasRuntimeBinding(sessionId) {
@@ -555,6 +618,106 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       return { mode: "background", sessionId: mapping.sessionId, taskId, workItemId }
     },
 
+    async assist({ parentSessionId, kind, prompt, title }) {
+      requireIdentifier(parentSessionId, "parentSessionId")
+      if (typeof prompt !== "string" || !prompt.trim()) throw failure("INVALID_PROMPT", "辅助检索内容不能为空")
+      const parent = await findMapping(parentSessionId)
+      if (!parent) throw failure("ASSIST_PARENT_REQUIRED", "只允许受管 Team-work 成员调用只读助手")
+      if (parent.lostRecordedAt || parent.stoppedAt) throw failure("ASSIST_PARENT_INACTIVE", "成员 session 已失联或停止，不能继续派发助手")
+      const helper = await helperProfile(kind)
+      const agent = helper.id
+      const created = await callSdk("OpenCode helper session.create", () => client.session.create({
+        query: { directory: root },
+        body: { parentID: parentSessionId, title: title ?? `[team-work:${kind}] ${parent.taskId}/${parent.workItemId}` },
+      }))
+      if (!created?.id) throw failure("SESSION_CREATE_FAILED", "OpenCode 未返回 helper child session id")
+      requireIdentifier(created.id, "helperSessionId")
+
+      const timestamp = now().toISOString()
+      const record = {
+        sessionId: created.id,
+        parentSessionId,
+        kind,
+        agent,
+        dispatchMode: "background",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+      try {
+        await updateMapping(parent.taskId, parent.workItemId, (current) => {
+          if (current.sessionId !== parentSessionId || current.lostRecordedAt || current.stoppedAt) {
+            throw failure("ASSIST_PARENT_INACTIVE", "成员 session 已变化、失联或停止，不能继续派发助手")
+          }
+          return { ...current, helpers: [...(current.helpers ?? []), record], updatedAt: timestamp }
+        })
+      } catch (error) {
+        try {
+          await callSdk("OpenCode orphan helper session.abort", () => client.session.abort({
+            path: { id: created.id },
+            query: { directory: root },
+          }))
+        } catch (cleanupError) {
+          try { error.cleanupError = { code: cleanupError.code, message: cleanupError.message, sessionId: created.id } } catch {}
+        }
+        throw error
+      }
+
+      const scopedPrompt = [
+        "[Team-work 只读辅助任务]",
+        `父任务：${parent.taskId}/${parent.workItemId}`,
+        `类型：${kind}`,
+        "只处理以下窄范围问题；禁止修改文件、执行命令、继续委托或作最终裁决。",
+        prompt,
+      ].join("\n")
+      try {
+        await dispatch(created.id, agent, scopedPrompt)
+      } catch (error) {
+        try {
+          await updateMapping(parent.taskId, parent.workItemId, (current) => ({
+            ...current,
+            helpers: (current.helpers ?? []).map((candidate) => candidate.sessionId === created.id
+              ? { ...candidate, dispatchError: errorSummary(error), updatedAt: now().toISOString() }
+              : candidate),
+            updatedAt: now().toISOString(),
+          }))
+        } catch (mappingError) {
+          try { error.mappingPersistenceError = { code: mappingError.code, message: mappingError.message } } catch {}
+        }
+        throw error
+      }
+      return {
+        mode: "background",
+        sessionId: created.id,
+        parentSessionId,
+        taskId: parent.taskId,
+        workItemId: parent.workItemId,
+        kind,
+        agent,
+      }
+    },
+
+    async assistStatus({ parentSessionId, sessionId }) {
+      const { mapping, helper } = await ownedHelper(parentSessionId, sessionId)
+      const statuses = await callSdk("OpenCode helper session.status", () => client.session.status({ query: { directory: root } })) ?? {}
+      if (statuses[sessionId]) return { ...helper, taskId: mapping.taskId, workItemId: mapping.workItemId, status: statuses[sessionId] }
+      try {
+        await callSdk("OpenCode helper session.get", () => client.session.get({ path: { id: sessionId }, query: { directory: root } }))
+        return { ...helper, taskId: mapping.taskId, workItemId: mapping.workItemId, status: { type: "idle" } }
+      } catch (error) {
+        if (error.statusCode === 404) return { ...helper, taskId: mapping.taskId, workItemId: mapping.workItemId, status: { type: "lost" } }
+        throw error
+      }
+    },
+
+    async assistMessages({ parentSessionId, sessionId, limit }) {
+      const { mapping, helper } = await ownedHelper(parentSessionId, sessionId)
+      const messages = await callSdk("OpenCode helper session.messages", () => client.session.messages({
+        path: { id: sessionId },
+        query: { directory: root, ...(limit ? { limit } : {}) },
+      })) ?? []
+      return { ...helper, taskId: mapping.taskId, workItemId: mapping.workItemId, messages }
+    },
+
     async status({ taskId, workItemId }) {
       const mapping = await readMapping(taskId, workItemId)
       const statuses = await callSdk("OpenCode session.status", () => client.session.status({ query: { directory: root } })) ?? {}
@@ -593,6 +756,16 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     },
 
     async contextForSession(sessionId) {
+      const assistance = await findHelperSession(sessionId)
+      if (assistance) {
+        return [
+          "[team-work 只读助手上下文]",
+          `task: ${assistance.mapping.taskId}`,
+          `parent-work-item: ${assistance.mapping.workItemId}`,
+          `profile: helper/${assistance.helper.kind}`,
+          "只按父成员派发的窄范围问题工作；不读取任务目录索引，不修改文件，不继续委托，不作最终裁决。",
+        ].join("\n")
+      }
       const mapping = await findMapping(sessionId)
       const shown = await executeRuntime({
         command: "task.show",
@@ -666,6 +839,15 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
         // fail-closed，不能因此放行原生阻塞 task。完全无受管证据的会话仍放行。
         return Boolean(mapping || bound)
       }
+    },
+
+    async isManagedHelperSession(sessionId) {
+      try {
+        return await findHelperSession(sessionId)
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error
+      }
+      return null
     },
 
     readMapping,

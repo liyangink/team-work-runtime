@@ -170,6 +170,126 @@ test("managed spawn and resume always use native promptAsync child sessions", as
   assert.equal(mapping.dispatchMode, "background")
 })
 
+test("managed members can fan out read-only helpers through background child sessions", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  let child = 0
+  client.session.create = async (input) => {
+    child += 1
+    client.calls.push(["create", input])
+    return { data: { id: `child-${child}`, parentID: input.body.parentID, title: input.body.title } }
+  }
+  client.session.status = async (input) => {
+    client.calls.push(["status", input])
+    return { data: { "child-2": { type: "busy" } } }
+  }
+  const adapter = testAdapter(client, projectRoot, {
+    platformProfile: {
+      helpers: [
+        { id: "team-work-explore", kind: "explore", resolvedModel: "gateway/deepseek-v4-flash" },
+        { id: "team-work-librarian", kind: "librarian", resolvedModel: "gateway/deepseek-v4-flash" },
+      ],
+    },
+  })
+  await adapter.spawn({ taskId: "task-help", workItemId: "owner-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+
+  const assisted = await adapter.assist({
+    parentSessionId: "child-1",
+    kind: "explore",
+    prompt: "定位身份校验调用链",
+  })
+
+  assert.deepEqual(assisted, {
+    mode: "background",
+    sessionId: "child-2",
+    parentSessionId: "child-1",
+    taskId: "task-help",
+    workItemId: "owner-1",
+    kind: "explore",
+    agent: "team-work-explore",
+  })
+  assert.equal(client.calls.at(-1)[0], "promptAsync")
+  assert.equal(client.calls.at(-1)[1].body.agent, "team-work-explore")
+  assert.match(client.calls.at(-1)[1].body.parts[0].text, /定位身份校验调用链/)
+  assert.match(client.calls.at(-1)[1].body.parts[0].text, /只读辅助任务/)
+
+  const helperContext = await adapter.contextForSession("child-2")
+  assert.match(helperContext, /profile: helper\/explore/)
+  assert.match(helperContext, /只按父成员派发的窄范围问题工作/)
+  assert.doesNotMatch(helperContext, /Lead|整个任务目录/)
+
+  const status = await adapter.assistStatus({ parentSessionId: "child-1", sessionId: "child-2" })
+  assert.equal(status.status.type, "busy")
+  const collected = await adapter.assistMessages({ parentSessionId: "child-1", sessionId: "child-2" })
+  assert.equal(collected.messages[0].parts[0].text, "result")
+
+  const mapping = await adapter.readMapping("task-help", "owner-1")
+  assert.deepEqual(mapping.helpers.map(({ sessionId, kind, agent }) => ({ sessionId, kind, agent })), [
+    { sessionId: "child-2", kind: "explore", agent: "team-work-explore" },
+  ])
+
+  const createsBeforeInvalidPrompt = client.calls.filter(([name]) => name === "create").length
+  await assert.rejects(
+    adapter.assist({ parentSessionId: "child-1", kind: "explore", prompt: "  " }),
+    (error) => error.code === "INVALID_PROMPT",
+  )
+  assert.equal(client.calls.filter(([name]) => name === "create").length, createsBeforeInvalidPrompt)
+})
+
+test("helper fan-out rejects unowned sessions and unavailable helper models", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, { platformProfile: { helpers: [] } })
+
+  await assert.rejects(
+    adapter.assist({ parentSessionId: "not-managed", kind: "explore", prompt: "检索" }),
+    (error) => error.code === "ASSIST_PARENT_REQUIRED",
+  )
+  await adapter.spawn({ taskId: "task-help", workItemId: "owner-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  await assert.rejects(
+    adapter.assist({ parentSessionId: "child-1", kind: "librarian", prompt: "查文档" }),
+    (error) => error.code === "HELPER_UNAVAILABLE",
+  )
+
+  const corrupt = testAdapter(client, projectRoot, {
+    platformProfile: {
+      helpers: [
+        { id: "team-work-explore", kind: "explore", resolvedModel: "gateway/helper" },
+        { id: "team-work-explore", kind: "explore", resolvedModel: "gateway/helper" },
+      ],
+    },
+  })
+  await assert.rejects(
+    corrupt.assist({ parentSessionId: "child-1", kind: "explore", prompt: "检索" }),
+    (error) => error.code === "HELPER_PROFILE_INVALID",
+  )
+})
+
+test("helper creation aborts the child session if the parent mapping becomes inactive", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, {
+    platformProfile: {
+      helpers: [{ id: "team-work-explore", kind: "explore", resolvedModel: "gateway/deepseek-v4-flash" }],
+    },
+  })
+  await adapter.spawn({ taskId: "task-orphan", workItemId: "owner-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  client.session.create = async (input) => {
+    client.calls.push(["create", input])
+    const target = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-orphan/owner-1.json")
+    const mapping = JSON.parse(await readFile(target, "utf8"))
+    await writeFile(target, `${JSON.stringify({ ...mapping, stoppedAt: new Date().toISOString() })}\n`)
+    return { data: { id: "helper-orphan" } }
+  }
+
+  await assert.rejects(
+    adapter.assist({ parentSessionId: "child-1", kind: "explore", prompt: "检索" }),
+    (error) => error.code === "ASSIST_PARENT_INACTIVE",
+  )
+  const abort = client.calls.find(([name, input]) => name === "abort" && input.path.id === "helper-orphan")
+  assert.ok(abort, "orphan helper session must be aborted")
+})
+
 test("status, result collection, and stop recover through stable task/work-item mapping", async () => {
   const projectRoot = await tempProject()
   const client = fakeClient()
@@ -389,8 +509,9 @@ test("stale dispatch locks recover by owner PID and managed sessions reject nati
 
   const plugin = await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js"), "utf8")
   assert.match(plugin, /"tool\.execute\.before"/)
-  assert.match(plugin, /input\.tool !== "task"/)
+  assert.match(plugin, /input\.tool === "task"/)
   assert.match(plugin, /TEAM_WORK_BLOCKING_TASK_REJECTED/)
+  assert.match(plugin, /TEAM_WORK_HELPER_READ_ONLY_REJECTED/)
 })
 
 test("managed task guard fails closed when Runtime state cannot be read", async () => {

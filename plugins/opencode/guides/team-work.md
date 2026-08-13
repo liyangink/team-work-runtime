@@ -9,6 +9,8 @@
 - 同一 work item 的返工和后续轮次必须用 `team_work_resume` 续派同一 child session，不得每轮重新 spawn。Owner、挑战者和 Expert 各自持有独立 work item；Expert 在同一阶段收敛期间保持同一 session，跨阶段再建立新 work item。
 - OpenCode session 的 retry/error/deleted 事件由 Plugin 归一化到 Runtime 审计；平台错误不自动改变 work item 的验收状态。
 - `resolvedModel` 为空的成员不可派发。模型、provider、网关、凭据和 MCP 仍由 OpenCode 配置管理。
+- 用户配置了独立 `helper` 模型时，受管成员可用 `team_work_assist` 后台派发 `explore` 或 `librarian` 只读助手，并用 `team_work_assist_status`、`team_work_assist_collect` 在同步点收集。助手不创建 Runtime work item；调用成员负责核验和整合结果。
+- `team_work_assist` 只接受受管成员 session。两个助手共用 `helper` 模型但提示词与联网权限不同，均禁止编辑、shell、原生 `task`、团队控制和继续辅助委托。
 
 ## 用户可点击文件引用
 

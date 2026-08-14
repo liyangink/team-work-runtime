@@ -5,7 +5,7 @@ import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { loadUserConfig, resolveUserConfigRoot } from "../installer/user-config.mjs"
+import { loadUserConfig, resolveUserConfigRoot, setOpenCodeEnabled } from "../installer/user-config.mjs"
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -28,6 +28,7 @@ test("first install creates one fixed user-level config with automatic OpenCode 
   assert.equal(loaded.path, path.join(configRoot, "config.json"))
   assert.deepEqual(loaded.platform, {
     id: "opencode",
+    enabled: true,
     modelMap: undefined,
     opencodeCommand: "opencode",
     openspecCommand: "openspec",
@@ -36,7 +37,7 @@ test("first install creates one fixed user-level config with automatic OpenCode 
   assert.deepEqual(JSON.parse(await readFile(loaded.path, "utf8")), {
     $schema: "./schemas/user-config.v1.schema.json",
     agents: "auto",
-    platforms: { opencode: {} },
+    platforms: { opencode: { enabled: true } },
     spec: { provider: "openspec", mode: "auto" },
   })
   await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
@@ -67,11 +68,42 @@ test("one config supports explicit model bindings and command overrides", async 
   assert.deepEqual(loaded.platform.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
   assert.deepEqual(loaded.platform, {
     id: "opencode",
+    enabled: true,
     helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     modelMap: models,
     opencodeCommand: "/opt/bin/opencode",
     openspecCommand: "/opt/bin/openspec",
     specMode: "required",
+  })
+})
+
+test("OpenCode enable state changes atomically without losing user configuration", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  const configPath = path.join(configRoot, "config.json")
+  await writeFile(configPath, `${JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
+    agents: "auto",
+    platforms: { opencode: { command: "/opt/bin/opencode" } },
+    spec: { provider: "openspec", mode: "disabled" },
+  }, null, 2)}\n`)
+
+  assert.deepEqual(await setOpenCodeEnabled({ configRoot, enabled: false }), {
+    changed: true,
+    enabled: false,
+    path: configPath,
+  })
+  assert.deepEqual(await setOpenCodeEnabled({ configRoot, enabled: false }), {
+    changed: false,
+    enabled: false,
+    path: configPath,
+  })
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
+    $schema: "./schemas/user-config.v1.schema.json",
+    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
+    agents: "auto",
+    platforms: { opencode: { command: "/opt/bin/opencode", enabled: false } },
+    spec: { provider: "openspec", mode: "disabled" },
   })
 })
 
@@ -82,7 +114,7 @@ test("loading config repairs a stale local schema sidecar", async () => {
   await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
     agents: "auto",
-    platforms: { opencode: {} },
+    platforms: { opencode: { enabled: true } },
     spec: { provider: "openspec", mode: "auto" },
   }))
 
@@ -97,7 +129,7 @@ test("invalid or unsafe fixed config fails with stable error codes", async () =>
   await writeFile(path.join(invalidRoot, "config.json"), JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
     agents: { "junior-flash": { model: 42 } },
-    platforms: { opencode: {} },
+    platforms: { opencode: { enabled: true } },
     spec: { provider: "openspec", mode: "auto" },
   }))
   await assert.rejects(
@@ -147,7 +179,7 @@ test("a missing user config directory is created on first install", async () => 
   assert.deepEqual(JSON.parse(await readFile(loaded.path, "utf8")), {
     $schema: "./schemas/user-config.v1.schema.json",
     agents: "auto",
-    platforms: { opencode: {} },
+    platforms: { opencode: { enabled: true } },
     spec: { provider: "openspec", mode: "auto" },
   })
 })

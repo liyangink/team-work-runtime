@@ -15,7 +15,7 @@ const sourceSchemaPath = path.resolve(moduleRoot, "../schemas/user-config.v1.sch
 const DEFAULT_CONFIG = {
   $schema: USER_CONFIG_SCHEMA_REF,
   agents: "auto",
-  platforms: { opencode: {} },
+  platforms: { opencode: { enabled: true } },
   spec: { provider: "openspec", mode: "auto" },
 }
 
@@ -134,6 +134,7 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
     config,
     platform: {
       id: "opencode",
+      enabled: opencode.enabled ?? true,
       ...(config.helper ? { helper: config.helper } : {}),
       modelMap,
       opencodeCommand: opencode.command ?? "opencode",
@@ -141,4 +142,23 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
       specMode: config.spec.mode,
     },
   }
+}
+
+export async function setOpenCodeEnabled({ configRoot, enabled }) {
+  if (typeof enabled !== "boolean") fail("USER_CONFIG_ENABLED_INVALID", "OpenCode enabled 必须是 boolean")
+  const loaded = await loadUserConfig({ configRoot })
+  const current = loaded.config.platforms.opencode.enabled ?? true
+  if (current === enabled) return { changed: false, enabled, path: loaded.path }
+
+  const next = structuredClone(loaded.config)
+  next.platforms.opencode.enabled = enabled
+  await validateConfig(next)
+  const temporary = path.join(path.dirname(loaded.path), `.${path.basename(loaded.path)}.${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" })
+    await rename(temporary, loaded.path)
+  } finally {
+    await rm(temporary, { force: true })
+  }
+  return { changed: true, enabled, path: loaded.path }
 }

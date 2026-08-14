@@ -333,6 +333,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
   await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
   await addTree(files, path.join(sourceRoot, "plugins/opencode/tui"), "team-work/tui")
   files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
+  files.set("team-work/opencode-activation.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/activation.mjs")))
   files.set("team-work/opencode-agent-config.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/agent-config.mjs")))
   files.set("team-work/installer/user-config.mjs", await readFile(path.join(sourceRoot, "installer/user-config.mjs")))
   files.set("plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
@@ -671,7 +672,7 @@ async function manageUnlocked(command, options) {
     warnings: desired.warnings,
     command,
     opencodeCommand: options.opencodeCommand ?? "opencode",
-    agentIds: desired.agentIds,
+    agentIds: options.platformEnabled === false ? [] : desired.agentIds,
     skipSmoke: options.skipSmoke === undefined ? Boolean(options.skipDependencies) : Boolean(options.skipSmoke),
   })
 }

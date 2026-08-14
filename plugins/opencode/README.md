@@ -19,6 +19,8 @@ npx team-work-runtime@latest install
 
 用户配置支持 `TEAM_WORK_CONFIG_HOME`、`XDG_CONFIG_HOME` 和 Windows `%APPDATA%`。OpenCode 安装根遵循其全局目录；安装器不修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
 
+OpenCode 会自动发现全局 `plugins/` 下的入口。`enable/disable` 只切换用户配置中的 `platforms.opencode.enabled`；禁用时入口仍可被发现，但 Server 不注册 Agent、工具或 Hook，TUI 不注册侧栏。修改后重启 OpenCode 生效。
+
 首次在项目内调用 Team-work Runtime Tool 时，Plugin 才初始化项目 `.team-work/`，并物化当前 Platform Profile 与增量指南。安装、更新和卸载都不扫描或删除各项目任务数据。
 
 ## 模型与 effort
@@ -48,7 +50,7 @@ npx team-work-runtime@latest uninstall
 
 ## 平台运行规则
 
-OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中展示当前任务成员状态并调用原生 session route 跳转；Installer 统一安装、更新和卸载两类入口及其依赖。
+OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中展示当前任务成员状态并调用原生 session route 跳转；Installer 统一装配和更新 Server/TUI 两类入口，并提供软启停与安全卸载。
 
 `solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；同一 work item 默认复用 child session，失联或停止后才受控替换并保留历史。禁止用阻塞式 `task` 工具替代受管派发。
 

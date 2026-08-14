@@ -132,6 +132,17 @@ test("OpenCode TUI submodule registers one sidebar slot and passes the selected 
   assert.deepEqual(rendered, [{ api, context: { theme: "theme" }, sessionId: "child-1" }])
 })
 
+test("disabled OpenCode platform does not register the Team sidebar", async () => {
+  let registrations = 0
+  const tui = createTeamWorkTui(() => "team-sidebar", {
+    isEnabled: async () => false,
+  })
+
+  await tui({ slots: { register: () => { registrations += 1 } } })
+
+  assert.equal(registrations, 0)
+})
+
 test("Team sidebar never follows task mapping or binding roots outside the project", async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-"))
   const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-outside-"))

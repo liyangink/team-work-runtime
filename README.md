@@ -53,6 +53,8 @@ Workflow 和 Team-work 只调用 CoreRuntime 的稳定接口。CoreRuntime 只�
 npx team-work-runtime@latest install
 ```
 
+安装器会将入口写入 OpenCode 全局插件目录，由 OpenCode 在启动时自动加载，无需修改 `opencode.json`。如果 OpenCode 已经运行，请在安装完成后重启。
+
 安装器会创建用户配置。Linux 与 macOS 默认位置为：
 
 ```text
@@ -245,7 +247,9 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
   "$schema": "./schemas/user-config.v1.schema.json",
   "agents": "auto",
   "platforms": {
-    "opencode": {}
+    "opencode": {
+      "enabled": true
+    }
   },
   "spec": {
     "provider": "openspec",
@@ -282,7 +286,9 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
     }
   },
   "platforms": {
-    "opencode": {}
+    "opencode": {
+      "enabled": true
+    }
   },
   "spec": {
     "provider": "openspec",
@@ -295,7 +301,7 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 顶层 `helper` 可选且不继承 Junior。配置后，Plugin 用同一绑定生成职责不同的 `team-work-explore` 与 `team-work-librarian`；未配置时不注入这两个助手。
 
-修改配置后只需重启 OpenCode。`install/update` 管理程序与静态资产，不承担配置同步。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
+`platforms.opencode.enabled` 控制 PlatformPlugin 是否注册 Agent、工具、Hook 和 Team 侧栏。修改配置后只需重启 OpenCode。`install/update` 管理程序与静态资产，不承担配置同步。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
 
 ## OpenCode 平台
 
@@ -310,6 +316,15 @@ Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagen
 在 OpenCode 中向用户展示文件时，使用 `[label](file:///absolute/path)` 形式的标准 Markdown 可点击链接，不只输出裸路径。
 
 模型、Provider、网关、凭据和 MCP 仍由 OpenCode 管理。可用模型名称以 `opencode models` 为准；Agent 配置格式参见 [OpenCode Agents](https://opencode.ai/docs/agents/)。
+
+### 启用与停用
+
+```bash
+npx team-work-runtime@latest disable
+npx team-work-runtime@latest enable
+```
+
+两个命令只切换固定用户配置中的 `platforms.opencode.enabled`，不会移动或重写已安装资产。停用会保留用户配置和项目 `.team-work/` 任务数据；重启 OpenCode 后生效。
 
 ## 更新与卸载
 

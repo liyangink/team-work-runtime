@@ -3,9 +3,9 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { manageOpenCodePlugin } from "../plugins/opencode/src/lifecycle.mjs"
-import { loadUserConfig, resolveUserConfigRoot } from "./user-config.mjs"
+import { loadUserConfig, resolveUserConfigRoot, setOpenCodeEnabled } from "./user-config.mjs"
 
-export const LIFECYCLE_COMMANDS = new Set(["install", "update", "doctor", "uninstall"])
+export const LIFECYCLE_COMMANDS = new Set(["install", "update", "doctor", "uninstall", "enable", "disable"])
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 function parse(argv) {
@@ -41,6 +41,18 @@ export async function runInstallerCli(argv, dependencies = {}) {
 
   try {
     const { command, options } = parse(argv)
+    if (command === "enable" || command === "disable") {
+      const enabled = command === "enable"
+      const changed = await setOpenCodeEnabled({ configRoot, enabled })
+      writeOut(`${JSON.stringify({
+        ok: true,
+        status: command === "enable" ? "enabled" : "disabled",
+        changed: changed.changed,
+        restartRequired: true,
+        configPath: changed.path,
+      }, null, 2)}\n`)
+      return 0
+    }
     let platform = {
       modelMap: undefined,
       opencodeCommand: "opencode",
@@ -57,6 +69,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
     const result = await manage(command, {
       installRoot: opencodeRoot,
       sourceRoot,
+      platformEnabled: platform.enabled,
       modelMap: platform.modelMap,
       helper: platform.helper,
       opencodeCommand: platform.opencodeCommand,

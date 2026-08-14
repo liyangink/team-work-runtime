@@ -36,7 +36,7 @@ test("install CLI creates user config and targets the global OpenCode directory 
   assert.deepEqual(JSON.parse(await readFile(path.join(configRoot, "config.json"), "utf8")), {
     $schema: "./schemas/user-config.v1.schema.json",
     agents: "auto",
-    platforms: { opencode: {} },
+    platforms: { opencode: { enabled: true } },
     spec: { provider: "openspec", mode: "auto" },
   })
   assert.equal(JSON.parse(output).status, "installed")
@@ -52,7 +52,7 @@ test("update CLI takes all model and command configuration from the fixed file",
     $schema: "./schemas/user-config.v1.schema.json",
     helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     agents: { "junior-luna": { model: models["junior-luna"], effort: "medium" } },
-    platforms: { opencode: { command: "opencode-next" } },
+    platforms: { opencode: { enabled: false, command: "opencode-next" } },
     spec: { provider: "openspec", mode: "required", command: "openspec-next" },
   }))
   let received
@@ -69,6 +69,7 @@ test("update CLI takes all model and command configuration from the fixed file",
 
   assert.equal(exitCode, 0)
   assert.equal(received.command, "update")
+  assert.equal(received.options.platformEnabled, false)
   assert.deepEqual(received.options.modelMap, models)
   assert.deepEqual(received.options.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
   assert.equal(received.options.opencodeCommand, "opencode-next")
@@ -76,6 +77,46 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(received.options.specMode, "required")
   assert.equal(received.options.force, true)
   assert.equal(received.options.installRoot, opencodeRoot)
+})
+
+test("enable and disable toggle OpenCode without changing installed assets", async () => {
+  const userRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  const configRoot = path.join(userRoot, ".config", "team-work")
+  const opencodeRoot = path.join(userRoot, ".config", "opencode")
+  await mkdir(configRoot, { recursive: true })
+  await writeFile(path.join(configRoot, "config.json"), `${JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: { enabled: true } },
+    spec: { provider: "openspec", mode: "auto" },
+  })}\n`)
+  let output = ""
+  const dependencies = {
+    manage: async () => assert.fail("enable/disable must not rewrite installed assets"),
+    writeOut: (text) => { output += text },
+    configRoot,
+    opencodeRoot,
+  }
+
+  assert.equal(await runInstallerCli(["disable"], dependencies), 0)
+  assert.deepEqual(JSON.parse(output), {
+    ok: true,
+    status: "disabled",
+    changed: true,
+    restartRequired: true,
+    configPath: path.join(configRoot, "config.json"),
+  })
+  assert.equal(JSON.parse(await readFile(path.join(configRoot, "config.json"), "utf8")).platforms.opencode.enabled, false)
+
+  output = ""
+  assert.equal(await runInstallerCli(["enable"], dependencies), 0)
+  assert.deepEqual(JSON.parse(output), {
+    ok: true,
+    status: "enabled",
+    changed: true,
+    restartRequired: true,
+    configPath: path.join(configRoot, "config.json"),
+  })
 })
 
 test("installer CLI reports stable JSON errors and uninstall remains recoverable without config", async () => {

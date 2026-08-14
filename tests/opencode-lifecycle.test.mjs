@@ -74,6 +74,7 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
     "plugins/team-work-tui.tsx",
     "team-work/runtime/cli.mjs",
     "team-work/opencode-adapter.mjs",
+    "team-work/opencode-activation.mjs",
     "team-work/opencode-agent-config.mjs",
     "team-work/tui/team-work-tui.tsx",
     "team-work/tui/team-sidebar.tsx",
@@ -186,6 +187,22 @@ test("failed OpenCode smoke test rolls back all managed files", async () => {
   assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), false)
   assert.equal(await exists(path.join(projectRoot, "team-work/install.json")), false)
   assert.equal(await readFile(fakeOpenCode, "utf8"), "#!/bin/sh\nexit 23\n")
+})
+
+test("disabled OpenCode platform keeps the host smoke check without requiring Agent registration", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, "#!/bin/sh\nexit 0\n")
+  await chmod(fakeOpenCode, 0o755)
+
+  const result = await manageOpenCodePlugin("install", options(projectRoot, {
+    platformEnabled: false,
+    opencodeCommand: fakeOpenCode,
+    skipSmoke: false,
+  }))
+
+  assert.equal(result.status, "installed")
+  assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), true)
 })
 
 test("tampered manifest cannot claim and delete arbitrary project files", async () => {

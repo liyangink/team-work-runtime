@@ -2,6 +2,7 @@ import { tool } from "@opencode-ai/plugin"
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { createOpenCodeAdapter } from "../team-work/opencode-adapter.mjs"
+import { loadOpenCodeActivation } from "../team-work/opencode-activation.mjs"
 import { applyOpenCodeAgentConfig, resolveEffectivePlatformProfile } from "../team-work/opencode-agent-config.mjs"
 import { loadUserConfig, resolveUserConfigRoot } from "../team-work/installer/user-config.mjs"
 
@@ -9,7 +10,8 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`
 
 export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
   const platformRoot = fileURLToPath(new URL("../team-work", import.meta.url))
-  const loaded = await loadUserConfig({ configRoot: resolveUserConfigRoot() })
+  const loaded = await loadOpenCodeActivation(() => loadUserConfig({ configRoot: resolveUserConfigRoot() }))
+  if (!loaded) return {}
   const profile = JSON.parse(await readFile(fileURLToPath(new URL("../team-work/profile.json", import.meta.url)), "utf8"))
   const effectiveProfile = resolveEffectivePlatformProfile(profile, loaded.config)
   const adapter = createOpenCodeAdapter({

@@ -60,6 +60,7 @@ test("npm package contains every installer input and excludes repository-only as
     "skills/workflow/SKILL.md",
     "skills/team-work/SKILL.md",
     "plugins/opencode/src/lifecycle.mjs",
+    "plugins/opencode/src/activation.mjs",
     "plugins/opencode/src/agent-config.mjs",
     "plugins/opencode/config/runtime-package-lock.json",
   ]) assert.ok(names.has(required), `npm package is missing ${required}`)

@@ -2,9 +2,11 @@
 import { createTeamWorkTui } from "./team-tui-plugin.mjs"
 import { TeamSidebar } from "./team-sidebar.tsx"
 
-export const TeamWorkTui = createTeamWorkTui((props) => <TeamSidebar {...props} />)
-
-export default {
+export const createTeamWorkTuiPlugin = ({ isEnabled } = {}) => ({
   id: "team-work-runtime-tui",
-  tui: TeamWorkTui,
-}
+  tui: createTeamWorkTui((props) => <TeamSidebar {...props} />, { isEnabled }),
+})
+
+export const TeamWorkTui = createTeamWorkTuiPlugin().tui
+
+export default createTeamWorkTuiPlugin()

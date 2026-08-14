@@ -30,6 +30,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 原始制品不复制；`context.jsonl` 是索引，`index.md` 是生成视图。
 - OpenSpec 是默认 SPEC Skill；PlatformPlugin 安装期准备工具并写入项目 Workflow Config，Workflow 运行期只读取配置。
 - Workflow 决定 `solo/team` 执行拓扑；两种模式都由 Team-work 派发成员工作，Lead 不承担具体工作或技术内容裁决。
+- 默认在方案审查后和任务完成前设置可配置的强制人工门禁；用户批准绑定制品指纹，制品变化后必须重新确认。
 - 先完成 OpenCode PlatformPlugin，再适配 Claude Code 和 OMO；首版不依赖平台原生 Team Agent。
 
 ## Phase 0：规则冻结
@@ -75,6 +76,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 状态：完成。
 
 - Workflow 驱动十阶段任务流、上下文计划、solo/team 判断和 SPEC Skill 路由；
+- 方案批准与最终验收默认使用 `required` 人工门禁，可按项目配置为 `optional|disabled`；
 - Team-work 保留成本、拓扑、Owner/挑战者/Expert 协作、三轮自主收敛、有限人工续轮、汇报和评分能力；
 - 两个 Skill 通过 CoreRuntime 记录状态，通过 Project Config/Profile 获取安装结果和平台增量信息。
 

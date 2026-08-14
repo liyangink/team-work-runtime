@@ -17,6 +17,7 @@
     "runtime/",
     "schemas/",
     "skills/workflow/",
+    "skills/workflow/references/human-review.md",
     "skills/team-work/",
     "plugins/opencode/",
     "tests/fixtures/runtime/",

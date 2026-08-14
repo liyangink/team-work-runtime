@@ -15,6 +15,7 @@ const requiredSkillFiles = [
   "skills/workflow/references/stages-and-artifacts.md",
   "skills/workflow/references/team-and-spec-routing.md",
   "skills/workflow/references/recovery-and-handoff.md",
+  "skills/workflow/references/human-review.md",
   "skills/team-work/SKILL.md",
   "skills/team-work/agents/openai.yaml",
   "skills/team-work/references/member-contract.md",
@@ -71,6 +72,27 @@ test("Workflow preserves platform-neutral task, gate, team, and SPEC policy", as
   }
   assert.match(stages, /code-review[^]*代码[^]*审查范围/)
   assert.doesNotMatch([skill, stages, routing, commands].join("\n"), /\.opencode|\.claude|team_create|team_send/)
+})
+
+test("Workflow requires plain-language design approval and final human acceptance", async () => {
+  const skill = await read("skills/workflow/SKILL.md")
+  const review = await read("skills/workflow/references/human-review.md")
+  const combined = `${skill}\n${review}`
+
+  assert.match(skill, /方案批准|design-approval/)
+  assert.match(skill, /最终验收|final-acceptance/)
+  assert.match(combined, /required.*optional.*disabled/s)
+  assert.match(combined, /awaiting-user/)
+  assert.match(combined, /唯一批准基线/)
+  for (const requirement of ["说人话", "修改点", "影响范围", "风险", "验证", "未决问题"]) {
+    assert.match(review, new RegExp(requirement))
+  }
+  assert.match(review, /复杂[^。\n]*(?:图|表)|(?:图|表)[^。\n]*复杂/)
+  assert.match(review, /代码片段[^。\n]*(?:现有代码|代码事实)/)
+  assert.match(review, /(?:伪代码|建议)[^。\n]*(?:明确|标注)/)
+  assert.match(review, /不得[^。\n]*(?:臆造|虚构)/)
+  assert.match(review, /文档[^。\n]*(?:变化|修改)[^。\n]*(?:重新批准|失效)/)
+  assert.match(review, /返工[^。\n]*(?:方案|实施|测试|代码审查|E2E)/)
 })
 
 test("Team-work preserves cost topology, convergence, ownership, and standalone entry", async () => {
@@ -134,7 +156,8 @@ test("context, session continuity, and human synchronization remain bounded", as
   assert.match(handoff, /(?:Owner|挑战者|Expert)[^。\n]*(?:转发|续派|回答)/)
   assert.match(handoff, /(?:说人话|普通语言)/)
   assert.match(handoff, /(?:内部|推理)[^。\n]*(?:编号|标识)[^。\n]*(?:替代|代替)/)
-  assert.match(handoff, /人工复核[^。\n]*(?:用户预先指定|高风险)/)
+  assert.match(handoff, /默认固定门禁[^。\n]*方案批准[^。\n]*最终验收/)
+  assert.match(handoff, /用户预先指定[^。\n]*高风险/)
 })
 
 test("research produces a concise project briefing instead of an unverifiable expertise claim", async () => {

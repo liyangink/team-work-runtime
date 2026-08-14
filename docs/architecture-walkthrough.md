@@ -62,7 +62,7 @@ CoreRuntime 内部有五个独立但协作的状态机。每一层只管自己�
 
 - **Task**（任务生命周期：active → completed/cancelled）
   - **Stage**（研发阶段：十阶段有向图）
-    - **Gate**（阶段门禁：pending → passed / blocked / overridden）
+    - **Gate**（阶段门禁：pending → passed / rejected / blocked / overridden）
     - **Evidence**（证据：valid → invalidated）
     - **Work Item**（工作项：queued → accepted / cancelled）
       - **Attempt History**（每次返工/阻塞的历史快照）
@@ -154,16 +154,19 @@ stateDiagram-v2
 
 ### 2.4 Gate——阶段门禁的守卫
 
-三种 kind（deterministic / semantic / human）× 四种 status，条件语义设计得很精巧：
+三种 kind（deterministic / semantic / human）使用五种 status：
 
 | status | 必须有 | 必须没有 |
 |---|---|---|
 | `pending` | — | evidenceRefs、blocker、decision |
 | `passed` | decision + ≥1 evidenceRefs | — |
+| `rejected` | decision + ≥1 evidenceRefs | — |
 | `blocked` | blocker | — |
 | `overridden` | blocker + decision + ≥1 evidenceRefs | — |
 
 `overridden` 处理"死门"场景：某个 gate 永远过不了但任务必须继续。你必须同时留下 blocker 和 decision，**不能静默跳过**。
+
+人工门禁只能在匹配的 `awaiting-user` 状态中由 `user` 通过或驳回，不能 override。默认 `design-approval` 和 `final-acceptance` 为 required；批准证据记录文件指纹，制品变化后必须重新确认。
 
 ### 2.5 回滚——唯一可以后退的机制
 

@@ -22,12 +22,21 @@ export function validateWorkflowSemantics(workflow) {
   const issues = []
   const stageIds = workflow.stages.map(({ id }) => id)
   const stages = new Set(stageIds)
+  const gateDeclarations = workflow.gates ?? []
+  const gateIds = gateDeclarations.map(({ id }) => id)
+  const gates = new Map(gateDeclarations.map((gate) => [gate.id, gate]))
   const terminals = new Set(workflow.stages.filter(({ terminal }) => terminal).map(({ id }) => id))
   const adjacency = new Map(stageIds.map((id) => [id, []]))
 
   for (const id of new Set(stageIds.filter((value, index) => stageIds.indexOf(value) !== index))) {
     issues.push(issue("stages", `duplicate stage: ${id}`))
   }
+  for (const id of new Set(gateIds.filter((value, index) => gateIds.indexOf(value) !== index))) {
+    issues.push(issue("gates", `duplicate gate: ${id}`))
+  }
+  gateDeclarations.forEach((gate, index) => {
+    if (!stages.has(gate.stage)) issues.push(issue(`gates[${index}].stage`, `unknown gate stage: ${gate.stage}`))
+  })
   if (!stages.has(workflow.initialStage)) issues.push(issue("initialStage", `unknown stage: ${workflow.initialStage}`))
   if (terminals.size === 0) issues.push(issue("stages", "at least one terminal stage is required"))
 
@@ -40,6 +49,10 @@ export function validateWorkflowSemantics(workflow) {
     if (edgeKeys.has(key)) issues.push(issue(`transitions[${index}]`, `duplicate transition: ${key}`))
     edgeKeys.add(key)
     if (terminals.has(edge.from)) issues.push(issue(`transitions[${index}].from`, `terminal stage has outgoing transition: ${edge.from}`))
+    if (edge.requiredGate && !gates.has(edge.requiredGate)) issues.push(issue(`transitions[${index}].requiredGate`, `unknown required gate: ${edge.requiredGate}`))
+    if (edge.requiredGate && gates.has(edge.requiredGate) && gates.get(edge.requiredGate).stage !== edge.from) {
+      issues.push(issue(`transitions[${index}].requiredGate`, `required gate ${edge.requiredGate} belongs to ${gates.get(edge.requiredGate).stage}, not ${edge.from}`))
+    }
   }
 
   function reachesTerminal(start, visiting = new Set()) {
@@ -57,9 +70,10 @@ export function validateWorkflowSemantics(workflow) {
   return issues
 }
 
-export function validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDigest, workItems } = {}) {
+export function validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDigest, workItems, gateModes = {} } = {}) {
   const order = stageOrder(workflow)
   const stages = new Set(order.keys())
+  const declaredGates = new Map((workflow.gates ?? []).map((gate) => [gate.id, gate]))
   const issues = []
   if (!stages.has(task.entryStage)) issues.push(issue("entryStage", `unknown stage: ${task.entryStage}`))
   if (!stages.has(task.stage)) issues.push(issue("stage", `unknown stage: ${task.stage}`))
@@ -90,6 +104,16 @@ export function validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDige
       })
     }
     if (!task.acceptance?.evidenceRefs?.length) issues.push(issue("acceptance.evidenceRefs", "completed task requires acceptance evidence"))
+    for (const declaration of (workflow.gates ?? []).filter(({ stage }) => stage === task.stage)) {
+      const mode = declaration.kind === "human" ? (gateModes[declaration.id] ?? declaration.defaultMode) : declaration.defaultMode
+      if (mode === "disabled") continue
+      const gate = task.gates.find(({ gateId, stage }) => gateId === declaration.id && stage === declaration.stage)
+      if (mode === "optional" && !gate) continue
+      const acceptedStatuses = declaration.kind === "human" ? ["passed"] : ["passed", "overridden"]
+      if (!gate || gate.kind !== declaration.kind || !acceptedStatuses.includes(gate.status)) {
+        issues.push(issue("gates", `completed task requires passed gate: ${declaration.id}`))
+      }
+    }
   }
 
   for (const [field, values, key] of [["gates", task.gates, "gateId"], ["evidence", task.evidence, "evidenceId"]]) {
@@ -105,6 +129,21 @@ export function validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDige
     }
   })
   task.gates.forEach((gate, gateIndex) => {
+    const declaration = declaredGates.get(gate.gateId)
+    if (gate.kind === "human") {
+      if (!declaration || declaration.kind !== "human") {
+        issues.push(issue(`gates[${gateIndex}].gateId`, `human gate must match a declared workflow human gate: ${gate.gateId}`))
+      }
+      if (!["pending", "passed", "rejected"].includes(gate.status)) {
+        issues.push(issue(`gates[${gateIndex}].status`, "human gate status must be pending, passed, or rejected"))
+      }
+      if (["passed", "rejected"].includes(gate.status) && gate.decision?.decidedBy !== "user") {
+        issues.push(issue(`gates[${gateIndex}].decision.decidedBy`, "human gate decision must be made by user"))
+      }
+    }
+    if (declaration && (gate.kind !== declaration.kind || gate.stage !== declaration.stage)) {
+      issues.push(issue(`gates[${gateIndex}]`, `gate must match workflow declaration: ${gate.gateId}`))
+    }
     if ((order.get(gate.stage) ?? Infinity) > (order.get(task.stage) ?? -1) && gate.status !== "pending") {
       issues.push(issue(`gates[${gateIndex}].stage`, "future-stage gate must remain pending"))
     }

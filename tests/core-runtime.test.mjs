@@ -121,13 +121,14 @@ test("user registers minimal context and checks only the current stage gate", as
   await mkdir(path.join(projectRoot, "src"))
   await writeFile(path.join(projectRoot, "src/index.js"), "export const answer = 42\n")
   await writeFile(path.join(projectRoot, "review-scope.md"), "Review src/index.js\n")
+  await writeFile(path.join(projectRoot, "review.md"), "E2E applicability reviewed\n")
   await run(projectRoot, "init")
   await run(projectRoot, "task", "create", "--task", "review", "--entry-stage", "code-review")
 
   const initiallyBlocked = await runResult(projectRoot, "flow", "check", "--task", "review")
   assert.equal(initiallyBlocked.exitCode, 4)
   assert.equal(initiallyBlocked.envelope.error.code, "GATE_BLOCKED")
-  assert.deepEqual(initiallyBlocked.envelope.error.blockers.map(({ kind }) => kind), ["source", "review-scope"])
+  assert.deepEqual(initiallyBlocked.envelope.error.blockers.map(({ kind }) => kind), ["source", "review-scope", "semantic"])
 
   const source = await run(
     projectRoot,
@@ -138,7 +139,7 @@ test("user registers minimal context and checks only the current stage gate", as
   assert.equal(source.revision, 1)
 
   const stillBlocked = await runResult(projectRoot, "flow", "check", "--task", "review")
-  assert.deepEqual(stillBlocked.envelope.error.blockers.map(({ kind }) => kind), ["review-scope"])
+  assert.deepEqual(stillBlocked.envelope.error.blockers.map(({ kind }) => kind), ["review-scope", "semantic"])
 
   const scope = await run(
     projectRoot,
@@ -148,6 +149,13 @@ test("user registers minimal context and checks only the current stage gate", as
   )
   assert.equal(scope.revision, 2)
 
+  assert.deepEqual((await runResult(projectRoot, "flow", "check", "--task", "review")).envelope.error.blockers.map(({ kind }) => kind), ["semantic"])
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "review", "--gate", "e2e-applicability", "--kind", "semantic",
+    "--status", "passed", "--reason", "E2E applies", "--actor", "lead",
+    "--evidence", "review-proof", "--evidence-path", "review.md", "--expected-revision", "2",
+  )
   const checked = await run(projectRoot, "flow", "check", "--task", "review")
   assert.equal(checked.data.gate.ok, true)
   const rendered = await run(projectRoot, "context", "render", "--task", "review", "--profile", "check")
@@ -201,6 +209,10 @@ test("optional SPEC and E2E branches follow the declared skip and internal rewor
   await writeFile(path.join(projectRoot, "source.md"), "source\n")
   await writeFile(path.join(projectRoot, "scope.md"), "scope\n")
   await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.humanReview["design-approval"] = "disabled"
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
 
   await run(projectRoot, "task", "create", "--task", "skip-spec", "--entry-stage", "design-review")
   await run(projectRoot, "context", "register", "--task", "skip-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
@@ -233,6 +245,208 @@ test("optional SPEC and E2E branches follow the declared skip and internal rewor
   assert.equal(reworked.data.to, "e2e")
 })
 
+test("design cannot advance until an awaited user approves the current design artifact", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "design.md"), "Approved implementation design\n")
+  await writeFile(path.join(projectRoot, "requirement.md"), "Implement approved behavior\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "design-human-review", "--entry-stage", "design-review")
+  await run(projectRoot, "context", "register", "--task", "design-human-review", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+
+  const unapproved = await runResult(projectRoot, "flow", "advance", "--task", "design-human-review", "--outcome", "skip", "--expected-revision", "1")
+  assert.equal(unapproved.envelope.error.code, "GATE_BLOCKED")
+  assert.ok(unapproved.envelope.error.blockers.some(({ gateId }) => gateId === "design-approval"))
+
+  const waiting = await run(
+    projectRoot,
+    "task", "await", "--task", "design-human-review", "--gate", "design-approval",
+    "--evidence-path", "design.md",
+    "--question", "是否批准当前方案并进入实施？", "--blocker", "方案尚未获得人工批准",
+    "--required-decision", "批准或提出修改意见", "--expected-revision", "1",
+  )
+  assert.equal(waiting.data.task.status, "awaiting-user")
+  assert.deepEqual(waiting.data.task.gates.find(({ gateId }) => gateId === "design-approval"), {
+    gateId: "design-approval", stage: "design-review", kind: "human", status: "pending", evidenceRefs: [],
+  })
+  assert.equal(
+    (await runResult(projectRoot, "task", "resume", "--task", "design-human-review", "--expected-revision", "2")).envelope.error.code,
+    "HUMAN_DECISION_REQUIRED",
+  )
+
+  const forged = await runResult(
+    projectRoot,
+    "flow", "decide", "--task", "design-human-review", "--gate", "design-approval", "--kind", "human",
+    "--status", "passed", "--reason", "Lead claims approval", "--actor", "lead",
+    "--evidence", "design-approval-proof", "--evidence-path", "design.md", "--expected-revision", "2",
+  )
+  assert.equal(forged.envelope.error.code, "HUMAN_DECISION_REQUIRED")
+
+  const wrongArtifact = await runResult(
+    projectRoot,
+    "flow", "decide", "--task", "design-human-review", "--gate", "design-approval", "--kind", "human",
+    "--status", "passed", "--reason", "用户只看到了另一份文件", "--actor", "user",
+    "--evidence", "wrong-design-proof", "--evidence-path", "requirement.md", "--expected-revision", "2",
+  )
+  assert.equal(wrongArtifact.envelope.error.code, "HUMAN_DECISION_REQUIRED")
+
+  const approved = await run(
+    projectRoot,
+    "flow", "decide", "--task", "design-human-review", "--gate", "design-approval", "--kind", "human",
+    "--status", "passed", "--reason", "用户确认方案完整且符合预期", "--actor", "user",
+    "--evidence", "design-approval-proof", "--evidence-path", "design.md", "--expected-revision", "2",
+  )
+  assert.equal(approved.data.gate.kind, "human")
+  assert.equal(approved.data.task.status, "active")
+  assert.match(approved.data.evidence.digest, /^sha256:[a-f0-9]{64}$/)
+
+  await writeFile(path.join(projectRoot, "design.md"), "Changed after approval\n")
+  const staleStatus = await run(projectRoot, "flow", "status", "--task", "design-human-review")
+  assert.ok(staleStatus.data.gate.blockers.some(({ code }) => code === "EVIDENCE_CHANGED"))
+  const staleCheck = await runResult(projectRoot, "flow", "check", "--task", "design-human-review")
+  assert.ok(staleCheck.envelope.error.blockers.some(({ code }) => code === "EVIDENCE_CHANGED"))
+  const stale = await runResult(projectRoot, "flow", "advance", "--task", "design-human-review", "--outcome", "skip", "--expected-revision", "3")
+  assert.equal(stale.envelope.error.code, "GATE_BLOCKED")
+  assert.ok(stale.envelope.error.blockers.some(({ code }) => code === "EVIDENCE_CHANGED"))
+
+  await run(
+    projectRoot,
+    "task", "await", "--task", "design-human-review", "--gate", "design-approval",
+    "--evidence-path", "design.md",
+    "--question", "方案已变化，是否重新批准？", "--blocker", "批准后的方案内容发生变化",
+    "--required-decision", "重新批准或提出修改意见", "--expected-revision", "3",
+  )
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "design-human-review", "--gate", "design-approval", "--kind", "human",
+    "--status", "passed", "--reason", "用户重新批准更新后的方案", "--actor", "user",
+    "--evidence", "design-approval-proof-v2", "--evidence-path", "design.md", "--expected-revision", "4",
+  )
+
+  const advanced = await run(projectRoot, "flow", "advance", "--task", "design-human-review", "--outcome", "skip", "--expected-revision", "5")
+  assert.equal(advanced.data.to, "implementation")
+  await run(projectRoot, "context", "register", "--task", "design-human-review", "--context", "requirement", "--kind", "requirement", "--path", "requirement.md", "--profiles", "lead,implement", "--expected-revision", "6")
+  await writeFile(path.join(projectRoot, "design.md"), "Changed after implementation started\n")
+  const laterStale = await runResult(projectRoot, "flow", "advance", "--task", "design-human-review", "--outcome", "pass", "--expected-revision", "7")
+  assert.ok(laterStale.envelope.error.blockers.some(({ code, gateId }) => code === "EVIDENCE_CHANGED" && gateId === "design-approval"))
+})
+
+test("optional human review may be skipped but an explicit rejection routes to rework", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "design.md"), "Design awaiting feedback\n")
+  await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.humanReview["design-approval"] = "optional"
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+
+  await run(projectRoot, "task", "create", "--task", "optional-review", "--entry-stage", "design-review")
+  await run(projectRoot, "context", "register", "--task", "optional-review", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+  assert.equal((await run(projectRoot, "flow", "advance", "--task", "optional-review", "--outcome", "skip", "--expected-revision", "1")).data.to, "implementation")
+
+  await run(projectRoot, "task", "create", "--task", "rejected-review", "--entry-stage", "design-review")
+  await run(projectRoot, "context", "register", "--task", "rejected-review", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
+  await run(
+    projectRoot,
+    "task", "await", "--task", "rejected-review", "--gate", "design-approval",
+    "--evidence-path", "design.md",
+    "--question", "是否批准方案？", "--blocker", "等待人工审核", "--required-decision", "批准或返工", "--expected-revision", "1",
+  )
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "rejected-review", "--gate", "design-approval", "--kind", "human",
+    "--status", "rejected", "--reason", "用户要求补齐兼容性设计", "--actor", "user",
+    "--evidence", "design-rejection", "--evidence-path", "design.md", "--expected-revision", "2",
+  )
+  assert.equal((await runResult(projectRoot, "flow", "advance", "--task", "rejected-review", "--outcome", "skip", "--expected-revision", "3")).envelope.error.code, "GATE_BLOCKED")
+  assert.equal((await run(projectRoot, "flow", "advance", "--task", "rejected-review", "--outcome", "rework", "--expected-revision", "3")).data.to, "design")
+})
+
+test("disabled final human review does not replace normal task evidence", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "final.md"), "Delivery evidence\n")
+  await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.humanReview["final-acceptance"] = "disabled"
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+
+  await run(projectRoot, "task", "create", "--task", "disabled-final-review", "--entry-stage", "finish")
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "disabled-final-review", "--gate", "delivery-evidence", "--kind", "semantic",
+    "--status", "passed", "--reason", "交付证据完整", "--actor", "lead",
+    "--evidence", "delivery-proof", "--evidence-path", "final.md", "--expected-revision", "0",
+  )
+  const completed = await run(
+    projectRoot,
+    "task", "complete", "--task", "disabled-final-review", "--summary", "Task accepted", "--actor", "lead",
+    "--artifacts", "final.md", "--evidence", "delivery-proof", "--expected-revision", "1",
+  )
+  assert.equal(completed.data.task.status, "completed")
+})
+
+test("rejected final acceptance returns work to the user-selected responsible stage", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "final.md"), "Delivery needs another iteration\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "final-rework", "--entry-stage", "finish")
+  await run(
+    projectRoot,
+    "task", "await", "--task", "final-rework", "--gate", "final-acceptance",
+    "--evidence-path", "final.md",
+    "--question", "是否接受当前交付？", "--blocker", "等待最终人工验收",
+    "--required-decision", "通过或指定返工方向", "--expected-revision", "0",
+  )
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "final-rework", "--gate", "final-acceptance", "--kind", "human",
+    "--status", "rejected", "--reason", "用户要求优化错误恢复", "--actor", "user",
+    "--evidence", "final-rejection", "--evidence-path", "final.md", "--expected-revision", "1",
+  )
+  const rolledBack = await run(
+    projectRoot,
+    "flow", "rollback", "--task", "final-rework", "--to", "implementation",
+    "--reason", "最终验收要求修改实现", "--evidence", "final-rejection", "--expected-revision", "2",
+  )
+  assert.equal(rolledBack.data.to, "implementation")
+  assert.equal(rolledBack.data.task.gates.find(({ gateId }) => gateId === "final-acceptance").status, "pending")
+  assert.equal(rolledBack.data.task.evidence.find(({ evidenceId }) => evidenceId === "final-rejection").status, "invalidated")
+})
+
+test("concurrent human decisions cannot silently overwrite each other", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "final.md"), "Concurrent decision evidence\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "human-decision-race", "--entry-stage", "finish")
+  await run(
+    projectRoot,
+    "task", "await", "--task", "human-decision-race", "--gate", "final-acceptance",
+    "--evidence-path", "final.md",
+    "--question", "是否接受？", "--blocker", "等待用户", "--required-decision", "通过或驳回", "--expected-revision", "0",
+  )
+
+  const decisions = await Promise.all([
+    runResult(
+      projectRoot,
+      "flow", "decide", "--task", "human-decision-race", "--gate", "final-acceptance", "--kind", "human",
+      "--status", "passed", "--reason", "用户通过", "--actor", "user",
+      "--evidence", "human-pass", "--evidence-path", "final.md", "--expected-revision", "1",
+    ),
+    runResult(
+      projectRoot,
+      "flow", "decide", "--task", "human-decision-race", "--gate", "final-acceptance", "--kind", "human",
+      "--status", "rejected", "--reason", "用户驳回", "--actor", "user",
+      "--evidence", "human-reject", "--evidence-path", "final.md", "--expected-revision", "1",
+    ),
+  ])
+
+  assert.equal(decisions.filter(({ exitCode }) => exitCode === 0).length, 1)
+  assert.equal(decisions.filter(({ envelope }) => ["REVISION_CONFLICT", "LOCK_UNAVAILABLE"].includes(envelope.error?.code)).length, 1)
+  const task = (await run(projectRoot, "task", "show", "--task", "human-decision-race")).data.task
+  assert.equal(task.status, "active")
+  assert.equal(task.gates.filter(({ gateId }) => gateId === "final-acceptance").length, 1)
+})
+
 test("SPEC routing mode cannot be bypassed through direct flow commands", async () => {
   const requiredRoot = await project()
   await writeFile(path.join(requiredRoot, "design.md"), "approved design\n")
@@ -240,6 +454,7 @@ test("SPEC routing mode cannot be bypassed through direct flow commands", async 
   const requiredConfigPath = path.join(requiredRoot, ".team-work/config.yaml")
   const requiredConfig = JSON.parse(await readFile(requiredConfigPath, "utf8"))
   requiredConfig.spec = { ...requiredConfig.spec, mode: "required", status: "missing" }
+  requiredConfig.humanReview["design-approval"] = "disabled"
   await writeFile(requiredConfigPath, `${JSON.stringify(requiredConfig, null, 2)}\n`)
   await run(requiredRoot, "task", "create", "--task", "required-spec", "--entry-stage", "design-review")
   await run(requiredRoot, "context", "register", "--task", "required-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
@@ -256,6 +471,7 @@ test("SPEC routing mode cannot be bypassed through direct flow commands", async 
   const readyConfigPath = path.join(readyRoot, ".team-work/config.yaml")
   const readyConfig = JSON.parse(await readFile(readyConfigPath, "utf8"))
   readyConfig.spec = { ...readyConfig.spec, mode: "auto", status: "ready" }
+  readyConfig.humanReview["design-approval"] = "disabled"
   await writeFile(readyConfigPath, `${JSON.stringify(readyConfig, null, 2)}\n`)
   await run(readyRoot, "task", "create", "--task", "ready-spec", "--entry-stage", "design-review")
   await run(readyRoot, "context", "register", "--task", "ready-spec", "--context", "design", "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0")
@@ -404,19 +620,34 @@ test("task lifecycle distinguishes awaiting, completion, cancellation and archiv
   await writeFile(path.join(projectRoot, "final.md"), "accepted result\n")
   await run(projectRoot, "init")
   await run(projectRoot, "task", "create", "--task", "finished", "--entry-stage", "finish")
+
+  const premature = await runResult(
+    projectRoot,
+    "task", "complete", "--task", "finished", "--summary", "Task accepted", "--actor", "lead",
+    "--artifacts", "final.md", "--evidence", "final-proof", "--expected-revision", "0",
+  )
+  assert.equal(premature.envelope.error.code, "GATE_BLOCKED")
+
   await run(
     projectRoot,
-    "flow", "decide", "--task", "finished", "--gate", "final-acceptance", "--kind", "semantic",
-    "--status", "passed", "--reason", "Final evidence verified", "--actor", "lead",
-    "--evidence", "final-proof", "--evidence-path", "final.md", "--expected-revision", "0",
+    "task", "await", "--task", "finished", "--gate", "final-acceptance",
+    "--evidence-path", "final.md",
+    "--question", "是否接受当前交付并完成任务？", "--blocker", "最终交付尚未人工验收",
+    "--required-decision", "通过或提出返工方向", "--expected-revision", "0",
+  )
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "finished", "--gate", "final-acceptance", "--kind", "human",
+    "--status", "passed", "--reason", "用户接受最终交付", "--actor", "user",
+    "--evidence", "final-proof", "--evidence-path", "final.md", "--expected-revision", "1",
   )
   const completed = await run(
     projectRoot,
     "task", "complete", "--task", "finished", "--summary", "Task accepted", "--actor", "lead",
-    "--artifacts", "final.md", "--evidence", "final-proof", "--expected-revision", "1",
+    "--artifacts", "final.md", "--evidence", "final-proof", "--expected-revision", "2",
   )
   assert.equal(completed.data.task.status, "completed")
-  assert.equal(completed.revision, 2)
+  assert.equal(completed.revision, 3)
   assert.equal((await run(projectRoot, "task", "show", "--task", "finished")).data.task.status, "completed")
 
   const archived = await run(projectRoot, "task", "archive", "--task", "finished")
@@ -435,6 +666,41 @@ test("task lifecycle distinguishes awaiting, completion, cancellation and archiv
   assert.equal(resumed.data.task.status, "active")
   const cancelled = await run(projectRoot, "task", "cancel", "--task", "waiting", "--reason", "No longer required", "--expected-revision", "2")
   assert.equal(cancelled.data.task.status, "cancelled")
+})
+
+test("completed tasks fail closed when final human acceptance is missing or stale", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "final.md"), "Accepted delivery\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "tampered-final", "--entry-stage", "finish")
+  await run(
+    projectRoot,
+    "task", "await", "--task", "tampered-final", "--gate", "final-acceptance", "--evidence-path", "final.md",
+    "--question", "是否接受？", "--blocker", "等待最终验收", "--required-decision", "通过或驳回", "--expected-revision", "0",
+  )
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "tampered-final", "--gate", "final-acceptance", "--kind", "human",
+    "--status", "passed", "--reason", "用户接受交付", "--actor", "user",
+    "--evidence", "final-proof", "--evidence-path", "final.md", "--expected-revision", "1",
+  )
+  await run(
+    projectRoot,
+    "task", "complete", "--task", "tampered-final", "--summary", "Accepted", "--actor", "lead",
+    "--artifacts", "final.md", "--evidence", "final-proof", "--expected-revision", "2",
+  )
+
+  const taskPath = path.join(projectRoot, ".team-work/tasks/tampered-final/task.json")
+  const completedTask = JSON.parse(await readFile(taskPath, "utf8"))
+  await writeFile(taskPath, `${JSON.stringify({ ...completedTask, gates: [] }, null, 2)}\n`)
+  assert.equal((await runResult(projectRoot, "task", "show", "--task", "tampered-final")).envelope.error.code, "STATE_CORRUPT")
+
+  await writeFile(taskPath, `${JSON.stringify(completedTask, null, 2)}\n`)
+  await writeFile(path.join(projectRoot, "final.md"), "Changed after completion\n")
+  assert.equal((await runResult(projectRoot, "task", "archive", "--task", "tampered-final")).envelope.error.code, "STATE_CORRUPT")
+  const diagnosis = await run(projectRoot, "doctor")
+  assert.equal(diagnosis.data.healthy, false)
+  assert.ok(diagnosis.data.issues.some(({ code }) => code === "STATE_CORRUPT"))
 })
 
 test("dry-run is side-effect free and concurrent writers cannot silently overwrite", async () => {
@@ -557,6 +823,12 @@ test("current-stage work must be accepted or cancelled before flow can advance",
   assert.ok(blocked.envelope.error.blockers.some(({ code }) => code === "WORK_ITEM_PENDING"))
 
   await run(projectRoot, "work", "cancel", "--task", "gated-work", "--work", "challenger", "--reason", "Reassigned", "--expected-revision", "3")
+  await run(
+    projectRoot,
+    "flow", "decide", "--task", "gated-work", "--gate", "e2e-applicability", "--kind", "semantic",
+    "--status", "passed", "--reason", "E2E applicability recorded", "--actor", "lead",
+    "--evidence", "e2e-decision", "--evidence-path", "finding.md", "--expected-revision", "4",
+  )
   assert.equal((await run(projectRoot, "flow", "check", "--task", "gated-work")).data.gate.ok, true)
 })
 
@@ -573,6 +845,19 @@ test("initialization is idempotent and never overwrites explicit project configu
   assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")).spec, config.spec)
   assert.equal((await run(projectRoot, "version")).data.apiVersion, "1.0")
   assert.equal((await run(projectRoot, "migrate")).data.migrated, false)
+})
+
+test("project human-review configuration rejects unknown gates", async () => {
+  const projectRoot = await project()
+  await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.humanReview = { "unknown-review": "required" }
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+
+  const result = await runResult(projectRoot, "task", "create", "--task", "invalid-review-config", "--entry-stage", "research")
+  assert.equal(result.envelope.error.code, "STATE_CORRUPT")
+  assert.ok(result.envelope.error.blockers.some(({ message }) => /unknown human review gate/.test(message)))
 })
 
 test("corrupt context, fake evidence, unknown stages and blocked terminal gates fail closed", async () => {

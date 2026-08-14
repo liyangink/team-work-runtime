@@ -1,8 +1,13 @@
 {
   "schemaVersion": "1.0",
   "workflowId": "engineering",
-  "version": "1.2",
+  "version": "1.3",
   "initialStage": "research",
+  "gates": [
+    { "id": "design-approval", "stage": "design-review", "kind": "human", "defaultMode": "required" },
+    { "id": "e2e-applicability", "stage": "code-review", "kind": "semantic", "defaultMode": "required" },
+    { "id": "final-acceptance", "stage": "finish", "kind": "human", "defaultMode": "required" }
+  ],
   "stages": [
     {
       "id": "research",
@@ -75,8 +80,8 @@
   "transitions": [
     { "from": "research", "outcome": "pass", "to": "design" },
     { "from": "design", "outcome": "pass", "to": "design-review" },
-    { "from": "design-review", "outcome": "pass", "to": "spec" },
-    { "from": "design-review", "outcome": "skip", "to": "implementation" },
+    { "from": "design-review", "outcome": "pass", "to": "spec", "requiredGate": "design-approval" },
+    { "from": "design-review", "outcome": "skip", "to": "implementation", "requiredGate": "design-approval" },
     { "from": "design-review", "outcome": "rework", "to": "design" },
     { "from": "spec", "outcome": "pass", "to": "spec-review" },
     { "from": "spec-review", "outcome": "pass", "to": "implementation" },

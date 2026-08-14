@@ -95,6 +95,29 @@ test("engineering workflow permits direct code-review entry with only its minimu
   assert.equal(evaluateStageGate(workflow, "code-review", [{ kind: "source" }, { kind: "review-scope" }]).ok, true)
 })
 
+test("engineering workflow declares configurable design and final human reviews", async () => {
+  const workflow = await readJson("schemas/examples/engineering.workflow.json")
+  const config = await readJson("tests/fixtures/runtime/project-config.valid.json")
+
+  assert.deepEqual(validate(schemaId("workflow"), workflow), [])
+  assert.deepEqual(workflow.gates.filter(({ kind }) => kind === "human"), [
+    { id: "design-approval", stage: "design-review", kind: "human", defaultMode: "required" },
+    { id: "final-acceptance", stage: "finish", kind: "human", defaultMode: "required" },
+  ])
+  assert.ok(workflow.transitions
+    .filter(({ from, outcome }) => from === "design-review" && ["pass", "skip"].includes(outcome))
+    .every(({ requiredGate }) => requiredGate === "design-approval"))
+
+  const configured = {
+    ...config,
+    humanReview: {
+      "design-approval": "optional",
+      "final-acceptance": "disabled",
+    },
+  }
+  assert.deepEqual(validate(schemaId("project-config"), configured), [])
+})
+
 test("runtime interface fixes stage-entry, lifecycle, gate, binding and error semantics", async () => {
   const contract = await read("docs/runtime-interface.md")
 
@@ -190,10 +213,14 @@ test("semantic validation rejects broken graphs, task stages and work-item refer
   const unreachableWorkflow = structuredClone(workflow)
   unreachableWorkflow.stages.push({ id: "island", requiredInputs: [], teamEvaluation: false, terminal: false })
   unreachableWorkflow.transitions.push({ from: "island", outcome: "loop", to: "island" })
+  const brokenGates = structuredClone(workflow)
+  brokenGates.gates.push({ id: "design-approval", stage: "missing", kind: "human", defaultMode: "required" })
+  brokenGates.transitions[0].requiredGate = "missing-gate"
 
   assert.deepEqual(validateWorkflowSemantics(workflow), [])
   assert.match(validateWorkflowSemantics(brokenWorkflow).map(({ message }) => message).join("\n"), /duplicate stage|unknown stage|duplicate transition|terminal stage/)
   assert.match(validateWorkflowSemantics(unreachableWorkflow).map(({ message }) => message).join("\n"), /cannot reach a terminal/)
+  assert.match(validateWorkflowSemantics(brokenGates).map(({ message }) => message).join("\n"), /duplicate gate|unknown gate stage|unknown required gate/)
   assert.deepEqual(validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDigest: task.workflow.digest }), [])
   assert.match(validateTaskAgainstWorkflow({ ...task, stage: "unknown" }, workflow).map(({ message }) => message).join("\n"), /unknown stage/)
   assert.match(validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDigest: "sha256:deadbeef" }).map(({ message }) => message).join("\n"), /loaded workflow digest/)
@@ -217,6 +244,14 @@ test("task semantics bind gates to valid non-future evidence and require complet
   assert.match(validateTaskAgainstWorkflow({ ...task, gates: [gate] }, workflow).map(({ message }) => message).join("\n"), /unknown evidence/)
   assert.match(validateTaskAgainstWorkflow({ ...task, evidence: [{ ...evidence, stage: "e2e" }], gates: [gate] }, workflow).map(({ message }) => message).join("\n"), /future-stage evidence/)
 
+  const humanEvidence = { ...evidence, evidenceId: "final-human-proof", stage: "finish" }
+  const forgedHuman = {
+    gateId: "final-acceptance", stage: "finish", kind: "human", status: "passed",
+    evidenceRefs: [humanEvidence.evidenceId],
+    decision: { decidedBy: "lead", reason: "Lead impersonated the user", decidedAt: "2026-08-10T08:10:00.000Z" },
+  }
+  assert.match(validateTaskAgainstWorkflow({ ...task, stage: "finish", evidence: [humanEvidence], gates: [forgedHuman] }, workflow).map(({ message }) => message).join("\n"), /human gate.*user/)
+
   const futureEvidence = { ...evidence, evidenceId: "e2e-proof", stage: "e2e" }
   const futureGate = { ...gate, gateId: "e2e-gate", stage: "e2e", evidenceRefs: [futureEvidence.evidenceId] }
   assert.match(validateTaskAgainstWorkflow({ ...task, evidence: [futureEvidence], gates: [futureGate] }, workflow).map(({ message }) => message).join("\n"), /future-stage evidence|future-stage gate/)
@@ -226,16 +261,24 @@ test("task semantics bind gates to valid non-future evidence and require complet
     gates: [{ ...futureGate, status: "pending", evidenceRefs: [], decision: undefined }],
   }, workflow), [])
 
+  const finalEvidence = { ...humanEvidence, digest: "sha256:deadbeef" }
+  const finalGate = {
+    ...forgedHuman,
+    evidenceRefs: [finalEvidence.evidenceId],
+    decision: { ...forgedHuman.decision, decidedBy: "user", reason: "用户接受最终交付" },
+  }
   const completed = {
     ...task,
     status: "completed",
     stage: "finish",
-    evidence: [evidence],
+    evidence: [evidence, finalEvidence],
+    gates: [finalGate],
     acceptance: {
       acceptedBy: "lead", acceptedAt: "2026-08-10T08:20:00.000Z", summary: "accepted",
       artifactRefs: ["artifacts/review.md"], evidenceRefs: [evidence.evidenceId],
     },
   }
+  assert.match(validateTaskAgainstWorkflow({ ...completed, gates: [] }, workflow, { workItems }).map(({ message }) => message).join("\n"), /requires passed gate: final-acceptance/)
   assert.match(validateTaskAgainstWorkflow(completed, workflow).map(({ message }) => message).join("\n"), /requires work-items/)
   assert.match(validateTaskAgainstWorkflow(completed, workflow, { workItems }).map(({ message }) => message).join("\n"), /unfinished work items/)
   const finishedItems = {

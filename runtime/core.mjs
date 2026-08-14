@@ -216,6 +216,18 @@ async function loadProject(projectRoot) {
   await validate("workflow", workflow)
   const semanticIssues = validateWorkflowSemantics(workflow)
   if (semanticIssues.length) throw new RuntimeError("STATE_CORRUPT", "workflow graph is invalid", { exitCode: 70, blockers: semanticIssues.map((entry) => ({ code: "WORKFLOW_INVALID", kind: "workflow", ...entry })) })
+  const humanGates = new Set((workflow.gates ?? []).filter(({ kind }) => kind === "human").map(({ id }) => id))
+  const unknownHumanReviews = Object.keys(config.humanReview ?? {}).filter((gateId) => !humanGates.has(gateId))
+  if (unknownHumanReviews.length) throw new RuntimeError("STATE_CORRUPT", "project human-review configuration references unknown workflow gates", {
+    exitCode: 70,
+    blockers: unknownHumanReviews.map((gateId) => ({
+      code: "HUMAN_REVIEW_CONFIG_INVALID",
+      kind: "project-config",
+      path: `humanReview.${gateId}`,
+      message: `unknown human review gate: ${gateId}`,
+    })),
+    remediation: ["Remove unknown human-review keys or declare matching human gates in the pinned workflow"],
+  })
   return { root, stateRoot, config, workflow }
 }
 
@@ -253,6 +265,10 @@ async function initialize(projectRoot, clock) {
       digest: digest(workflowRaw),
     },
     spec: { type: "openspec", skill: "openspec", root: "openspec/", mode: "auto", status: "missing" },
+    humanReview: {
+      "design-approval": "required",
+      "final-acceptance": "required",
+    },
   }
   await validate("workflow", workflow)
   await validate("project-config", config)
@@ -279,8 +295,20 @@ async function loadTask(project, taskId) {
     workItems = await readJson(path.join(taskRoot, "work-items.json"), "work-items document")
     await validate("work-items", workItems)
   }
-  const issues = validateTaskAgainstWorkflow(task, project.workflow, { loadedWorkflowDigest: project.config.workflow.digest, workItems })
+  const issues = validateTaskAgainstWorkflow(task, project.workflow, {
+    loadedWorkflowDigest: project.config.workflow.digest,
+    workItems,
+    gateModes: project.config.humanReview,
+  })
   if (issues.length) throw new RuntimeError("STATE_CORRUPT", `task ${id} is inconsistent with its workflow`, { exitCode: 70, blockers: issues.map((entry) => ({ code: "TASK_INVALID", kind: "task", ...entry })) })
+  if (task.status === "completed") {
+    const staleHumanEvidence = await passedHumanGateEvidenceBlockers(project, task)
+    if (staleHumanEvidence.length) throw new RuntimeError("STATE_CORRUPT", `completed task ${id} has stale human-review evidence`, {
+      exitCode: 70,
+      blockers: staleHumanEvidence,
+      remediation: ["Restore the accepted artifact or reopen the task through an audited recovery procedure"],
+    })
+  }
   return task
 }
 
@@ -532,6 +560,8 @@ async function evaluateCurrentStage(project, task) {
 async function checkFlow(project, taskId) {
   const task = await loadTask(project, taskId)
   const { gate } = await evaluateCurrentStage(project, task)
+  gate.blockers.push(...await passedHumanGateEvidenceBlockers(project, task), ...await requiredStageGateBlockers(project, task))
+  gate.ok = gate.blockers.length === 0
   if (!gate.ok) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} is blocked`, {
     exitCode: 4,
     task,
@@ -544,6 +574,8 @@ async function checkFlow(project, taskId) {
 async function flowStatus(project, taskId) {
   const task = await loadTask(project, taskId)
   const { gate, workItems } = await evaluateCurrentStage(project, task)
+  gate.blockers.push(...await passedHumanGateEvidenceBlockers(project, task), ...await requiredStageGateBlockers(project, task))
+  gate.ok = gate.blockers.length === 0
   return success({
     stage: task.stage,
     status: task.status,
@@ -554,7 +586,11 @@ async function flowStatus(project, taskId) {
 
 async function persistTask(project, currentTask, nextTask, eventType, clock, { refs = [], reason, dryRun = false, workItems } = {}) {
   await validate("task", nextTask)
-  const issues = validateTaskAgainstWorkflow(nextTask, project.workflow, { loadedWorkflowDigest: project.config.workflow.digest, workItems })
+  const issues = validateTaskAgainstWorkflow(nextTask, project.workflow, {
+    loadedWorkflowDigest: project.config.workflow.digest,
+    workItems,
+    gateModes: project.config.humanReview,
+  })
   if (issues.length) throw new RuntimeError("ILLEGAL_TRANSITION", "task mutation violates workflow semantics", {
     exitCode: 4,
     task: currentTask,
@@ -577,18 +613,111 @@ async function persistTask(project, currentTask, nextTask, eventType, clock, { r
   })
 }
 
+function declaredGate(project, gateId) {
+  return (project.workflow.gates ?? []).find(({ id }) => id === gateId)
+}
+
+function configuredGateMode(project, declaration) {
+  if (!declaration) return "required"
+  if (declaration.kind === "human") return project.config.humanReview?.[declaration.id] ?? declaration.defaultMode
+  return declaration.defaultMode
+}
+
+async function gateEvidenceBlocker(project, task, gate) {
+  for (const evidenceId of gate.evidenceRefs) {
+    const evidence = task.evidence.find(({ evidenceId: id }) => id === evidenceId)
+    if (!evidence?.digest) {
+      return { code: "EVIDENCE_FINGERPRINT_MISSING", kind: gate.kind, gateId: gate.gateId, evidenceId }
+    }
+    try {
+      const target = await safeProjectEntry(project, evidence.path)
+      const metadata = await stat(target)
+      if (!metadata.isFile()) return { code: "EVIDENCE_CHANGED", kind: gate.kind, gateId: gate.gateId, evidenceId, path: evidence.path }
+      const actual = digest(await readFile(target))
+      if (actual !== evidence.digest) {
+        return { code: "EVIDENCE_CHANGED", kind: gate.kind, gateId: gate.gateId, evidenceId, path: evidence.path, expected: evidence.digest, actual }
+      }
+    } catch (error) {
+      return { code: "EVIDENCE_CHANGED", kind: gate.kind, gateId: gate.gateId, evidenceId, path: evidence.path, message: error.message }
+    }
+  }
+  return null
+}
+
+async function requiredGateDecision(project, task, gateId) {
+  const declaration = declaredGate(project, gateId)
+  const mode = configuredGateMode(project, declaration)
+  if (mode === "disabled") return null
+  const gate = task.gates.find(({ gateId: id, stage }) => id === gateId && stage === task.stage)
+  if (mode === "optional" && !gate) return null
+  const acceptedStatuses = declaration?.kind === "human" ? ["passed"] : ["passed", "overridden"]
+  if (gate && acceptedStatuses.includes(gate.status) && (!declaration || gate.kind === declaration.kind)) return gateEvidenceBlocker(project, task, gate)
+  return {
+    code: "REQUIRED_GATE_MISSING",
+    kind: declaration?.kind ?? "semantic",
+    gateId,
+    mode,
+    ...(gate ? { status: gate.status } : {}),
+  }
+}
+
+async function requiredStageGateBlockers(project, task) {
+  return (await Promise.all((project.workflow.gates ?? [])
+    .filter(({ stage }) => stage === task.stage)
+    .map(({ id }) => requiredGateDecision(project, task, id))))
+    .filter(Boolean)
+}
+
+async function passedHumanGateEvidenceBlockers(project, task) {
+  const declarations = new Map((project.workflow.gates ?? []).filter(({ kind }) => kind === "human").map((gate) => [gate.id, gate]))
+  return (await Promise.all(task.gates
+    .filter((gate) => gate.kind === "human" && gate.status === "passed" && configuredGateMode(project, declarations.get(gate.gateId)) !== "disabled")
+    .map((gate) => gateEvidenceBlocker(project, task, gate))))
+    .filter(Boolean)
+}
+
 async function decideFlow(project, input, clock, dryRun) {
   const task = await loadTask(project, input.taskId)
   assertRevision(task, input.expectedRevision)
-  if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "flow decisions require an active task", { exitCode: 4, task })
+  const declaration = declaredGate(project, input.gateId)
+  const isHuman = declaration?.kind === "human"
+  if (input.kind === "human" && !isHuman) throw new RuntimeError("INVALID_ARGUMENT", "human decisions require a declared human gate", { exitCode: 4, task })
+  if (isHuman) {
+    if (configuredGateMode(project, declaration) === "disabled") throw new RuntimeError("ILLEGAL_TRANSITION", "disabled human review cannot receive a decision", { exitCode: 4, task })
+    if (declaration.stage !== task.stage || input.kind !== "human") throw new RuntimeError("INVALID_ARGUMENT", "human decision does not match the declared gate", { exitCode: 4, task })
+    if (task.status !== "awaiting-user" || task.awaitingUser?.gateRef !== declaration.id || input.actor !== "user") {
+      throw new RuntimeError("HUMAN_DECISION_REQUIRED", "human gate requires the task to await this gate and the decision actor to be user", {
+        exitCode: 4,
+        task,
+        blockers: [{ code: "HUMAN_DECISION_REQUIRED", kind: "human", gateId: declaration.id }],
+        remediation: ["Put the task into awaiting-user for this gate and wait for the user's explicit decision"],
+      })
+    }
+    if (!["passed", "rejected"].includes(input.status)) throw new RuntimeError("INVALID_ARGUMENT", "human gate status must be passed or rejected", { exitCode: 4, task })
+  } else if (task.status !== "active") {
+    throw new RuntimeError("ILLEGAL_TRANSITION", "flow decisions require an active task", { exitCode: 4, task })
+  }
+  if (declaration && declaration.kind !== input.kind) throw new RuntimeError("INVALID_ARGUMENT", "gate kind does not match the workflow declaration", { exitCode: 4, task })
   const timestamp = now(clock)
   const evidenceId = safeId(input.evidenceId, "evidence id")
   if (task.evidence.some(({ evidenceId: existing }) => existing === evidenceId)) throw new RuntimeError("WORK_ITEM_CONFLICT", `evidence id already exists: ${evidenceId}`, { exitCode: 3, task })
-  await safeProjectEntry(project, input.evidencePath)
+  const evidenceTarget = await safeProjectEntry(project, input.evidencePath)
+  if (isHuman) {
+    const awaitedEvidenceTarget = await safeProjectEntry(project, task.awaitingUser.evidencePath)
+    if (evidenceTarget !== awaitedEvidenceTarget) throw new RuntimeError("HUMAN_DECISION_REQUIRED", "human decision evidence must match the artifact presented for review", {
+      exitCode: 4,
+      task,
+      blockers: [{ code: "HUMAN_REVIEW_ARTIFACT_MISMATCH", kind: "human", gateId: declaration.id, expected: task.awaitingUser.evidencePath, actual: input.evidencePath }],
+      remediation: ["Record the decision against the exact artifact named when the human review started"],
+    })
+  }
+  const evidenceMetadata = await stat(evidenceTarget)
+  if (!evidenceMetadata.isFile()) throw new RuntimeError("INVALID_ARGUMENT", "decision evidence must be a file", { exitCode: 4, task })
   const evidence = {
     evidenceId,
     stage: task.stage,
     path: input.evidencePath,
+    digest: digest(await readFile(evidenceTarget)),
     status: "valid",
     recordedAtRevision: task.revision + 1,
   }
@@ -599,20 +728,22 @@ async function decideFlow(project, input, clock, dryRun) {
     status: input.status,
     ...(input.blocker ? { blocker: input.blocker } : {}),
     evidenceRefs: [evidenceId],
-    ...(["passed", "overridden"].includes(input.status) ? {
+    ...(["passed", "rejected", "overridden"].includes(input.status) ? {
       decision: { decidedBy: input.actor, reason: input.reason, decidedAt: timestamp },
     } : {}),
   }
   const gates = task.gates.filter(({ gateId }) => gateId !== gate.gateId)
   const nextTask = {
     ...task,
+    ...(isHuman ? { status: "active" } : {}),
     revision: task.revision + 1,
     gates: [...gates, gate],
     evidence: [...task.evidence, evidence],
     updatedAt: timestamp,
   }
+  if (isHuman) delete nextTask.awaitingUser
   const persisted = await persistTask(project, task, nextTask, "flow.decided", clock, { refs: [gate.gateId, evidenceId], reason: input.reason, dryRun })
-  return success({ dryRun: Boolean(dryRun), gate, evidence }, persisted)
+  return success({ dryRun: Boolean(dryRun), gate, evidence, task: persisted }, persisted)
 }
 
 function enforceSpecRoute(project, task, transition) {
@@ -655,19 +786,42 @@ async function advanceFlow(project, input, clock, dryRun) {
   if (!transition) throw new RuntimeError("ILLEGAL_TRANSITION", `no ${input.outcome} transition from ${task.stage}`, { exitCode: 4, task })
   const { gate } = await evaluateCurrentStage(project, task)
   if (!gate.ok) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} is blocked`, { exitCode: 4, task, blockers: gate.blockers, remediation: ["Resolve current-stage gate blockers"] })
+  const staleHumanEvidence = await passedHumanGateEvidenceBlockers(project, task)
+  if (staleHumanEvidence.length) throw new RuntimeError("GATE_BLOCKED", "approved human-review evidence changed after approval", {
+    exitCode: 4,
+    task,
+    blockers: staleHumanEvidence,
+    remediation: ["Return to the review stage and request approval for the current artifact"],
+  })
   enforceSpecRoute(project, task, transition)
   if (transition.requiredGate) {
-    const decision = task.gates.find(({ gateId, stage, status }) => (
-      gateId === transition.requiredGate && stage === task.stage && ["passed", "overridden"].includes(status)
-    ))
-    if (!decision) throw new RuntimeError("GATE_BLOCKED", `transition requires gate ${transition.requiredGate}`, {
+    const blocker = await requiredGateDecision(project, task, transition.requiredGate)
+    if (blocker) throw new RuntimeError("GATE_BLOCKED", `transition requires gate ${transition.requiredGate}`, {
       exitCode: 4,
       task,
-      blockers: [{ code: "REQUIRED_GATE_MISSING", kind: "semantic", gateId: transition.requiredGate }],
+      blockers: [blocker],
       remediation: [`Record ${transition.requiredGate} with decision evidence before advancing`],
     })
   }
-  const nextTask = { ...task, stage: transition.to, teamDecision: { mode: "undecided" }, revision: task.revision + 1, updatedAt: now(clock) }
+  const nextRevision = task.revision + 1
+  const stageOrder = new Map(project.workflow.stages.map(({ id }, index) => [id, index]))
+  const movesBackward = stageOrder.get(transition.to) < stageOrder.get(task.stage)
+  const resetReason = `workflow ${input.outcome} moved ${task.stage} to ${transition.to}`
+  const nextTask = {
+    ...task,
+    stage: transition.to,
+    teamDecision: { mode: "undecided" },
+    revision: nextRevision,
+    updatedAt: now(clock),
+    ...(movesBackward ? {
+      gates: task.gates.map((gate) => (stageOrder.get(gate.stage) > stageOrder.get(transition.to)
+        ? { gateId: gate.gateId, stage: gate.stage, kind: gate.kind, status: "pending", evidenceRefs: [] }
+        : gate)),
+      evidence: task.evidence.map((evidence) => (evidence.status === "valid" && stageOrder.get(evidence.stage) > stageOrder.get(transition.to)
+        ? { ...evidence, status: "invalidated", invalidatedAtRevision: nextRevision, invalidationReason: resetReason }
+        : evidence)),
+    } : {}),
+  }
   const persisted = await persistTask(project, task, nextTask, "flow.advanced", clock, { refs: [...new Set([task.stage, transition.to, transition.requiredGate].filter(Boolean))], dryRun })
   return success({ dryRun: Boolean(dryRun), from: task.stage, to: transition.to, outcome: input.outcome, task: persisted }, persisted)
 }
@@ -954,19 +1108,47 @@ async function transitionTask(project, input, action, clock, dryRun) {
   let workItems
   if (action === "await") {
     if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "only an active task can await user input", { exitCode: 4, task })
+    const declaration = input.gateId ? declaredGate(project, input.gateId) : null
+    if (input.gateId && (!declaration || declaration.kind !== "human" || declaration.stage !== task.stage || configuredGateMode(project, declaration) === "disabled")) {
+      throw new RuntimeError("INVALID_ARGUMENT", "awaited gate must be an enabled human gate declared for the current stage", { exitCode: 4, task })
+    }
+    let reviewEvidencePath
+    if (declaration) {
+      const reviewEvidenceTarget = await safeProjectEntry(project, input.evidencePath)
+      const reviewEvidenceMetadata = await stat(reviewEvidenceTarget)
+      if (!reviewEvidenceMetadata.isFile()) throw new RuntimeError("INVALID_ARGUMENT", "human review evidence must be a file", { exitCode: 4, task })
+      reviewEvidencePath = path.relative(project.root, reviewEvidenceTarget).split(path.sep).join("/")
+    }
+    const gates = declaration
+      ? [...task.gates.filter(({ gateId }) => gateId !== declaration.id), {
+          gateId: declaration.id,
+          stage: task.stage,
+          kind: "human",
+          status: "pending",
+          evidenceRefs: [],
+        }]
+      : task.gates
     nextTask = {
       ...task,
+      gates,
       status: "awaiting-user",
       awaitingUser: {
         question: input.question,
         blocker: input.blocker,
         requiredDecision: input.requiredDecision,
         ...(input.gateId ? { gateRef: input.gateId } : {}),
+        ...(reviewEvidencePath ? { evidencePath: reviewEvidencePath } : {}),
         requestedAt: timestamp,
       },
     }
   } else if (action === "resume") {
     if (task.status !== "awaiting-user") throw new RuntimeError("ILLEGAL_TRANSITION", "only an awaiting-user task can resume", { exitCode: 4, task })
+    if (task.awaitingUser.gateRef) throw new RuntimeError("HUMAN_DECISION_REQUIRED", "a human gate must be resolved through flow decide", {
+      exitCode: 4,
+      task,
+      blockers: [{ code: "HUMAN_DECISION_REQUIRED", kind: "human", gateId: task.awaitingUser.gateRef }],
+      remediation: ["Record the user's passed or rejected decision for the awaited human gate"],
+    })
     nextTask = { ...task, status: "active" }
     delete nextTask.awaitingUser
   } else if (action === "cancel") {
@@ -978,6 +1160,20 @@ async function transitionTask(project, input, action, clock, dryRun) {
     for (const artifact of input.artifactPaths ?? []) await safeProjectEntry(project, artifact)
     const currentStage = await evaluateCurrentStage(project, task)
     if (!currentStage.gate.ok) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} is blocked`, { exitCode: 4, task, blockers: currentStage.gate.blockers, remediation: ["Resolve current-stage blockers before completion"] })
+    const staleHumanEvidence = await passedHumanGateEvidenceBlockers(project, task)
+    if (staleHumanEvidence.length) throw new RuntimeError("GATE_BLOCKED", "approved human-review evidence changed after approval", {
+      exitCode: 4,
+      task,
+      blockers: staleHumanEvidence,
+      remediation: ["Return to the review stage and request approval for the current artifact"],
+    })
+    const gateBlockers = await requiredStageGateBlockers(project, task)
+    if (gateBlockers.length) throw new RuntimeError("GATE_BLOCKED", `stage ${task.stage} requires configured gate decisions`, {
+      exitCode: 4,
+      task,
+      blockers: gateBlockers,
+      remediation: ["Complete every required stage gate before task completion"],
+    })
     workItems = currentStage.workItems
     nextTask = {
       ...task,

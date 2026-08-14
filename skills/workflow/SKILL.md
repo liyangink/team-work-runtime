@@ -14,7 +14,7 @@ description: 驱动研发任务的上下文、阶段、状态、门禁、solo/te
 3. 读取任务状态、当前阶段与上下文索引。仅加载当前动作需要的原文；摘要不能替代关键制品。
 4. 检查当前阶段最低输入。缺失历史制品只记为风险，除非它被当前阶段明确列为必需输入。
 
-Runtime 的可靠调用、revision 和错误处理见 [Runtime 调用约定](references/runtime-commands.md)。阶段目标与制品契约见 [阶段与制品](references/stages-and-artifacts.md)。
+Runtime 的可靠调用、revision 和错误处理见 [Runtime 调用约定](references/runtime-commands.md)。阶段目标与制品契约见 [阶段与制品](references/stages-and-artifacts.md)。方案批准、最终验收和文档规范见 [人工审核](references/human-review.md)。
 
 ## 推进当前阶段
 
@@ -22,15 +22,16 @@ Runtime 的可靠调用、revision 和错误处理见 [Runtime 调用约定](ref
 2. 评估 solo/team。用户明确要求团队时选择 `team`；否则根据并行价值决定。`solo` 表示单一 Owner 串行执行，`team` 表示多个 Owner 可并行；两种模式都由 `team-work` Skill 派发具体工作，Lead 不亲自执行。通过 Runtime 记录模式和理由，并提供任务 ID、当前阶段、目标、约束和 Platform Profile。
 3. `spec` 阶段按项目的 `auto|required|disabled` 路由执行或跳过 SPEC。通过 Runtime 记录 SPEC 状态与制品。Workflow 只负责衔接、上下文和门禁，具体规范流程由所选 SPEC Skill 执行。
 4. 收集 Owner、挑战者和必要 Expert 的提交。内容正确性由工作成员与 Expert 裁决；Lead 只核对流程、制品、证据和裁决链完整，再注册制品并更新 Runtime，不能以成员自报完成代替验收。
-5. 依次处理确定性、语义和人工门禁。进入 E2E 前必须把适用性判断记录为 `e2e-applicability` gate：不适用时走 `skip`；适用且环境就绪时进入 E2E；适用但环境不可用时停留并阻塞。记录决策与证据后才能推进。
+5. 依次处理确定性、语义和人工门禁。方案审查完成后处理 `design-approval`，最终收尾时处理 `final-acceptance`；默认都必须进入 `awaiting-user` 并取得用户明确决定。进入 E2E 前把适用性判断记录为 `e2e-applicability` gate。所有门禁按项目配置和证据处理，Lead 不替用户批准。
 
 团队与 SPEC 的决策规则见 [团队与 SPEC 路由](references/team-and-spec-routing.md)。
 
 ## 停顿、返工与交接
 
 - 需求缺失、重大分歧或高风险操作需要用户决定时，把任务置为 `awaiting-user`，写清问题、选项和所需决定。
+- 用户驳回方案或最终交付时，先记录决定和当前制品，再按归因返回方案、实施、测试、代码审查或 E2E；不要模糊地“继续优化”。
 - 验证失败时按归因选择状态边：SPEC 局部问题回 SPEC、结构问题回设计；代码审查的实现问题回实施、测试问题回测试；E2E 用例、夹具、脚本和执行问题留在 E2E，产品代码缺陷回实施，系统性的上游测试策略缺口才回测试，环境问题在 E2E 阻塞。
 - 会话结束前刷新上下文索引，记录当前状态、已完成事项、阻塞、下一动作和关键制品路径。
-- 只有 terminal 阶段、工作项已验收且任务级验收证据完整时才完成任务。
+- 只有 terminal 阶段、工作项已验收、任务级证据完整且配置要求的 `final-acceptance` 已由用户通过时才完成任务。
 
 恢复与交接格式见 [恢复与交接](references/recovery-and-handoff.md)。平台特有的派发、会话和恢复方式只从 Platform Profile 及其增量指南读取，不在本 Skill 中推测。

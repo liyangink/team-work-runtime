@@ -117,7 +117,12 @@ spec:
   root: openspec/
   mode: auto
   status: ready
+humanReview:
+  design-approval: required
+  final-acceptance: required
 ```
+
+默认工程 Workflow 在方案审查后和任务完成前声明两个人工门禁。项目可把它们配置为 `required|optional|disabled`；人工批准绑定当前方案或最终报告的文件指纹，批准制品变化后由 CoreRuntime 阻止继续推进。
 
 PlatformPlugin 首次接入项目时可以初始化默认路由并同步工具就绪状态，但 Workflow 只依赖配置结果。切换 Claude Code、OpenCode 或其他 CLI 时，项目的 SPEC 选择保持不变。
 
@@ -146,8 +151,10 @@ Workflow 以“任意阶段可介入”为设计原则：创建任务时可以�
 flowchart LR
     R["research"] --> D["design"]
     D --> DR["design-review"]
-    DR -->|"pass"| S["spec"]
-    DR -->|"skip spec"| I["implementation"]
+    DR -->|"team pass"| DA["design-approval<br/>human"]
+    DA -->|"pass"| S["spec"]
+    DA -->|"skip spec"| I["implementation"]
+    DA -->|"rejected"| D
     DR -->|"rework"| D
     S --> SR["spec-review"]
     SR -->|"pass"| I["implementation"]
@@ -157,7 +164,7 @@ flowchart LR
     T -->|"pass"| CR["code-review"]
     T -->|"fail"| I
     CR -->|"pass"| E["e2e"]
-    CR -->|"skip e2e"| F["finish"]
+    CR -->|"skip e2e"| F["finish<br/>final-acceptance"]
     CR -->|"rework"| I
     CR -->|"fail: test"| T
     E -->|"pass"| F["finish"]
@@ -166,13 +173,13 @@ flowchart LR
     E -->|"fail"| I
 ```
 
-`code-review` 的 `pass/skip` 边都声明 `requiredGate: e2e-applicability`。因此是否执行 E2E 必须留下决定与证据，不能仅靠 Skill 提示词约束。
+`design-review` 的 `pass/skip` 边声明 `requiredGate: design-approval`；`code-review` 的 `pass/skip` 边声明 `requiredGate: e2e-applicability`；terminal `finish` 完成前检查 `final-acceptance`。因此方案批准、E2E 适用性和最终验收都不能仅靠 Skill 提示词约束。
 
 Workflow 解释阶段目标和语义；CoreRuntime 校验合法状态边并记录：
 
 1. **确定性门禁**：文件、work item、验证命令和证据路径；
 2. **语义门禁**：方案、设计和审查质量，由非作者 Expert 作内容结论，Lead 只记录并核对裁决链；
-3. **人工门禁**：需求缺失、重大分歧和高风险操作。
+3. **人工门禁**：默认强制的方案批准与最终验收，以及需求缺失、重大分歧和高风险操作。
 
 CoreRuntime 只验证后两类门禁是否具有合法决策、理由和证据，不生成结论。门禁失败返回 blocker 和可执行修复建议；override 必须保留原 blocker 与原因。
 

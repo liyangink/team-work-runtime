@@ -12,5 +12,9 @@
     "root": "openspec/",
     "mode": "auto",
     "status": "ready"
+  },
+  "humanReview": {
+    "design-approval": "required",
+    "final-acceptance": "required"
   }
 }

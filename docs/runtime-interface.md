@@ -22,6 +22,8 @@ team-work event list|record
 
 任务创建时从 `config.yaml` 解析 Workflow，并把 `id/version/path/digest` 固定到 task。被任务引用的 Workflow 版本必须保留；加载时 digest 不匹配即返回 `STATE_CORRUPT`，禁止悄悄使用新配置。SPEC 的 `type/skill/root` 只存在于 Project Config；task 只保存执行状态、产物引用和配置 digest，不复制路由。
 
+Workflow 用 `gates` 声明门禁的 `id/stage/kind/defaultMode`。项目配置的 `humanReview` 可把已声明人工门禁覆盖为 `required|optional|disabled`；未知门禁 ID 视为损坏配置。默认 `design-approval` 与 `final-acceptance` 都为 `required`。
+
 `task team --mode <solo|team> --reason <reason>` 持久化当前阶段的执行拓扑：`solo` 是一个成员 Owner 串行工作，`team` 是多个 Owner 可并行工作；两者都不表示 Lead 亲自执行。每次阶段推进或回退后重置为 `undecided`，避免沿用上一阶段的成本判断。`task spec --status <in-progress|completed|blocked|disabled> [--artifacts <paths>]` 只更新任务内 SPEC 执行状态与制品引用，不修改 Project Config 路由；`completed` 至少需要一个已存在制品。SPEC 返工可从 `completed|blocked|disabled` 回到 `in-progress`。
 
 阶段门禁只检查当前阶段声明的最低必需输入。历史需求、设计、SPEC、测试和 Review 制品只有在当前阶段的 `requiredInputs` 中出现时才阻塞；其他缺失只产生 warning。默认工程 Workflow 中，`code-review` 只要求：
@@ -39,11 +41,11 @@ Task 业务状态为：
 active | awaiting-user | completed | cancelled
 ```
 
-合法生命周期：`active -> awaiting-user|completed|cancelled`，`awaiting-user -> active|cancelled`；completed/cancelled 为终态。`task await` 写入待用户决策，`task resume` 恢复 active。awaiting-user 仍参与活动任务解析；终态禁止新增 flow/work 写入。完成必须处于当前 Workflow 的 terminal stage；work-items document 及其每个 item 必须属于当前 task、阶段属于固定 Workflow，所有非 cancelled item 已带有效证据 accepted，并写入同样引用有效证据的任务级 acceptance。
+合法生命周期：`active -> awaiting-user|completed|cancelled`，`awaiting-user -> active|cancelled`；completed/cancelled 为终态。`task await --gate <human-gate> --evidence-path <reviewed-path>` 同时创建 pending 人工门禁、固定本次提交审核的文件并写入待用户决策；匹配的 `flow decide --kind human --actor user --status passed|rejected` 只能引用同一文件，并原子记录决定、恢复 active。带 gate 的等待不能用 `task resume` 解除；普通等待仍可恢复。awaiting-user 仍参与活动任务解析；终态禁止新增 flow/work 写入。完成必须处于当前 Workflow 的 terminal stage，满足该阶段 required 人工门禁，并且所有非 cancelled work item 已带有效证据 accepted，最后写入任务级 acceptance。
 
 `task complete|cancel|archive` 语义不同：complete/cancel 改变业务状态，archive 只移动已结束任务的存储位置，不能代替完成或取消。
 
-`flow advance --outcome <pass|skip|rework|fail|test-gap>` 只能走 Workflow 明确声明的边。边可以声明 `requiredGate`；对应阶段的 gate 未通过时不得流转。默认流程用 `e2e-applicability` 强制记录 E2E 适用性决定。`flow rollback --to` 只能回到更早阶段，必须提供 reason 和 evidence，并失效后续 gate 与 evidence。
+`flow advance --outcome <pass|skip|rework|fail|test-gap>` 只能走 Workflow 明确声明的边。边可以声明 `requiredGate`；`required` 模式必须通过，`optional` 未发起时可跳过但发起后必须处理，`disabled` 不阻塞。默认方案审查的 pass/skip 边要求 `design-approval`，代码审查边要求 `e2e-applicability`；terminal `finish` 完成前要求 `final-acceptance`。人工驳回后按归因走 rework 或 `flow rollback --to`；向前流转形成的返工同样重置后续 gate 并失效证据。
 
 SPEC 路由同样由 Runtime 强制执行：`auto + missing` 和 `disabled` 只能走 `skip`，ready 时进入声明了 `specRoute` 的阶段；`required + missing` 对进入和跳过都返回可恢复 blocker。直接调用 `flow advance` 不能绕过该约束。
 
@@ -54,9 +56,13 @@ SPEC 路由同样由 Runtime 强制执行：`auto + missing` 和 `disabled` 只�
 - 确定性、语义和人工门禁决策及证据；
 - warning、blocker 和最小修复动作。
 
-语义门禁的技术内容由工作成员与非作者 Expert 形成结论，Lead 仅通过 `flow decide` 记录该结论并核对制品、证据和复核链；人工门禁由用户决定。CoreRuntime 只校验决策、理由和证据是否完整，不生成语义结论。override 必须保留原 blocker 与原因，不能形成无法人工恢复的死门。
+`flow check` 与 `flow status` 都复核当前阶段 required gate 和已通过人工门禁的文件指纹，使制品变化在真正推进前就可见。
 
-task.json 中的 gates 与 evidence 是门禁、override 和 rollback 恢复的权威状态；events 只做审计。每个 overridden gate 必须同时保留 blocker、decision、decidedBy、reason 和 evidenceRefs。当前阶段之后的 gate 只能保持 pending，未来阶段 evidence 只能以 invalidated 状态保留回滚审计，禁止预写可用结论。
+语义门禁的技术内容由工作成员与非作者 Expert 形成结论，Lead 仅通过 `flow decide` 记录该结论并核对制品、证据和复核链；人工门禁只接受处于对应 `awaiting-user` 状态、actor 为 `user` 且证据匹配待审文件的决定，不允许 human override。CoreRuntime 只校验决策、理由和证据是否完整，不生成语义结论。override 必须保留原 blocker 与原因，不能形成无法人工恢复的死门。
+
+CoreRuntime 的身份边界是可信 CLI 调用方：它能阻止错误状态、错误 actor 和错误证据，但不能证明传入 `--actor user` 的进程背后一定是人类。可验证的用户事件或批准凭据属于 PlatformPlugin 增强；在平台未提供该能力时，Lead/Skill 契约禁止代填用户决定，文档不得把该约束表述为针对恶意调用者的身份认证。
+
+task.json 中的 gates 与 evidence 是门禁、override 和 rollback 恢复的权威状态；events 只做审计。决定证据记录文件 `digest`，人工批准后 Runtime 在后续流转和完成前复核文件指纹；变化或缺失返回 `EVIDENCE_CHANGED` blocker，要求回到审核阶段重新确认。每个 overridden gate 必须同时保留 blocker、decision、decidedBy、reason 和 evidenceRefs。当前阶段之后的 gate 只能保持 pending，未来阶段 evidence 只能以 invalidated 状态保留回滚审计，禁止预写可用结论。
 
 ## 4. Work item 与策略返回
 
@@ -149,6 +155,7 @@ Platform Profile 是 Team-work 读取平台能力的唯一 Interface，必须给
 | `REVISION_CONFLICT` | expected revision 与当前状态不一致 |
 | `ILLEGAL_TRANSITION` | 阶段边或回退目标非法 |
 | `GATE_BLOCKED` | 当前阶段最低输入或决策门禁不满足 |
+| `HUMAN_DECISION_REQUIRED` | 人工门禁没有匹配的等待状态或用户决定 |
 | `WORK_ITEM_CONFLICT` | Owner、attempt 或生命周期冲突 |
 | `STATE_CORRUPT` | 控制文件损坏，需 doctor/restore |
 | `LOCK_UNAVAILABLE` | 无法安全获得写锁，可稍后重试 |

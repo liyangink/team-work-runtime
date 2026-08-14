@@ -26,16 +26,18 @@ team-work context rebuild --project <root> --task <task-id> --expected-revision 
 
 team-work flow status --project <root> --task <task-id> --json
 team-work flow check --project <root> --task <task-id> --json
-team-work flow decide --project <root> --task <task-id> --gate <gate-id> --kind <deterministic|semantic|human> --status <passed|blocked|overridden> --actor <actor> --reason <reason> --evidence <evidence-id> --evidence-path <path> --expected-revision <rev> --json
+team-work flow decide --project <root> --task <task-id> --gate <gate-id> --kind <deterministic|semantic> --status <passed|blocked|overridden> --actor <actor> --reason <reason> --evidence <evidence-id> --evidence-path <path> --expected-revision <rev> --json
+team-work flow decide --project <root> --task <task-id> --gate <human-gate> --kind human --status <passed|rejected> --actor user --reason <reason> --evidence <evidence-id> --evidence-path <reviewed-path> --expected-revision <rev> --json
 team-work flow advance --project <root> --task <task-id> --outcome <pass|rework|fail> --expected-revision <rev> --json
 team-work flow rollback --project <root> --task <task-id> --to <earlier-stage> --reason <reason> --evidence <refs> --expected-revision <rev> --json
 
+team-work task await --project <root> --task <task-id> --gate <human-gate> --evidence-path <reviewed-path> --question <question> --blocker <blocker> --required-decision <decision> --expected-revision <rev> --json
 team-work task await --project <root> --task <task-id> --question <question> --blocker <blocker> --required-decision <decision> --expected-revision <rev> --json
 team-work task resume --project <root> --task <task-id> --expected-revision <rev> --json
 team-work task complete --project <root> --task <task-id> --summary <summary> --artifacts <paths> --evidence <refs> --actor <actor> --expected-revision <rev> --json
 ```
 
-`flow decide` 的 `--evidence` 是新证据 ID，`--evidence-path` 是已存在的项目相对路径；`blocked` 和 `overridden` 还必须传 `--blocker`。每次成功写入后都使用响应中的新 revision，不复用示例里的旧值。
+`flow decide` 的 `--evidence` 是新证据 ID，`--evidence-path` 是已存在的项目相对路径；人工决定必须与 `task await` 时提交审核的同一文件一致。`blocked` 和 `overridden` 还必须传 `--blocker`。带人工 gate 的等待只能用 human `flow decide` 解除，不能调用 `task resume`。每次成功写入后都使用响应中的新 revision，不复用示例里的旧值。
 
 首次 `task bind` 不传 `--expected-revision`；覆盖已有绑定时传上次 `data.binding.revision`，不要传 task revision。绑定不改变 task revision。
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -107,6 +107,82 @@ test("OpenCode enable state changes atomically without losing user configuration
   })
 })
 
+test("concurrent OpenCode toggles are serialized instead of committing a stale read", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  await loadUserConfig({ configRoot, createIfMissing: true })
+  let releaseWrite
+  let writeStarted
+  const started = new Promise((resolve) => { writeStarted = resolve })
+  const released = new Promise((resolve) => { releaseWrite = resolve })
+
+  const disable = setOpenCodeEnabled({
+    configRoot,
+    enabled: false,
+    io: {
+      writeFile: async (...args) => {
+        writeStarted()
+        await released
+        return writeFile(...args)
+      },
+      rename,
+    },
+  })
+  let hookTimeout
+  await Promise.race([
+    started,
+    new Promise((_, reject) => {
+      hookTimeout = setTimeout(() => reject(new Error("toggle write hook was not reached")), 2_000)
+    }),
+  ])
+  clearTimeout(hookTimeout)
+  const enable = setOpenCodeEnabled({ configRoot, enabled: true })
+  releaseWrite()
+
+  assert.equal((await disable).changed, true)
+  assert.equal((await enable).changed, true)
+  assert.equal((await loadUserConfig({ configRoot })).platform.enabled, true)
+})
+
+test("failed OpenCode toggle preserves the last valid config and releases its lock", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  const configPath = path.join(configRoot, "config.json")
+  await loadUserConfig({ configRoot, createIfMissing: true })
+  const original = await readFile(configPath, "utf8")
+
+  await assert.rejects(setOpenCodeEnabled({
+    configRoot,
+    enabled: false,
+    io: {
+      writeFile: async () => { throw Object.assign(new Error("disk full"), { code: "ENOSPC" }) },
+      rename,
+    },
+  }), (error) => error.code === "ENOSPC")
+  assert.equal(await readFile(configPath, "utf8"), original)
+
+  await assert.rejects(setOpenCodeEnabled({
+    configRoot,
+    enabled: false,
+    io: {
+      writeFile,
+      rename: async () => { throw Object.assign(new Error("rename failed"), { code: "EIO" }) },
+    },
+  }), (error) => error.code === "EIO")
+  assert.equal(await readFile(configPath, "utf8"), original)
+  assert.deepEqual((await readdir(configRoot)).filter((name) => name.includes(".tmp") || name.endsWith(".lock")), [])
+
+  assert.equal((await setOpenCodeEnabled({ configRoot, enabled: false })).changed, true)
+})
+
+test("OpenCode toggle recovers a lock left by a terminated writer", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  const configPath = path.join(configRoot, "config.json")
+  await loadUserConfig({ configRoot, createIfMissing: true })
+  await writeFile(`${configPath}.lock`, `${JSON.stringify({ pid: 99_999_999, acquiredAt: "2026-08-14T00:00:00.000Z" })}\n`)
+
+  assert.equal((await setOpenCodeEnabled({ configRoot, enabled: false })).changed, true)
+  await assert.rejects(access(`${configPath}.lock`), (error) => error.code === "ENOENT")
+})
+
 test("loading config repairs a stale local schema sidecar", async () => {
   const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   await mkdir(path.join(configRoot, "schemas"), { recursive: true })
@@ -147,6 +223,25 @@ test("invalid or unsafe fixed config fails with stable error codes", async () =>
   await assert.rejects(
     loadUserConfig({ configRoot: invalidEffortRoot }),
     (error) => error.code === "USER_CONFIG_INVALID" && /effort/.test(error.message),
+  )
+
+  const invalidEnabledRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  await writeFile(path.join(invalidEnabledRoot, "config.json"), JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: { enabled: "false" } },
+    spec: { provider: "openspec", mode: "auto" },
+  }))
+  await assert.rejects(
+    loadUserConfig({ configRoot: invalidEnabledRoot }),
+    (error) => error.code === "USER_CONFIG_INVALID" && /enabled/.test(error.message),
+  )
+
+  const malformedRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  await writeFile(path.join(malformedRoot, "config.json"), "{not-json")
+  await assert.rejects(
+    loadUserConfig({ configRoot: malformedRoot }),
+    (error) => error.code === "USER_CONFIG_INVALID" && /不是合法 JSON/.test(error.message),
   )
 
   const unsafeRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { link, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { link, lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,6 +11,9 @@ export const USER_CONFIG_SCHEMA_REF = "./schemas/user-config.v1.schema.json"
 
 const moduleRoot = path.dirname(fileURLToPath(import.meta.url))
 const sourceSchemaPath = path.resolve(moduleRoot, "../schemas/user-config.v1.schema.json")
+const CONFIG_LOCK_RETRIES = 200
+const CONFIG_LOCK_RETRY_MS = 10
+const CONFIG_LOCK_STALE_MS = 5 * 60_000
 
 const DEFAULT_CONFIG = {
   $schema: USER_CONFIG_SCHEMA_REF,
@@ -38,6 +41,63 @@ export class UserConfigError extends Error {
 
 function fail(code, message, details) {
   throw new UserConfigError(code, message, details)
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code !== "ESRCH"
+  }
+}
+
+async function withConfigLock(configPath, action) {
+  const lockPath = `${configPath}.lock`
+  await mkdir(path.dirname(lockPath), { recursive: true })
+  let handle
+  for (let attempt = 0; attempt < CONFIG_LOCK_RETRIES; attempt += 1) {
+    try {
+      handle = await open(lockPath, "wx", 0o600)
+      break
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+      let owner
+      try {
+        owner = JSON.parse(await readFile(lockPath, "utf8"))
+      } catch {
+        let age
+        try {
+          age = Date.now() - (await stat(lockPath)).mtimeMs
+        } catch (statError) {
+          if (statError.code === "ENOENT") continue
+          throw statError
+        }
+        if (age >= CONFIG_LOCK_STALE_MS) {
+          await rm(lockPath, { force: true })
+          continue
+        }
+      }
+      if (owner && !processIsAlive(owner.pid)) {
+        await rm(lockPath, { force: true })
+        continue
+      }
+      if (attempt < CONFIG_LOCK_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, CONFIG_LOCK_RETRY_MS))
+        continue
+      }
+      fail("USER_CONFIG_LOCKED", "用户配置正在被另一个 team-work 命令更新，请稍后重试", { retryable: true, lockPath })
+    }
+  }
+  if (!handle) fail("USER_CONFIG_LOCKED", "无法获取用户配置写锁", { retryable: true, lockPath })
+  try {
+    await handle.writeFile(`${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`)
+    return await action()
+  } finally {
+    await handle.close()
+    await rm(lockPath, { force: true })
+  }
 }
 
 let validatorPromise
@@ -144,21 +204,27 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
   }
 }
 
-export async function setOpenCodeEnabled({ configRoot, enabled }) {
+export async function setOpenCodeEnabled({ configRoot, enabled, io = {} }) {
   if (typeof enabled !== "boolean") fail("USER_CONFIG_ENABLED_INVALID", "OpenCode enabled 必须是 boolean")
-  const loaded = await loadUserConfig({ configRoot })
-  const current = loaded.config.platforms.opencode.enabled ?? true
-  if (current === enabled) return { changed: false, enabled, path: loaded.path }
+  if (typeof configRoot !== "string" || !configRoot.trim()) fail("USER_CONFIG_ROOT_INVALID", "用户配置目录不能为空")
+  const configPath = path.join(path.resolve(configRoot), USER_CONFIG_NAME)
+  const write = io.writeFile ?? writeFile
+  const replace = io.rename ?? rename
+  return withConfigLock(configPath, async () => {
+    const loaded = await loadUserConfig({ configRoot })
+    const current = loaded.config.platforms.opencode.enabled ?? true
+    if (current === enabled) return { changed: false, enabled, path: loaded.path }
 
-  const next = structuredClone(loaded.config)
-  next.platforms.opencode.enabled = enabled
-  await validateConfig(next)
-  const temporary = path.join(path.dirname(loaded.path), `.${path.basename(loaded.path)}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" })
-    await rename(temporary, loaded.path)
-  } finally {
-    await rm(temporary, { force: true })
-  }
-  return { changed: true, enabled, path: loaded.path }
+    const next = structuredClone(loaded.config)
+    next.platforms.opencode.enabled = enabled
+    await validateConfig(next)
+    const temporary = path.join(path.dirname(loaded.path), `.${path.basename(loaded.path)}.${randomUUID()}.tmp`)
+    try {
+      await write(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx" })
+      await replace(temporary, loaded.path)
+    } finally {
+      await rm(temporary, { force: true })
+    }
+    return { changed: true, enabled, path: loaded.path }
+  })
 }

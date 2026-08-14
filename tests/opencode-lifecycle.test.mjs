@@ -189,7 +189,7 @@ test("failed OpenCode smoke test rolls back all managed files", async () => {
   assert.equal(await readFile(fakeOpenCode, "utf8"), "#!/bin/sh\nexit 23\n")
 })
 
-test("disabled OpenCode platform keeps the host smoke check without requiring Agent registration", async () => {
+test("disabled OpenCode platform keeps host smoke and update repair without requiring Agent registration", async () => {
   const projectRoot = await tempProject()
   const fakeOpenCode = path.join(projectRoot, "fake-opencode")
   await writeFile(fakeOpenCode, "#!/bin/sh\nexit 0\n")
@@ -202,7 +202,17 @@ test("disabled OpenCode platform keeps the host smoke check without requiring Ag
   }))
 
   assert.equal(result.status, "installed")
-  assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), true)
+  const plugin = path.join(projectRoot, "plugins/team-work.js")
+  assert.equal(await exists(plugin), true)
+
+  await rm(plugin)
+  const repaired = await manageOpenCodePlugin("update", options(projectRoot, {
+    platformEnabled: false,
+    opencodeCommand: fakeOpenCode,
+    skipSmoke: false,
+  }))
+  assert.equal(repaired.status, "updated")
+  assert.equal(await exists(plugin), true)
 })
 
 test("tampered manifest cannot claim and delete arbitrary project files", async () => {

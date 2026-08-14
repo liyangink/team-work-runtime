@@ -301,7 +301,7 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 顶层 `helper` 可选且不继承 Junior。配置后，Plugin 用同一绑定生成职责不同的 `team-work-explore` 与 `team-work-librarian`；未配置时不注入这两个助手。
 
-`platforms.opencode.enabled` 控制 PlatformPlugin 是否注册 Agent、工具、Hook 和 Team 侧栏。修改配置后只需重启 OpenCode。`install/update` 管理程序与静态资产，不承担配置同步。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
+`platforms.opencode.enabled` 控制 PlatformPlugin 是否注册 Agent、工具、Hook 和 Team 侧栏。修改配置后只需重启 OpenCode。停用期间 `update` 仍会检查并修复安装资产，方便恢复或升级，但不会要求 Agent 已注册。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
 
 ## OpenCode 平台
 

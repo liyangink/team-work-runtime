@@ -1,6 +1,6 @@
 {
   "name": "team-work-runtime",
-  "version": "0.1.0-beta.0",
+  "version": "0.1.0-beta.1",
   "description": "平台无关的 multiagent engineering loop 与 PlatformPlugin 安装器",
   "repository": {
     "type": "git",

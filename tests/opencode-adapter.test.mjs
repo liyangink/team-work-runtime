@@ -160,14 +160,35 @@ test("managed spawn and resume always use native promptAsync child sessions", as
   assert.deepEqual(client.calls.map(([name]) => name), ["create", "promptAsync"])
   assert.equal(client.calls[1][1].body.agent, "senior-terra")
 
+  client.session.status = async (input) => {
+    client.calls.push(["status", input])
+    return { data: {} }
+  }
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
   await adapter.resume({ taskId: "task-1", workItemId: "review-1", prompt: "复核证据" })
-  assert.deepEqual(client.calls.map(([name]) => name), ["create", "promptAsync", "promptAsync"])
+  assert.deepEqual(client.calls.map(([name]) => name), ["create", "promptAsync", "status", "promptAsync"])
   assert.equal(client.calls.some(([name]) => name === "prompt"), false)
 
   const mapping = JSON.parse(await readFile(path.join(projectRoot, ".team-work/platform/opencode/sessions/task-1/review-1.json"), "utf8"))
   assert.equal(mapping.sessionId, "child-1")
   assert.equal(mapping.contextProfile, "check")
   assert.equal(mapping.dispatchMode, "background")
+  assert.equal(mapping.dispatchSeq, 2)
+  assert.equal(mapping.pendingSync, undefined)
+})
+
+test("a delayed idle event cannot settle a newer busy dispatch", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot)
+  await adapter.spawn({ taskId: "task-stale-idle", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "第一轮" })
+  await adapter.resume({ taskId: "task-stale-idle", workItemId: "impl-1", prompt: "第二轮" })
+
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+
+  const mapping = await adapter.readMapping("task-stale-idle", "impl-1")
+  assert.equal(mapping.dispatchSeq, 2)
+  assert.equal(mapping.pendingSync, undefined)
 })
 
 test("managed members can fan out read-only helpers through background child sessions", async () => {
@@ -298,11 +319,63 @@ test("status, result collection, and stop recover through stable task/work-item 
 
   const status = await adapter.status({ taskId: "task-2", workItemId: "impl-1" })
   assert.equal(status.status.type, "busy")
+  client.session.status = async () => ({ data: {} })
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
   const messages = await adapter.messages({ taskId: "task-2", workItemId: "impl-1" })
   assert.equal(messages.messages[0].parts[0].text, "result")
+  const collectedMapping = await adapter.readMapping("task-2", "impl-1")
+  assert.equal(collectedMapping.pendingSync, undefined)
+  assert.equal(collectedMapping.lastCollectedSeq, 1)
   const stopped = await adapter.stop({ taskId: "task-2", workItemId: "impl-1" })
   assert.equal(stopped.stopped, true)
   assert.equal(client.calls.some(([name]) => name === "abort"), true)
+})
+
+test("failed result collection preserves the pending synchronization hint", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot)
+  await adapter.spawn({ taskId: "task-collect", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  client.session.status = async () => ({ data: {} })
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+  client.session.messages = async () => { throw new Error("gateway unavailable") }
+
+  await assert.rejects(
+    adapter.messages({ taskId: "task-collect", workItemId: "impl-1" }),
+    (error) => error.code === "OPENCODE_API_ERROR",
+  )
+  assert.equal((await adapter.readMapping("task-collect", "impl-1")).pendingSync.kind, "idle")
+})
+
+test("collect consumes only the idle hint from the dispatch it actually read", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot)
+  await adapter.spawn({ taskId: "task-collect-race", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "第一轮" })
+  client.session.status = async () => ({ data: {} })
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+
+  let announceMessages
+  let releaseMessages
+  const messagesStarted = new Promise((resolve) => { announceMessages = resolve })
+  const messagesHeld = new Promise((resolve) => { releaseMessages = resolve })
+  client.session.messages = async () => {
+    announceMessages()
+    await messagesHeld
+    return { data: [] }
+  }
+  const collecting = adapter.messages({ taskId: "task-collect-race", workItemId: "impl-1" })
+  await messagesStarted
+  await adapter.resume({ taskId: "task-collect-race", workItemId: "impl-1", prompt: "第二轮" })
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+  releaseMessages()
+  await collecting
+
+  const mapping = await adapter.readMapping("task-collect-race", "impl-1")
+  assert.equal(mapping.dispatchSeq, 2)
+  assert.equal(mapping.lastCollectedSeq, 1)
+  assert.equal(mapping.pendingSync.dispatchSeq, 2)
+  assert.equal(mapping.pendingSync.kind, "idle")
 })
 
 test("adapter rejects path traversal identifiers before touching the SDK", async () => {
@@ -324,7 +397,7 @@ test("context injection selects lead or child profile without copying artifact b
     requests.push(request)
     if (request.command === "task.show") return {
       exitCode: 0,
-      envelope: { data: { task: { taskId: request.input.taskId ?? "task-bound", stage: "code-review" } } },
+      envelope: { data: { task: { taskId: request.input.taskId ?? "task-7", stage: "code-review" } } },
     }
     return {
       exitCode: 0,
@@ -356,6 +429,14 @@ test("context injection selects lead or child profile without copying artifact b
   assert.match(child, /只读取分配范围/)
   assert.equal(requests[0].input.taskId, "task-7")
   assert.equal(requests[1].input.profile, "check")
+
+  client.session.status = async () => ({ data: {} })
+  await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+  const leadWithPendingSync = await adapter.contextForSession("lead-7")
+  assert.match(leadWithPendingSync, /待同步成员/)
+  assert.match(leadWithPendingSync, /check-1/)
+  assert.match(leadWithPendingSync, /team_work_collect/)
+  assert.doesNotMatch(leadWithPendingSync, /result/)
 })
 
 test("SDK field-style errors are surfaced as recoverable platform errors", async () => {
@@ -512,6 +593,10 @@ test("stale dispatch locks recover by owner PID and managed sessions reject nati
   assert.match(plugin, /input\.tool === "task"/)
   assert.match(plugin, /TEAM_WORK_BLOCKING_TASK_REJECTED/)
   assert.match(plugin, /TEAM_WORK_HELPER_READ_ONLY_REJECTED/)
+  assert.match(plugin, /team_work_wait/)
+  assert.match(plugin, /adapter\.wait/)
+  assert.match(plugin, /requesterSessionId:\s*context\.sessionID/)
+  assert.match(plugin, /timeout_ms/)
 })
 
 test("managed task guard fails closed when Runtime state cannot be read", async () => {
@@ -599,6 +684,161 @@ test("OpenCode session events audit retries, errors, and lost children exactly o
     "platform.session.lost",
   ])
   assert.ok((await adapter.readMapping("task-events", "check-1")).lostRecordedAt)
+})
+
+test("child idle events persist a dispatch-scoped Lead synchronization hint without claiming completion", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+  })
+  await adapter.spawn({ taskId: "task-sync", workItemId: "impl-1", parentSessionId: "lead-sync", agent: "junior-luna", prompt: "实现" })
+
+  assert.equal((await adapter.readMapping("task-sync", "impl-1")).dispatchSeq, 1)
+  client.session.status = async () => ({ data: {} })
+  assert.equal(await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } }), true)
+
+  const firstPending = (await adapter.readMapping("task-sync", "impl-1")).pendingSync
+  assert.equal(await adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } }), true)
+  const mapping = await adapter.readMapping("task-sync", "impl-1")
+  assert.deepEqual(mapping.pendingSync, {
+    dispatchSeq: 1,
+    kind: "idle",
+    detectedAt: firstPending.detectedAt,
+  })
+  assert.equal(mapping.completedAt, undefined)
+})
+
+test("bounded wait wakes on a child synchronization event and can time out without changing workflow state", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+    waitPollMs: 1_000,
+  })
+  await adapter.spawn({ taskId: "task-wait", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  client.session.status = async () => ({ data: {} })
+
+  const waiting = adapter.wait({ taskId: "task-wait", workItemIds: ["impl-1"], timeoutMs: 1_000 })
+  setTimeout(() => {
+    void adapter.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+  }, 10)
+  const ready = await waiting
+  assert.equal(ready.outcome, "ready")
+  assert.equal(ready.items[0].workItemId, "impl-1")
+  assert.equal(ready.items[0].dispatchSeq, 1)
+  assert.ok(ready.waitedMs < 500)
+
+  await adapter.messages({ taskId: "task-wait", workItemId: "impl-1" })
+  const timedOut = await adapter.wait({ taskId: "task-wait", workItemIds: ["impl-1"], timeoutMs: 15 })
+  assert.equal(timedOut.outcome, "timeout")
+  assert.deepEqual(timedOut.items, [])
+})
+
+test("managed members cannot use the Lead synchronization wait", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot)
+  await adapter.spawn({ taskId: "task-lead-wait", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+
+  await assert.rejects(
+    adapter.wait({ taskId: "task-lead-wait", requesterSessionId: "child-1", timeoutMs: 20 }),
+    (error) => error.code === "WAIT_LEAD_REQUIRED",
+  )
+})
+
+test("bounded wait follows the OpenCode tool abort signal", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, { waitPollMs: 1_000 })
+  await adapter.spawn({ taskId: "task-abort-wait", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  const controller = new AbortController()
+
+  const waiting = assert.rejects(
+    adapter.wait({ taskId: "task-abort-wait", timeoutMs: 1_000, signal: controller.signal }),
+    (error) => error.code === "WAIT_ABORTED",
+  )
+  setTimeout(() => controller.abort(), 10)
+  await waiting
+})
+
+test("a new adapter process recovers persisted pending synchronization hints", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const runtimeExecutor = async () => ({ exitCode: 0, envelope: { data: {} } })
+  const first = testAdapter(client, projectRoot, { runtimeExecutor })
+  await first.spawn({ taskId: "task-restart", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+  client.session.status = async () => ({ data: {} })
+  await first.handleEvent({ type: "session.idle", properties: { sessionID: "child-1" } })
+
+  const restarted = testAdapter(client, projectRoot, { runtimeExecutor })
+  const recovered = await restarted.wait({ taskId: "task-restart", timeoutMs: 20 })
+
+  assert.equal(recovered.outcome, "ready")
+  assert.equal(recovered.items[0].workItemId, "impl-1")
+})
+
+test("bounded wait uses a low-frequency idle reconciliation when an event was missed", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  client.session.status = async (input) => {
+    client.calls.push(["status", input])
+    return { data: {} }
+  }
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+    waitPollMs: 5,
+    waitIdleGraceMs: 0,
+  })
+  await adapter.spawn({ taskId: "task-reconcile", workItemId: "check-1", parentSessionId: "lead", agent: "senior-terra", prompt: "审查" })
+
+  const result = await adapter.wait({ taskId: "task-reconcile", timeoutMs: 100 })
+
+  assert.equal(result.outcome, "ready")
+  assert.equal(result.items[0].source, "reconcile")
+  assert.equal((await adapter.readMapping("task-reconcile", "check-1")).pendingSync.kind, "idle")
+  assert.equal(client.calls.some(([name]) => name === "get"), true)
+})
+
+test("bounded wait honors its deadline even when OpenCode status does not settle", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  client.session.status = async () => new Promise(() => {})
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+    waitPollMs: 5,
+  })
+  await adapter.spawn({ taskId: "task-hung-status", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+
+  const result = await Promise.race([
+    adapter.wait({ taskId: "task-hung-status", timeoutMs: 20 }),
+    new Promise((resolve) => setTimeout(() => resolve({ outcome: "hung" }), 80)),
+  ])
+
+  assert.equal(result.outcome, "timeout")
+  assert.match(result.reconcileError, /timed out/)
+})
+
+test("bounded wait surfaces child error and lost states without accepting the work item", async () => {
+  const projectRoot = await tempProject()
+  const client = fakeClient()
+  const adapter = testAdapter(client, projectRoot, {
+    runtimeExecutor: async () => ({ exitCode: 0, envelope: { data: {} } }),
+  })
+  await adapter.spawn({ taskId: "task-wait-fault", workItemId: "impl-1", parentSessionId: "lead", agent: "junior-luna", prompt: "实现" })
+
+  await adapter.handleEvent({ type: "session.error", properties: { sessionID: "child-1", error: { message: "gateway unavailable" } } })
+  const failed = await adapter.wait({ taskId: "task-wait-fault", timeoutMs: 20 })
+  assert.equal(failed.outcome, "error")
+  assert.match(failed.items[0].detail, /gateway unavailable/)
+  await adapter.messages({ taskId: "task-wait-fault", workItemId: "impl-1" })
+  assert.equal((await adapter.readMapping("task-wait-fault", "impl-1")).pendingSync.kind, "error")
+
+  await adapter.resume({ taskId: "task-wait-fault", workItemId: "impl-1", prompt: "网关恢复后继续" })
+  await adapter.handleEvent({ type: "session.deleted", properties: { info: { id: "child-1" } } })
+  const lost = await adapter.wait({ taskId: "task-wait-fault", timeoutMs: 20 })
+  assert.equal(lost.outcome, "lost")
+  assert.equal(lost.items[0].dispatchSeq, 2)
 })
 
 test("lost detection and resume serialize mapping updates without erasing the terminal marker", async () => {

@@ -191,6 +191,23 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
           return json(await adapter.status({ taskId: args.task_id, workItemId: args.work_item_id }))
         },
       }),
+      team_work_wait: tool({
+        description: "在明确同步点有界等待任一受管成员请求同步；默认 10 秒、最长 30 秒，事件通知优先并低频复核状态。ready 只表示应收集消息，不表示工作已验收；timeout 后继续处理用户输入或其他 Harness 工作",
+        args: {
+          task_id: taskId,
+          work_item_ids: tool.schema.array(workItemId).min(1).optional().describe("可选；只等待这些 work item，省略则等待任务下任一受管成员"),
+          timeout_ms: tool.schema.number().int().positive().max(30_000).default(10_000),
+        },
+        async execute(args, context) {
+          return json(await adapter.wait({
+            taskId: args.task_id,
+            workItemIds: args.work_item_ids,
+            requesterSessionId: context.sessionID,
+            timeoutMs: args.timeout_ms,
+            signal: context.abort,
+          }))
+        },
+      }),
       team_work_collect: tool({
         description: "在同步点读取受管 child session 消息，供 Lead 核对制品、证据和裁决链",
         args: { task_id: taskId, work_item_id: workItemId, limit: tool.schema.number().int().positive().max(200).optional() },

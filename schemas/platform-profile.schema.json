@@ -59,6 +59,7 @@
         "assign": { "$ref": "#/$defs/operation" },
         "resume": { "$ref": "#/$defs/operation" },
         "status": { "$ref": "#/$defs/operation" },
+        "wait": { "$ref": "#/$defs/operation" },
         "stop": { "$ref": "#/$defs/operation" },
         "message": { "$ref": "#/$defs/operation" },
         "assist": { "$ref": "#/$defs/operation" },

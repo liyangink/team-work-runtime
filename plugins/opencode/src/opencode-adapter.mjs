@@ -133,11 +133,12 @@ function eventFingerprint(value) {
   return createHash("sha256").update(stableJson(value)).digest("hex")
 }
 
-export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platformProfile, platformSettings, now = () => new Date(), runtimeExecutor, assignmentValidator }) {
+export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platformProfile, platformSettings, now = () => new Date(), runtimeExecutor, assignmentValidator, waitPollMs = 1_000, waitIdleGraceMs = 1_500 }) {
   if (!client?.session) throw failure("INVALID_CLIENT", "OpenCode client.session 不可用")
   const root = path.resolve(projectRoot)
   const installedPlatformRoot = path.resolve(platformRoot ?? path.join(root, ".opencode/team-work"))
   const inFlightPlatformAudits = new Map()
+  const waitSignals = new Set()
   let projectReady
 
   function mappingPath(taskId, workItemId) {
@@ -166,6 +167,108 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     const mapping = await readOptionalMapping(mappingPath(taskId, workItemId))
     if (!mapping) throw failure("SESSION_MAPPING_NOT_FOUND", `未找到 ${taskId}/${workItemId} 的 OpenCode child session`)
     return mapping
+  }
+
+  async function listTaskMappings(taskId, workItemIds) {
+    requireIdentifier(taskId, "taskId")
+    if (workItemIds !== undefined) {
+      if (!Array.isArray(workItemIds) || workItemIds.length === 0) {
+        throw failure("INVALID_WAIT_TARGET", "workItemIds 必须是非空稳定标识符数组")
+      }
+      return Promise.all([...new Set(workItemIds)].map((workItemId) => readMapping(taskId, requireIdentifier(workItemId, "workItemId"))))
+    }
+    const taskRoot = path.dirname(mappingPath(taskId, "placeholder"))
+    let entries
+    try {
+      entries = await readdir(taskRoot, { withFileTypes: true })
+    } catch (error) {
+      if (error.code === "ENOENT") throw failure("SESSION_MAPPING_NOT_FOUND", `task ${taskId} 没有受管 child session`)
+      throw error
+    }
+    const mappings = []
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue
+      const workItemId = entry.name.slice(0, -5)
+      if (!IDENTIFIER.test(workItemId)) continue
+      mappings.push(await readMapping(taskId, workItemId))
+    }
+    if (!mappings.length) throw failure("SESSION_MAPPING_NOT_FOUND", `task ${taskId} 没有受管 child session`)
+    return mappings
+  }
+
+  function wakeWaiters() {
+    for (const resolve of waitSignals) resolve()
+    waitSignals.clear()
+  }
+
+  function waitForSignal(timeoutMs, signal) {
+    if (signal?.aborted) return Promise.reject(failure("WAIT_ABORTED", "等待已被取消", { retryable: true }))
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (operation) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        waitSignals.delete(onWake)
+        signal?.removeEventListener("abort", onAbort)
+        operation()
+      }
+      const onWake = () => finish(resolve)
+      const onAbort = () => finish(() => reject(failure("WAIT_ABORTED", "等待已被取消", { retryable: true })))
+      const timer = setTimeout(() => finish(resolve), timeoutMs)
+      waitSignals.add(onWake)
+      signal?.addEventListener("abort", onAbort, { once: true })
+    })
+  }
+
+  async function settleWithin(operation, timeoutMs) {
+    let timer
+    try {
+      return await Promise.race([
+        operation,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(failure("WAIT_RECONCILE_TIMEOUT", "OpenCode status reconciliation timed out", { retryable: true })), timeoutMs)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async function liveSessionIsIdle(mapping) {
+    try {
+      const statuses = await settleWithin(
+        callSdk("OpenCode session.status", () => client.session.status({ query: { directory: root } })),
+        waitPollMs,
+      ) ?? {}
+      const status = statuses[mapping.sessionId]
+      return !status || status.type === "idle"
+    } catch {
+      // 不确定时不消费 idle 事件；有界等待的低频复核仍可恢复遗漏通知。
+      return false
+    }
+  }
+
+  async function recordPendingSync(mapping, kind, { detail, source } = {}) {
+    const priority = { idle: 1, error: 2, lost: 3 }
+    const next = await updateMapping(mapping.taskId, mapping.workItemId, (current) => {
+      const dispatchSeq = current.dispatchSeq ?? 1
+      const existing = current.pendingSync
+      if (existing?.dispatchSeq === dispatchSeq && (priority[existing.kind] ?? 0) >= (priority[kind] ?? 0)) return current
+      return {
+        ...current,
+        pendingSync: {
+          dispatchSeq,
+          kind,
+          detectedAt: now().toISOString(),
+          ...(source ? { source } : {}),
+          ...(detail ? { detail: errorSummary(detail) } : {}),
+        },
+        updatedAt: now().toISOString(),
+      }
+    })
+    wakeWaiters()
+    return next
   }
 
   async function dispatch(sessionId, agent, prompt) {
@@ -426,10 +529,17 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       return {
         ...current,
         lostRecordedAt: current.lostRecordedAt ?? timestamp,
+        pendingSync: {
+          dispatchSeq: current.dispatchSeq ?? 1,
+          kind: "lost",
+          detectedAt: timestamp,
+          detail: errorSummary(reason),
+        },
         ...(ownsClaim ? { lostAuditClaimedAt: timestamp } : {}),
         updatedAt: timestamp,
       }
     })
+    wakeWaiters()
     if (!ownsClaim) return claimed
 
     const recorded = await auditSafe(claimed, "platform.session.lost", reason)
@@ -545,6 +655,8 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           title: title ?? `${agent} · ${workItemId}`,
           contextProfile,
           dispatchMode: "background",
+          dispatchSeq: 1,
+          lastDispatchAt: timestamp,
           createdAt: timestamp,
           updatedAt: timestamp,
           ...(existing ? {
@@ -576,8 +688,15 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
             failed = await updateMapping(taskId, workItemId, (current) => ({
               ...current,
               dispatchError: String(error?.message ?? error),
+              pendingSync: {
+                dispatchSeq: current.dispatchSeq ?? 1,
+                kind: "error",
+                detectedAt: now().toISOString(),
+                detail: errorSummary(error),
+              },
               updatedAt: now().toISOString(),
             }))
+            wakeWaiters()
           } catch (mappingError) {
             try { error.mappingPersistenceError = { code: mappingError.code, message: mappingError.message } } catch {}
           }
@@ -590,7 +709,18 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     },
 
     async resume({ taskId, workItemId, prompt }) {
-      const mapping = await updateMapping(taskId, workItemId, (current) => current)
+      const mapping = await updateMapping(taskId, workItemId, (current) => {
+        if (current.lostRecordedAt) return current
+        const next = {
+          ...current,
+          dispatchSeq: (current.dispatchSeq ?? 1) + 1,
+          lastDispatchAt: now().toISOString(),
+          updatedAt: now().toISOString(),
+        }
+        delete next.pendingSync
+        delete next.resumeError
+        return next
+      })
       if (mapping.lostRecordedAt) throw failure("SESSION_LOST", "OpenCode child session 已失联；请创建新的 work item attempt 并重派", { retryable: false })
       try {
         await dispatch(mapping.sessionId, mapping.agent, prompt)
@@ -600,8 +730,15 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           failed = await updateMapping(taskId, workItemId, (current) => ({
             ...current,
             resumeError: String(error?.message ?? error),
+            pendingSync: {
+              dispatchSeq: current.dispatchSeq ?? 1,
+              kind: "error",
+              detectedAt: now().toISOString(),
+              detail: errorSummary(error),
+            },
             updatedAt: now().toISOString(),
           }))
+          wakeWaiters()
         } catch (mappingError) {
           try { error.mappingPersistenceError = { code: mappingError.code, message: mappingError.message } } catch {}
         }
@@ -737,11 +874,111 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
 
     async messages({ taskId, workItemId, limit }) {
       const mapping = await readMapping(taskId, workItemId)
+      const collectedDispatchSeq = mapping.dispatchSeq ?? 1
       const messages = await callSdk("OpenCode session.messages", () => client.session.messages({
         path: { id: mapping.sessionId },
         query: { directory: root, ...(limit ? { limit } : {}) },
       })) ?? []
-      return { ...mapping, messages }
+      const collected = await updateMapping(taskId, workItemId, (current) => {
+        const next = {
+          ...current,
+          lastCollectedAt: now().toISOString(),
+          lastCollectedSeq: Math.max(current.lastCollectedSeq ?? 0, collectedDispatchSeq),
+          updatedAt: now().toISOString(),
+        }
+        if (current.dispatchSeq === collectedDispatchSeq
+          && current.pendingSync?.kind === "idle"
+          && current.pendingSync.dispatchSeq === collectedDispatchSeq) delete next.pendingSync
+        return next
+      })
+      return { ...collected, messages }
+    },
+
+    async wait({ taskId, workItemIds, requesterSessionId, timeoutMs = 10_000, signal }) {
+      requireIdentifier(taskId, "taskId")
+      if (requesterSessionId) {
+        requireIdentifier(requesterSessionId, "requesterSessionId")
+        if (await findMapping(requesterSessionId) || await findHelperSession(requesterSessionId)) {
+          throw failure("WAIT_LEAD_REQUIRED", "只有 Lead 控制面可以等待团队同步；成员继续执行自己的 work item")
+        }
+      }
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+        throw failure("INVALID_WAIT_TIMEOUT", "timeoutMs 必须是 1 到 30000 的整数")
+      }
+      const startedAt = Date.now()
+      const deadline = startedAt + timeoutMs
+      let reconcileError
+
+      const resultFrom = (mappings) => {
+        const items = mappings.flatMap((mapping) => {
+          const pending = mapping.pendingSync
+          if (!pending && !mapping.lostRecordedAt && !mapping.stoppedAt) return []
+          const kind = mapping.lostRecordedAt ? "lost" : mapping.stoppedAt ? "error" : pending.kind
+          return [{
+            workItemId: mapping.workItemId,
+            sessionId: mapping.sessionId,
+            agent: mapping.agent,
+            dispatchSeq: pending?.dispatchSeq ?? mapping.dispatchSeq ?? 1,
+            kind,
+            ...(pending?.source ? { source: pending.source } : {}),
+            ...(pending?.detail ? { detail: pending.detail } : {}),
+          }]
+        })
+        if (!items.length) return null
+        const outcome = items.some(({ kind }) => kind === "lost")
+          ? "lost"
+          : items.some(({ kind }) => kind === "error") ? "error" : "ready"
+        return { outcome, taskId, waitedMs: Date.now() - startedAt, items }
+      }
+
+      while (true) {
+        let mappings = await listTaskMappings(taskId, workItemIds)
+        const available = resultFrom(mappings)
+        if (available) return available
+
+        try {
+          const reconcileBudgetMs = Math.max(1, Math.min(waitPollMs, deadline - Date.now()))
+          const statuses = await settleWithin(
+            callSdk("OpenCode session.status", () => client.session.status({ query: { directory: root } })),
+            reconcileBudgetMs,
+          ) ?? {}
+          for (const mapping of mappings) {
+            const dispatchedAt = new Date(mapping.lastDispatchAt ?? mapping.createdAt).getTime()
+            if (Date.now() - dispatchedAt < waitIdleGraceMs) continue
+            const status = statuses[mapping.sessionId]
+            if (status?.type === "idle") await recordPendingSync(mapping, "idle", { source: "reconcile" })
+            if (status) continue
+            try {
+              await settleWithin(
+                callSdk("OpenCode session.get", () => client.session.get({ path: { id: mapping.sessionId }, query: { directory: root } })),
+                Math.max(1, Math.min(waitPollMs, deadline - Date.now())),
+              )
+              await recordPendingSync(mapping, "idle", { source: "reconcile" })
+            } catch (error) {
+              if (error.statusCode === 404) await markLost(mapping, "OpenCode 无法找到 child session")
+              else throw error
+            }
+          }
+          reconcileError = undefined
+        } catch (error) {
+          reconcileError = errorSummary(error)
+        }
+        mappings = await listTaskMappings(taskId, workItemIds)
+        const reconciled = resultFrom(mappings)
+        if (reconciled) return reconciled
+
+        const remainingMs = deadline - Date.now()
+        if (remainingMs <= 0) {
+          return {
+            outcome: "timeout",
+            taskId,
+            waitedMs: Date.now() - startedAt,
+            items: [],
+            ...(reconcileError ? { reconcileError } : {}),
+          }
+        }
+        await waitForSignal(Math.min(waitPollMs, remainingMs), signal)
+      }
     },
 
     async stop({ taskId, workItemId }) {
@@ -794,6 +1031,21 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       for (const entry of rendered.envelope.data.entries) {
         lines.push(`- ${entry.mustRead ? "[必读] " : ""}${entry.path} (${entry.kind})${entry.summary ? `：${entry.summary}` : ""}`)
       }
+      if (!mapping) {
+        let mappings = []
+        try {
+          mappings = await listTaskMappings(task.taskId)
+        } catch (error) {
+          if (error.code !== "SESSION_MAPPING_NOT_FOUND") throw error
+        }
+        const pending = mappings.filter((candidate) => candidate.pendingSync)
+        if (pending.length) {
+          lines.push("", "[待同步成员]")
+          for (const candidate of pending) {
+            lines.push(`- ${candidate.workItemId} · ${candidate.pendingSync.kind} · dispatch ${candidate.pendingSync.dispatchSeq}；调用 team_work_collect 核对消息和制品后再决定下一步`)
+          }
+        }
+      }
       return lines.join("\n")
     },
 
@@ -809,11 +1061,17 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       if (typeof sessionId !== "string" || !IDENTIFIER.test(sessionId)) return false
       const mapping = await findMapping(sessionId)
       if (!mapping) return false
+      if (event.type === "session.idle" || (event.type === "session.status" && properties.status?.type === "idle")) {
+        if (!await liveSessionIsIdle(mapping)) return true
+        await recordPendingSync(mapping, "idle")
+        return true
+      }
       if (event.type === "session.status" && properties.status?.type === "retry") {
         await auditPlatformEventOnce(mapping, "platform.session.retry", properties.status.message ?? `attempt ${properties.status.attempt ?? "unknown"}`, properties.status)
         return true
       }
       if (event.type === "session.error") {
+        await recordPendingSync(mapping, "error", { detail: properties.error })
         await auditPlatformEventOnce(mapping, "platform.session.error", properties.error, properties.error ?? null)
         return true
       }

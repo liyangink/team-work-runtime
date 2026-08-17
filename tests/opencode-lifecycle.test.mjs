@@ -97,6 +97,7 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   assert.deepEqual(profile.helpers.map(({ id }) => id), ["team-work-explore", "team-work-librarian"])
   assert.ok(profile.helpers.every(({ resolvedModel }) => resolvedModel === "gateway/deepseek-v4-flash"))
   assert.equal(profile.operations.spawn.tool, "team_work_spawn")
+  assert.equal(profile.operations.wait.tool, "team_work_wait")
   assert.equal(profile.operations.assist.tool, "team_work_assist")
   const profileSchema = JSON.parse(await readFile(path.join(sourceRoot, "schemas/platform-profile.schema.json"), "utf8"))
   assert.deepEqual(createContractValidator([profileSchema])(profileSchema.$id, profile), [])

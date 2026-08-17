@@ -51,6 +51,17 @@ test("OpenCode managed resume distinguishes its arguments from generic delegatio
   assert.match(recovery, /team_work_resume[^。\n]*(?:网关|session)[^。\n]*(?:status|恢复)/i)
 })
 
+test("OpenCode bounded wait remains a synchronization hint rather than a completion signal", async () => {
+  const plugin = await read("plugins/opencode/assets/team-work.js")
+  const guide = await read("plugins/opencode/guides/team-work.md")
+
+  assert.match(plugin, /team_work_wait/)
+  assert.match(plugin, /最长 30 秒/)
+  assert.match(guide, /ready[^。\n]*不表示[^。\n]*验收/)
+  assert.match(guide, /待同步[^]*不复制成员正文/)
+  assert.match(guide, /不会[^。\n]*第二套调度队列|不会[^。\n]*自动推进 Workflow/)
+})
+
 test("OpenCode exposes a strongly typed work-item creation tool before managed spawn", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")

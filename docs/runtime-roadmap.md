@@ -92,7 +92,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 首次项目调用时懒初始化 `.team-work/`，物化当前平台 Profile/指南并探测默认 OpenSpec；
 - 通过 Plugin 的 session、message、tool 事件完成活动任务识别、上下文注入和生命周期记录；
 - 复用原生 subagent child session 与 session 导航，不实现第二套 Agent 调度器；
-- 所有受管 Team-work subagent 强制 background/non-blocking 派发；Lead 在显式同步点查询状态并收集结果，禁止阻塞等待单个成员；
+- 所有受管 Team-work subagent 强制 background/non-blocking 派发；Lead 在显式同步点通过持久待同步提示和最长 30 秒的有界等待收集结果，禁止阻塞等待单个成员完成整个任务；
 - 可选地从独立 `helper` 模型配置生成只读 explore/librarian 助手；受管成员通过原生后台 child session 并行检索，助手不成为团队成员或 Runtime work item；
 - 使用稳定 task/work-item ID 关联 child session；同一 work item 跨轮次复用会话，Lead 只记录并转发成员与 Expert 结论；
 - 跨会话恢复 Runtime 任务、制品与映射；只有失联、停止、换 Owner、职责变化或独立第二意见才新建 child session，并保留旧映射历史；
@@ -100,7 +100,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 完成标准：可独立创建、恢复和完成团队任务；多模型 Agent 能正常调用工具；受管派发测试证明不会进入阻塞模式；Lead 与 subagent 获得不同的最小上下文；Plugin 失败不损坏状态或形成死门；卸载不删除项目数据。
 
-已完成：最低版本校验、模型唯一解析、启动时动态 Agent model/effort 注入、独立 helper 模型与只读 explore/librarian 后台辅助链路、跨平台用户配置路径、版本化配置 Schema、用户级 Skill/Plugin 装配、可配置软启停、npm 安装器、项目懒初始化、安装清单、更新备份与回滚、安全卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、最小上下文 Hook、OpenSpec 模式路由、平台事件审计、右侧 Team 会话状态与原生 session 跳转，以及网关失败—续派—成员失联的故障注入。
+已完成：最低版本校验、模型唯一解析、启动时动态 Agent model/effort 注入、独立 helper 模型与只读 explore/librarian 后台辅助链路、跨平台用户配置路径、版本化配置 Schema、用户级 Skill/Plugin 装配、可配置软启停、npm 安装器、项目懒初始化、安装清单、更新备份与回滚、安全卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、派发轮次级待同步提示与有界等待、最小上下文 Hook、OpenSpec 模式路由、平台事件审计、右侧 Team 会话状态与原生 session 跳转，以及网关失败—续派—成员失联的故障注入。
 
 真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中从实际研发阶段完成 Workflow 路由、Owner、挑战者、核心 Expert 裁决、Lead 控制面验收和最终制品的正式场景 E2E。
 

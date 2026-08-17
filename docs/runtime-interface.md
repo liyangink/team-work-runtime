@@ -102,7 +102,7 @@ Workflow 消费 outcome 后决定流转；Team-work 不直接修改阶段。SPEC
 
 ## 6. Platform Profile
 
-Platform Profile 是 Team-work 读取平台能力的唯一 Interface，必须给出 ID 唯一的 Agent 档位、requested/resolved model、成本权重、受管派发模式、spawn/assign/resume/status/stop/message 操作映射、并发限制、session/UI 能力和已知降级。共享 schema 允许平台声明 background 或 blocking；OpenCode Adapter 及其 fixture 单独强制 background + reject/rewrite，不能把 OpenCode 限制扩大成所有平台规则。
+Platform Profile 是 Team-work 读取平台能力的唯一 Interface，必须给出 ID 唯一的 Agent 档位、requested/resolved model、成本权重、受管派发模式、spawn/assign/resume/status/stop/message 操作映射、并发限制、session/UI 能力和已知降级；支持成员通知的插件还可声明可选 `wait` 操作。共享 schema 允许平台声明 background 或 blocking；OpenCode Adapter 及其 fixture 单独强制 background + reject/rewrite，不能把 OpenCode 限制扩大成所有平台规则。
 
 ## 7. JSON envelope
 

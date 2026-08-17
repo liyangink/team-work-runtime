@@ -306,6 +306,8 @@ plugins/opencode/
 
 OpenCode Adapter 对受管 `solo/team` 派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续维护 Harness 或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果，禁止转而承担成员的具体工作。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
 
+Adapter 按 work item 的派发轮次持久记录 `idle/error/lost` 待同步提示；`idle` 事件必须复核原生实时状态，避免上一轮延迟事件错配到新的 busy 派发。事件只唤醒当前进程内的有界等待，提示本身保存在既有 session mapping 中，因而可跨会话恢复。Lead 等待默认 10 秒、最长 30 秒，事件遗漏时低频复核原生 session 状态；返回只表示应收集消息，不替代制品验收、Workflow 流转或用户输入队列。首版不实现自动续写 Lead、独立 Inbox、永久定时任务或第二套 Agent 调度器。
+
 首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `solo/team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过 `team_work_spawn`。spawn 在创建 child session 前必须验证 Platform Profile 中的已解析 Agent、活动任务拓扑、Runtime work item、唯一 Owner 和可派发状态；同一 work item 的后续轮次必须 `resume`，只有旧 session 已失联或停止时才能替换并保留历史。SDK 返回错误与网络抛错统一为可恢复的平台错误；已删除会话报告为 `lost` 而不是伪装成 `idle`。
 
 OpenCode 能力约束参考：[Plugins](https://opencode.ai/docs/plugins/)、[Agent Skills](https://opencode.ai/docs/skills/)、[Agents](https://opencode.ai/docs/agents/)、[Custom Tools](https://opencode.ai/docs/custom-tools/)。

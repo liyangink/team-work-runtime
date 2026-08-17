@@ -334,7 +334,7 @@ Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagen
 
 进入已绑定的团队任务后，OpenCode 右侧栏会显示 `Team` 区域：持续列出当前任务的受管成员、Agent、work item 以及工作中、重试、空闲、停止或失联状态。点击成员可直接进入对应 child session；进入成员会话后列表仍保留，并可一键返回 Lead。该视图只读取 Runtime 已有的 task/session 映射，不维护第二份团队状态。
 
-所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 用 resume 复用 child session。Lead 在同步点查询状态并收集结果；成员自报完成或平台显示完成都不等于验收通过。
+所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 用 resume 复用 child session。Plugin 持久记录成员当前派发轮次的待同步提示；Lead 可在明确同步点短暂调用 `team_work_wait`，事件到达会立即返回，事件遗漏则低频复核，默认 10 秒且最长 30 秒。随后仍须用 `team_work_collect` 核对消息、制品和证据；成员空闲、自报完成或平台显示完成都不等于验收通过。
 
 受管成员的只读辅助同样使用非阻塞 child session。助手只做代码探索或资料检索，不创建 Runtime work item；成员在同步点收集结果后自行核验和整合。
 

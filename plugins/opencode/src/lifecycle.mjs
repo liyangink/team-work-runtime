@@ -424,6 +424,7 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
       assign: { supported: true, tool: "team_work_spawn" },
       resume: { supported: true, tool: "team_work_resume" },
       status: { supported: true, tool: "team_work_status" },
+      wait: { supported: true, tool: "team_work_wait" },
       stop: { supported: true, tool: "team_work_stop" },
       message: { supported: false, tool: null },
       assist: { supported: Boolean(helper), tool: helper ? "team_work_assist" : null },

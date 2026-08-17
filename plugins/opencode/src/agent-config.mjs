@@ -37,6 +37,7 @@ function definition(agent, binding, helperEnabled) {
       team_work_work_create: "deny",
       team_work_spawn: "deny",
       team_work_resume: "deny",
+      team_work_wait: "deny",
       team_work_stop: "deny",
     },
   }
@@ -69,6 +70,7 @@ function helperDefinition(helper, binding) {
       team_work_spawn: "deny",
       team_work_resume: "deny",
       team_work_status: "deny",
+      team_work_wait: "deny",
       team_work_collect: "deny",
       team_work_stop: "deny",
     },

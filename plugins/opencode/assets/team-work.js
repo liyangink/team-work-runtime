@@ -30,7 +30,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
     "task.create", "task.bind", "task.show", "task.team", "task.spec", "task.await", "task.resume", "task.complete", "task.cancel", "task.archive",
     "context.register", "context.list", "context.render", "context.rebuild",
     "flow.status", "flow.check", "flow.advance", "flow.rollback", "flow.decide",
-    "work.create", "work.start", "work.submit", "work.accept", "work.rework", "work.block", "work.cancel", "work.show",
+    "work.start", "work.submit", "work.accept", "work.rework", "work.block", "work.cancel", "work.show",
     "event.list", "event.record",
   ]
   const contextFor = async (sessionID) => {
@@ -74,7 +74,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
     },
     tool: {
       team_work_runtime: tool({
-        description: "以稳定 JSON Interface 调用项目 CoreRuntime；用于任务、上下文、流程、门禁和 work item 状态，不执行任意 shell",
+        description: "以稳定 JSON Interface 调用项目 CoreRuntime；用于任务、上下文、流程、门禁和 work item 状态，不执行任意 shell。创建 work item 优先使用强类型 team_work_work_create，避免猜测字段名",
         args: {
           command: tool.schema.enum(runtimeCommands),
           input: tool.schema.record(tool.schema.string(), tool.schema.unknown()).default({}),
@@ -91,6 +91,34 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
             input.sessionKey = context.sessionID
           }
           return json((await adapter.runtime({ command: args.command, input, dryRun: args.dry_run })).envelope)
+        },
+      }),
+      team_work_work_create: tool({
+        description: "强类型创建 Runtime work item；固定平台参数并映射到 CoreRuntime，避免通过通用 record 猜测字段名",
+        args: {
+          task_id: taskId,
+          work_item_id: workItemId,
+          owner: tool.schema.string().describe("已安装的 Team-work Agent 名称，且必须与随后派发的 agent 一致"),
+          scope: tool.schema.string().min(1).describe("唯一 Owner 的工作范围与边界"),
+          done_when: tool.schema.array(tool.schema.string().min(1)).min(1).describe("可核验完成条件"),
+          artifact_paths: tool.schema.array(tool.schema.string().min(1)).min(1).describe("相对项目根目录的预期制品路径"),
+          dependencies: tool.schema.array(workItemId).default([]),
+          expected_revision: tool.schema.number().int().nonnegative(),
+        },
+        async execute(args) {
+          return json((await adapter.runtime({
+            command: "work.create",
+            input: {
+              taskId: args.task_id,
+              workItemId: args.work_item_id,
+              owner: args.owner,
+              scope: args.scope,
+              doneWhen: args.done_when,
+              artifactPaths: args.artifact_paths,
+              dependencies: args.dependencies,
+              expectedRevision: args.expected_revision,
+            },
+          })).envelope)
         },
       }),
       team_work_spawn: tool({

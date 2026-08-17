@@ -51,6 +51,18 @@ test("OpenCode managed resume distinguishes its arguments from generic delegatio
   assert.match(recovery, /team_work_resume[^。\n]*(?:网关|session)[^。\n]*(?:status|恢复)/i)
 })
 
+test("OpenCode exposes a strongly typed work-item creation tool before managed spawn", async () => {
+  const plugin = await read("plugins/opencode/assets/team-work.js")
+  const guide = await read("plugins/opencode/guides/team-work.md")
+  const genericCommands = plugin.slice(plugin.indexOf("const runtimeCommands"), plugin.indexOf("const contextFor"))
+  assert.match(plugin, /team_work_work_create:\s*tool\(/)
+  assert.match(plugin, /workItemId:\s*args\.work_item_id/)
+  assert.match(plugin, /artifactPaths:\s*args\.artifact_paths/)
+  assert.match(plugin, /doneWhen:\s*args\.done_when/)
+  assert.doesNotMatch(genericCommands, /"work\.create"/)
+  assert.match(guide, /team_work_work_create.*work\.start.*team_work_spawn/s)
+})
+
 test("new implementation documents have valid local links", async () => {
   const inventory = JSON.parse(await read("docs/file-inventory.json"))
   const markdownFiles = inventory.newImplementation.filter((file) => file.endsWith(".md"))
@@ -76,7 +88,7 @@ test("README is the single user guide with intro, quick start, and one fixed con
   assert.ok(usage.indexOf("## 使用说明") < usage.indexOf("## 成本控制与团队分档"))
   assert.ok(usage.indexOf("## 成本控制与团队分档") < usage.indexOf("## 工作流"))
   assert.match(usage, /npx team-work-runtime@latest install/)
-  assert.match(quickStart, /全局插件目录[^。\n]*自动加载[^。\n]*无需修改[^。\n]*opencode\.json/i)
+  assert.match(quickStart, /全局插件目录[^。\n]*tui\.json[^。\n]*不会修改[^。\n]*opencode\.json/i)
   assert.match(usage, /~\/\.config\/team-work\/config\.json/)
   assert.match(usage, /首次调用.*`.team-work\/`/s)
   assert.match(usage, /TEAM_WORK_CONFIG_HOME/)

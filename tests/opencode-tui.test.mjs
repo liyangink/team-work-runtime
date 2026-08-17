@@ -27,12 +27,14 @@ async function fixture() {
     {
       schemaVersion: "1.0", platform: "opencode", taskId, workItemId: "owner-1",
       parentSessionId: "lead-1", sessionId: "child-busy", agent: "junior-flash",
+      title: "实现消息重试",
       contextProfile: "implement", dispatchMode: "background",
       createdAt: "2026-08-13T08:01:00.000Z", updatedAt: "2026-08-13T08:03:00.000Z",
     },
     {
       schemaVersion: "1.0", platform: "opencode", taskId, workItemId: "review-1",
       parentSessionId: "lead-1", sessionId: "child-idle", agent: "senior-terra",
+      title: "挑战实现方案",
       contextProfile: "check", dispatchMode: "background",
       createdAt: "2026-08-13T08:02:00.000Z", updatedAt: "2026-08-13T08:02:00.000Z",
     },
@@ -44,15 +46,10 @@ async function fixture() {
 
 test("Team sidebar resolves the bound task and presents live managed sessions", async () => {
   const { projectRoot, taskId } = await fixture()
-  const sessions = new Map([
-    ["child-busy", { id: "child-busy", title: "实现消息重试" }],
-    ["child-idle", { id: "child-idle", title: "挑战实现方案" }],
-  ])
   const panel = await loadTeamPanel({
     projectRoot,
     currentSessionId: "lead-1",
     statusFor: (sessionId) => sessionId === "child-busy" ? { type: "busy" } : { type: "idle" },
-    sessionFor: (sessionId) => sessions.get(sessionId),
   })
 
   assert.equal(panel.taskId, taskId)
@@ -115,6 +112,20 @@ test("Team sidebar refuses ambiguous parent mappings and ignores malformed files
   assert.equal(await loadTeamPanel({ projectRoot: parent, currentSessionId: "lead-shared" }), null)
 })
 
+test("Team sidebar refuses a stale binding that conflicts with the current child mapping", async () => {
+  const { projectRoot } = await fixture()
+  const otherRoot = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-other")
+  await mkdir(otherRoot, { recursive: true })
+  await writeFile(path.join(otherRoot, "owner-other.json"), `${JSON.stringify({
+    schemaVersion: "1.0", platform: "opencode", taskId: "task-other", workItemId: "owner-other",
+    parentSessionId: "lead-other", sessionId: "lead-1", agent: "junior-flash",
+    contextProfile: "implement", dispatchMode: "background",
+    createdAt: "2026-08-13T08:00:00.000Z", updatedAt: "2026-08-13T08:00:00.000Z",
+  })}\n`)
+
+  assert.equal(await loadTeamPanel({ projectRoot, currentSessionId: "lead-1" }), null)
+})
+
 test("OpenCode TUI submodule registers one sidebar slot and passes the selected session", async () => {
   let registration
   const rendered = []
@@ -127,7 +138,7 @@ test("OpenCode TUI submodule registers one sidebar slot and passes the selected 
   await tui(api)
   const output = registration.slots.sidebar_content({ theme: "theme" }, { session_id: "child-1" })
 
-  assert.equal(registration.order, 300)
+  assert.equal(registration.order, 350)
   assert.equal(output, "team-sidebar")
   assert.deepEqual(rendered, [{ api, context: { theme: "theme" }, sessionId: "child-1" }])
 })

@@ -11,10 +11,11 @@ const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.
 function parse(argv) {
   const command = argv[0]
   if (!LIFECYCLE_COMMANDS.has(command)) throw Object.assign(new Error(`未知安装器命令：${command ?? "<empty>"}`), { code: "INVALID_COMMAND" })
-  const options = { force: false }
+  const options = { force: false, probeModels: false }
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]
     if (token === "--force") options.force = true
+    else if (token === "--probe-models" && command === "doctor") options.probeModels = true
     else {
       throw Object.assign(new Error(`未知参数：${token}`), { code: "INVALID_ARGUMENT" })
     }
@@ -76,6 +77,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       openspecCommand: platform.openspecCommand,
       specMode: platform.specMode,
       force: options.force,
+      probeModels: options.probeModels,
     })
     writeOut(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`)
     return 0

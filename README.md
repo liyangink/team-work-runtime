@@ -53,7 +53,7 @@ Workflow 和 Team-work 只调用 CoreRuntime 的稳定接口。CoreRuntime 只�
 npx team-work-runtime@latest install
 ```
 
-安装器会将入口写入 OpenCode 全局插件目录，由 OpenCode 在启动时自动加载，无需修改 `opencode.json`。如果 OpenCode 已经运行，请在安装完成后重启。
+安装器会将 Server 入口写入 OpenCode 全局插件目录，并在全局 `tui.json` 中注册 Team 侧栏；不会修改 Provider、网关或 `opencode.json`。如果 OpenCode 已经运行，请在安装完成后重启。
 
 安装器会创建用户配置。Linux 与 macOS 默认位置为：
 
@@ -358,7 +358,16 @@ npx team-work-runtime@latest update
 npx team-work-runtime@latest uninstall
 ```
 
-更新会保护并备份受管文件。卸载只移除用户级 Skill、Plugin 和 Runtime；用户配置及项目 `.team-work/` 中的任务、制品、事件和归档都会保留。
+更新会保护并备份受管文件；卸载也会先创建可恢复快照，再移除用户级 Skill、Plugin、TUI 注册和 Runtime。用户配置及项目 `.team-work/` 中的任务、制品、事件和归档都会保留。
+
+开发阶段可直接用当前仓库更新本机安装，不需要等待 npm 发布：
+
+```bash
+cd /path/to/team-work-runtime
+./cli.mjs update
+```
+
+该命令以当前工作区为安装源；更新后重启 OpenCode。只有受管文件被手工修改时才需要先确认备份内容，再使用 `./cli.mjs update --force`。
 
 ## 常见问题
 
@@ -370,7 +379,13 @@ npx team-work-runtime@latest uninstall
 npx team-work-runtime@latest doctor
 ```
 
-`doctor` 用于诊断版本、安装清单、受管文件漂移和 Agent 可用性，不是更新或卸载的必需步骤。
+默认检查版本、安装清单、TUI 注册、受管文件漂移，以及配置模型能否被 `opencode models` 找到。需要真实调用各个不同模型验证网关连通性时显式执行：
+
+```bash
+npx team-work-runtime@latest doctor --probe-models
+```
+
+连通探测会要求每个不同模型只回复 `OK`，但 OpenCode 仍可能携带系统上下文，费用未必可以忽略；同一模型被多个 Agent 复用时只探测一次。默认 `doctor` 不调用模型，也不是更新或卸载的必需步骤。
 
 ## License
 

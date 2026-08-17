@@ -15,11 +15,12 @@ npx team-work-runtime@latest install
 - 用户配置：`~/.config/team-work/config.json`
 - Skill：`~/.config/opencode/skills/`
 - Plugin：`~/.config/opencode/plugins/team-work.js`、`team-work-tui.tsx`
+- TUI 注册：`~/.config/opencode/tui.json` 中的 `./plugins/team-work-tui.tsx`
 - Runtime、Profile、指南和安装清单：`~/.config/opencode/team-work/`
 
-用户配置支持 `TEAM_WORK_CONFIG_HOME`、`XDG_CONFIG_HOME` 和 Windows `%APPDATA%`。OpenCode 安装根遵循其全局目录；安装器不修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
+用户配置支持 `TEAM_WORK_CONFIG_HOME`、`XDG_CONFIG_HOME` 和 Windows `%APPDATA%`。OpenCode 安装根遵循其全局目录；安装器只对 `tui.json` 做保留注释的定点注册，不修改 provider、网关、凭据、MCP 或用户的 `opencode.json`。
 
-OpenCode 会自动发现全局 `plugins/` 下的入口。`enable/disable` 只切换用户配置中的 `platforms.opencode.enabled`；禁用时入口仍可被发现，但 Server 不注册 Agent、工具或 Hook，TUI 不注册侧栏。修改后重启 OpenCode 生效。
+OpenCode 会自动发现全局 `plugins/` 下的 Server 入口；TUI 入口按官方机制显式注册到 `tui.json`。`enable/disable` 只切换用户配置中的 `platforms.opencode.enabled`；禁用时入口仍可被发现，但 Server 不注册 Agent、工具或 Hook，TUI 不注册侧栏。修改后重启 OpenCode 生效。
 
 首次在项目内调用 Team-work Runtime Tool 时，Plugin 才初始化项目 `.team-work/`，并物化当前 Platform Profile 与增量指南。安装、更新和卸载都不扫描或删除各项目任务数据。
 
@@ -44,9 +45,9 @@ npx team-work-runtime@latest update
 npx team-work-runtime@latest uninstall
 ```
 
-更新会检查 digest，并在强制覆盖前备份受管文件。卸载只处理安装清单中的用户级资产；本地修改默认保留，`--force` 会先备份再删除。用户配置和项目 `.team-work/` 始终保留。
+更新会检查 digest，并在强制覆盖前备份受管文件。卸载只处理安装清单中的用户级资产和自己的 TUI 注册，操作前始终创建恢复快照；本地修改默认保留，`--force` 才会连同本地修改一起移除。用户配置和项目 `.team-work/` 始终保留。
 
-`doctor` 只用于故障诊断，会检查显式绑定的模型是否仍出现在 `opencode models` 中；它不是更新或卸载的前置步骤。
+`doctor` 只用于故障诊断，会检查 TUI 注册及显式绑定模型是否仍出现在 `opencode models` 中。`doctor --probe-models` 还会要求每个不同模型真实回复一次 `OK`；OpenCode 仍可能携带系统上下文，因此应留意模型费用。默认检查不调用模型，也不是更新或卸载的前置步骤。
 
 ## 平台运行规则
 

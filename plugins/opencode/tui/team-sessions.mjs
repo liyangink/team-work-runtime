@@ -96,7 +96,7 @@ function memberStatus(mapping, statusFor) {
   }
 }
 
-export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor, sessionFor }) {
+export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor }) {
   if (typeof projectRoot !== "string" || !projectRoot || typeof currentSessionId !== "string") return null
   const root = await realpath(path.resolve(projectRoot)).catch(() => null)
   if (!root) return null
@@ -109,12 +109,6 @@ export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor, 
   const members = mappings
     .filter((mapping) => mapping.taskId === taskId)
     .map((mapping) => {
-      let session
-      try {
-        session = sessionFor?.(mapping.sessionId)
-      } catch {
-        session = undefined
-      }
       const status = memberStatus(mapping, statusFor)
       return {
         taskId,
@@ -124,7 +118,7 @@ export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor, 
         agent: mapping.agent,
         contextProfile: mapping.contextProfile,
         status,
-        title: session?.title || `${mapping.agent} · ${mapping.workItemId}`,
+        title: mapping.title || `${mapping.agent} · ${mapping.workItemId}`,
         navigable: status !== "lost",
         focused: mapping.sessionId === currentSessionId,
         updatedAt: mapping.updatedAt,

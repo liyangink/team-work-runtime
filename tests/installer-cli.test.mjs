@@ -79,6 +79,33 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(received.options.installRoot, opencodeRoot)
 })
 
+test("doctor CLI forwards the explicit model probe switch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  const configRoot = path.join(root, "team-work")
+  await mkdir(configRoot, { recursive: true })
+  await writeFile(path.join(configRoot, "config.json"), `${JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: { "junior-flash": { model: "gateway/model-a" } },
+    platforms: { opencode: { enabled: true } },
+    spec: { provider: "openspec", mode: "auto" },
+  })}\n`)
+  let received
+  const exitCode = await runInstallerCli(["doctor", "--probe-models"], {
+    configRoot,
+    opencodeRoot: path.join(root, "opencode"),
+    manage: async (command, options) => {
+      received = { command, options }
+      return { status: "ok" }
+    },
+    writeOut: () => {},
+    writeError: () => {},
+  })
+
+  assert.equal(exitCode, 0)
+  assert.equal(received.command, "doctor")
+  assert.equal(received.options.probeModels, true)
+})
+
 test("enable and disable toggle OpenCode without changing installed assets", async () => {
   const userRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
   const configRoot = path.join(userRoot, ".config", "team-work")

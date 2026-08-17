@@ -108,6 +108,108 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   assert.equal(manifest.status, "installed")
   assert.ok(manifest.managedFiles.length > 20)
   assert.ok(manifest.managedFiles.every(({ path: relativePath, sha256 }) => relativePath && /^[a-f0-9]{64}$/.test(sha256)))
+
+  const tuiConfig = JSON.parse(await readFile(path.join(projectRoot, "tui.json"), "utf8"))
+  assert.equal(tuiConfig.$schema, "https://opencode.ai/tui.json")
+  assert.deepEqual(tuiConfig.plugin, ["./plugins/team-work-tui.tsx"])
+})
+
+test("install and update preserve an existing JSONC TUI config and register the sidebar idempotently", async () => {
+  const projectRoot = await tempProject()
+  const tuiPath = path.join(projectRoot, "tui.json")
+  await writeFile(tuiPath, `{
+  // 用户自己的主题与插件必须保留
+  "$schema": "https://opencode.ai/tui.json",
+  "theme": "custom",
+  "plugin": ["other-plugin"]
+}\n`)
+
+  await manageOpenCodePlugin("install", options(projectRoot))
+  await manageOpenCodePlugin("update", options(projectRoot))
+
+  const content = await readFile(tuiPath, "utf8")
+  assert.match(content, /用户自己的主题与插件必须保留/)
+  assert.match(content, /"theme": "custom"/)
+  assert.equal(content.match(/\.\/plugins\/team-work-tui\.tsx/g)?.length, 1)
+})
+
+test("invalid or symlinked TUI config fails before installation changes", async () => {
+  const invalidRoot = await tempProject()
+  await writeFile(path.join(invalidRoot, "tui.json"), "{broken\n")
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(invalidRoot)),
+    (error) => error.code === "TUI_CONFIG_INVALID",
+  )
+  assert.equal(await exists(path.join(invalidRoot, "plugins/team-work.js")), false)
+
+  const symlinkRoot = await tempProject()
+  const outside = path.join(await tempProject(), "outside-tui.json")
+  await writeFile(outside, "{}\n")
+  await symlink(outside, path.join(symlinkRoot, "tui.json"))
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(symlinkRoot)),
+    (error) => error.code === "UNSAFE_PATH",
+  )
+  assert.equal(await readFile(outside, "utf8"), "{}\n")
+})
+
+test("failed smoke restores the exact pre-install TUI config", async () => {
+  const projectRoot = await tempProject()
+  const tuiPath = path.join(projectRoot, "tui.json")
+  const original = `{
+  // keep this byte-for-byte on rollback
+  "theme": "custom"
+}\n`
+  await writeFile(tuiPath, original)
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, "#!/bin/sh\nexit 23\n")
+  await chmod(fakeOpenCode, 0o755)
+
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(projectRoot, { opencodeCommand: fakeOpenCode, skipSmoke: false })),
+    (error) => error.code === "SMOKE_TEST_FAILED",
+  )
+
+  assert.equal(await readFile(tuiPath, "utf8"), original)
+  assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), false)
+})
+
+test("doctor reports a missing TUI registration and update repairs it", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  await writeFile(path.join(projectRoot, "tui.json"), "{}\n")
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot))
+  assert.ok(diagnosis.issues.some(({ code }) => code === "TUI_PLUGIN_NOT_REGISTERED"))
+
+  const repaired = await manageOpenCodePlugin("update", options(projectRoot))
+  assert.equal(repaired.status, "updated")
+  assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, "tui.json"), "utf8")).plugin, ["./plugins/team-work-tui.tsx"])
+})
+
+test("uninstall removes only the Team-work TUI registration", async () => {
+  const projectRoot = await tempProject()
+  const tuiPath = path.join(projectRoot, "tui.json")
+  await writeFile(tuiPath, `${JSON.stringify({ theme: "custom", plugin: ["other-plugin"] }, null, 2)}\n`)
+  await manageOpenCodePlugin("install", options(projectRoot))
+
+  await manageOpenCodePlugin("uninstall", options(projectRoot))
+
+  assert.deepEqual(JSON.parse(await readFile(tuiPath, "utf8")), { theme: "custom", plugin: ["other-plugin"] })
+})
+
+test("uninstall refuses a newly corrupted TUI config without removing installed assets", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  await writeFile(path.join(projectRoot, "tui.json"), "{broken\n")
+
+  await assert.rejects(
+    manageOpenCodePlugin("uninstall", options(projectRoot)),
+    (error) => error.code === "TUI_CONFIG_INVALID",
+  )
+
+  assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), true)
+  assert.equal(JSON.parse(await readFile(path.join(projectRoot, "team-work/install.json"), "utf8")).status, "installed")
 })
 
 test("update repairs missing managed files and doctor reports drift", async () => {
@@ -148,6 +250,16 @@ test("doctor does not report stale unresolved Agents outside the current explici
   assert.equal(diagnosis.issues.some(({ code }) => code === "MODEL_UNRESOLVED"), false)
 })
 
+test("an explicit reduced Agent config does not warn about intentionally omitted candidates", async () => {
+  const projectRoot = await tempProject()
+  const result = await manageOpenCodePlugin("install", options(projectRoot, {
+    modelMap: { "junior-flash": "gateway/deepseek-v4-flash" },
+    availableModels: ["gateway/deepseek-v4-flash"],
+  }))
+
+  assert.deepEqual(result.warnings, [])
+})
+
 test("doctor reports an explicit Agent model that OpenCode cannot resolve", async () => {
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot))
@@ -174,6 +286,86 @@ test("doctor reports an independently configured helper model that OpenCode cann
   )))
 })
 
+test("doctor distinguishes model discovery failure from unavailable configured models", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const failingOpenCode = path.join(projectRoot, "failing-opencode")
+  await writeFile(failingOpenCode, "#!/bin/sh\necho model-scan-broken >&2\nexit 23\n")
+  await chmod(failingOpenCode, 0o755)
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    availableModels: undefined,
+    opencodeCommand: failingOpenCode,
+  }))
+
+  assert.ok(diagnosis.issues.some(({ code, message }) => code === "MODEL_DISCOVERY_FAILED" && message.includes("model-scan-broken")))
+  assert.equal(diagnosis.issues.some(({ code }) => code === "MODEL_UNAVAILABLE"), false)
+})
+
+test("doctor optionally probes each distinct configured model and reports connectivity", async () => {
+  const projectRoot = await tempProject()
+  const calls = path.join(projectRoot, "probe-calls.txt")
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, `#!/bin/sh
+if [ "$1" = "models" ]; then
+  printf '%s\\n' gateway/model-a gateway/model-b
+  exit 0
+fi
+printf '%s\\n' "$*" >> "${calls}"
+case "$*" in
+  *gateway/model-b*) echo '{"type":"error","error":{"message":"probe-failed"}}'; exit 0 ;;
+  *) echo '{"type":"text","part":{"type":"text","text":"OK"}}'; exit 0 ;;
+esac
+`)
+  await chmod(fakeOpenCode, 0o755)
+  const configured = {
+    "junior-flash": "gateway/model-a",
+    "junior-luna": "gateway/model-a",
+    "senior-terra": "gateway/model-b",
+  }
+  await manageOpenCodePlugin("install", options(projectRoot, {
+    modelMap: configured,
+    availableModels: Object.values(configured),
+  }))
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    modelMap: configured,
+    availableModels: undefined,
+    opencodeCommand: fakeOpenCode,
+    probeModels: true,
+  }))
+
+  assert.equal(diagnosis.modelChecks.filter(({ probe }) => probe === "ok").length, 1)
+  assert.ok(diagnosis.issues.some(({ code, model }) => code === "MODEL_PROBE_FAILED" && model === "gateway/model-b"))
+  assert.equal((await readFile(calls, "utf8")).trim().split("\n").length, 2)
+})
+
+test("doctor probes resolved automatic Agent models too", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, `#!/bin/sh
+if [ "$1" = "models" ]; then echo gateway/model-a; exit 0; fi
+echo '{"type":"text","part":{"type":"text","text":"OK"}}'
+`)
+  await chmod(fakeOpenCode, 0o755)
+  await manageOpenCodePlugin("install", options(projectRoot, {
+    modelMap: undefined,
+    availableModels: ["gateway/gpt-5.6-terra"],
+  }))
+
+  const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
+    modelMap: undefined,
+    helper: undefined,
+    availableModels: ["gateway/gpt-5.6-terra"],
+    opencodeCommand: fakeOpenCode,
+    probeModels: true,
+  }))
+
+  assert.deepEqual(diagnosis.modelChecks.map(({ model, probe }) => ({ model, probe })), [
+    { model: "gateway/gpt-5.6-terra", probe: "ok" },
+  ])
+})
+
 test("failed OpenCode smoke test rolls back all managed files", async () => {
   const projectRoot = await tempProject()
   const fakeOpenCode = path.join(projectRoot, "fake-opencode")
@@ -187,6 +379,29 @@ test("failed OpenCode smoke test rolls back all managed files", async () => {
   assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), false)
   assert.equal(await exists(path.join(projectRoot, "team-work/install.json")), false)
   assert.equal(await readFile(fakeOpenCode, "utf8"), "#!/bin/sh\nexit 23\n")
+})
+
+test("OpenCode smoke retries one transient Agent discovery miss", async () => {
+  const projectRoot = await tempProject()
+  const attempts = path.join(projectRoot, "smoke-attempts")
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, `#!/bin/sh
+count=0
+if [ -f "${attempts}" ]; then count=$(cat "${attempts}"); fi
+count=$((count + 1))
+printf '%s' "$count" > "${attempts}"
+if [ "$count" -eq 1 ]; then exit 0; fi
+printf '%s\\n' junior-flash junior-luna senior-terra senior-glm senior-qwen expert-opus expert-k3 team-work-explore team-work-librarian
+`)
+  await chmod(fakeOpenCode, 0o755)
+
+  const result = await manageOpenCodePlugin("install", options(projectRoot, {
+    opencodeCommand: fakeOpenCode,
+    skipSmoke: false,
+  }))
+
+  assert.equal(result.status, "installed")
+  assert.equal(await readFile(attempts, "utf8"), "2")
 })
 
 test("disabled OpenCode platform keeps host smoke and update repair without requiring Agent registration", async () => {

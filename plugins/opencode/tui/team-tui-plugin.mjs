@@ -4,7 +4,7 @@ export function createTeamWorkTui(renderTeamSidebar, { isEnabled = async () => t
   return async function TeamWorkTui(api) {
     if (!await isEnabled()) return
     api.slots.register({
-      order: 300,
+      order: 350,
       slots: {
         sidebar_content: (context, props) => renderTeamSidebar({
           api,

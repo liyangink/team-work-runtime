@@ -542,6 +542,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           parentSessionId,
           sessionId: created.id,
           agent,
+          title: title ?? `${agent} · ${workItemId}`,
           contextProfile,
           dispatchMode: "background",
           createdAt: timestamp,

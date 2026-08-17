@@ -16,6 +16,7 @@ export function TeamSidebar(props: { api: any, context: any, sessionId: string }
   const [panel, setPanel] = createSignal<any>(null)
   let generation = 0
   let timer: ReturnType<typeof setTimeout> | undefined
+  let poller: ReturnType<typeof setInterval> | undefined
 
   const refresh = async () => {
     const current = ++generation
@@ -23,7 +24,6 @@ export function TeamSidebar(props: { api: any, context: any, sessionId: string }
       projectRoot: props.api.state.path.worktree || props.api.state.path.directory,
       currentSessionId: props.sessionId,
       statusFor: (sessionId: string) => props.api.state.session.status(sessionId),
-      sessionFor: (sessionId: string) => props.api.state.session.get(sessionId),
     }).catch(() => null)
     if (current === generation) setPanel(next)
   }
@@ -36,6 +36,7 @@ export function TeamSidebar(props: { api: any, context: any, sessionId: string }
     props.sessionId
     void refresh()
   })
+  poller = setInterval(() => void refresh(), 5_000)
   const dispose = [
     props.api.event.on("session.status", scheduleRefresh),
     props.api.event.on("session.idle", scheduleRefresh),
@@ -46,10 +47,11 @@ export function TeamSidebar(props: { api: any, context: any, sessionId: string }
   onCleanup(() => {
     generation += 1
     if (timer) clearTimeout(timer)
+    if (poller) clearInterval(poller)
     for (const unsubscribe of dispose) unsubscribe()
   })
 
-  const colors = () => props.context.theme.current
+  const colors = () => props.context.theme
   const navigate = (sessionId: string) => props.api.route.navigate("session", { sessionID: sessionId })
 
   return (

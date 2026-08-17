@@ -19,6 +19,7 @@ import {
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
 
 const execFile = promisify(execFileCallback)
 export const MINIMUM_OPENCODE_VERSION = "1.18.0"
@@ -26,6 +27,8 @@ const MANIFEST_PATH = "team-work/install.json"
 const BACKUP_ROOT = "team-work/backups"
 const PLATFORM_ROOT = "team-work"
 const LIFECYCLE_LOCK = `${PLATFORM_ROOT}/.lifecycle.lock`
+const TUI_CONFIG_PATH = "tui.json"
+const TUI_PLUGIN_SPEC = "./plugins/team-work-tui.tsx"
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const MANAGED_AGENT_PATHS = new Set([
   "junior-flash", "junior-luna", "senior-terra", "senior-glm", "senior-qwen", "expert-opus", "expert-k3",
@@ -158,6 +161,68 @@ async function readJson(target, code) {
   }
 }
 
+function parseTuiConfig(content) {
+  const errors = []
+  const config = parseJsonc(content, errors, { allowTrailingComma: true, disallowComments: false })
+  if (errors.length) {
+    const first = errors[0]
+    fail("TUI_CONFIG_INVALID", `OpenCode ${TUI_CONFIG_PATH} 无效：${printParseErrorCode(first.error)}（offset ${first.offset}）`)
+  }
+  if (config === undefined) return {}
+  if (!config || Array.isArray(config) || typeof config !== "object") fail("TUI_CONFIG_INVALID", `OpenCode ${TUI_CONFIG_PATH} 顶层必须是对象`)
+  if (config.plugin !== undefined && !Array.isArray(config.plugin)) fail("TUI_CONFIG_INVALID", `OpenCode ${TUI_CONFIG_PATH} 的 plugin 必须是数组`)
+  return config
+}
+
+function isTuiPluginEntry(entry) {
+  return entry === TUI_PLUGIN_SPEC || (Array.isArray(entry) && entry[0] === TUI_PLUGIN_SPEC)
+}
+
+async function readTuiConfig(installRoot) {
+  await assertNoSymlink(installRoot, TUI_CONFIG_PATH)
+  const target = targetPath(installRoot, TUI_CONFIG_PATH)
+  try {
+    const content = await readFile(target, "utf8")
+    return { target, content, config: parseTuiConfig(content), existed: true }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    return { target, content: "{}\n", config: {}, existed: false }
+  }
+}
+
+async function tuiRegistrationState(installRoot) {
+  const state = await readTuiConfig(installRoot)
+  return { ...state, registered: state.config.plugin?.some(isTuiPluginEntry) ?? false }
+}
+
+async function ensureTuiRegistration(installRoot) {
+  const state = await tuiRegistrationState(installRoot)
+  if (state.registered) return { ...state, changed: false }
+  const plugins = [...(state.config.plugin ?? []), TUI_PLUGIN_SPEC]
+  let content = state.content
+  if (!state.existed && Object.keys(state.config).length === 0) {
+    content = `${JSON.stringify({ $schema: "https://opencode.ai/tui.json", plugin: plugins }, null, 2)}\n`
+  } else {
+    const edits = modify(content, ["plugin"], plugins, {
+      formattingOptions: { insertSpaces: true, tabSize: 2, eol: content.includes("\r\n") ? "\r\n" : "\n" },
+    })
+    content = applyEdits(content, edits)
+  }
+  await atomicWrite(state.target, content)
+  return { ...state, content, changed: true }
+}
+
+async function removeTuiRegistration(installRoot) {
+  const state = await tuiRegistrationState(installRoot)
+  if (!state.registered) return { ...state, changed: false }
+  const plugins = state.config.plugin.filter((entry) => !isTuiPluginEntry(entry))
+  const edits = modify(state.content, ["plugin"], plugins.length ? plugins : undefined, {
+    formattingOptions: { insertSpaces: true, tabSize: 2, eol: state.content.includes("\r\n") ? "\r\n" : "\n" },
+  })
+  await atomicWrite(state.target, applyEdits(state.content, edits))
+  return { ...state, changed: true }
+}
+
 async function allowedManagedPaths(sourceRoot) {
   const allowed = new Set([
     "plugins/team-work.js",
@@ -246,10 +311,64 @@ async function addTree(files, source, destination, options) {
 async function scanModels(opencodeCommand) {
   try {
     const { stdout } = await execFile(opencodeCommand, ["models"], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 })
-    return stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[^\s/]+\/.+/.test(line))
-  } catch {
-    return []
+    return {
+      models: stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^[^\s/]+\/.+/.test(line)),
+      error: null,
+    }
+  } catch (error) {
+    return {
+      models: [],
+      error: String(error.stderr || error.message || error).trim().slice(0, 1200),
+    }
   }
+}
+
+async function probeConfiguredModels(opencodeCommand, models) {
+  const probeRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-model-probe-"))
+  const results = new Map()
+  try {
+    for (const model of models) {
+      try {
+        const { stdout } = await execFile(opencodeCommand, [
+          "--pure",
+          "run",
+          "--model", model,
+          "--format", "json",
+          "--title", "team-work doctor model probe",
+          "仅回复 OK",
+        ], {
+          cwd: probeRoot,
+          encoding: "utf8",
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: 60_000,
+          env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: "true" },
+        })
+        const events = stdout.split(/\r?\n/).filter(Boolean).map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return null
+          }
+        }).filter(Boolean)
+        const errorEvent = events.find(({ type }) => type === "error")
+        if (errorEvent) throw new Error(JSON.stringify(errorEvent.error ?? errorEvent).slice(0, 1000))
+        const text = events
+          .filter(({ type, part }) => type === "text" && part?.type === "text")
+          .map(({ part }) => part.text)
+          .join("\n")
+        if (!/(?:^|\W)OK(?:\W|$)/i.test(text)) throw new Error("OpenCode 未返回预期的模型文本 OK")
+        results.set(model, { status: "ok" })
+      } catch (error) {
+        results.set(model, {
+          status: "failed",
+          message: String(error.stderr || error.stdout || error.message || error).trim().slice(0, 1200),
+        })
+      }
+    }
+  } finally {
+    await rm(probeRoot, { recursive: true, force: true })
+  }
+  return results
 }
 
 function resolveModels(agentConfig, explicitMap, availableModels) {
@@ -259,6 +378,7 @@ function resolveModels(agentConfig, explicitMap, availableModels) {
   const unknownAgents = Object.keys(explicitMap ?? {}).filter((id) => !knownAgents.has(id))
   if (unknownAgents.length) fail("INVALID_MODEL_MAP", `模型映射包含未知 Agent：${unknownAgents.join(", ")}`)
   for (const agent of agentConfig.agents) {
+    if (explicitMap && !Object.hasOwn(explicitMap, agent.id)) continue
     const explicit = explicitMap?.[agent.id]
     if (explicit !== undefined) {
       if (typeof explicit !== "string" || !/^[^\s/]+\/.+/.test(explicit)) {
@@ -374,8 +494,13 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
   }
 
   const agentConfig = JSON.parse(await readFile(path.join(sourceRoot, "plugins/opencode/config/agents.json"), "utf8"))
-  const scanned = availableModels ?? (modelMap ? [] : await scanModels(opencodeCommand))
-  const { resolved, warnings } = resolveModels(agentConfig, modelMap, scanned)
+  const scan = availableModels !== undefined
+    ? { models: availableModels, error: null }
+    : modelMap
+      ? { models: [], error: null }
+      : await scanModels(opencodeCommand)
+  const { resolved, warnings } = resolveModels(agentConfig, modelMap, scan.models)
+  if (scan.error) warnings.unshift(`无法读取 OpenCode 模型列表：${scan.error}`)
   return {
     files,
     warnings,
@@ -453,22 +578,40 @@ async function writeManifest(installRoot, manifest) {
 }
 
 async function smokeCheck(installRoot, opencodeCommand, expectedAgents) {
-  try {
-    const { stdout } = await execFile(opencodeCommand, ["agent", "list"], {
-      cwd: installRoot,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: 30_000,
-    })
-    const missing = expectedAgents.filter((agent) => !stdout.includes(agent))
-    if (missing.length) fail("SMOKE_TEST_FAILED", `OpenCode 未发现已安装 Agent：${missing.join(", ")}`)
-  } catch (error) {
-    if (error instanceof LifecycleError) throw error
-    fail("SMOKE_TEST_FAILED", "OpenCode Plugin/Agent smoke test 失败；已开始回滚", { cause: error })
+  let lastFailure = null
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const { stdout, stderr } = await execFile(opencodeCommand, ["agent", "list"], {
+        cwd: installRoot,
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 30_000,
+      })
+      const missing = expectedAgents.filter((agent) => !stdout.includes(agent))
+      if (!missing.length) return
+      lastFailure = {
+        missing,
+        stdout: stdout.trim().slice(-1200),
+        stderr: stderr.trim().slice(-1200),
+      }
+    } catch (error) {
+      lastFailure = {
+        message: String(error.message || error).trim().slice(0, 1200),
+        stdout: String(error.stdout || "").trim().slice(-1200),
+        stderr: String(error.stderr || "").trim().slice(-1200),
+      }
+    }
   }
+  const missing = lastFailure?.missing
+  const message = missing?.length
+    ? `OpenCode 未发现已安装 Agent：${missing.join(", ")}`
+    : "OpenCode Plugin/Agent smoke test 失败；已开始回滚"
+  fail("SMOKE_TEST_FAILED", message, { diagnostics: lastFailure })
 }
 
 async function applyInstall({ installRoot, desired, prior, force, now, hostVersion, packageVersion, warnings, command, opencodeCommand, agentIds, skipSmoke }) {
+  const tuiState = await tuiRegistrationState(installRoot)
+  const tuiNeedsPatch = !tuiState.registered
   const desiredEntries = manifestFiles(desired)
   const desiredByPath = new Map(desiredEntries.map((entry) => [entry.path, entry]))
   const priorFiles = prior?.managedFiles ?? []
@@ -500,20 +643,22 @@ async function applyInstall({ installRoot, desired, prior, force, now, hostVersi
     || modified.includes(relativePath)
   ))
   const missing = desiredEntries.filter(({ path: relativePath }) => !priorByPath.has(relativePath))
-  if (prior && !changed.length && !missing.length && !obsolete.length) {
+  if (prior && !changed.length && !missing.length && !obsolete.length && !tuiNeedsPatch) {
     return { status: "unchanged", manifestId: prior.manifestId, warnings }
   }
 
   const backupCandidates = prior
-    ? [...priorFiles.map(({ path: relativePath }) => relativePath), ...collisions]
-    : collisions
+    ? [...priorFiles.map(({ path: relativePath }) => relativePath), ...collisions, ...(tuiState.existed && tuiNeedsPatch ? [TUI_CONFIG_PATH] : [])]
+    : [...collisions, ...(tuiState.existed && tuiNeedsPatch ? [TUI_CONFIG_PATH] : [])]
   const backupPath = await createBackup(installRoot, backupCandidates, now)
   const createdPaths = desiredEntries
     .filter(({ path: relativePath }) => !priorByPath.has(relativePath) && !preexistingDesired.has(relativePath))
     .map(({ path: relativePath }) => relativePath)
+  if (!tuiState.existed && tuiNeedsPatch) createdPaths.push(TUI_CONFIG_PATH)
   try {
     for (const relativePath of obsolete) await rm(targetPath(installRoot, relativePath), { force: true })
     for (const [relativePath, content] of desired) await atomicWrite(targetPath(installRoot, relativePath), content)
+    await ensureTuiRegistration(installRoot)
     if (!skipSmoke) await smokeCheck(installRoot, opencodeCommand, agentIds)
     const timestamp = now().toISOString()
     const manifest = {
@@ -527,6 +672,7 @@ async function applyInstall({ installRoot, desired, prior, force, now, hostVersi
       installedAt: prior?.installedAt ?? timestamp,
       updatedAt: timestamp,
       lastOperation: command,
+      tui: { configPath: TUI_CONFIG_PATH, plugin: TUI_PLUGIN_SPEC },
       managedFiles: desiredEntries,
       warnings,
     }
@@ -550,20 +696,28 @@ async function uninstall({ installRoot, prior, force, now }) {
     if (digest !== entry.sha256 && !force) retained.push(entry)
     else removable.push(entry.path)
   }
-  const backupPath = force ? await createBackup(installRoot, removable, now) : null
-  for (const relativePath of removable) await rm(targetPath(installRoot, relativePath), { force: true })
-  await pruneEmptyManagedDirectories(installRoot, removable)
+  const tuiState = await tuiRegistrationState(installRoot)
+  const tuiPath = tuiState.existed && tuiState.registered ? [TUI_CONFIG_PATH] : []
+  const backupPath = await createBackup(installRoot, [...removable, ...tuiPath], now)
+  try {
+    await removeTuiRegistration(installRoot)
+    for (const relativePath of removable) await rm(targetPath(installRoot, relativePath), { force: true })
+    await pruneEmptyManagedDirectories(installRoot, removable)
 
-  const timestamp = now().toISOString()
-  await writeManifest(installRoot, {
-    ...prior,
-    status: retained.length ? "partial" : "uninstalled",
-    updatedAt: timestamp,
-    uninstalledAt: retained.length ? null : timestamp,
-    lastOperation: "uninstall",
-    managedFiles: retained,
-    retained: retained.map(({ path: relativePath }) => relativePath),
-  })
+    const timestamp = now().toISOString()
+    await writeManifest(installRoot, {
+      ...prior,
+      status: retained.length ? "partial" : "uninstalled",
+      updatedAt: timestamp,
+      uninstalledAt: retained.length ? null : timestamp,
+      lastOperation: "uninstall",
+      managedFiles: retained,
+      retained: retained.map(({ path: relativePath }) => relativePath),
+    })
+  } catch (error) {
+    await restoreBackup(installRoot, backupPath, [...removable, ...tuiPath])
+    throw error
+  }
   return {
     status: retained.length ? "partial" : "uninstalled",
     retained: retained.map(({ path: relativePath }) => relativePath),
@@ -590,32 +744,69 @@ async function pruneEmptyManagedDirectories(installRoot, removedFiles) {
   }
 }
 
-async function doctor({ installRoot, prior, hostVersion, modelMap, helper, availableModels, opencodeCommand }) {
+async function doctor({ installRoot, prior, hostVersion, modelMap, helper, availableModels, opencodeCommand, probeModels }) {
   const issues = []
+  const modelChecks = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
     const digest = await currentDigest(installRoot, entry.path)
     if (digest === null) issues.push({ code: "MANAGED_FILE_MISSING", path: entry.path })
     else if (digest !== entry.sha256) issues.push({ code: "MANAGED_FILE_MODIFIED", path: entry.path })
   }
+  try {
+    if (!(await tuiRegistrationState(installRoot)).registered) {
+      issues.push({ code: "TUI_PLUGIN_NOT_REGISTERED", path: TUI_CONFIG_PATH, plugin: TUI_PLUGIN_SPEC })
+    }
+  } catch (error) {
+    if (error.code === "TUI_CONFIG_INVALID") issues.push({ code: error.code, path: TUI_CONFIG_PATH, message: error.message })
+    else throw error
+  }
   const profile = await readJson(targetPath(installRoot, `${PLATFORM_ROOT}/profile.json`), "PROFILE_CORRUPT")
+  const known = new Set((profile?.agents ?? []).map(({ id }) => id))
+  const configuredAgents = []
   if (modelMap === undefined) {
     for (const agent of profile?.agents ?? []) {
       if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
+      else configuredAgents.push([agent.id, agent.resolvedModel])
     }
   } else {
-    const known = new Set((profile?.agents ?? []).map(({ id }) => id))
-    const visibleModels = new Set(availableModels ?? await scanModels(opencodeCommand))
     for (const [agent, model] of Object.entries(modelMap)) {
       if (!known.has(agent)) issues.push({ code: "AGENT_UNKNOWN", agent })
-      else if (!visibleModels.has(model)) issues.push({ code: "MODEL_UNAVAILABLE", agent, model })
+      else configuredAgents.push([agent, model])
     }
   }
-  if (helper) {
-    const visibleModels = new Set(availableModels ?? await scanModels(opencodeCommand))
-    if (!visibleModels.has(helper.model)) issues.push({ code: "HELPER_MODEL_UNAVAILABLE", model: helper.model })
+
+  const consumers = new Map()
+  for (const [agent, model] of configuredAgents) consumers.set(model, [...(consumers.get(model) ?? []), agent])
+  if (helper) consumers.set(helper.model, [...(consumers.get(helper.model) ?? []), "helper"])
+  if (consumers.size) {
+    const discovery = availableModels !== undefined
+      ? { models: availableModels, error: null }
+      : await scanModels(opencodeCommand)
+    const visibleModels = new Set(discovery.models)
+    if (discovery.error) issues.push({ code: "MODEL_DISCOVERY_FAILED", message: discovery.error })
+    if (!discovery.error) {
+      for (const [model, agents] of consumers) {
+        if (visibleModels.has(model)) continue
+        const helperOnly = agents.length === 1 && agents[0] === "helper"
+        const teamAgents = agents.filter((agent) => agent !== "helper")
+        issues.push(helperOnly
+          ? { code: "HELPER_MODEL_UNAVAILABLE", model }
+          : { code: "MODEL_UNAVAILABLE", ...(teamAgents.length === 1 ? { agent: teamAgents[0] } : { agents: teamAgents }), model })
+      }
+    }
+
+    const probeCandidates = [...consumers.keys()].filter((model) => !discovery.error && visibleModels.has(model))
+    const probeResults = probeModels ? await probeConfiguredModels(opencodeCommand, probeCandidates) : new Map()
+    for (const [model, agents] of consumers) {
+      const discoverable = discovery.error ? null : visibleModels.has(model)
+      const result = probeResults.get(model)
+      const probe = !probeModels ? "not-requested" : result?.status ?? "skipped"
+      modelChecks.push({ model, agents, discoverable, probe, ...(result?.message ? { message: result.message } : {}) })
+      if (probe === "failed") issues.push({ code: "MODEL_PROBE_FAILED", model, agents, message: result.message })
+    }
   }
-  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues }
+  return { status: issues.length ? "issues" : "ok", hostVersion, minimumHostVersion: MINIMUM_OPENCODE_VERSION, issues, modelChecks }
 }
 
 async function manageUnlocked(command, options) {
@@ -642,6 +833,7 @@ async function manageUnlocked(command, options) {
     helper: options.helper,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
+    probeModels: Boolean(options.probeModels),
   })
   if (command === "update" && prior?.status !== "installed") {
     fail("NOT_INSTALLED", "尚未安装 OpenCode PlatformPlugin，请先执行 install")

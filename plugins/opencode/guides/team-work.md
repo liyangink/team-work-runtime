@@ -4,7 +4,7 @@
 
 - OpenCode 中用 `team_work_runtime` 调用 CoreRuntime；它等价于平台无关 Skill 中的 `team-work ...` CLI 示例，并自动使用当前项目。`task.bind` 会自动采用当前 OpenCode session key；创建任务后仍需显式执行一次 `task.bind`。未绑定时，`task.show` 只会按 Runtime 的“项目唯一活动任务”规则解析，不会静默创建绑定。
 - 受管成员只能通过 `team_work_spawn` 派发。该工具创建原生 child session，并使用 `promptAsync` 非阻塞启动；不要用阻塞式 `task` 代替。
-- 派发前先用 CoreRuntime 创建 work item，并把稳定的 `task_id`、`work_item_id` 传给工具。成员名称使用已安装的 `junior-*`、`senior-*`、`expert-*`。
+- 派发前优先用强类型 `team_work_work_create` 创建 work item；随后通过 `team_work_runtime` 的 `work.start` 启动，再把同一组稳定 `task_id`、`work_item_id` 交给 `team_work_spawn`。不要用通用 Runtime record 猜测字段；强类型参数 `work_item_id`、`artifact_paths`、`done_when` 会分别映射为 CoreRuntime 的 `workItemId`、`artifactPaths`、`doneWhen`。成员名称使用已安装的 `junior-*`、`senior-*`、`expert-*`。
 - Lead 不等待单个成员结束，也不转而处理具体内容；继续维护 Harness、其他派发和同步点，在同步点调用 `team_work_status`，再用 `team_work_collect` 收集结果。
 - 同一 work item 的返工和后续轮次必须用 `team_work_resume` 续派同一 child session，不得每轮重新 spawn。Owner、挑战者和 Expert 各自持有独立 work item；Expert 在同一阶段收敛期间保持同一 session，跨阶段再建立新 work item。
 - `team_work_resume` 自身始终通过 `promptAsync` 非阻塞续派，只传稳定的 Runtime `task_id`、`work_item_id` 和本轮 `prompt`；这里的 `task_id` 不是 OpenCode 原生委托工具返回的 child session ID。不要传 `session_id`、`run_in_background` 或 `background`，也不要改用原生 `task`、可选增强工具或同步模式继续受管成员。

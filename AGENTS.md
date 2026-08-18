@@ -52,7 +52,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 ## 当前基线
 
-- Runtime v2 不兼容重构设计已通过交叉终审和人工确认，当前进入实施规划；目标控制面只有 `open / plan / run / steer`，不得新增 v2 到 v1 命令族的包装、回退或兼容路径。
+- Runtime v2 不兼容重构设计已通过交叉终审和人工确认；V2-0 契约与稳定 seam 骨架已完成，下一里程碑为 V2-1 Domain 与 Store。目标控制面只有 `open / plan / run / steer`，不得新增 v2 到 v1 命令族的包装、回退或兼容路径。
 - 第一版 PlatformPlugin 以 OpenCode 为实现目标，优先验证多模型兼容、subagent/session、上下文注入和 Lead 控制面协作；不得把 Claude Agent Teams 作为 Runtime 或 Workflow 的前置能力。
 - OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。Agent model/effort 由 Plugin 启动时读取用户配置并动态注入。
 - Runtime 1.0 契约、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已完成自动化测试和 Terra 交叉审查；OpenCode PlatformPlugin 的安装生命周期、原生异步 child session、Runtime Tool 和上下文 Hook 已落地。低成本多模型平台链路 E2E 已完成，含 Senior 挑战者的正式 Workflow 场景 E2E 尚待完成。

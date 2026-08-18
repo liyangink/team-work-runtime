@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立，V2-0 契约与骨架正在实施。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立，V2-0 契约与骨架已完成，下一里程碑为 V2-1 Domain 与文件 Store。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-开始 V2-0，只实现契约、骨架和 contract tests。在 V2-0 评审通过前，不实现 Reducer、Driver、OpenCode Adapter 或安装器改造。
+开始 V2-1，先用纯 Reducer tracer bullet 固定 Task Aggregate 的最小状态与转移，再实现文件 Store。不提前实现 Driver、Platform Adapter 或安装器改造。

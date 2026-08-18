@@ -262,11 +262,33 @@ export function assertTaskState(state) {
       failState(`assignment ${assignment.assignmentId} cannot be ${attempt.status} without a durable member report`)
     }
   }
-  if (state.stagePlan === null && state.workGraph.assignments.length > 0) {
-    failState("a work graph cannot exist without a frozen stage plan")
+  const activePreflight = state.preflight?.status === "active"
+  if (state.stagePlan === null && !activePreflight && state.workGraph.assignments.length > 0) {
+    failState("a work graph requires a frozen stage plan or active preflight")
+  }
+  if (state.stagePlan !== null && activePreflight) failState("delivery and preflight graphs cannot be active together")
+  if (state.preflight) {
+    if (state.preflight.stageRunId !== state.currentStageRun.stageRunId) failState("preflight must target the current stage run")
+    if (state.preflight.plan.stageRunId !== state.preflight.stageRunId) failState("preflight plan must target its preflight stage run")
+    if (state.preflight.result && state.preflight.result.kind !== state.preflight.kind) failState("preflight result kind must match its preflight")
+    if (state.preflight.status === "active") {
+      if (state.preflight.result !== null) failState("an active preflight cannot already contain a result")
+      if (
+        state.preflight.plan.assignments.length !== assignmentIds.size
+        || state.preflight.plan.assignments.some((id) => !assignmentIds.has(id))
+      ) failState("active preflight assignment refs must exactly match the work graph")
+    } else if (state.preflight.result === null) failState("a satisfied or consumed preflight requires a durable result")
   }
   if (state.stagePlan !== null) {
     if (state.stagePlan.stageRunId !== state.currentStageRun.stageRunId) failState("stage plan must target the current stage run")
+    if (state.stagePlan.basis.kind === "preflight") {
+      if (
+        state.preflight?.status !== "consumed"
+        || state.stagePlan.basis.preflightId !== state.preflight.preflightId
+        || state.stagePlan.basis.resultRef !== state.preflight.result.ref
+        || state.stagePlan.basis.resultDigest !== state.preflight.result.digest
+      ) failState("preflight-based stage plan must bind its consumed durable result")
+    } else if (state.preflight?.status === "consumed") failState("a consumed preflight requires a preflight-based stage plan")
     if (state.stagePlan.assignments.length !== assignmentIds.size || state.stagePlan.assignments.some((id) => !assignmentIds.has(id))) {
       failState("stage plan assignment refs must exactly match the work graph")
     }
@@ -295,7 +317,7 @@ export function assertTaskState(state) {
         || state.stagePlan.costProjection.scopeStages.length !== state.scope.stages.length
         || state.stagePlan.costProjection.scopeStages.some((stage, index) => stage !== state.scope.stages[index])
       ) failState("compiled cost projection must bind the task scope, routes, and convergence limit")
-      const ownerCount = state.workGraph.assignments.filter(({ teamRole }) => teamRole === "owner").length
+      const ownerCount = state.workGraph.assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0).length
       if (state.stagePlan.teamMode !== (ownerCount > 1 ? "team" : "solo")) {
         failState("compiled team mode must match its owner topology")
       }
@@ -325,6 +347,8 @@ export function assertTaskState(state) {
   assertUniqueBy(state.artifacts, "artifactId", "artifact ids")
   const artifacts = new Map(state.artifacts.map((artifact) => [artifact.artifactId, artifact]))
   const runIds = new Set(runs.map(({ stageRunId }) => stageRunId))
+  assertUniqueBy(state.routeDecisions, "decisionId", "route decision ids")
+  if (state.routeDecisions.some((decision) => !runIds.has(decision.stageRunId))) failState("route decision stage run must exist")
   if (state.artifacts.some((artifact) => !runIds.has(artifact.stageRunId))) failState("artifact stage run must exist")
   if (state.artifacts.some((artifact) => artifact.path.split("/").some((segment) => segment === "" || segment === "." || segment === ".."))) {
     failState("artifact paths must contain only safe project-relative segments")

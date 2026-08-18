@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": [
     "runtimeMajor", "schemaVersion", "taskId", "revision", "title", "objective", "taskIntent", "taskIntentRevision", "taskIntentHistory",
-    "workflow", "scope", "status", "currentStageRun", "stageRuns", "stagePlan",
+    "workflow", "scope", "status", "currentStageRun", "stageRuns", "stagePlan", "preflight", "routeDecisions",
     "workGraph", "artifacts", "evidence", "acceptedReportRefs", "costLedger",
     "observationInbox", "pendingDecision", "decisionHistory", "pendingOperations", "createdAt", "updatedAt"
   ],
@@ -30,6 +30,13 @@
         { "$ref": "#/$defs/stagePlan" }
       ]
     },
+    "preflight": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/preflight" }
+      ]
+    },
+    "routeDecisions": { "type": "array", "items": { "$ref": "#/$defs/routeDecision" } },
     "workGraph": { "$ref": "#/$defs/workGraph" },
     "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
     "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
@@ -165,7 +172,7 @@
     "stagePlan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["planId", "stageRunId", "objective", "inputRefs", "outputRefs", "assignments", "teamMode", "policyPins", "convergence", "routes", "costProjection"],
+      "required": ["planId", "stageRunId", "objective", "inputRefs", "outputRefs", "assignments", "basis", "teamMode", "policyPins", "convergence", "routes", "costProjection"],
       "properties": {
         "planId": { "$ref": "#/$defs/id" },
         "stageRunId": { "$ref": "#/$defs/id" },
@@ -173,6 +180,27 @@
         "inputRefs": { "$ref": "#/$defs/uniqueStrings" },
         "outputRefs": { "$ref": "#/$defs/uniqueStrings" },
         "assignments": { "$ref": "#/$defs/uniqueStrings" },
+        "basis": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": { "kind": { "const": "deterministic" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "preflightId", "resultRef", "resultDigest"],
+              "properties": {
+                "kind": { "const": "preflight" },
+                "preflightId": { "$ref": "#/$defs/id" },
+                "resultRef": { "type": "string", "minLength": 1 },
+                "resultDigest": { "$ref": "#/$defs/digest" }
+              }
+            }
+          ]
+        },
         "teamMode": { "enum": ["solo", "team"] },
         "policyPins": {
           "type": "object",
@@ -224,9 +252,11 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["gateId", "requirement", "action"],
+                "required": ["gateId", "stage", "artifactKind", "requirement", "action"],
                 "properties": {
                   "gateId": { "$ref": "#/$defs/id" },
+                  "stage": { "$ref": "#/$defs/id" },
+                  "artifactKind": { "$ref": "#/$defs/id" },
                   "requirement": { "enum": ["required", "optional", "disabled"] },
                   "action": { "enum": ["wait", "skip"] },
                   "proofMode": { "enum": ["verified-event", "trusted-caller"] },
@@ -237,6 +267,34 @@
             "spec": { "$ref": "#/$defs/specRoute" },
             "e2e": { "$ref": "#/$defs/e2eRoute" }
           }
+        }
+      }
+    },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflightId", "stageRunId", "kind", "status", "plan", "result"],
+      "properties": {
+        "preflightId": { "$ref": "#/$defs/id" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["planning-bootstrap", "route-assessment"] },
+        "status": { "enum": ["active", "satisfied", "consumed"] },
+        "plan": { "$ref": "#/$defs/stagePlan" },
+        "result": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "ref", "digest", "evidenceRefs"],
+              "properties": {
+                "kind": { "enum": ["planning-bootstrap", "route-assessment"] },
+                "ref": { "type": "string", "minLength": 1 },
+                "digest": { "$ref": "#/$defs/digest" },
+                "evidenceRefs": { "$ref": "#/$defs/uniqueStrings" }
+              }
+            }
+          ]
         }
       }
     },
@@ -251,6 +309,24 @@
         "decision": { "enum": ["use-provider", "skip", "block"] },
         "reason": { "type": "string", "minLength": 1 },
         "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "routeDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "stageRunId", "stage", "routeKind", "outcome", "decision", "routeDigest", "basisRefs", "reason", "recovery", "recordedAt"],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "stage": { "$ref": "#/$defs/id" },
+        "routeKind": { "enum": ["spec", "e2e"] },
+        "outcome": { "enum": ["blocked", "skipped"] },
+        "decision": { "enum": ["block", "skip"] },
+        "routeDigest": { "$ref": "#/$defs/digest" },
+        "basisRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "reason": { "type": "string", "minLength": 1 },
+        "recovery": { "enum": ["replan-after-capability-change", "follow-skip-edge"] },
+        "recordedAt": { "type": "string", "format": "date-time" }
       }
     },
     "e2eRoute": {
@@ -304,7 +380,11 @@
         "receiptRef": { "$ref": "#/$defs/id" },
         "executionRef": { "type": "string", "minLength": 1 },
         "reportRef": { "$ref": "#/$defs/id" },
-        "reportDigest": { "$ref": "#/$defs/digest" }
+        "reportDigest": { "$ref": "#/$defs/digest" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "rejectedAt": { "type": "string", "format": "date-time" },
+        "rejectionReason": { "type": "string", "minLength": 1 }
       }
     },
     "pendingOperation": {
@@ -455,7 +535,8 @@
             "agentId": { "type": "string", "minLength": 1 },
             "capabilitySnapshotDigest": { "type": "string", "minLength": 1 },
             "contextRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
-            "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }
+            "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+            "resumeAssignmentId": { "$ref": "#/$defs/id" }
           }
         },
         "status": { "enum": ["planned", "effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },

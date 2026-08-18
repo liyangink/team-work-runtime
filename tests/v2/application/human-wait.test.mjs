@@ -255,8 +255,8 @@ test("human gate capability is resolved before execution so required unsupported
   assert.throws(
     () => compileHumanGateRequirements({
       gates: [
-        { gateId: "design-approval", requirement: "required" },
-        { gateId: "final-acceptance", requirement: "required" },
+        { gateId: "design-approval", stage: "design-review", artifactKind: "design", requirement: "required" },
+        { gateId: "final-acceptance", stage: "finish", artifactKind: "delivery-report", requirement: "required" },
       ],
       capabilitySnapshot: { features: { humanDecisionProof: "unsupported" } },
     }),
@@ -264,13 +264,13 @@ test("human gate capability is resolved before execution so required unsupported
   )
   assert.deepEqual(compileHumanGateRequirements({
     gates: [
-      { gateId: "design-approval", requirement: "optional" },
-      { gateId: "final-acceptance", requirement: "disabled" },
+      { gateId: "design-approval", stage: "design-review", artifactKind: "design", requirement: "optional" },
+      { gateId: "final-acceptance", stage: "finish", artifactKind: "delivery-report", requirement: "disabled" },
     ],
     capabilitySnapshot: { features: { humanDecisionProof: "unsupported" } },
   }), [
-    { gateId: "design-approval", requirement: "optional", action: "skip", reason: "proof-unsupported" },
-    { gateId: "final-acceptance", requirement: "disabled", action: "skip", reason: "disabled" },
+    { gateId: "design-approval", stage: "design-review", artifactKind: "design", requirement: "optional", action: "skip", reason: "proof-unsupported" },
+    { gateId: "final-acceptance", stage: "finish", artifactKind: "delivery-report", requirement: "disabled", action: "skip", reason: "disabled" },
   ])
 })
 
@@ -443,7 +443,7 @@ test("late member delivery is durable but non-progressing until new human input 
     report: {
       outcome: "delivered",
       summary: "A report arrived after the approval card was issued.",
-      artifacts: ["docs/design.md"],
+      artifacts: [{ ref: "artifact:design", path: "docs/design.md" }],
       evidenceRefs: [],
       recommendation: "accept",
     },
@@ -831,7 +831,7 @@ test("a report racing with human verification wins and invalidates the decision 
         report: {
           outcome: "delivered",
           summary: "This report raced with the human decision.",
-          artifacts: ["docs/design.md"],
+          artifacts: [{ ref: "artifact:design", path: "docs/design.md" }],
           evidenceRefs: [],
           recommendation: "accept",
         },
@@ -893,7 +893,7 @@ test("an observation arriving during quiesce is drained and prevents a stale app
         report: {
           outcome: "delivered",
           summary: "This report arrived while host continuations were being cleared.",
-          artifacts: ["docs/design.md"],
+          artifacts: [{ ref: "artifact:design", path: "docs/design.md" }],
           evidenceRefs: [],
           recommendation: "accept",
         },

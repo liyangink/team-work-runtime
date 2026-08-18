@@ -79,7 +79,7 @@
         "assignmentId": { "type": "string", "minLength": 1 },
         "attempt": { "type": "integer", "minimum": 1 },
         "role": { "enum": ["owner", "challenger", "expert"] },
-        "assignmentKind": { "type": "string", "pattern": "^(planning|research|design|spec|implementation|integration|test|review|e2e|evidence|custom:.+)$" },
+        "assignmentKind": { "type": "string", "pattern": "^(planning|research|design|spec|implementation|integration|test|review|e2e|evidence|e2e-applicability|custom:.+)$" },
         "agentId": { "type": "string", "minLength": 1 },
         "capabilitySnapshotDigest": { "type": "string", "minLength": 1 },
         "mode": { "const": "background" },

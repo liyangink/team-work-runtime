@@ -17,6 +17,7 @@ export function compiledPlanMetadata({ workflow, scopeStages = workflow.stages, 
     reason: "disabled-by-project",
   }
   return {
+    basis: { kind: "deterministic" },
     teamMode: "solo",
     policyPins: {
       workflow: {

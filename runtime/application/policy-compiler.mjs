@@ -24,6 +24,8 @@ export function compilePolicyPlan(input) {
   const humanGates = compileHumanGateRequirements({
     gates: input.workflowDefinition.gates.map((gate) => ({
       gateId: gate.gateId,
+      stage: gate.stage,
+      artifactKind: gate.artifactKind,
       requirement: input.routeInputs?.humanReview?.[gate.gateId] ?? gate.requirement,
     })),
     capabilitySnapshot: { features: { humanDecisionProof: input.routeInputs?.humanDecisionCapability } },
@@ -92,6 +94,12 @@ export function compilePolicyPlan(input) {
   })
   const compiledPlan = {
     ...compiled.plan,
+    basis: input.task.preflight?.status === "satisfied" ? {
+      kind: "preflight",
+      preflightId: input.task.preflight.preflightId,
+      resultRef: input.task.preflight.result.ref,
+      resultDigest: input.task.preflight.result.digest,
+    } : { kind: "deterministic" },
     policyPins: compiled.policyPins,
     routes,
     convergence: compiled.convergence,

@@ -577,7 +577,7 @@ interface MemberDelivery {
 type MemberReport = {
   outcome: "delivered" | "rework" | "blocked" | "needs-user"
   summary: string
-  artifacts: string[]
+  artifacts: Array<{ ref: string; path: string }>
   evidenceRefs: string[]
   unresolved?: string[]
   checks?: Array<{

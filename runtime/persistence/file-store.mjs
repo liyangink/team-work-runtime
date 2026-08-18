@@ -21,6 +21,7 @@ import {
 import { recoverTransactions } from "./recovery.mjs"
 import { StoreError } from "./store-error.mjs"
 import { atomicJson, atomicWrite, canonicalJson, syncDirectory, withOwnerLock } from "./transactions.mjs"
+import { assertDurableReferences } from "./durable-reference-validator.mjs"
 
 const taskDirectories = ["reports", "observations", "packets", "operations", "artifacts", ".txn"]
 
@@ -157,142 +158,29 @@ async function writeRecords(taskRoot, records) {
   }
 }
 
-async function assertAcceptedReportsExist(taskRoot, state, records = [], { corrupt = false } = {}) {
-  if (state.acceptedReportRefs.length === 0) return
-  const reportsRoot = await resolveTaskSubdirectory(taskRoot, "reports")
-  const included = new Map(records.filter(({ kind }) => kind === "report").map((record) => [record.recordId, record.value]))
-  for (const { reportId, digest } of state.acceptedReportRefs) {
-    assertIdentifier(reportId, "acceptedReportRef")
-    let value = included.get(reportId)
-    try {
-      if (value === undefined) {
-        const reportPath = await resolveSafeFile(reportsRoot, path.join(reportsRoot, `${reportId}.json`), `accepted report ${reportId}`)
-        value = JSON.parse(await readFile(reportPath, "utf8"))
-      }
-    } catch (error) {
-      if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
-      const code = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_MISSING"
-      throw new StoreError(code, `accepted report ${reportId} has no immutable record`, [{ message: error.message }])
-    }
-    if (digestJson(value) !== digest) {
-      const code = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_DIGEST_MISMATCH"
-      throw new StoreError(code, `accepted report ${reportId} does not match its authoritative digest`)
-    }
+async function readReferencedRecord(taskRoot, included, kind, recordId) {
+  const key = `${kind}:${recordId}`
+  if (included.has(key)) return included.get(key)
+  const directoryName = recordDirectories[kind]
+  const directory = await resolveTaskSubdirectory(taskRoot, directoryName)
+  try {
+    const recordPath = await resolveSafeFile(directory, path.join(directory, `${recordId}.json`), key, { allowMissing: true })
+    if (!recordPath) return undefined
+    return JSON.parse(await readFile(recordPath, "utf8"))
+  } catch (error) {
+    if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
+    if (error.code === "ENOENT") return undefined
+    throw new StoreError("STATE_CORRUPT", `cannot read immutable record ${key}`, [{ message: error.message }])
   }
 }
 
-async function assertDurableReferencesExist(taskRoot, state, records = [], { corrupt = false } = {}) {
+async function assertTaskDurableReferences(taskRoot, state, records = [], { corrupt = false } = {}) {
   const included = new Map(records.map((record) => [`${record.kind}:${record.recordId}`, record.value]))
-  const missingCode = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_MISSING"
-  const mismatchCode = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_DIGEST_MISMATCH"
-
-  async function readRecord(kind, recordId) {
-    const key = `${kind}:${recordId}`
-    if (included.has(key)) return included.get(key)
-    const directoryName = recordDirectories[kind]
-    const directory = await resolveTaskSubdirectory(taskRoot, directoryName)
-    try {
-      const recordPath = await resolveSafeFile(directory, path.join(directory, `${recordId}.json`), key)
-      return JSON.parse(await readFile(recordPath, "utf8"))
-    } catch (error) {
-      if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
-      throw new StoreError(missingCode, `${key} is required by authoritative state`, [{ message: error.message }])
-    }
-  }
-
-  for (const assignment of state.workGraph.assignments) {
-    for (const attempt of assignment.attempts) {
-      if (attempt.receiptRef) {
-        const operation = await readRecord("operation", attempt.receiptRef)
-        if (
-          operation.operationId !== attempt.receiptRef
-          || operation.intent?.effectDigest !== attempt.effectDigest
-          || operation.receipt?.operationId !== attempt.receiptRef
-          || operation.receipt?.effectDigest !== attempt.effectDigest
-          || (["running", "reported", "verified", "accepted"].includes(attempt.status)
-            && (operation.receipt.status !== "confirmed" || operation.receipt.executionRef !== attempt.executionRef))
-        ) {
-          throw new StoreError(mismatchCode, `operation:${attempt.receiptRef} does not prove its assignment state`)
-        }
-      }
-      if (attempt.reportRef) {
-        const report = await readRecord("report", attempt.reportRef)
-        if (digestJson(report) !== attempt.reportDigest) {
-          throw new StoreError(mismatchCode, `report:${attempt.reportRef} does not match its assignment digest`)
-        }
-      }
-    }
-  }
-
-  for (const item of state.observationInbox.items) {
-    const kind = item.kind === "member-report" ? "report" : "observation"
-    const directory = kind === "report" ? "reports" : "observations"
-    const match = new RegExp(`^${directory}/([a-z0-9][a-z0-9._-]*)\\.json$`).exec(item.payloadRef ?? "")
-    if (!match) throw new StoreError(mismatchCode, `${item.kind} inbox item has an invalid payload reference`)
-    const payload = await readRecord(kind, match[1])
-    if (digestJson(payload) !== item.digest) {
-      throw new StoreError(mismatchCode, `${kind}:${match[1]} does not match its inbox digest`)
-    }
-  }
-
-  if (state.pendingDecision?.quiesceReceiptRef || state.pendingDecision?.quiesceFailureRef) {
-    const recordId = state.pendingDecision.quiesceReceiptRef ?? state.pendingDecision.quiesceFailureRef
-    const operation = await readRecord("operation", recordId)
-    const expectedStatus = state.pendingDecision.quiesceReceiptRef ? "confirmed" : "blocked"
-    const receiptExecutions = [...(operation.receipt?.executions ?? [])]
-      .map(({ executionRef, state: executionState }) => ({ executionRef, state: executionState }))
-      .sort((left, right) => left.executionRef.localeCompare(right.executionRef))
-    if (
-      operation.operationId !== recordId
-      || operation.kind !== "execution.quiesce"
-      || operation.intent?.decisionId !== state.pendingDecision.decisionId
-      || operation.intent?.leadBindingRef !== state.pendingDecision.leadBindingRef
-      || canonicalJson(operation.intent?.executionRefs) !== canonicalJson(state.pendingDecision.executionRefs)
-      || operation.receipt?.status !== expectedStatus
-      || operation.receipt?.operationId !== recordId
-      || operation.receipt?.effectDigest !== operation.intent?.effectDigest
-      || (expectedStatus === "confirmed" && operation.receipt?.hostContinuationsCleared !== true)
-      || (expectedStatus === "confirmed" && canonicalJson(receiptExecutions.map(({ executionRef }) => executionRef)) !== canonicalJson(state.pendingDecision.executionRefs))
-      || (expectedStatus === "confirmed" && receiptExecutions.some(({ state: executionState }) => !["idle", "stopped", "isolated"].includes(executionState)))
-    ) {
-      throw new StoreError(mismatchCode, `operation:${recordId} does not prove its human-wait state`)
-    }
-  }
-
-  for (const decision of state.decisionHistory) {
-    const record = await readRecord("operation", decision.decisionRef)
-    if (
-      digestJson(record) !== decision.decisionDigest
-      || record.operationId !== decision.decisionRef
-      || record.kind !== "human-decision"
-      || record.stageRunId !== decision.stageRunId
-      || record.evidenceDigest !== decision.evidenceDigest
-      || record.decision?.decisionId !== decision.decisionId
-      || record.decision?.choice !== decision.choice
-      || record.decision?.proof?.mode !== decision.proofMode
-    ) {
-      throw new StoreError(mismatchCode, `operation:${decision.decisionRef} does not prove its human decision`)
-    }
-    const quiesce = await readRecord("operation", decision.quiesceReceiptRef)
-    const receiptExecutions = [...(quiesce.receipt?.executions ?? [])]
-      .map(({ executionRef, state: executionState }) => ({ executionRef, state: executionState }))
-      .sort((left, right) => left.executionRef.localeCompare(right.executionRef))
-    if (
-      quiesce.operationId !== decision.quiesceReceiptRef
-      || quiesce.kind !== "execution.quiesce"
-      || quiesce.intent?.decisionId !== decision.decisionId
-      || quiesce.intent?.leadBindingRef !== decision.leadBindingRef
-      || canonicalJson(quiesce.intent?.executionRefs) !== canonicalJson(decision.executionRefs)
-      || quiesce.receipt?.status !== "confirmed"
-      || quiesce.receipt?.operationId !== decision.quiesceReceiptRef
-      || quiesce.receipt?.effectDigest !== quiesce.intent?.effectDigest
-      || quiesce.receipt?.hostContinuationsCleared !== true
-      || canonicalJson(receiptExecutions.map(({ executionRef }) => executionRef)) !== canonicalJson(decision.executionRefs)
-      || receiptExecutions.some(({ state: executionState }) => !["idle", "stopped", "isolated"].includes(executionState))
-    ) {
-      throw new StoreError(mismatchCode, `operation:${decision.quiesceReceiptRef} does not prove decision quiescence`)
-    }
-  }
+  return assertDurableReferences({
+    state,
+    mode: corrupt ? "load" : "commit",
+    loadRecord: (kind, recordId) => readReferencedRecord(taskRoot, included, kind, recordId),
+  })
 }
 
 function normalizeAuditEvents(events = [], { revision, required = false } = {}) {
@@ -394,8 +282,7 @@ async function recoverTaskRoot(taskRoot, taskId) {
         throw new StoreError("STATE_CORRUPT", "unfinished transaction cannot reconcile with current state")
       }
       manifest.records = await normalizeRecords(taskRoot, manifest.records)
-      await assertAcceptedReportsExist(taskRoot, manifest.state, manifest.records)
-      await assertDurableReferencesExist(taskRoot, manifest.state, manifest.records)
+      await assertTaskDurableReferences(taskRoot, manifest.state, manifest.records)
     } catch (error) {
       if (error instanceof StoreError && error.code === "STATE_CORRUPT") throw error
       throw new StoreError("STATE_CORRUPT", "unfinished transaction violates Store invariants", [{
@@ -464,10 +351,28 @@ export function createFileStore({ projectRoot }) {
       return withOwnerLock(path.join(taskRoot, ".lock"), async () => {
         await recoverTaskRoot(taskRoot, taskId)
         const state = await readState(taskRoot)
-        await assertAcceptedReportsExist(taskRoot, state, [], { corrupt: true })
-        await assertDurableReferencesExist(taskRoot, state, [], { corrupt: true })
+        await assertTaskDurableReferences(taskRoot, state, [], { corrupt: true })
         await writeArtifactProjection(taskRoot, state)
         return structuredClone(state)
+      })
+    },
+
+    async loadRecord(taskId, kind, recordId) {
+      const directoryName = recordDirectories[kind]
+      if (!directoryName) throw new StoreError("RECORD_INVALID", `unsupported immutable record kind: ${kind}`)
+      assertIdentifier(recordId, "recordId")
+      const taskRoot = await resolveExistingTaskRoot(await paths(), taskId)
+      return withOwnerLock(path.join(taskRoot, ".lock"), async () => {
+        await recoverTaskRoot(taskRoot, taskId)
+        const directory = await resolveTaskSubdirectory(taskRoot, directoryName)
+        try {
+          const recordPath = await resolveSafeFile(directory, path.join(directory, `${recordId}.json`), `${kind}:${recordId}`)
+          return JSON.parse(await readFile(recordPath, "utf8"))
+        } catch (error) {
+          if (error instanceof StoreError) throw error
+          if (error.code === "ENOENT") throw new StoreError("RECORD_NOT_FOUND", `immutable record does not exist: ${kind}:${recordId}`)
+          throw error
+        }
       })
     },
 
@@ -483,8 +388,7 @@ export function createFileStore({ projectRoot }) {
         }
         assertImmutableIdentity(current, state)
         const normalizedRecords = await normalizeRecords(taskRoot, records)
-        await assertAcceptedReportsExist(taskRoot, state, normalizedRecords)
-        await assertDurableReferencesExist(taskRoot, state, normalizedRecords)
+        await assertTaskDurableReferences(taskRoot, state, normalizedRecords)
         const normalizedAuditEvents = normalizeAuditEvents(auditEvents, { revision: state.revision, required: true })
         const committed = await commitTransaction(taskRoot, {
           schemaVersion: "2.0",

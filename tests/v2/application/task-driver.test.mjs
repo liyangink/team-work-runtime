@@ -433,7 +433,10 @@ test("member reports land atomically, dedupe retries, and replay once through th
   const report = {
     outcome: "delivered",
     summary: "Implementation and focused tests are complete.",
-    artifacts: ["src/feature.mjs", "tests/feature.test.mjs"],
+    artifacts: [
+      { ref: "artifact:source", path: "src/feature.mjs" },
+      { ref: "artifact:test", path: "tests/feature.test.mjs" },
+    ],
     evidenceRefs: ["check:test-1"],
     checks: [{ name: "focused tests", result: "pass", evidenceRef: "check:test-1" }],
     recommendation: "accept",
@@ -667,7 +670,7 @@ test("a committed report survives a crash before its in-process wake signal", as
   const report = {
     outcome: "delivered",
     summary: "The result was persisted before the host interruption.",
-    artifacts: ["src/feature.mjs"],
+    artifacts: [{ ref: "artifact:source", path: "src/feature.mjs" }],
     evidenceRefs: [],
     recommendation: "accept",
   }
@@ -711,7 +714,7 @@ test("run waits on SignalHub and consumes a report without platform polling", as
     report: {
       outcome: "delivered",
       summary: "The member completed while run was suspended.",
-      artifacts: ["src/feature.mjs"],
+      artifacts: [{ ref: "artifact:source", path: "src/feature.mjs" }],
       evidenceRefs: [],
       recommendation: "accept",
     },

@@ -9,7 +9,18 @@
       "properties": {
         "outcome": { "enum": ["delivered", "rework", "blocked", "needs-user"] },
         "summary": { "type": "string", "minLength": 1 },
-        "artifacts": { "type": "array", "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }, "uniqueItems": true },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ref", "path"],
+            "properties": {
+              "ref": { "type": "string", "pattern": "^artifact:[a-zA-Z0-9][a-zA-Z0-9._:-]*$" },
+              "path": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }
+            }
+          }
+        },
         "evidenceRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "unresolved": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "checks": {

@@ -120,6 +120,7 @@ test("reports and completed operations are immutable facts committed with state"
     JSON.parse(await readFile(path.join(projectRoot, ".team-work", "tasks", initial.taskId, "reports", "report-1.json"), "utf8")),
     report.value,
   )
+  assert.deepEqual(await store.loadRecord(initial.taskId, "report", "report-1"), report.value)
   assert.deepEqual(
     (await readFile(path.join(projectRoot, ".team-work", "tasks", initial.taskId, "events.jsonl"), "utf8"))
       .trim().split("\n").map((line) => JSON.parse(line)).at(-1),
@@ -170,6 +171,47 @@ test("reports and completed operations are immutable facts committed with state"
   await assert.rejects(
     store.loadTask(initial.taskId),
     (error) => error.code === "PATH_ESCAPE",
+  )
+})
+
+test("a changed durable record makes the authoritative task snapshot corrupt on load", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const initial = createState("durable-record-corruption")
+  await store.createTask(initial)
+  const next = reduceTask(initial, {
+    type: "stage-run.transitioned",
+    expectedRevision: 0,
+    status: "dispatching",
+    occurredAt: "2026-08-18T10:01:00.000Z",
+  }).state
+  const report = { kind: "report", recordId: "report-1", value: { reportId: "report-1", outcome: "completed" } }
+  next.acceptedReportRefs = [{ reportId: report.recordId, digest: digestJson(report.value) }]
+  await store.commit({
+    taskId: initial.taskId,
+    expectedRevision: 0,
+    state: next,
+    records: [report],
+    auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
+  })
+
+  await writeFile(
+    path.join(projectRoot, ".team-work", "tasks", initial.taskId, "reports", "report-1.json"),
+    `${JSON.stringify({ reportId: "report-1", outcome: "changed" })}\n`,
+  )
+
+  await assert.rejects(
+    store.loadTask(initial.taskId),
+    (error) => error.code === "STATE_CORRUPT",
+  )
+
+  await writeFile(
+    path.join(projectRoot, ".team-work", "tasks", initial.taskId, "reports", "report-1.json"),
+    "{not-json\n",
+  )
+  await assert.rejects(
+    store.loadTask(initial.taskId),
+    (error) => error.code === "STATE_CORRUPT",
   )
 })
 

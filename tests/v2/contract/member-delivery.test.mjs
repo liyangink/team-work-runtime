@@ -18,7 +18,7 @@ test("MemberDelivery accepts a bound member report without orchestration identit
   const receipt = await delivery.report({
     outcome: "delivered",
     summary: "代码审查完成",
-    artifacts: ["reviews/code-review.md"],
+    artifacts: [{ ref: "artifact:code-review", path: "reviews/code-review.md" }],
     evidenceRefs: ["evidence-1"],
     checks: [{ name: "tests", result: "pass", evidenceRef: "evidence-1" }],
     recommendation: "accept",

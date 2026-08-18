@@ -83,7 +83,35 @@ function advanceStage(next, fact) {
     status: "planned",
   }
   next.stagePlan = null
+  next.preflight = null
   next.workGraph = { assignments: [] }
+}
+
+function skipStage(next, fact) {
+  if (
+    next.currentStageRun.status !== "planned"
+    || next.stagePlan !== null
+    || next.preflight !== null
+    || next.workGraph.assignments.length > 0
+    || next.pendingOperations.length > 0
+  ) throw new DomainError("STAGE_SKIP_INVALID", "only a fresh unplanned stage run can be skipped by a compiled route")
+  const currentStage = next.currentStageRun.stage
+  const legal = next.scope.edges.some((edge) => edge.from === currentStage && edge.to === fact.to && edge.outcome === fact.outcome)
+  if (!legal) throw new DomainError("STAGE_EDGE_INVALID", `workflow scope does not allow ${currentStage} -> ${fact.to} via ${fact.outcome}`)
+  const nextStageRunId = assertIdentifier(fact.nextStageRunId, "fact.nextStageRunId")
+  if (next.stageRuns.some((run) => run.stageRunId === nextStageRunId) || next.currentStageRun.stageRunId === nextStageRunId) {
+    throw new DomainError("STAGE_RUN_DUPLICATE", `stage run ${nextStageRunId} already exists`)
+  }
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  next.stageRuns.push({ ...next.currentStageRun, status: "completed", reason, completedAt: fact.occurredAt })
+  next.currentStageRun = {
+    stageRunId: nextStageRunId,
+    sequence: next.currentStageRun.sequence + 1,
+    round: 1,
+    stage: fact.to,
+    status: "planned",
+  }
+  next.status = "needs-plan"
 }
 
 function normalizeCostLedger(ledger) {
@@ -132,9 +160,95 @@ function freezeStagePlan(next, fact) {
     recordTaskIntent(next, { intent: fact.taskIntent })
   }
   const plan = normalizeStagePlan(fact.plan, next.currentStageRun.stageRunId)
+  if (next.preflight) {
+    if (
+      next.preflight.status !== "satisfied"
+      || fact.preflightId !== next.preflight.preflightId
+      || plan.basis?.kind !== "preflight"
+      || plan.basis.preflightId !== next.preflight.preflightId
+      || plan.basis.resultRef !== next.preflight.result.ref
+      || plan.basis.resultDigest !== next.preflight.result.digest
+    ) throw new DomainError("PREFLIGHT_NOT_SATISFIED", "formal planning must bind the satisfied current preflight result")
+  } else if (plan.basis?.kind !== "deterministic") {
+    throw new DomainError("STAGE_PLAN_BASIS_INVALID", "a direct stage plan must use a deterministic basis")
+  }
   next.stagePlan = { ...plan, assignments: plan.assignments.map(({ assignmentId }) => assignmentId) }
   next.workGraph = createWorkGraph(plan.assignments)
   next.costLedger = normalizeCostLedger(fact.costLedger)
+  next.status = "needs-plan"
+  if (next.preflight) next.preflight.status = "consumed"
+}
+
+function recordRouteDecision(next, fact) {
+  const decision = structuredClone(fact.decision)
+  if (decision.stageRunId !== next.currentStageRun.stageRunId || decision.stage !== next.currentStageRun.stage) {
+    throw new DomainError("ROUTE_DECISION_STALE", "route decision must target the current stage run")
+  }
+  if (next.routeDecisions.some(({ decisionId }) => decisionId === decision.decisionId)) {
+    throw new DomainError("ROUTE_DECISION_DUPLICATE", `route decision already exists: ${decision.decisionId}`)
+  }
+  next.routeDecisions.push(decision)
+  if (decision.outcome === "blocked") next.status = "blocked"
+}
+
+function startPreflight(next, fact) {
+  if (next.currentStageRun.status !== "planned" || next.stagePlan !== null || next.preflight !== null || next.workGraph.assignments.length > 0) {
+    throw new DomainError("PREFLIGHT_STATE_INVALID", "preflight requires a fresh planned stage run")
+  }
+  if (next.taskIntent === null) {
+    if (!fact.taskIntent) throw new DomainError("TASK_INTENT_REQUIRED", "preflight requires the inherited task intent")
+    recordTaskIntent(next, { intent: fact.taskIntent })
+  }
+  const kind = fact.plan?.preflightKind
+  if (!["planning-bootstrap", "route-assessment"].includes(kind)) {
+    throw new DomainError("PREFLIGHT_KIND_INVALID", "preflight plan must declare a supported kind")
+  }
+  const { preflightKind: _preflightKind, ...candidate } = fact.plan
+  const plan = normalizeStagePlan(candidate, next.currentStageRun.stageRunId)
+  next.preflight = {
+    preflightId: `preflight-${digestValue({ kind, planId: plan.planId, stageRunId: plan.stageRunId }).slice(0, 20)}`,
+    stageRunId: next.currentStageRun.stageRunId,
+    kind,
+    status: "active",
+    plan: { ...plan, assignments: plan.assignments.map(({ assignmentId }) => assignmentId) },
+    result: null,
+  }
+  next.workGraph = createWorkGraph(plan.assignments)
+  next.costLedger = normalizeCostLedger(fact.costLedger)
+  next.status = "working"
+}
+
+function satisfyPreflight(next, fact) {
+  if (!next.preflight || next.preflight.status !== "active" || fact.preflightId !== next.preflight.preflightId) {
+    throw new DomainError("PREFLIGHT_STATE_INVALID", "only the active current preflight can be satisfied")
+  }
+  if (
+    next.pendingOperations.length > 0
+    || next.observationInbox.items.length > 0
+    || next.workGraph.assignments.some(({ status }) => status !== "accepted")
+  ) throw new DomainError("PREFLIGHT_INCOMPLETE", "preflight requires an accepted and quiescent work graph")
+  const result = fact.result
+  if (
+    result?.kind !== next.preflight.kind
+    || typeof result.ref !== "string"
+    || result.ref === ""
+    || !Array.isArray(result.evidenceRefs)
+  ) throw new DomainError("PREFLIGHT_RESULT_INVALID", "preflight result must identify its durable output and evidence")
+  const evidenceRefs = assertStringList(result.evidenceRefs, "fact.result.evidenceRefs", { allowEmpty: false })
+  const resultDigest = assertDigest(result.digest, "fact.result.digest")
+  const artifact = next.artifacts.find(({ path, digest }) => path === result.ref && digest === resultDigest)
+  if (!artifact || evidenceRefs.some((ref) => {
+    const reportId = ref.startsWith("report:") ? ref.slice("report:".length) : null
+    return !reportId || !next.acceptedReportRefs.some((entry) => entry.reportId === reportId)
+  })) throw new DomainError("PREFLIGHT_RESULT_INVALID", "preflight result must bind a registered artifact and accepted report evidence")
+  next.preflight.status = "satisfied"
+  next.preflight.result = {
+    kind: result.kind,
+    ref: result.ref,
+    digest: resultDigest,
+    evidenceRefs: [...evidenceRefs],
+  }
+  next.workGraph = { assignments: [] }
 }
 
 function startAssignmentAttempt(next, fact) {
@@ -177,7 +291,7 @@ function startAssignmentAttempt(next, fact) {
   }
   assignment.status = "effect-pending"
   if (next.status === "needs-plan") next.status = "working"
-  if (next.currentStageRun.status === "planned") next.currentStageRun.status = "dispatching"
+  if (next.currentStageRun.status === "planned" && next.stagePlan !== null) next.currentStageRun.status = "dispatching"
   assignment.attempts.push({
     attemptId,
     attempt: fact.attempt,
@@ -763,8 +877,63 @@ function consumeObservation(next, fact) {
     const attempt = assignment?.attempts.find((entry) => entry.attemptId === item.attemptId)
     if (assignment && attempt && attempt.status === "running") attempt.idleObservedAt = item.receivedAt
   }
+  if (fact.evidence) recordEvidence(next, { evidence: fact.evidence, occurredAt: fact.occurredAt })
   next.observationInbox.acknowledgedThrough = fact.sequence
   next.observationInbox.items = next.observationInbox.items.filter((entry) => entry.sequence > fact.sequence)
+}
+
+function findReportedAttempt(next, fact, allowedStatuses) {
+  const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === fact.assignmentId)
+  const attempt = assignment?.attempts.find((entry) => entry.attemptId === fact.attemptId)
+  if (!assignment || !attempt) {
+    throw new DomainError("REPORT_BINDING_INVALID", "report decision has no matching assignment attempt")
+  }
+  if (attempt.reportRef !== fact.reportId || attempt.reportDigest !== fact.reportDigest) {
+    throw new DomainError("REPORT_BINDING_INVALID", "report decision does not match the immutable member report")
+  }
+  if (!allowedStatuses.includes(attempt.status) || assignment.status !== attempt.status) {
+    throw new DomainError(
+      attempt.status === "reported" ? "REPORT_NOT_VERIFIED" : "REPORT_STATE_INVALID",
+      `report cannot move from ${attempt.status}`,
+    )
+  }
+  return { assignment, attempt }
+}
+
+function verifyAssignmentReport(next, fact) {
+  const { assignment, attempt } = findReportedAttempt(next, fact, ["reported"])
+  const artifacts = Array.isArray(fact.artifacts) ? fact.artifacts : []
+  const evidence = Array.isArray(fact.evidence) ? fact.evidence : []
+  if (assignment.teamRole !== "owner" && artifacts.length > 0) {
+    throw new DomainError("ROLE_WRITE_FORBIDDEN", `${assignment.teamRole} reports cannot register product artifacts`)
+  }
+  if (assignment.teamRole === "owner" && artifacts.length !== assignment.writableRefs.length) {
+    throw new DomainError("REPORT_ARTIFACT_MISMATCH", "Owner report artifacts must exactly match its declared writable refs")
+  }
+  for (const artifact of artifacts) recordArtifact(next, { artifact, occurredAt: fact.occurredAt })
+  for (const entry of evidence) recordEvidence(next, { evidence: entry, occurredAt: fact.occurredAt })
+  assignment.status = "verified"
+  attempt.status = "verified"
+  attempt.verifiedAt = fact.occurredAt
+}
+
+function acceptAssignmentReport(next, fact) {
+  const { assignment, attempt } = findReportedAttempt(next, fact, ["verified"])
+  assignment.status = "accepted"
+  attempt.status = "accepted"
+  attempt.acceptedAt = fact.occurredAt
+  if (next.acceptedReportRefs.some(({ reportId }) => reportId === fact.reportId)) {
+    throw new DomainError("REPORT_ALREADY_ACCEPTED", `report ${fact.reportId} is already accepted`)
+  }
+  next.acceptedReportRefs.push({ reportId: fact.reportId, digest: fact.reportDigest })
+}
+
+function rejectAssignmentReport(next, fact) {
+  const { assignment, attempt } = findReportedAttempt(next, fact, ["reported", "verified"])
+  assignment.status = "rework"
+  attempt.status = "rework"
+  attempt.rejectionReason = assertNonEmptyString(fact.reason, "fact.reason")
+  attempt.rejectedAt = fact.occurredAt
 }
 
 function assertProjectPath(value, label) {
@@ -900,6 +1069,7 @@ function reopenStage(next, fact) {
     status: "planned",
   }
   next.stagePlan = null
+  next.preflight = null
   next.workGraph = { assignments: [] }
 }
 
@@ -943,6 +1113,7 @@ function replanStage(next, fact) {
     status: "planned",
   }
   next.stagePlan = null
+  next.preflight = null
   next.workGraph = { assignments: [] }
   next.status = "needs-plan"
   next.costLedger = {
@@ -966,8 +1137,20 @@ export function reduceTask(state, fact) {
     case "stage.advanced":
       advanceStage(next, fact)
       return finish(next, fact)
+    case "stage.skipped":
+      skipStage(next, fact)
+      return finish(next, fact)
     case "stage-plan.frozen":
       freezeStagePlan(next, fact)
+      return finish(next, fact)
+    case "preflight.started":
+      startPreflight(next, fact)
+      return finish(next, fact)
+    case "preflight.satisfied":
+      satisfyPreflight(next, fact)
+      return finish(next, fact)
+    case "route.decision-recorded":
+      recordRouteDecision(next, fact)
       return finish(next, fact)
     case "assignment.attempt-started":
       startAssignmentAttempt(next, fact)
@@ -1028,6 +1211,15 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "observation.consumed":
       consumeObservation(next, fact)
+      return finish(next, fact)
+    case "assignment.report-verified":
+      verifyAssignmentReport(next, fact)
+      return finish(next, fact)
+    case "assignment.report-accepted":
+      acceptAssignmentReport(next, fact)
+      return finish(next, fact)
+    case "assignment.report-rejected":
+      rejectAssignmentReport(next, fact)
       return finish(next, fact)
     case "artifact.recorded":
       recordArtifact(next, fact)

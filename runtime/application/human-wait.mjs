@@ -46,7 +46,10 @@ export function compileHumanGateRequirements({ gates, capabilitySnapshot }) {
       requirement: gate.requirement,
       humanDecisionProof: capabilitySnapshot?.features?.humanDecisionProof,
     })
-    return Object.freeze({ gateId: gate.gateId, requirement: gate.requirement, ...compiled })
+    const metadata = {}
+    if (typeof gate.stage === "string" && gate.stage !== "") metadata.stage = gate.stage
+    if (typeof gate.artifactKind === "string" && gate.artifactKind !== "") metadata.artifactKind = gate.artifactKind
+    return Object.freeze({ gateId: gate.gateId, ...metadata, requirement: gate.requirement, ...compiled })
   })
 }
 

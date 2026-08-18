@@ -40,9 +40,11 @@ export function createTaskAggregate(input) {
     },
     stageRuns: [],
     stagePlan: null,
+    preflight: null,
+    routeDecisions: [],
     workGraph: { assignments: [] },
-    artifacts: [],
-    evidence: [],
+    artifacts: structuredClone(input.artifacts ?? []),
+    evidence: structuredClone(input.evidence ?? []),
     acceptedReportRefs: [],
     costLedger: {
       forecastMin: 0,

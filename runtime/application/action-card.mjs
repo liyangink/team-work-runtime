@@ -132,10 +132,11 @@ function reportFor(state, stage, reason, decision) {
     ...(decision ? ["等待人工选择。"] : []),
   ].slice(0, 3)
   const assignments = state.workGraph.assignments
+  const deliveryOwners = assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0)
   const challengers = assignments.filter(({ teamRole }) => teamRole === "challenger")
   const team = assignments.length === 0 ? undefined : {
-    mode: state.stagePlan?.teamMode ?? (assignments.filter(({ teamRole }) => teamRole === "owner").length > 1 ? "team" : "solo"),
-    owners: Math.max(1, assignments.filter(({ teamRole }) => teamRole === "owner").length),
+    mode: state.stagePlan?.teamMode ?? (deliveryOwners.length > 1 ? "team" : "solo"),
+    owners: Math.max(1, deliveryOwners.length),
     challengerTier: challengers.some(({ costTier }) => costTier === "expert") ? "expert" : "senior",
     expert: assignments.some(({ teamRole }) => teamRole === "expert"),
     cost: {

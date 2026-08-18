@@ -56,16 +56,17 @@ function assignmentId(seed, label) {
   return `${label}-${digestValue(seed).slice(0, 12)}`
 }
 
-function executionFor(taskId, assignmentIdValue, agent, catalogDigest) {
+function executionFor(taskId, assignmentIdValue, agent, catalogDigest, resumeAssignmentId) {
   return {
     agentId: agent.agentId,
     capabilitySnapshotDigest: catalogDigest,
     contextRef: `.team-work/tasks/${taskId}/context/${assignmentIdValue}.md`,
     promptRef: `.team-work/tasks/${taskId}/prompts/${assignmentIdValue}.md`,
+    ...(resumeAssignmentId ? { resumeAssignmentId } : {}),
   }
 }
 
-function createAssignment({ taskId, stageRunId, label, role, kind, tier, dependsOn, readableRefs, writableRefs, criteria, agent, catalogDigest }) {
+function createAssignment({ taskId, stageRunId, label, role, kind, tier, dependsOn, readableRefs, writableRefs, criteria, agent, catalogDigest, resumeAssignmentId }) {
   const id = assignmentId({ taskId, stageRunId, label, role, kind, writableRefs }, label)
   return {
     assignmentId: id,
@@ -76,7 +77,7 @@ function createAssignment({ taskId, stageRunId, label, role, kind, tier, depends
     readableRefs: [...new Set(readableRefs)],
     writableRefs: [...new Set(writableRefs)],
     completionCriteria: criteria,
-    execution: executionFor(taskId, id, agent, catalogDigest),
+    execution: executionFor(taskId, id, agent, catalogDigest, resumeAssignmentId),
   }
 }
 
@@ -99,12 +100,13 @@ export function projectCostLedger({ assignments, policy, budget, accrued = 0, un
 function defaultStageCost(stage, stagePolicies, policy) {
   const teamScene = stagePolicies[stage]?.teamScene
   if (teamScene === "e2e") {
-    return policy.e2eTemplate.length * (policy.costWeights.junior + policy.costWeights.senior) + policy.costWeights.expert
+    return policy.e2eTemplate.length * (policy.costWeights.junior * 2 + policy.costWeights.senior) + policy.costWeights.expert
   }
   const scene = policy.scenes[teamScene]
   if (!scene) return 0
   return policy.costWeights[scene.ownerTier]
     + policy.costWeights[scene.challengerTier]
+    + policy.costWeights[scene.ownerTier]
     + (scene.core ? policy.costWeights.expert : 0)
 }
 
@@ -254,6 +256,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
   const stageRunId = task.currentStageRun.stageRunId
   const usedFamilies = []
   const assignments = []
+  const preflightIdentity = workflowDraft.planningRequired || workflowDraft.stage.teamScene === "e2e-applicability"
 
   const e2eRun = workflowDraft.stage.teamScene === "e2e" && workflowDraft.routes?.e2e?.decision === "run"
   let packages = e2eRun
@@ -296,6 +299,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
   let deliveryIds = []
   let deliveredRefs = []
   let challenger
+  const ownerReviewIds = new Map()
   if (e2eRun) {
     let previousReviewId
     for (const workPackage of packages) {
@@ -337,6 +341,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
         catalogDigest: catalog.digest,
       })
       assignments.push(challenger)
+      ownerReviewIds.set(owner.assignmentId, challenger.assignmentId)
       previousReviewId = challenger.assignmentId
     }
     deliveryIds = [challenger.assignmentId]
@@ -397,7 +402,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
     challenger = createAssignment({
       taskId: task.taskId,
       stageRunId,
-      label: "challenger",
+      label: preflightIdentity ? "preflight-challenger" : "challenger",
       role: "challenger",
       kind: "review",
       tier: scene.challengerTier,
@@ -409,10 +414,14 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
       catalogDigest: catalog.digest,
     })
     assignments.push(challenger)
+    for (const owner of assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0)) {
+      ownerReviewIds.set(owner.assignmentId, challenger.assignmentId)
+    }
     deliveryIds = [challenger.assignmentId]
   }
 
   const needsExpert = stageScene.core || ["high", "critical"].includes(workflowDraft.intent.preferences.risk)
+  let expertAssignmentId
   if (needsExpert) {
     const ownerAgentIds = assignments.filter(({ teamRole }) => teamRole === "owner").map(({ execution }) => execution.agentId)
     let expertAgent
@@ -425,7 +434,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
     const expert = createAssignment({
       taskId: task.taskId,
       stageRunId,
-      label: "expert-verdict",
+      label: preflightIdentity ? "preflight-expert-verdict" : "expert-verdict",
       role: "expert",
       kind: workflowDraft.stage.assignmentKind,
       tier: "expert",
@@ -437,6 +446,31 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
       catalogDigest: catalog.digest,
     })
     assignments.push(expert)
+    expertAssignmentId = expert.assignmentId
+  }
+
+  const deliveryOwners = assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0)
+  for (const owner of deliveryOwners) {
+    const ownerAgent = catalog.agents.find(({ agentId }) => agentId === owner.execution.agentId)
+    const response = createAssignment({
+      taskId: task.taskId,
+      stageRunId,
+      label: `owner-response-${owner.assignmentId}`,
+      role: "owner",
+      kind: owner.assignmentKind,
+      tier: owner.costTier,
+      dependsOn: [ownerReviewIds.get(owner.assignmentId), expertAssignmentId].filter(Boolean),
+      readableRefs: [...owner.readableRefs, ...owner.writableRefs],
+      writableRefs: [],
+      criteria: [
+        "independently verify the Challenger and Expert conclusions against the delivered artifacts",
+        "accept with evidence or state a concrete evidence-backed disagreement",
+      ],
+      agent: ownerAgent,
+      catalogDigest: catalog.digest,
+      resumeAssignmentId: owner.assignmentId,
+    })
+    assignments.push(response)
   }
 
   const planSeed = {
@@ -488,9 +522,9 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
     convergence: { maxAutonomousRounds: teamPolicy.maxAutonomousRounds, currentRound: task.currentStageRun.round },
     costProjection,
     summary: {
-      mode: assignments.filter(({ teamRole }) => teamRole === "owner").length > 1 ? "team" : "solo",
+      mode: deliveryOwners.length > 1 ? "team" : "solo",
       planningBootstrap: workflowDraft.planningRequired,
-      owners: assignments.filter(({ teamRole }) => teamRole === "owner").length,
+      owners: deliveryOwners.length,
       challengerTier: challenger.costTier,
       expert: needsExpert,
     },

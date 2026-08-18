@@ -67,16 +67,81 @@ test("a clear implementation stage compiles directly without a planning agent", 
   })), [
     { teamRole: "owner", assignmentKind: "implementation", costTier: "junior" },
     { teamRole: "challenger", assignmentKind: "review", costTier: "senior" },
+    { teamRole: "owner", assignmentKind: "implementation", costTier: "junior" },
   ])
   assert.deepEqual(result.plan.assignments[1].dependsOn, [result.plan.assignments[0].assignmentId])
+  assert.equal(result.plan.assignments[2].execution.resumeAssignmentId, result.plan.assignments[0].assignmentId)
   assert.deepEqual(result.costLedger, {
-    forecastMin: 11,
-    forecastMax: 33,
+    forecastMin: 12,
+    forecastMax: 36,
     accrued: 0,
     uncertain: 0,
     nextWave: 1,
     automaticLimit: 200,
   })
+  assert.deepEqual(result.plan.routes.humanGates, [
+    {
+      gateId: "design-approval",
+      stage: "design-review",
+      artifactKind: "design",
+      requirement: "required",
+      action: "wait",
+      proofMode: "verified-event",
+    },
+    {
+      gateId: "final-acceptance",
+      stage: "finish",
+      artifactKind: "delivery-report",
+      requirement: "required",
+      action: "wait",
+      proofMode: "verified-event",
+    },
+  ])
+})
+
+test("human gate route overrides retain the Workflow Definition stage and artifact kind", async () => {
+  const workflow = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const compile = (humanReview) => compilePolicyPlan({
+    task: {
+      taskId: "human-gate-overrides",
+      currentStageRun: { stageRunId: "stage-run-1", stage: "implementation", round: 1 },
+      scope: { stages: ["implementation"], edges: [], completionStages: ["implementation"] },
+      costLedger: { accrued: 0, uncertain: 0 },
+    },
+    taskIntent: {
+      objective: "Implement the approved cache change",
+      constraints: [],
+      exclusions: [],
+      preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+    },
+    availableArtifacts: [artifact("requirement")],
+    workflowDefinition: workflow,
+    teamPolicy,
+    agentCatalog: agentCatalog(),
+    routeInputs: {
+      humanDecisionCapability: "verified-event",
+      humanReview,
+      spec: { mode: "disabled", configDigest: digestValue({ mode: "disabled" }) },
+      e2e: { mode: "auto", userRequired: false },
+    },
+  })
+
+  const required = compile({})
+  const optional = compile({ "design-approval": "optional" })
+  const disabled = compile({ "final-acceptance": "disabled" })
+
+  for (const result of [required, optional, disabled]) {
+    assert.deepEqual(result.plan.routes.humanGates.map(({ gateId, stage, artifactKind }) => ({ gateId, stage, artifactKind })), [
+      { gateId: "design-approval", stage: "design-review", artifactKind: "design" },
+      { gateId: "final-acceptance", stage: "finish", artifactKind: "delivery-report" },
+    ])
+  }
+  assert.equal(required.plan.routes.humanGates[0].requirement, "required")
+  assert.equal(optional.plan.routes.humanGates[0].requirement, "optional")
+  assert.equal(optional.plan.routes.humanGates[0].action, "wait")
+  assert.equal(disabled.plan.routes.humanGates[1].requirement, "disabled")
+  assert.equal(disabled.plan.routes.humanGates[1].action, "skip")
 })
 
 test("a complex design uses a planning bootstrap before freezing a multi-owner graph", async () => {
@@ -115,6 +180,7 @@ test("a complex design uses a planning bootstrap before freezing a multi-owner g
     { teamRole: "owner", assignmentKind: "planning", costTier: "junior" },
     { teamRole: "challenger", assignmentKind: "review", costTier: "senior" },
     { teamRole: "expert", assignmentKind: "design", costTier: "expert" },
+    { teamRole: "owner", assignmentKind: "planning", costTier: "junior" },
   ])
   assert.throws(
     () => normalizeStagePlan(bootstrap.preflight, "stage-run-1"),
@@ -157,8 +223,13 @@ test("a complex design uses a planning bootstrap before freezing a multi-owner g
     { teamRole: "owner", assignmentKind: "integration" },
     { teamRole: "challenger", assignmentKind: "review" },
     { teamRole: "expert", assignmentKind: "design" },
+    { teamRole: "owner", assignmentKind: "design" },
+    { teamRole: "owner", assignmentKind: "design" },
+    { teamRole: "owner", assignmentKind: "integration" },
   ])
   const [first, second, integration, challenger, expert] = compiled.plan.assignments
+  assert.notEqual(challenger.assignmentId, bootstrap.preflight.assignments.find(({ teamRole }) => teamRole === "challenger").assignmentId)
+  assert.notEqual(expert.assignmentId, bootstrap.preflight.assignments.find(({ teamRole }) => teamRole === "expert").assignmentId)
   assert.deepEqual(integration.dependsOn, [first.assignmentId, second.assignmentId])
   assert.deepEqual(challenger.dependsOn, [integration.assignmentId])
   assert.deepEqual(expert.dependsOn, [challenger.assignmentId])
@@ -261,6 +332,7 @@ test("code review keeps all required perspectives independent from cost tiers", 
     { teamRole: "owner", costTier: "junior" },
     { teamRole: "challenger", costTier: "senior" },
     { teamRole: "expert", costTier: "expert" },
+    { teamRole: "owner", costTier: "junior" },
   ])
 })
 
@@ -320,9 +392,17 @@ test("an applicable E2E stage compiles the full internal review loop", async () 
     "owner", "challenger",
     "owner", "challenger",
     "expert",
+    "owner", "owner", "owner",
   ])
-  for (let index = 1; index < result.plan.assignments.length; index += 1) {
+  for (let index = 1; index < 7; index += 1) {
     assert.deepEqual(result.plan.assignments[index].dependsOn, [result.plan.assignments[index - 1].assignmentId])
+  }
+  for (const [index, response] of result.plan.assignments.slice(7).entries()) {
+    assert.deepEqual(response.dependsOn, [
+      result.plan.assignments[(index * 2) + 1].assignmentId,
+      result.plan.assignments[6].assignmentId,
+    ])
+    assert.ok(response.execution.resumeAssignmentId)
   }
 })
 
@@ -503,7 +583,7 @@ test("versioned policy files validate and a compiled plan freezes without losing
   assert.equal(state.stagePlan.policyPins.team.policyId, "default")
   assert.equal(state.stagePlan.convergence.maxAutonomousRounds, 3)
   assert.equal(state.stagePlan.teamMode, "solo")
-  assert.equal(state.workGraph.assignments.length, 2)
+  assert.equal(state.workGraph.assignments.length, 3)
 
   const revisedIntent = {
     ...state.taskIntent,
@@ -645,7 +725,7 @@ test("explicit solo collapses proposal packages into one Owner without losing ou
       e2e: { mode: "auto", userRequired: false },
     },
   })
-  const owners = result.plan.assignments.filter(({ teamRole }) => teamRole === "owner")
+  const owners = result.plan.assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0)
   assert.equal(result.summary.mode, "solo")
   assert.equal(owners.length, 1)
   assert.deepEqual(owners[0].writableRefs, ["artifact:api-design", "artifact:storage-design", "artifact:design"])
@@ -690,6 +770,7 @@ test("a workflow code review assesses E2E before selecting the outgoing branch",
   assert.deepEqual(result.preflight.assignments.map(({ teamRole, assignmentKind }) => ({ teamRole, assignmentKind })), [
     { teamRole: "owner", assignmentKind: "e2e-applicability" },
     { teamRole: "challenger", assignmentKind: "review" },
+    { teamRole: "owner", assignmentKind: "e2e-applicability" },
   ])
   assert.deepEqual(result.preflight.assignments[1].dependsOn, [result.preflight.assignments[0].assignmentId])
   assert.deepEqual(result.preflight.outputRefs, ["artifact:e2e-route-assessment"])
@@ -734,6 +815,6 @@ test("completion cost follows Workflow team scenes instead of hard-coded stage i
     },
   })
 
-  assert.equal(result.costLedger.forecastMin, 22)
+  assert.equal(result.costLedger.forecastMin, 24)
   assert.equal(result.plan.costProjection.branchPathCount, 1)
 })

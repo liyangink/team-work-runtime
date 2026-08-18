@@ -54,6 +54,9 @@ function normalizeAssignment(assignment) {
     ),
     contextRef: assertNonEmptyString(assignment.execution.contextRef, "assignment.execution.contextRef"),
     promptRef: assertNonEmptyString(assignment.execution.promptRef, "assignment.execution.promptRef"),
+    ...(assignment.execution.resumeAssignmentId ? {
+      resumeAssignmentId: assertIdentifier(assignment.execution.resumeAssignmentId, "assignment.execution.resumeAssignmentId"),
+    } : {}),
   }
   return {
     assignmentId: assignment.assignmentId,
@@ -73,12 +76,33 @@ function normalizeAssignment(assignment) {
 export function createWorkGraph(assignments) {
   const normalized = assignments.map(normalizeAssignment)
   const ids = new Set(normalized.map(({ assignmentId }) => assignmentId))
+  const byId = new Map(normalized.map((assignment) => [assignment.assignmentId, assignment]))
+  const dependsTransitivelyOn = (assignment, target, seen = new Set()) => assignment.dependsOn.some((dependency) => {
+    if (dependency === target) return true
+    if (seen.has(dependency)) return false
+    seen.add(dependency)
+    const parent = byId.get(dependency)
+    return parent ? dependsTransitivelyOn(parent, target, seen) : false
+  })
   if (ids.size !== normalized.length) {
     throw new DomainError("WORK_GRAPH_INVALID", "assignment ids must be unique")
   }
   for (const assignment of normalized) {
     if (assignment.dependsOn.includes(assignment.assignmentId) || assignment.dependsOn.some((id) => !ids.has(id))) {
       throw new DomainError("WORK_GRAPH_INVALID", `assignment ${assignment.assignmentId} has an invalid dependency`)
+    }
+    const resumeAssignmentId = assignment.execution.resumeAssignmentId
+    if (resumeAssignmentId) {
+      const source = normalized.find(({ assignmentId }) => assignmentId === resumeAssignmentId)
+      if (
+        !source
+        || source.assignmentId === assignment.assignmentId
+        || source.teamRole !== assignment.teamRole
+        || source.execution.agentId !== assignment.execution.agentId
+        || !dependsTransitivelyOn(assignment, source.assignmentId)
+      ) {
+        throw new DomainError("WORK_GRAPH_INVALID", `assignment ${assignment.assignmentId} has an invalid resume source`)
+      }
     }
   }
   assertAcyclic(normalized)

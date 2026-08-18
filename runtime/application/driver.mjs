@@ -6,6 +6,7 @@ import { createFileEvidenceVerifier } from "./evidence-verifier.mjs"
 import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
 import { costWeightForTier } from "../../policy/kernel.mjs"
+import { createTaskLifecycle } from "./task-lifecycle.mjs"
 
 const terminalReasons = new Set(["needs-plan", "awaiting-user", "blocked", "completed", "cancelled"])
 
@@ -30,21 +31,43 @@ export function createTaskDriver({
   now = Date.now,
   projectRoot,
   evidenceVerifier = projectRoot ? createFileEvidenceVerifier({ projectRoot }) : undefined,
+  specProviderAdapter,
+  artifactRepository,
+  workflowDefinition,
+  workflowPin,
+  teamPolicy,
+  routeConfig,
 }) {
   const reconciler = createTaskReconciler({ store, clock })
   const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
   const humanWait = createHumanWait({ reconciler, executionAdapter, evidenceVerifier, clock, effectLeaseMs, faultInjector })
 
   async function consumeInbox(taskId) {
-    return reconciler.commit(taskId, (state) => {
+    return reconciler.commit(taskId, async (state) => {
       const item = state.observationInbox.items[0]
       if (!item) return null
+      let evidence
+      if (item.kind === "check-result") {
+        const recordId = item.payloadRef.split("/").at(-1).replace(/\.json$/, "")
+        const record = await store.loadRecord(taskId, "observation", recordId)
+        const observation = record.observation
+        evidence = {
+          evidenceId: `check-${digestValue(observation.toolCallRef).slice(0, 24)}`,
+          kind: "platform-check",
+          sourceRef: `check:${observation.toolCallRef}`,
+          artifactRefs: [],
+          result: observation.result,
+          digest: item.digest,
+          stageRunId: state.currentStageRun.stageRunId,
+        }
+      }
       return {
         fact: {
           type: "observation.consumed",
           sequence: item.sequence,
           observationId: item.observationId,
           ...(item.kind === "member-report" ? { reportId: item.payloadRef.split("/").at(-1).replace(/\.json$/, "") } : {}),
+          ...(evidence ? { evidence } : {}),
           occurredAt: clock(),
         },
         refs: [item.observationId, ...(item.assignmentId ? [item.assignmentId] : [])],
@@ -54,10 +77,11 @@ export function createTaskDriver({
 
   async function prepareNextDispatch(taskId) {
     return reconciler.commit(taskId, (state) => {
-      if (!state.stagePlan) return null
+      if (!state.stagePlan && state.preflight?.status !== "active") return null
       const byId = new Map(state.workGraph.assignments.map((assignment) => [assignment.assignmentId, assignment]))
       const assignment = state.workGraph.assignments.find((candidate) => (
-        candidate.status === "planned"
+        ["planned", "rework", "lost"].includes(candidate.status)
+        && candidate.attempts.length < (state.stagePlan?.convergence.maxAutonomousRounds ?? 3)
         && candidate.execution
         && candidate.dependsOn.every((dependency) => byId.get(dependency)?.status === "accepted")
       ))
@@ -86,6 +110,10 @@ export function createTaskDriver({
         contextRef: assignment.execution.contextRef,
         promptRef: assignment.execution.promptRef,
       }
+      const resumeSource = assignment.execution.resumeAssignmentId
+        ? byId.get(assignment.execution.resumeAssignmentId)?.attempts.at(-1)
+        : assignment.attempts.at(-1)
+      if (resumeSource?.executionRef) effect.resumeExecutionRef = resumeSource.executionRef
       effect.effectDigest = digestEffect(effect)
       return {
         fact: {
@@ -317,7 +345,8 @@ export function createTaskDriver({
           const prepared = await prepareNextDispatch(taskId)
           if (prepared.changed) continue
           const readyAssignment = state.workGraph.assignments.find((candidate) => (
-            candidate.status === "planned"
+            ["planned", "rework", "lost"].includes(candidate.status)
+            && candidate.attempts.length < (state.stagePlan?.convergence.maxAutonomousRounds ?? 3)
             && candidate.execution
             && candidate.dependsOn.every((dependency) => (
               state.workGraph.assignments.find(({ assignmentId }) => assignmentId === dependency)?.status === "accepted"
@@ -378,6 +407,21 @@ export function createTaskDriver({
       }
       throw new Error(`Task Driver exceeded ${maxInternalTransitions} internal transitions`)
     },
+  }
+  if (artifactRepository && workflowDefinition && teamPolicy) {
+    Object.assign(driver, createTaskLifecycle({
+      store,
+      reconciler,
+      effectDriver: driver,
+      executionAdapter,
+      specProviderAdapter,
+      artifactRepository,
+      workflowDefinition,
+      workflowPin,
+      teamPolicy,
+      routeConfig,
+      clock,
+    }))
   }
   return Object.freeze(driver)
 }

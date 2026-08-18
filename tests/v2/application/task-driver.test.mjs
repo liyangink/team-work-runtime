@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -115,6 +115,31 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch", { pr
   })
 }
 
+async function requestStop(store, taskId, executionRef, occurredAt = "2026-08-18T10:04:00.000Z") {
+  const state = await store.loadTask(taskId)
+  const stopIntent = {
+    operationId: `stop-${taskId}`,
+    effectDigest: "0".repeat(64),
+    executionRef,
+    reason: "replace a lost owner",
+  }
+  stopIntent.effectDigest = digestEffect(stopIntent)
+  const requested = reduceTask(state, {
+    type: "execution.stop-requested",
+    expectedRevision: state.revision,
+    assignmentId: "implementation-owner",
+    attemptId: "implementation-owner-attempt-1",
+    intent: stopIntent,
+    occurredAt,
+  }).state
+  return store.commit({
+    taskId,
+    expectedRevision: state.revision,
+    state: requested,
+    auditEvents: [event(requested.revision, "execution.stop-requested", occurredAt)],
+  })
+}
+
 function fakeExecutionAdapter(overrides = {}) {
   return {
     capabilities: async () => assert.fail("not used"),
@@ -203,6 +228,9 @@ test("the driver persists invocation state before dispatch and commits only a co
   ), "utf8"))
   assert.equal(operation.receipt.status, "confirmed")
   assert.equal(operation.intent.mode, "background")
+
+  await rm(path.join(projectRoot, ".team-work/tasks/driver-dispatch/operations/dispatch-operation-1.json"))
+  await assert.rejects(store.loadTask("driver-dispatch"), (error) => error.code === "STATE_CORRUPT")
 })
 
 test("a restart inspects an in-doubt dispatch instead of creating a second execution", async () => {
@@ -259,15 +287,16 @@ test("a concurrent driver does not inspect or repeat an invocation whose durable
   await createDispatchPendingTask(store, "concurrent-dispatch")
   const pending = await store.loadTask("concurrent-dispatch")
   const effect = pending.pendingOperations[0].intent
-  let releaseEnsure
-  let markEnsureStarted
-  const ensureStarted = new Promise((resolve) => { markEnsureStarted = resolve })
-  const ensureReleased = new Promise((resolve) => { releaseEnsure = resolve })
+  let releaseClaims
+  let markClaimsReady
+  let claims = 0
+  const claimsReady = new Promise((resolve) => { markClaimsReady = resolve })
+  const claimsReleased = new Promise((resolve) => { releaseClaims = resolve })
   let inspectCalls = 0
+  let ensureCalls = 0
   const executionAdapter = fakeExecutionAdapter({
     ensureExecution: async () => {
-      markEnsureStarted()
-      await ensureReleased
+      ensureCalls += 1
       return {
         operationId: effect.operationId,
         effectDigest: effect.effectDigest,
@@ -288,19 +317,36 @@ test("a concurrent driver does not inspect or repeat an invocation whose durable
       }
     },
   })
-  const firstDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:02:30.000Z" })
-  const secondDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:02:31.000Z" })
+  const faultInjector = {
+    beforeInvocationClaim: async () => {
+      claims += 1
+      if (claims === 2) markClaimsReady()
+      await claimsReleased
+    },
+  }
+  const firstDriver = createTaskDriver({
+    store,
+    executionAdapter,
+    clock: () => "2026-08-18T10:02:30.000Z",
+    faultInjector,
+  })
+  const secondDriver = createTaskDriver({
+    store,
+    executionAdapter,
+    clock: () => "2026-08-18T10:02:31.000Z",
+    faultInjector,
+  })
   const firstRun = firstDriver.run({ taskId: "concurrent-dispatch", waitBudgetMs: 0 })
-  await ensureStarted
+  const secondRun = secondDriver.run({ taskId: "concurrent-dispatch", waitBudgetMs: 0 })
+  await claimsReady
+  releaseClaims()
+  const outcomes = await Promise.all([firstRun, secondRun])
 
-  const concurrent = await secondDriver.run({ taskId: "concurrent-dispatch", waitBudgetMs: 0 })
-  assert.equal(concurrent.reason, "in-doubt")
+  assert.equal(ensureCalls, 1)
   assert.equal(inspectCalls, 0)
-
-  releaseEnsure()
-  const completed = await firstRun
-  assert.equal(completed.reason, "waiting-report")
-  assert.equal(completed.state.workGraph.assignments[0].attempts[0].executionRef, "member-session-concurrent")
+  assert.ok(outcomes.some((outcome) => outcome.reason === "waiting-report"))
+  const completed = await store.loadTask("concurrent-dispatch")
+  assert.equal(completed.workGraph.assignments[0].attempts[0].executionRef, "member-session-concurrent")
 })
 
 test("retryable dispatch failures are bounded and end in an explicit blocker", async () => {
@@ -399,6 +445,9 @@ test("member reports land atomically, dedupe retries, and replay once through th
   assert.equal(stored.report.summary, report.summary)
   assert.equal("transcript" in stored, false)
   assert.equal("toolLogs" in stored, false)
+
+  await rm(path.join(projectRoot, `.team-work/tasks/member-report/reports/${first.reportId}.json`))
+  await assert.rejects(store.loadTask("member-report"), (error) => error.code === "STATE_CORRUPT")
 })
 
 test("platform observations use the same durable sequence and dedupe protocol", async () => {
@@ -712,28 +761,7 @@ test("stop execution persists intent and inspects after a receipt-loss crash", a
   })
   const dispatchDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:04:00.000Z" })
   await dispatchDriver.run({ taskId: "durable-stop", waitBudgetMs: 0 })
-  state = await store.loadTask("durable-stop")
-  const stopIntent = {
-    operationId: "stop-operation-1",
-    effectDigest: "0".repeat(64),
-    executionRef: "member-session-stop",
-    reason: "replace a lost owner",
-  }
-  stopIntent.effectDigest = digestEffect(stopIntent)
-  const requested = reduceTask(state, {
-    type: "execution.stop-requested",
-    expectedRevision: state.revision,
-    assignmentId: "implementation-owner",
-    attemptId: "implementation-owner-attempt-1",
-    intent: stopIntent,
-    occurredAt: "2026-08-18T10:04:00.000Z",
-  }).state
-  await store.commit({
-    taskId: state.taskId,
-    expectedRevision: state.revision,
-    state: requested,
-    auditEvents: [event(requested.revision, "execution.stop-requested", "2026-08-18T10:04:00.000Z")],
-  })
+  await requestStop(store, "durable-stop", "member-session-stop")
 
   const interrupted = createTaskDriver({
     store,
@@ -753,7 +781,56 @@ test("stop execution persists intent and inspects after a receipt-loss crash", a
   assert.deepEqual(outcome.state.pendingOperations, [])
   const operation = JSON.parse(await readFile(path.join(
     projectRoot,
-    ".team-work/tasks/durable-stop/operations/stop-operation-1.json",
+    ".team-work/tasks/durable-stop/operations/stop-durable-stop.json",
   ), "utf8"))
   assert.equal(operation.receipt.status, "confirmed")
+})
+
+test("retryable stop failures are retried within the same bounded durable operation", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "retry-stop")
+  const pending = await store.loadTask("retry-stop")
+  const dispatch = pending.pendingOperations[0].intent
+  let stopCalls = 0
+  const executionAdapter = fakeExecutionAdapter({
+    ensureExecution: async () => ({
+      operationId: dispatch.operationId,
+      effectDigest: dispatch.effectDigest,
+      status: "confirmed",
+      executionRef: "member-session-retry-stop",
+      agentId: dispatch.agentId,
+      observedAt: "2026-08-18T10:03:00.000Z",
+    }),
+    inspectExecution: async () => assert.fail("not used"),
+    stopExecution: async (intent) => {
+      stopCalls += 1
+      if (stopCalls === 1) {
+        return {
+          operationId: intent.operationId,
+          effectDigest: intent.effectDigest,
+          status: "failed",
+          executionRef: intent.executionRef,
+          observedAt: "2026-08-18T10:05:00.000Z",
+          error: { code: "gateway-limit", retryable: true, message: "temporary rate limit" },
+        }
+      }
+      return {
+        operationId: intent.operationId,
+        effectDigest: intent.effectDigest,
+        status: "confirmed",
+        executionRef: intent.executionRef,
+        observedAt: "2026-08-18T10:06:00.000Z",
+      }
+    },
+    inspectStop: async () => assert.fail("a confirmed failed receipt is not in-doubt"),
+  })
+  const driver = createTaskDriver({ store, executionAdapter, maxEffectAttempts: 2 })
+  await driver.run({ taskId: "retry-stop", waitBudgetMs: 0 })
+  await requestStop(store, "retry-stop", "member-session-retry-stop")
+
+  const outcome = await driver.run({ taskId: "retry-stop", waitBudgetMs: 0 })
+  assert.equal(stopCalls, 2)
+  assert.equal(outcome.reason, "blocked")
+  assert.deepEqual(outcome.state.pendingOperations, [])
 })

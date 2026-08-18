@@ -1135,6 +1135,7 @@ type StopReceipt = {
   status: "confirmed" | "in-doubt" | "failed"
   executionRef: string
   observedAt: string
+  error?: PlatformError
 }
 
 interface ExecutionAdapter {

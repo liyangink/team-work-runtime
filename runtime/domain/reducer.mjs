@@ -315,7 +315,7 @@ function confirmEffect(next, fact) {
 }
 
 function scheduleEffectRetry(next, fact) {
-  const { operation, assignment, attempt } = findPendingOperation(next, fact, "execution.ensure")
+  const { operation, assignment, attempt } = findPendingOperation(next, fact)
   validateReceipt(operation, fact.receipt)
   if (operation.status !== "in-doubt" || fact.receipt.status !== "failed" || fact.receipt.error?.retryable !== true) {
     throw new DomainError("EFFECT_RETRY_INVALID", "only a retryable failed invocation can be scheduled again")

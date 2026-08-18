@@ -181,6 +181,61 @@ async function assertAcceptedReportsExist(taskRoot, state, records = [], { corru
   }
 }
 
+async function assertDurableReferencesExist(taskRoot, state, records = [], { corrupt = false } = {}) {
+  const included = new Map(records.map((record) => [`${record.kind}:${record.recordId}`, record.value]))
+  const missingCode = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_MISSING"
+  const mismatchCode = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_DIGEST_MISMATCH"
+
+  async function readRecord(kind, recordId) {
+    const key = `${kind}:${recordId}`
+    if (included.has(key)) return included.get(key)
+    const directoryName = recordDirectories[kind]
+    const directory = await resolveTaskSubdirectory(taskRoot, directoryName)
+    try {
+      const recordPath = await resolveSafeFile(directory, path.join(directory, `${recordId}.json`), key)
+      return JSON.parse(await readFile(recordPath, "utf8"))
+    } catch (error) {
+      if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
+      throw new StoreError(missingCode, `${key} is required by authoritative state`, [{ message: error.message }])
+    }
+  }
+
+  for (const assignment of state.workGraph.assignments) {
+    for (const attempt of assignment.attempts) {
+      if (attempt.receiptRef) {
+        const operation = await readRecord("operation", attempt.receiptRef)
+        if (
+          operation.operationId !== attempt.receiptRef
+          || operation.intent?.effectDigest !== attempt.effectDigest
+          || operation.receipt?.operationId !== attempt.receiptRef
+          || operation.receipt?.effectDigest !== attempt.effectDigest
+          || (["running", "reported", "verified", "accepted"].includes(attempt.status)
+            && (operation.receipt.status !== "confirmed" || operation.receipt.executionRef !== attempt.executionRef))
+        ) {
+          throw new StoreError(mismatchCode, `operation:${attempt.receiptRef} does not prove its assignment state`)
+        }
+      }
+      if (attempt.reportRef) {
+        const report = await readRecord("report", attempt.reportRef)
+        if (digestJson(report) !== attempt.reportDigest) {
+          throw new StoreError(mismatchCode, `report:${attempt.reportRef} does not match its assignment digest`)
+        }
+      }
+    }
+  }
+
+  for (const item of state.observationInbox.items) {
+    const kind = item.kind === "member-report" ? "report" : "observation"
+    const directory = kind === "report" ? "reports" : "observations"
+    const match = new RegExp(`^${directory}/([a-z0-9][a-z0-9._-]*)\\.json$`).exec(item.payloadRef ?? "")
+    if (!match) throw new StoreError(mismatchCode, `${item.kind} inbox item has an invalid payload reference`)
+    const payload = await readRecord(kind, match[1])
+    if (digestJson(payload) !== item.digest) {
+      throw new StoreError(mismatchCode, `${kind}:${match[1]} does not match its inbox digest`)
+    }
+  }
+}
+
 function normalizeAuditEvents(events = [], { revision, required = false } = {}) {
   if (!Array.isArray(events)) throw new StoreError("AUDIT_EVENT_INVALID", "auditEvents must be an array")
   if (required && events.length === 0) throw new StoreError("AUDIT_EVENT_REQUIRED", `revision ${revision} requires an audit event`)
@@ -281,6 +336,7 @@ async function recoverTaskRoot(taskRoot, taskId) {
       }
       manifest.records = await normalizeRecords(taskRoot, manifest.records)
       await assertAcceptedReportsExist(taskRoot, manifest.state, manifest.records)
+      await assertDurableReferencesExist(taskRoot, manifest.state, manifest.records)
     } catch (error) {
       if (error instanceof StoreError && error.code === "STATE_CORRUPT") throw error
       throw new StoreError("STATE_CORRUPT", "unfinished transaction violates Store invariants", [{
@@ -350,6 +406,7 @@ export function createFileStore({ projectRoot }) {
         await recoverTaskRoot(taskRoot, taskId)
         const state = await readState(taskRoot)
         await assertAcceptedReportsExist(taskRoot, state, [], { corrupt: true })
+        await assertDurableReferencesExist(taskRoot, state, [], { corrupt: true })
         await writeArtifactProjection(taskRoot, state)
         return structuredClone(state)
       })
@@ -368,6 +425,7 @@ export function createFileStore({ projectRoot }) {
         assertImmutableIdentity(current, state)
         const normalizedRecords = await normalizeRecords(taskRoot, records)
         await assertAcceptedReportsExist(taskRoot, state, normalizedRecords)
+        await assertDurableReferencesExist(taskRoot, state, normalizedRecords)
         const normalizedAuditEvents = normalizeAuditEvents(auditEvents, { revision: state.revision, required: true })
         const committed = await commitTransaction(taskRoot, {
           schemaVersion: "2.0",

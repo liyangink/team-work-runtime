@@ -9,7 +9,7 @@
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 契约与骨架、V2-1 Domain 与文件 Store 均已完成并通过两轴终审；V2-2 首轮审查的并发派发、stop inspect、planned dispatch 和 idle settle 问题已修正，全量 257 项自动化测试通过，等待终审。
+- v2 实现：V2-0 契约与骨架、V2-1 Domain 与文件 Store 均已完成并通过两轴终审；V2-2 审查发现的 planned dispatch、idle settle、并发 claim、stop inspect/重试问题已修正，全量 258 项自动化测试通过，等待终审。
 
 | v2 里程碑 | 状态 |
 | --- | --- |

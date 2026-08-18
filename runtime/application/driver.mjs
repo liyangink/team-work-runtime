@@ -244,9 +244,10 @@ export function createTaskDriver({
         observation,
         "platform observation",
       )
-      const digest = digestValue(observation)
       const keyDigest = digestValue(`${taskId}:${observation.dedupeKey}`)
       const observationId = `observation-${keyDigest.slice(0, 24)}`
+      const value = { observationId, taskId, observation: structuredClone(observation) }
+      const digest = digestValue(value)
       const current = await reconciler.load(taskId)
       const previous = current.observationInbox.dedupe.find((entry) => entry.dedupeKey === observation.dedupeKey)
       if (previous) {
@@ -267,7 +268,6 @@ export function createTaskDriver({
       const kind = observation.kind === "check"
         ? "check-result"
         : `execution-${observation.state}`
-      const value = { observationId, taskId, receivedAt: clock(), observation: structuredClone(observation) }
       const result = await receive(taskId, {
         observationId,
         dedupeKey: observation.dedupeKey,

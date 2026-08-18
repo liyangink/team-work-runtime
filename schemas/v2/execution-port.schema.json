@@ -218,8 +218,15 @@
         "effectDigest": { "type": "string", "minLength": 1 },
         "status": { "enum": ["confirmed", "in-doubt", "failed"] },
         "executionRef": { "type": "string", "minLength": 1 },
-        "observedAt": { "type": "string", "format": "date-time" }
-      }
+        "observedAt": { "type": "string", "format": "date-time" },
+        "error": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+          "then": { "required": ["error"] }
+        }
+      ]
     }
   }
 }

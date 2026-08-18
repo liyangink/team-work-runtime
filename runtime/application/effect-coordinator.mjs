@@ -42,7 +42,7 @@ export function createEffectCoordinator({
         }
       }
       if (receipt.status === "failed") {
-        const retry = operation.kind === "execution.ensure" && receipt.error?.retryable === true && operation.invocationCount < maxEffectAttempts
+        const retry = receipt.error?.retryable === true && operation.invocationCount < maxEffectAttempts
         return {
           fact: {
             type: retry ? "effect.retry-scheduled" : operation.kind === "execution.stop" ? "effect.stop-failed" : "effect.failed",
@@ -65,8 +65,9 @@ export function createEffectCoordinator({
       if (!operation) return { changed: false, state }
 
       let receipt
-      const fresh = operation.status === "intent-persisted"
+      let fresh = operation.status === "intent-persisted"
       if (fresh) {
+        await faultInjector.beforeInvocationClaim?.({ taskId, operation: structuredClone(operation) })
         const invocationStartedAt = clock()
         const started = await reconciler.commit(taskId, (current) => {
           const candidate = current.pendingOperations.find((entry) => entry.operationId === operationId)
@@ -85,6 +86,7 @@ export function createEffectCoordinator({
         state = started.state
         operation = state.pendingOperations.find((entry) => entry.operationId === operationId)
         if (!operation) return { changed: started.changed, state }
+        fresh = started.changed
       }
       if (!fresh && Date.parse(operation.leaseExpiresAt) > Date.parse(clock())) {
         return { changed: false, state, inDoubt: true }

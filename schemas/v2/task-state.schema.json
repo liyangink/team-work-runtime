@@ -142,13 +142,16 @@
     "attempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attemptId", "attempt", "stageRunId", "status", "startedAt"],
+      "required": ["attemptId", "attempt", "stageRunId", "status", "startedAt", "correctionCount"],
       "properties": {
         "attemptId": { "$ref": "#/$defs/id" },
         "attempt": { "type": "integer", "minimum": 1 },
         "stageRunId": { "$ref": "#/$defs/id" },
         "status": { "enum": ["effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },
         "startedAt": { "type": "string", "format": "date-time" },
+        "correctionCount": { "type": "integer", "minimum": 0 },
+        "idleObservedAt": { "type": "string", "format": "date-time" },
+        "lastCorrectionAt": { "type": "string", "format": "date-time" },
         "completedAt": { "type": "string", "format": "date-time" },
         "operationId": { "$ref": "#/$defs/id" },
         "effectDigest": { "$ref": "#/$defs/digest" },
@@ -171,7 +174,10 @@
         "status": { "enum": ["intent-persisted", "in-doubt"] },
         "invocationCount": { "type": "integer", "minimum": 0 },
         "intent": { "type": "object" },
+        "purpose": { "enum": ["dispatch", "continuation", "stop"] },
         "lastError": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" },
+        "invocationId": { "$ref": "#/$defs/id" },
+        "leaseExpiresAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
       }
     },
@@ -209,7 +215,7 @@
       "additionalProperties": false,
       "required": [
         "assignmentId", "teamRole", "assignmentKind", "costTier", "dependsOn",
-        "readableRefs", "writableRefs", "completionCriteria", "status", "attempts"
+        "readableRefs", "writableRefs", "completionCriteria", "execution", "status", "attempts"
       ],
       "properties": {
         "assignmentId": { "$ref": "#/$defs/id" },
@@ -223,6 +229,17 @@
         "readableRefs": { "$ref": "#/$defs/uniqueStrings" },
         "writableRefs": { "$ref": "#/$defs/uniqueStrings" },
         "completionCriteria": { "$ref": "#/$defs/uniqueStrings" },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agentId", "capabilitySnapshotDigest", "contextRef", "promptRef"],
+          "properties": {
+            "agentId": { "type": "string", "minLength": 1 },
+            "capabilitySnapshotDigest": { "type": "string", "minLength": 1 },
+            "contextRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+            "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }
+          }
+        },
         "status": { "enum": ["planned", "effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },
         "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } }
       }

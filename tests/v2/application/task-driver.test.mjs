@@ -33,7 +33,7 @@ function event(revision, type, occurredAt) {
   return { eventId: `${type.replaceAll(".", "-")}-${revision}`, type, occurredAt, revision, refs: ["stage-run-1"] }
 }
 
-async function createDispatchPendingTask(store, taskId = "driver-dispatch") {
+async function createDispatchPendingTask(store, taskId = "driver-dispatch", { prepareOnly = false } = {}) {
   let state = createTaskAggregate({
     taskId,
     title: "Dispatch one member",
@@ -64,6 +64,12 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch") {
         readableRefs: ["artifact:source"],
         writableRefs: ["artifact:implementation"],
         completionCriteria: ["submit a structured report"],
+        execution: {
+          agentId: "junior-luna",
+          capabilitySnapshotDigest: "capability-snapshot-1",
+          contextRef: `.team-work/tasks/${taskId}/context/owner.md`,
+          promptRef: `.team-work/tasks/${taskId}/prompts/implementation-owner.md`,
+        },
       }],
     },
     costLedger: { forecastMin: 1, forecastMax: 2, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit: 2 },
@@ -74,6 +80,7 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch") {
     state: result.state,
     auditEvents: [event(1, "stage-plan.frozen", "2026-08-18T10:01:00.000Z")],
   })
+  if (prepareOnly) return state
   const effect = {
     operationId: "dispatch-operation-1",
     effectDigest: "0".repeat(64),
@@ -114,12 +121,44 @@ function fakeExecutionAdapter(overrides = {}) {
     bindLead: async () => assert.fail("not used"),
     ensureExecution: async () => assert.fail("ensureExecution must be provided"),
     inspectExecution: async () => assert.fail("inspectExecution must be provided"),
+    inspectStop: async () => assert.fail("inspectStop must be provided"),
     quiesce: async () => assert.fail("not used"),
     verifyHumanDecision: async () => assert.fail("not used"),
     stopExecution: async () => assert.fail("not used"),
     ...overrides,
   }
 }
+
+test("the driver derives a durable background dispatch from a frozen planned assignment", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "planned-dispatch", { prepareOnly: true })
+  let receivedEffect
+  const executionAdapter = fakeExecutionAdapter({
+    ensureExecution: async (effect) => {
+      receivedEffect = effect
+      return {
+        operationId: effect.operationId,
+        effectDigest: effect.effectDigest,
+        status: "confirmed",
+        executionRef: "member-session-planned",
+        agentId: effect.agentId,
+        observedAt: "2026-08-18T10:03:00.000Z",
+      }
+    },
+    inspectExecution: async () => assert.fail("not used"),
+  })
+  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:02:00.000Z" })
+
+  const outcome = await driver.run({ taskId: "planned-dispatch", waitBudgetMs: 0 })
+
+  assert.equal(receivedEffect.mode, "background")
+  assert.equal(receivedEffect.agentId, "junior-luna")
+  assert.equal(receivedEffect.assignmentId, "implementation-owner")
+  assert.equal(outcome.reason, "waiting-report")
+  assert.equal(outcome.state.currentStageRun.status, "dispatching")
+  assert.equal(outcome.state.workGraph.assignments[0].status, "running")
+})
 
 test("the driver persists invocation state before dispatch and commits only a confirmed receipt as running", async () => {
   const projectRoot = await createProject()
@@ -205,13 +244,63 @@ test("a restart inspects an in-doubt dispatch instead of creating a second execu
   assert.equal(uncertain.pendingOperations[0].status, "in-doubt")
   assert.equal(uncertain.workGraph.assignments[0].status, "in-doubt")
 
-  const recovered = createTaskDriver({ store, executionAdapter })
+  const recovered = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:10:00.000Z" })
   const outcome = await recovered.run({ taskId: "recover-dispatch", waitBudgetMs: 0 })
 
   assert.equal(ensureCalls, 1)
   assert.equal(inspectCalls, 1)
   assert.equal(outcome.reason, "waiting-report")
   assert.equal(outcome.state.workGraph.assignments[0].attempts[0].executionRef, "member-session-recovered")
+})
+
+test("a concurrent driver does not inspect or repeat an invocation whose durable lease is still active", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "concurrent-dispatch")
+  const pending = await store.loadTask("concurrent-dispatch")
+  const effect = pending.pendingOperations[0].intent
+  let releaseEnsure
+  let markEnsureStarted
+  const ensureStarted = new Promise((resolve) => { markEnsureStarted = resolve })
+  const ensureReleased = new Promise((resolve) => { releaseEnsure = resolve })
+  let inspectCalls = 0
+  const executionAdapter = fakeExecutionAdapter({
+    ensureExecution: async () => {
+      markEnsureStarted()
+      await ensureReleased
+      return {
+        operationId: effect.operationId,
+        effectDigest: effect.effectDigest,
+        status: "confirmed",
+        executionRef: "member-session-concurrent",
+        agentId: effect.agentId,
+        observedAt: "2026-08-18T10:03:00.000Z",
+      }
+    },
+    inspectExecution: async () => {
+      inspectCalls += 1
+      return {
+        operationId: effect.operationId,
+        effectDigest: effect.effectDigest,
+        status: "in-doubt",
+        agentId: effect.agentId,
+        observedAt: "2026-08-18T10:02:45.000Z",
+      }
+    },
+  })
+  const firstDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:02:30.000Z" })
+  const secondDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:02:31.000Z" })
+  const firstRun = firstDriver.run({ taskId: "concurrent-dispatch", waitBudgetMs: 0 })
+  await ensureStarted
+
+  const concurrent = await secondDriver.run({ taskId: "concurrent-dispatch", waitBudgetMs: 0 })
+  assert.equal(concurrent.reason, "in-doubt")
+  assert.equal(inspectCalls, 0)
+
+  releaseEnsure()
+  const completed = await firstRun
+  assert.equal(completed.reason, "waiting-report")
+  assert.equal(completed.state.workGraph.assignments[0].attempts[0].executionRef, "member-session-concurrent")
 })
 
 test("retryable dispatch failures are bounded and end in an explicit blocker", async () => {
@@ -351,7 +440,7 @@ test("platform observations use the same durable sequence and dedupe protocol", 
   assert.deepEqual(duplicate, { ...first, duplicate: true })
 
   const waiting = await driver.run({ taskId: "platform-observation", waitBudgetMs: 0 })
-  assert.equal(waiting.reason, "waiting-report")
+  assert.equal(waiting.reason, "settling-idle")
   assert.equal(waiting.state.observationInbox.acknowledgedThrough, 1)
   assert.equal(waiting.state.observationInbox.dedupe.length, 1)
 
@@ -397,6 +486,67 @@ test("a lost execution becomes an explicit blocker after its observation is ackn
   assert.equal(outcome.reason, "blocked")
   assert.equal(outcome.state.workGraph.assignments[0].status, "lost")
   assert.equal(outcome.state.observationInbox.acknowledgedThrough, 1)
+})
+
+test("idle waits for a settle window, resumes the same execution once, then blocks if idle repeats", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "idle-correction", { prepareOnly: true })
+  let ensureCalls = 0
+  const effects = []
+  const executionAdapter = fakeExecutionAdapter({
+    ensureExecution: async (effect) => {
+      ensureCalls += 1
+      effects.push(effect)
+      return {
+        operationId: effect.operationId,
+        effectDigest: effect.effectDigest,
+        status: "confirmed",
+        executionRef: "member-session-idle",
+        agentId: effect.agentId,
+        observedAt: new Date().toISOString(),
+      }
+    },
+    inspectExecution: async () => assert.fail("not used"),
+  })
+  const driver = createTaskDriver({ store, executionAdapter, idleSettleMs: 10, maxIdleCorrections: 1 })
+  await driver.run({ taskId: "idle-correction", waitBudgetMs: 0 })
+  const observedAt = new Date().toISOString()
+  await driver.observe({
+    taskId: "idle-correction",
+    observation: {
+      kind: "execution",
+      observationId: "host-idle-first",
+      dedupeKey: "member-session-idle:idle:1",
+      executionRef: "member-session-idle",
+      assignmentId: "implementation-owner",
+      state: "idle",
+      observedAt,
+    },
+  })
+
+  const corrected = await driver.run({ taskId: "idle-correction", waitBudgetMs: 40 })
+  assert.equal(corrected.reason, "wait-budget-exhausted")
+  assert.equal(ensureCalls, 2)
+  assert.equal(effects[1].resumeExecutionRef, "member-session-idle")
+  assert.equal(corrected.state.workGraph.assignments[0].attempts[0].correctionCount, 1)
+
+  await driver.observe({
+    taskId: "idle-correction",
+    observation: {
+      kind: "execution",
+      observationId: "host-idle-second",
+      dedupeKey: "member-session-idle:idle:2",
+      executionRef: "member-session-idle",
+      assignmentId: "implementation-owner",
+      state: "idle",
+      observedAt: new Date().toISOString(),
+    },
+  })
+  const blocked = await driver.run({ taskId: "idle-correction", waitBudgetMs: 40 })
+  assert.equal(blocked.reason, "blocked")
+  assert.equal(blocked.state.workGraph.assignments[0].status, "blocked")
+  assert.equal(ensureCalls, 2)
 })
 
 test("a committed report survives a crash before its in-process wake signal", async () => {
@@ -523,12 +673,21 @@ test("an exhausted host wait budget returns without changing durable task state"
   assert.deepEqual(await store.loadTask("wait-budget"), before)
 })
 
-test("stop execution also persists intent before the idempotent platform effect", async () => {
+test("stop execution persists intent and inspects after a receipt-loss crash", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })
   await createDispatchPendingTask(store, "durable-stop")
   let state = await store.loadTask("durable-stop")
   const dispatch = state.pendingOperations[0].intent
+  let stopCalls = 0
+  let inspectStopCalls = 0
+  const stopReceipt = {
+    operationId: "stop-operation-1",
+    effectDigest: "",
+    status: "confirmed",
+    executionRef: "member-session-stop",
+    observedAt: "2026-08-18T10:05:00.000Z",
+  }
   const executionAdapter = fakeExecutionAdapter({
     ensureExecution: async () => ({
       operationId: dispatch.operationId,
@@ -540,20 +699,19 @@ test("stop execution also persists intent before the idempotent platform effect"
     }),
     inspectExecution: async () => assert.fail("not used"),
     stopExecution: async (intent) => {
+      stopCalls += 1
       const durable = await store.loadTask("durable-stop")
       assert.equal(durable.pendingOperations[0].status, "in-doubt")
       assert.equal(durable.workGraph.assignments[0].status, "running")
-      return {
-        operationId: intent.operationId,
-        effectDigest: intent.effectDigest,
-        status: "confirmed",
-        executionRef: intent.executionRef,
-        observedAt: "2026-08-18T10:05:00.000Z",
-      }
+      return { ...stopReceipt, operationId: intent.operationId, effectDigest: intent.effectDigest }
+    },
+    inspectStop: async (intent) => {
+      inspectStopCalls += 1
+      return { ...stopReceipt, operationId: intent.operationId, effectDigest: intent.effectDigest }
     },
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:04:00.000Z" })
-  await driver.run({ taskId: "durable-stop", waitBudgetMs: 0 })
+  const dispatchDriver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:04:00.000Z" })
+  await dispatchDriver.run({ taskId: "durable-stop", waitBudgetMs: 0 })
   state = await store.loadTask("durable-stop")
   const stopIntent = {
     operationId: "stop-operation-1",
@@ -577,7 +735,19 @@ test("stop execution also persists intent before the idempotent platform effect"
     auditEvents: [event(requested.revision, "execution.stop-requested", "2026-08-18T10:04:00.000Z")],
   })
 
-  const outcome = await driver.run({ taskId: "durable-stop", waitBudgetMs: 0 })
+  const interrupted = createTaskDriver({
+    store,
+    executionAdapter,
+    clock: () => "2026-08-18T10:04:00.000Z",
+    faultInjector: { afterReceipt: async () => { throw new Error("simulated stop receipt loss") } },
+  })
+  await assert.rejects(interrupted.run({ taskId: "durable-stop", waitBudgetMs: 0 }), /simulated stop receipt loss/)
+  assert.equal((await store.loadTask("durable-stop")).pendingOperations[0].status, "in-doubt")
+
+  const recovered = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:10:00.000Z" })
+  const outcome = await recovered.run({ taskId: "durable-stop", waitBudgetMs: 0 })
+  assert.equal(stopCalls, 1)
+  assert.equal(inspectStopCalls, 1)
   assert.equal(outcome.reason, "blocked")
   assert.equal(outcome.state.workGraph.assignments[0].status, "blocked")
   assert.deepEqual(outcome.state.pendingOperations, [])

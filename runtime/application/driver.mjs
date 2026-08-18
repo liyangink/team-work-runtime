@@ -1,7 +1,7 @@
 import { createEffectCoordinator } from "./effect-coordinator.mjs"
 import { createTaskReconciler } from "./reconciler.mjs"
 import { createSignalHub } from "./signal-hub.mjs"
-import { digestValue } from "../domain/digests.mjs"
+import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
 
 const terminalReasons = new Set(["needs-plan", "awaiting-user", "blocked", "completed", "cancelled"])
@@ -18,13 +18,16 @@ export function createTaskDriver({
   executionAdapter,
   clock = () => new Date().toISOString(),
   maxEffectAttempts = 2,
+  effectLeaseMs = 120_000,
   maxInternalTransitions = 64,
+  idleSettleMs = 1_000,
+  maxIdleCorrections = 1,
   faultInjector,
   signalHub = createSignalHub(),
   now = Date.now,
 }) {
   const reconciler = createTaskReconciler({ store, clock })
-  const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, faultInjector })
+  const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
 
   async function consumeInbox(taskId) {
     return reconciler.commit(taskId, (state) => {
@@ -39,6 +42,108 @@ export function createTaskDriver({
           occurredAt: clock(),
         },
         refs: [item.observationId, ...(item.assignmentId ? [item.assignmentId] : [])],
+      }
+    })
+  }
+
+  async function prepareNextDispatch(taskId) {
+    return reconciler.commit(taskId, (state) => {
+      if (!state.stagePlan) return null
+      const byId = new Map(state.workGraph.assignments.map((assignment) => [assignment.assignmentId, assignment]))
+      const assignment = state.workGraph.assignments.find((candidate) => (
+        candidate.status === "planned"
+        && candidate.execution
+        && candidate.dependsOn.every((dependency) => byId.get(dependency)?.status === "accepted")
+      ))
+      if (!assignment) return null
+      const attempt = assignment.attempts.length + 1
+      const seed = digestValue({
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        assignmentId: assignment.assignmentId,
+        attempt,
+      }).slice(0, 24)
+      const effect = {
+        operationId: `dispatch-${seed}`,
+        effectDigest: "0".repeat(64),
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        assignmentId: assignment.assignmentId,
+        attempt,
+        role: assignment.teamRole,
+        assignmentKind: assignment.assignmentKind,
+        agentId: assignment.execution.agentId,
+        capabilitySnapshotDigest: assignment.execution.capabilitySnapshotDigest,
+        mode: "background",
+        contextRef: assignment.execution.contextRef,
+        promptRef: assignment.execution.promptRef,
+      }
+      effect.effectDigest = digestEffect(effect)
+      return {
+        fact: {
+          type: "assignment.attempt-started",
+          assignmentId: assignment.assignmentId,
+          stageRunId: state.currentStageRun.stageRunId,
+          attemptId: `${assignment.assignmentId}-attempt-${attempt}`,
+          attempt,
+          effect,
+          occurredAt: clock(),
+        },
+        refs: [assignment.assignmentId, effect.operationId],
+      }
+    })
+  }
+
+  async function prepareIdleCorrection(taskId, assignment, attempt) {
+    return reconciler.commit(taskId, (state) => {
+      const currentAssignment = state.workGraph.assignments.find((entry) => entry.assignmentId === assignment.assignmentId)
+      const currentAttempt = currentAssignment?.attempts.find((entry) => entry.attemptId === attempt.attemptId)
+      if (!currentAssignment || !currentAttempt || currentAttempt.status !== "running" || !currentAttempt.idleObservedAt) return null
+      if (currentAttempt.correctionCount >= maxIdleCorrections || !currentAssignment.execution) {
+        return {
+          fact: {
+            type: "execution.idle-exhausted",
+            assignmentId: currentAssignment.assignmentId,
+            attemptId: currentAttempt.attemptId,
+            occurredAt: clock(),
+          },
+          refs: [currentAssignment.assignmentId, currentAttempt.executionRef],
+        }
+      }
+      const correction = currentAttempt.correctionCount + 1
+      const seed = digestValue({
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        assignmentId: currentAssignment.assignmentId,
+        attemptId: currentAttempt.attemptId,
+        correction,
+      }).slice(0, 24)
+      const effect = {
+        operationId: `continue-${seed}`,
+        effectDigest: "0".repeat(64),
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        assignmentId: currentAssignment.assignmentId,
+        attempt: currentAttempt.attempt,
+        role: currentAssignment.teamRole,
+        assignmentKind: currentAssignment.assignmentKind,
+        agentId: currentAssignment.execution.agentId,
+        capabilitySnapshotDigest: currentAssignment.execution.capabilitySnapshotDigest,
+        mode: "background",
+        contextRef: currentAssignment.execution.contextRef,
+        promptRef: currentAssignment.execution.promptRef,
+        resumeExecutionRef: currentAttempt.executionRef,
+      }
+      effect.effectDigest = digestEffect(effect)
+      return {
+        fact: {
+          type: "execution.continuation-requested",
+          assignmentId: currentAssignment.assignmentId,
+          attemptId: currentAttempt.attemptId,
+          intent: effect,
+          occurredAt: clock(),
+        },
+        refs: [currentAssignment.assignmentId, effect.operationId],
       }
     })
   }
@@ -189,6 +294,33 @@ export function createTaskDriver({
         }
         const operation = state.pendingOperations[0]
         if (!operation) {
+          const prepared = await prepareNextDispatch(taskId)
+          if (prepared.changed) continue
+          const idleAssignment = state.workGraph.assignments.find((assignment) => (
+            assignment.status === "running" && assignment.attempts.at(-1)?.idleObservedAt
+          ))
+          if (idleAssignment) {
+            const idleAttempt = idleAssignment.attempts.at(-1)
+            const settleRemaining = Date.parse(idleAttempt.idleObservedAt) + idleSettleMs - now()
+            if (settleRemaining <= 0) {
+              const correction = await prepareIdleCorrection(taskId, idleAssignment, idleAttempt)
+              if (correction.changed) continue
+            } else if (waitBudgetMs <= 0) {
+              return { state, reason: "settling-idle" }
+            } else {
+              const remaining = Math.min(deadline - now(), settleRemaining)
+              if (remaining <= 0 || signal?.aborted) return { state, reason: "wait-budget-exhausted" }
+              const revision = state.revision
+              const subscription = signalHub.subscribe(taskId, { signal, timeoutMs: remaining })
+              const checked = await reconciler.load(taskId)
+              if (checked.revision !== revision || checked.observationInbox.items.length > 0) {
+                subscription.cancel()
+                continue
+              }
+              await subscription.promise
+              continue
+            }
+          }
           const reason = stableReason(state)
           if (reason !== "waiting-report" || waitBudgetMs <= 0) return { state, reason }
           const remaining = deadline - now()

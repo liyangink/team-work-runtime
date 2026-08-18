@@ -11,6 +11,12 @@ import {
 } from "../../../runtime/domain/index.mjs"
 
 const digest = "a".repeat(64)
+const execution = {
+  agentId: "test-agent",
+  capabilitySnapshotDigest: "capability-snapshot-1",
+  contextRef: ".team-work/context/member.md",
+  promptRef: ".team-work/prompts/assignment.md",
+}
 
 const workflow = {
   workflowId: "engineering",
@@ -133,6 +139,7 @@ test("freezing a stage plan materializes a validated work graph and cost ledger"
           readableRefs: ["artifact:source"],
           writableRefs: ["artifact:review"],
           completionCriteria: ["findings include evidence"],
+          execution,
         },
         {
           assignmentId: "review-challenger",
@@ -143,6 +150,7 @@ test("freezing a stage plan materializes a validated work graph and cost ledger"
           readableRefs: ["artifact:source", "artifact:review"],
           writableRefs: [],
           completionCriteria: ["challenge omissions and false positives"],
+          execution,
         },
       ],
     },
@@ -201,6 +209,7 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
         readableRefs: ["artifact:source"],
         writableRefs: ["artifact:review"],
         completionCriteria: ["submit evidence-backed findings"],
+        execution,
       }],
     },
     costLedger: {
@@ -248,12 +257,14 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     stageRunId: "stage-run-1",
     status: "effect-pending",
     startedAt: "2026-08-18T10:02:00.000Z",
+    correctionCount: 0,
     operationId: "dispatch-operation-1",
     effectDigest: dispatchEffect.effectDigest,
   }])
   assert.deepEqual(started.pendingOperations, [{
     operationId: "dispatch-operation-1",
     kind: "execution.ensure",
+    purpose: "dispatch",
     assignmentId: "review-owner",
     attemptId: "review-owner-attempt-1",
     effectDigest: dispatchEffect.effectDigest,
@@ -498,6 +509,7 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
           readableRefs: ["artifact:source"],
           writableRefs: ["artifact:review"],
           completionCriteria: ["write review"],
+          execution,
         },
         {
           assignmentId: "challenger-1",
@@ -508,6 +520,7 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
           readableRefs: ["artifact:review"],
           writableRefs: [],
           completionCriteria: ["challenge review"],
+          execution,
         },
       ],
     },
@@ -575,6 +588,7 @@ test("work graphs accept every assignment kind declared by the Runtime architect
           readableRefs: [],
           writableRefs: ["artifact:result"],
           completionCriteria: ["produce result"],
+          execution,
         }],
       },
       costLedger: {

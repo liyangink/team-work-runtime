@@ -10,6 +10,7 @@ export const EXECUTION_ADAPTER_METHODS = Object.freeze([
   "quiesce",
   "verifyHumanDecision",
   "stopExecution",
+  "inspectStop",
 ])
 
 export function assertExecutionAdapter(adapter) {
@@ -35,5 +36,6 @@ export function createExecutionAdapterPort(adapter) {
     quiesce: (input) => call("quiesce", "quiesceIntent", "quiesceReceipt", input),
     verifyHumanDecision: (input) => call("verifyHumanDecision", "verifyHumanIntent", "verifiedHumanDecision", input),
     stopExecution: (input) => call("stopExecution", "stopIntent", "stopReceipt", input),
+    inspectStop: (input) => call("inspectStop", "stopIntent", "stopReceipt", input),
   })
 }

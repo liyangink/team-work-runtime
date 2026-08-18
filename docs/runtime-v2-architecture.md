@@ -858,6 +858,7 @@ effect-pending
 - 并行 assignment 的 product writable refs 必须互不重叠；无法静态分离时串行执行或先交 integration Owner，禁止依赖成员自行避免覆盖；
 - execution handle 由 Runtime 持久化，PlatformPlugin mapping 只是可重建投影；
 - 只有 confirmed receipt 才能把 assignment 标为 running；
+- 外部调用开始前写入有界 invocation lease；并发 Driver 在 lease 有效期内不得 inspect 或重放，lease 到期后必须先 inspect。lease 只消除“仍在调用”与“宿主已崩溃”的竞争，不代替 operationId 幂等；
 - 外部事件只提交 observation/report，不直接推进阶段；
 - 新 Runtime 调用或正在挂起的 run 消费事件并驱动 reducer；
 - 宿主重启后没有 daemon，下一次 open/run 自动恢复。
@@ -1144,6 +1145,7 @@ interface ExecutionAdapter {
   quiesce(input: QuiesceIntent): Promise<QuiesceReceipt>
   verifyHumanDecision(input: VerifyHumanIntent): Promise<VerifiedHumanDecision>
   stopExecution(input: StopIntent): Promise<StopReceipt>
+  inspectStop(input: StopIntent): Promise<StopReceipt>
 }
 
 interface PlatformObservationSink {

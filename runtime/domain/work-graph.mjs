@@ -45,6 +45,15 @@ function normalizeAssignment(assignment) {
     throw new DomainError("ROLE_WRITE_FORBIDDEN", `${assignment.teamRole} assignments cannot write product artifacts`)
   }
   completionCriteria.forEach((criterion, index) => assertNonEmptyString(criterion, `assignment.completionCriteria[${index}]`))
+  const execution = {
+    agentId: assertNonEmptyString(assignment.execution?.agentId, "assignment.execution.agentId"),
+    capabilitySnapshotDigest: assertNonEmptyString(
+      assignment.execution.capabilitySnapshotDigest,
+      "assignment.execution.capabilitySnapshotDigest",
+    ),
+    contextRef: assertNonEmptyString(assignment.execution.contextRef, "assignment.execution.contextRef"),
+    promptRef: assertNonEmptyString(assignment.execution.promptRef, "assignment.execution.promptRef"),
+  }
   return {
     assignmentId: assignment.assignmentId,
     teamRole: assignment.teamRole,
@@ -54,6 +63,7 @@ function normalizeAssignment(assignment) {
     readableRefs: [...readableRefs],
     writableRefs: [...writableRefs],
     completionCriteria: [...completionCriteria],
+    execution,
     status: "planned",
     attempts: [],
   }

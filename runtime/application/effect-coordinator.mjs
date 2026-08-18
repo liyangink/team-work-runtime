@@ -1,4 +1,5 @@
 import { createExecutionAdapterPort } from "../ports/execution.mjs"
+import { randomUUID } from "node:crypto"
 
 function completedOperation(operation, receipt) {
   return {
@@ -19,6 +20,7 @@ export function createEffectCoordinator({
   executionAdapter,
   clock,
   maxEffectAttempts = 2,
+  effectLeaseMs = 120_000,
   faultInjector = {},
 }) {
   const execution = createExecutionAdapterPort(executionAdapter)
@@ -65,11 +67,18 @@ export function createEffectCoordinator({
       let receipt
       const fresh = operation.status === "intent-persisted"
       if (fresh) {
+        const invocationStartedAt = clock()
         const started = await reconciler.commit(taskId, (current) => {
           const candidate = current.pendingOperations.find((entry) => entry.operationId === operationId)
           if (!candidate || candidate.status !== "intent-persisted") return null
           return {
-            fact: { type: "effect.invocation-started", operationId, occurredAt: clock() },
+            fact: {
+              type: "effect.invocation-started",
+              operationId,
+              invocationId: randomUUID(),
+              leaseExpiresAt: new Date(Date.parse(invocationStartedAt) + effectLeaseMs).toISOString(),
+              occurredAt: invocationStartedAt,
+            },
             refs: [operationId, candidate.assignmentId],
           }
         })
@@ -77,8 +86,13 @@ export function createEffectCoordinator({
         operation = state.pendingOperations.find((entry) => entry.operationId === operationId)
         if (!operation) return { changed: started.changed, state }
       }
+      if (!fresh && Date.parse(operation.leaseExpiresAt) > Date.parse(clock())) {
+        return { changed: false, state, inDoubt: true }
+      }
       if (operation.kind === "execution.stop") {
-        receipt = await execution.stopExecution(operation.intent)
+        receipt = fresh
+          ? await execution.stopExecution(operation.intent)
+          : await execution.inspectStop(operation.intent)
       } else if (fresh) {
         receipt = await execution.ensureExecution(operation.intent)
       } else {

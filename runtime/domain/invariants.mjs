@@ -158,7 +158,16 @@ export function assertTaskState(state) {
   assertUniqueBy(state.pendingOperations, "operationId", "pending operation ids")
   const pendingById = new Map(state.pendingOperations.map((operation) => [operation.operationId, operation]))
   for (const operation of state.pendingOperations) {
+    if (operation.status === "in-doubt" && (!operation.invocationId || !operation.leaseExpiresAt)) {
+      failState("in-doubt operation must retain its invocation lease")
+    }
+    if (operation.status === "intent-persisted" && (operation.invocationId || operation.leaseExpiresAt)) {
+      failState("a retryable effect intent cannot retain an old invocation lease")
+    }
     if (operation.kind === "execution.ensure") {
+      if (!["dispatch", "continuation"].includes(operation.purpose)) {
+        failState("execution ensure operation must declare dispatch or continuation purpose")
+      }
       try {
         validateContract(
           "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/dispatchEffect",
@@ -173,13 +182,15 @@ export function assertTaskState(state) {
       if (
         !binding
         || binding.assignment.assignmentId !== operation.assignmentId
-        || binding.attempt.operationId !== operation.operationId
-        || binding.attempt.effectDigest !== operation.effectDigest
+        || (operation.purpose === "dispatch" && binding.attempt.operationId !== operation.operationId)
+        || (operation.purpose === "dispatch" && binding.attempt.effectDigest !== operation.effectDigest)
+        || (operation.purpose === "continuation" && binding.attempt.executionRef !== operation.intent.resumeExecutionRef)
         || operation.intent.operationId !== operation.operationId
         || operation.intent.effectDigest !== operation.effectDigest
         || digestEffect(operation.intent) !== operation.effectDigest
       ) failState("execution operation must bind exactly one assignment attempt")
     } else if (operation.kind === "execution.stop") {
+      if (operation.purpose !== "stop") failState("execution stop operation must declare stop purpose")
       try {
         validateContract(
           "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/stopIntent",

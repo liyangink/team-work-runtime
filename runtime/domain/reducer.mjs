@@ -134,18 +134,21 @@ function startAssignmentAttempt(next, fact) {
   }
   assignment.status = "effect-pending"
   if (next.status === "needs-plan") next.status = "working"
+  if (next.currentStageRun.status === "planned") next.currentStageRun.status = "dispatching"
   assignment.attempts.push({
     attemptId,
     attempt: fact.attempt,
     stageRunId: fact.stageRunId,
     status: "effect-pending",
     startedAt: fact.occurredAt,
+    correctionCount: 0,
     operationId,
     effectDigest,
   })
   next.pendingOperations.push({
     operationId,
     kind: "execution.ensure",
+    purpose: "dispatch",
     assignmentId: assignment.assignmentId,
     attemptId,
     effectDigest,
@@ -164,7 +167,11 @@ function findPendingOperation(next, fact, expectedKind) {
   }
   const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === operation.assignmentId)
   const attempt = assignment?.attempts.find((entry) => entry.attemptId === operation.attemptId)
-  if (!assignment || !attempt || (operation.kind === "execution.ensure" && attempt.operationId !== operation.operationId)) {
+  if (
+    !assignment
+    || !attempt
+    || (operation.kind === "execution.ensure" && operation.purpose === "dispatch" && attempt.operationId !== operation.operationId)
+  ) {
     throw new DomainError("OPERATION_BINDING_INVALID", "execution operation has no matching assignment attempt")
   }
   return { operation, assignment, attempt }
@@ -188,6 +195,7 @@ function requestExecutionStop(next, fact) {
   next.pendingOperations.push({
     operationId,
     kind: "execution.stop",
+    purpose: "stop",
     assignmentId: assignment.assignmentId,
     attemptId: attempt.attemptId,
     effectDigest,
@@ -198,21 +206,77 @@ function requestExecutionStop(next, fact) {
   })
 }
 
+function requestExecutionContinuation(next, fact) {
+  const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === fact.assignmentId)
+  const attempt = assignment?.attempts.find((entry) => entry.attemptId === fact.attemptId)
+  if (!assignment || !attempt || attempt.status !== "running" || !attempt.idleObservedAt) {
+    throw new DomainError("CONTINUATION_TARGET_INVALID", "continuation must target an idle running assignment attempt")
+  }
+  const intent = structuredClone(fact.intent)
+  const operationId = assertIdentifier(intent?.operationId, "fact.intent.operationId")
+  const effectDigest = assertDigest(intent?.effectDigest, "fact.intent.effectDigest")
+  if (
+    intent.taskId !== next.taskId
+    || intent.stageRunId !== next.currentStageRun.stageRunId
+    || intent.assignmentId !== assignment.assignmentId
+    || intent.attempt !== attempt.attempt
+    || intent.resumeExecutionRef !== attempt.executionRef
+    || digestEffect(intent) !== effectDigest
+  ) {
+    throw new DomainError("CONTINUATION_EFFECT_MISMATCH", "continuation effect does not match its running assignment")
+  }
+  if (next.pendingOperations.some((operation) => operation.operationId === operationId)) {
+    throw new DomainError("OPERATION_DUPLICATE", `operation ${operationId} already exists`)
+  }
+  next.pendingOperations.push({
+    operationId,
+    kind: "execution.ensure",
+    purpose: "continuation",
+    assignmentId: assignment.assignmentId,
+    attemptId: attempt.attemptId,
+    effectDigest,
+    status: "intent-persisted",
+    invocationCount: 0,
+    intent,
+    createdAt: fact.occurredAt,
+  })
+}
+
+function exhaustIdleCorrection(next, fact) {
+  const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === fact.assignmentId)
+  const attempt = assignment?.attempts.find((entry) => entry.attemptId === fact.attemptId)
+  if (!assignment || !attempt || attempt.status !== "running" || !attempt.idleObservedAt) {
+    throw new DomainError("IDLE_EXHAUSTED_INVALID", "idle correction exhaustion must target an idle running attempt")
+  }
+  assignment.status = "blocked"
+  attempt.status = "blocked"
+  attempt.completedAt = fact.occurredAt
+  next.status = "blocked"
+}
+
 function startEffectInvocation(next, fact) {
   const { operation, assignment, attempt } = findPendingOperation(next, fact)
   if (operation.status !== "intent-persisted") {
     throw new DomainError("EFFECT_INVOCATION_INVALID", "only a persisted effect intent can begin an invocation")
   }
-  if (operation.kind === "execution.ensure" && attempt.status !== "effect-pending") {
+  if (operation.kind === "execution.ensure" && operation.purpose === "dispatch" && attempt.status !== "effect-pending") {
     throw new DomainError("EFFECT_INVOCATION_INVALID", "dispatch effect must target an effect-pending attempt")
+  }
+  if (operation.kind === "execution.ensure" && operation.purpose === "continuation" && attempt.status !== "running") {
+    throw new DomainError("EFFECT_INVOCATION_INVALID", "continuation effect must target a running attempt")
   }
   if (operation.kind === "execution.stop" && attempt.status !== "running") {
     throw new DomainError("EFFECT_INVOCATION_INVALID", "stop effect must target a running attempt")
   }
   operation.status = "in-doubt"
   operation.invocationCount += 1
+  operation.invocationId = assertIdentifier(fact.invocationId, "fact.invocationId")
+  operation.leaseExpiresAt = assertTimestamp(fact.leaseExpiresAt, "fact.leaseExpiresAt")
+  if (Date.parse(operation.leaseExpiresAt) < Date.parse(fact.occurredAt)) {
+    throw new DomainError("EFFECT_LEASE_INVALID", "effect invocation lease cannot expire before it starts")
+  }
   delete operation.lastError
-  if (operation.kind === "execution.ensure") {
+  if (operation.kind === "execution.ensure" && operation.purpose === "dispatch") {
     assignment.status = "in-doubt"
     attempt.status = "in-doubt"
   }
@@ -235,8 +299,17 @@ function confirmEffect(next, fact) {
   }
   assignment.status = "running"
   attempt.status = "running"
-  attempt.receiptRef = operation.operationId
-  attempt.executionRef = fact.receipt.executionRef
+  if (operation.purpose === "dispatch") {
+    attempt.receiptRef = operation.operationId
+    attempt.executionRef = fact.receipt.executionRef
+  } else {
+    if (fact.receipt.executionRef !== attempt.executionRef) {
+      throw new DomainError("CONTINUATION_RECEIPT_INVALID", "continuation must resume the bound execution")
+    }
+    attempt.correctionCount += 1
+    attempt.lastCorrectionAt = fact.occurredAt
+    delete attempt.idleObservedAt
+  }
   next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
   if (next.status === "needs-plan") next.status = "working"
 }
@@ -249,8 +322,12 @@ function scheduleEffectRetry(next, fact) {
   }
   operation.status = "intent-persisted"
   operation.lastError = structuredClone(fact.receipt.error)
-  assignment.status = "effect-pending"
-  attempt.status = "effect-pending"
+  delete operation.invocationId
+  delete operation.leaseExpiresAt
+  if (operation.purpose === "dispatch") {
+    assignment.status = "effect-pending"
+    attempt.status = "effect-pending"
+  }
 }
 
 function failEffect(next, fact) {
@@ -352,6 +429,10 @@ function consumeObservation(next, fact) {
       attempt.completedAt = fact.occurredAt
       next.status = "blocked"
     }
+  } else if (item.kind === "execution-idle") {
+    const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === item.assignmentId)
+    const attempt = assignment?.attempts.find((entry) => entry.attemptId === item.attemptId)
+    if (assignment && attempt && attempt.status === "running") attempt.idleObservedAt = item.receivedAt
   }
   next.observationInbox.acknowledgedThrough = fact.sequence
   next.observationInbox.items = next.observationInbox.items.filter((entry) => entry.sequence > fact.sequence)
@@ -502,6 +583,12 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "execution.stop-requested":
       requestExecutionStop(next, fact)
+      return finish(next, fact)
+    case "execution.continuation-requested":
+      requestExecutionContinuation(next, fact)
+      return finish(next, fact)
+    case "execution.idle-exhausted":
+      exhaustIdleCorrection(next, fact)
       return finish(next, fact)
     case "effect.invocation-started":
       startEffectInvocation(next, fact)

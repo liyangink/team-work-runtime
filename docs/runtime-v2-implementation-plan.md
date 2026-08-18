@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 契约与骨架、V2-1 Domain 与文件 Store 已完成并通过两轴终审，下一里程碑为 V2-2。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0、V2-1 已完成并通过两轴终审；V2-2 已完成实现和首轮审查修正，正在终审。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-完成 V2-1 两轴终审后进入 V2-2：实现 Driver、Observation Inbox 与 durable effect。V2-2 不改动 Lead Interface，也不提前接入 Platform Adapter 或安装器。
+完成 V2-2 两轴终审后进入 V2-3：实现 prepare-quiesce-commit 人工等待与决定凭证。V2-3 不提前接入 OpenCode/OpenSpec Adapter 或公开切换 Lead 控制面。

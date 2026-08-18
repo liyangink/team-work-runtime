@@ -45,7 +45,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 - `AGENTS.md` 保存产品边界，Roadmap 保存进度，Skill 保存协作策略，Runtime 输出保存运行状态；不要重复定义。
 - `docs/file-inventory.json` 是当前实现与规划路径的清单；新增或迁移文件时必须同步。根目录不得重新引入 OMO、Claude Code 等旧版资产，历史实现只通过 Git 历史保留。
-- 开发本仓库时新建 subagent 默认使用 `gpt-5.6-terra` 以控制成本；只有任务明确需要更高能力或用户另行指定时才升级。
+- 开发本仓库时新建 subagent 默认使用 `gpt-5.6-terra`，推理强度统一设为 `max`；只有任务明确需要更高能力或用户另行指定时才升级模型。
 - 修改 schema、状态机、门禁、Hook 或安装器时，补齐损坏输入、非法流转、并发、恢复和幂等测试。
 - 新增平台时复用 Workflow、Team-work 和 CoreRuntime，只新增 PlatformPlugin；不得复制任务状态机和通用团队策略。
 - Roadmap 中尚未完成的能力不得描述成已经可用。

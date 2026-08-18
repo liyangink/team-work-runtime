@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0、V2-1、V2-2 均已完成并通过两轴终审，下一里程碑为 V2-3。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 至 V2-3 均已完成并通过两轴终审，下一里程碑为 V2-4。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-完成 V2-2 两轴终审后进入 V2-3：实现 prepare-quiesce-commit 人工等待与决定凭证。V2-3 不提前接入 OpenCode/OpenSpec Adapter 或公开切换 Lead 控制面。
+完成 V2-3 两轴终审后进入 V2-4：实现 Workflow 与 Team-work Policy Compiler，把十阶段流程、角色协作、成本、收敛和恢复规则编译为不可变 StagePlan/WorkGraph；继续不接入 OpenCode/OpenSpec Adapter，也不提前公开切换 Lead 控制面。

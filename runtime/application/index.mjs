@@ -1,4 +1,5 @@
 export { createTaskDriver } from "./driver.mjs"
+export { composeActionCard, visibleCodePointLength } from "./action-card.mjs"
 export { createFileEvidenceVerifier } from "./evidence-verifier.mjs"
 export { createHumanWait, compileHumanGateRequirements, evaluateHumanGate } from "./human-wait.mjs"
 export { compilePolicyPlan } from "./policy-compiler.mjs"

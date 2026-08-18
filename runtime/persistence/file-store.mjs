@@ -234,6 +234,46 @@ async function assertDurableReferencesExist(taskRoot, state, records = [], { cor
       throw new StoreError(mismatchCode, `${kind}:${match[1]} does not match its inbox digest`)
     }
   }
+
+  if (state.pendingDecision?.quiesceReceiptRef || state.pendingDecision?.quiesceFailureRef) {
+    const recordId = state.pendingDecision.quiesceReceiptRef ?? state.pendingDecision.quiesceFailureRef
+    const operation = await readRecord("operation", recordId)
+    const expectedStatus = state.pendingDecision.quiesceReceiptRef ? "confirmed" : "blocked"
+    if (
+      operation.operationId !== recordId
+      || operation.kind !== "execution.quiesce"
+      || operation.receipt?.status !== expectedStatus
+      || operation.receipt?.operationId !== recordId
+      || operation.receipt?.effectDigest !== operation.intent?.effectDigest
+    ) {
+      throw new StoreError(mismatchCode, `operation:${recordId} does not prove its human-wait state`)
+    }
+  }
+
+  for (const decision of state.decisionHistory) {
+    const record = await readRecord("operation", decision.decisionRef)
+    if (
+      digestJson(record) !== decision.decisionDigest
+      || record.operationId !== decision.decisionRef
+      || record.kind !== "human-decision"
+      || record.stageRunId !== decision.stageRunId
+      || record.evidenceDigest !== decision.evidenceDigest
+      || record.decision?.decisionId !== decision.decisionId
+      || record.decision?.choice !== decision.choice
+      || record.decision?.proof?.mode !== decision.proofMode
+    ) {
+      throw new StoreError(mismatchCode, `operation:${decision.decisionRef} does not prove its human decision`)
+    }
+    const quiesce = await readRecord("operation", decision.quiesceReceiptRef)
+    if (
+      quiesce.operationId !== decision.quiesceReceiptRef
+      || quiesce.kind !== "execution.quiesce"
+      || quiesce.receipt?.status !== "confirmed"
+      || quiesce.receipt?.operationId !== decision.quiesceReceiptRef
+    ) {
+      throw new StoreError(mismatchCode, `operation:${decision.quiesceReceiptRef} does not prove decision quiescence`)
+    }
+  }
 }
 
 function normalizeAuditEvents(events = [], { revision, required = false } = {}) {

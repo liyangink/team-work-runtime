@@ -16,6 +16,7 @@ test("ExecutionAdapter requires the complete recovery-aware port", () => {
     ensureExecution() {},
     inspectExecution() {},
     quiesce() {},
+    inspectQuiesce() {},
     verifyHumanDecision() {},
     stopExecution() {},
     inspectStop() {},
@@ -29,6 +30,10 @@ test("ExecutionAdapter requires the complete recovery-aware port", () => {
   assert.throws(
     () => assertExecutionAdapter({ ...adapter, inspectStop: undefined }),
     (error) => error instanceof ContractError && /inspectStop/.test(error.message),
+  )
+  assert.throws(
+    () => assertExecutionAdapter({ ...adapter, inspectQuiesce: undefined }),
+    (error) => error instanceof ContractError && /inspectQuiesce/.test(error.message),
   )
 })
 
@@ -60,6 +65,7 @@ test("Execution port validates every effect and receipt at the adapter boundary"
     },
     inspectExecution() {},
     quiesce() {},
+    inspectQuiesce() {},
     verifyHumanDecision() {},
     stopExecution() {},
     inspectStop() {},

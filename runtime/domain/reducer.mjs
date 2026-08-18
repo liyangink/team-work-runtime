@@ -9,7 +9,7 @@ import {
 } from "./invariants.mjs"
 import { normalizeStagePlan } from "./stage-plan.mjs"
 import { createWorkGraph } from "./work-graph.mjs"
-import { digestEffect } from "./digests.mjs"
+import { digestEffect, digestValue } from "./digests.mjs"
 
 const stageRunTransitions = new Map([
   ["planned", new Set(["dispatching"])],
@@ -165,6 +165,16 @@ function findPendingOperation(next, fact, expectedKind) {
   if (!operation || (expectedKind && operation.kind !== expectedKind)) {
     throw new DomainError("OPERATION_UNKNOWN", `unknown ${expectedKind ?? "external"} operation: ${operationId}`)
   }
+  if (operation.kind === "execution.quiesce") {
+    if (
+      operation.purpose !== "human-wait"
+      || next.pendingDecision?.quiesceOperationId !== operation.operationId
+      || operation.intent.decisionId !== next.pendingDecision.decisionId
+    ) {
+      throw new DomainError("OPERATION_BINDING_INVALID", "quiesce operation has no matching pending decision")
+    }
+    return { operation }
+  }
   const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === operation.assignmentId)
   const attempt = assignment?.attempts.find((entry) => entry.attemptId === operation.attemptId)
   if (
@@ -282,6 +292,264 @@ function startEffectInvocation(next, fact) {
   }
 }
 
+function prepareHumanWait(next, fact) {
+  if (!["working", "blocked"].includes(next.status)) {
+    throw new DomainError("HUMAN_WAIT_STATE_INVALID", "human wait can only be prepared from working or blocked")
+  }
+  if (next.pendingDecision || next.pendingOperations.length > 0) {
+    throw new DomainError("HUMAN_WAIT_NOT_QUIESCENT", "human wait requires no existing decision or external effect")
+  }
+  if (next.observationInbox.items.length > 0) {
+    throw new DomainError("HUMAN_WAIT_INBOX_PENDING", "human wait requires the durable observation inbox to be drained")
+  }
+  const decision = fact.decision
+  const decisionId = assertIdentifier(decision?.decisionId, "fact.decision.decisionId")
+  const artifactRefs = assertStringList(decision?.artifactRefs, "fact.decision.artifactRefs", { allowEmpty: false })
+  const evidence = artifactRefs.map((artifactId) => {
+    const artifact = next.artifacts.find((entry) => entry.artifactId === artifactId)
+    if (!artifact || artifact.stageRunId !== next.currentStageRun.stageRunId) {
+      throw new DomainError("HUMAN_WAIT_EVIDENCE_INVALID", `human decision references unavailable current-stage artifact: ${artifactId}`)
+    }
+    return { artifactId, path: artifact.path, digest: artifact.digest }
+  })
+  const evidenceDigest = digestValue({ stageRunId: next.currentStageRun.stageRunId, evidence })
+  const executionRefs = [...new Set(next.workGraph.assignments.flatMap((assignment) => {
+    const executionRef = assignment.attempts.at(-1)?.executionRef
+    return executionRef ? [executionRef] : []
+  }))].sort()
+  const intent = structuredClone(fact.intent)
+  if (
+    intent?.taskId !== next.taskId
+    || intent.decisionId !== decisionId
+    || intent.leadBindingRef !== decision.leadBindingRef
+    || JSON.stringify(intent.executionRefs) !== JSON.stringify(executionRefs)
+    || intent.clearHostContinuations !== true
+    || digestEffect(intent) !== intent.effectDigest
+  ) {
+    throw new DomainError("HUMAN_WAIT_EFFECT_MISMATCH", "quiesce intent does not match the pending human decision")
+  }
+  next.pendingDecision = {
+    decisionId,
+    stageRunId: next.currentStageRun.stageRunId,
+    phase: "preparing",
+    requirement: decision.requirement,
+    proofMode: decision.proofMode,
+    capabilitySnapshotDigest: assertNonEmptyString(decision.capabilitySnapshotDigest, "fact.decision.capabilitySnapshotDigest"),
+    leadBindingRef: assertNonEmptyString(decision.leadBindingRef, "fact.decision.leadBindingRef"),
+    question: assertNonEmptyString(decision.question, "fact.decision.question"),
+    choices: [...assertStringList(decision.choices, "fact.decision.choices", { allowEmpty: false })],
+    evidence,
+    evidenceDigest,
+    executionRefs,
+    quiesceOperationId: assertIdentifier(intent.operationId, "fact.intent.operationId"),
+    quiesceAttempt: 1,
+    observationsAfterPrepare: 0,
+    createdAt: fact.occurredAt,
+  }
+  next.pendingOperations.push({
+    operationId: intent.operationId,
+    kind: "execution.quiesce",
+    purpose: "human-wait",
+    effectDigest: assertDigest(intent.effectDigest, "fact.intent.effectDigest"),
+    status: "intent-persisted",
+    invocationCount: 0,
+    intent,
+    createdAt: fact.occurredAt,
+  })
+}
+
+function retryHumanQuiesce(next, fact) {
+  const decision = next.pendingDecision
+  if (
+    next.status !== "blocked"
+    || decision?.phase !== "preparing"
+    || !decision.quiesceFailureRef
+    || next.pendingOperations.length > 0
+  ) {
+    throw new DomainError("HUMAN_WAIT_RETRY_INVALID", "only a blocked quiesce may be retried")
+  }
+  const intent = structuredClone(fact.intent)
+  if (
+    intent?.taskId !== next.taskId
+    || intent.decisionId !== decision.decisionId
+    || intent.leadBindingRef !== decision.leadBindingRef
+    || JSON.stringify(intent.executionRefs) !== JSON.stringify(decision.executionRefs)
+    || intent.clearHostContinuations !== true
+    || digestEffect(intent) !== intent.effectDigest
+  ) {
+    throw new DomainError("HUMAN_WAIT_EFFECT_MISMATCH", "retried quiesce intent does not match the pending human decision")
+  }
+  decision.quiesceAttempt += 1
+  decision.quiesceOperationId = assertIdentifier(intent.operationId, "fact.intent.operationId")
+  decision.observationsAfterPrepare = 0
+  delete decision.quiesceFailureRef
+  next.pendingOperations.push({
+    operationId: intent.operationId,
+    kind: "execution.quiesce",
+    purpose: "human-wait",
+    effectDigest: assertDigest(intent.effectDigest, "fact.intent.effectDigest"),
+    status: "intent-persisted",
+    invocationCount: 0,
+    intent,
+    createdAt: fact.occurredAt,
+  })
+  next.status = "working"
+}
+
+function confirmHumanQuiesce(next, fact) {
+  const { operation } = findPendingOperation(next, fact, "execution.quiesce")
+  const receipt = fact.receipt
+  validateReceipt(operation, receipt)
+  const decision = next.pendingDecision
+  const states = new Map(receipt.executions?.map((entry) => [entry.executionRef, entry.state]))
+  if (
+    receipt.status !== "confirmed"
+    || receipt.hostContinuationsCleared !== true
+    || decision.executionRefs.some((executionRef) => !["idle", "stopped", "isolated"].includes(states.get(executionRef)))
+    || states.size !== decision.executionRefs.length
+    || (decision.proofMode === "verified-event" && !receipt.hostCursor)
+  ) {
+    throw new DomainError("HUMAN_WAIT_QUIESCE_INVALID", "confirmed quiesce receipt does not prove a static human wait")
+  }
+  next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
+  decision.quiesceReceiptRef = operation.operationId
+  decision.quiescedAt = fact.occurredAt
+  if (receipt.hostCursor) decision.afterHostCursor = receipt.hostCursor
+}
+
+function blockHumanQuiesce(next, fact) {
+  const { operation } = findPendingOperation(next, fact, "execution.quiesce")
+  const receipt = fact.receipt
+  validateReceipt(operation, receipt)
+  if (receipt.status !== "blocked") {
+    throw new DomainError("HUMAN_WAIT_QUIESCE_INVALID", "blocked human wait requires a blocked quiesce receipt")
+  }
+  next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
+  next.pendingDecision.quiesceFailureRef = operation.operationId
+  next.status = "blocked"
+}
+
+function activateHumanWait(next, fact) {
+  const decision = next.pendingDecision
+  if (!decision || decision.phase !== "preparing" || !decision.quiesceReceiptRef) {
+    throw new DomainError("HUMAN_WAIT_NOT_PREPARED", "human wait requires a confirmed quiesce receipt")
+  }
+  if (next.pendingOperations.length > 0 || next.observationInbox.items.length > 0) {
+    throw new DomainError("HUMAN_WAIT_NOT_QUIESCENT", "human wait cannot activate with pending effects or observations")
+  }
+  const currentEvidence = decision.evidence.map(({ artifactId }) => {
+    const artifact = next.artifacts.find((entry) => entry.artifactId === artifactId)
+    return artifact && { artifactId, path: artifact.path, digest: artifact.digest }
+  })
+  if (
+    currentEvidence.some((entry) => !entry)
+    || digestValue({ stageRunId: next.currentStageRun.stageRunId, evidence: currentEvidence }) !== decision.evidenceDigest
+  ) {
+    throw new DomainError("HUMAN_WAIT_EVIDENCE_STALE", "human wait evidence changed before the decision was issued")
+  }
+  decision.phase = "awaiting-user"
+  decision.issuedAt = fact.occurredAt
+  next.status = "awaiting-user"
+}
+
+function invalidatePreparedHumanWait(next) {
+  const decision = next.pendingDecision
+  if (!decision || decision.phase !== "preparing" || !decision.quiesceReceiptRef || next.pendingOperations.length > 0) {
+    throw new DomainError("HUMAN_WAIT_INVALIDATION_INVALID", "only a quiesced preparing decision can be invalidated")
+  }
+  const currentEvidence = decision.evidence.map(({ artifactId }) => {
+    const artifact = next.artifacts.find((entry) => entry.artifactId === artifactId)
+    return artifact && { artifactId, path: artifact.path, digest: artifact.digest }
+  })
+  const evidenceUnchanged = (
+    currentEvidence.every(Boolean)
+    && digestValue({ stageRunId: next.currentStageRun.stageRunId, evidence: currentEvidence }) === decision.evidenceDigest
+  )
+  if (evidenceUnchanged && decision.observationsAfterPrepare === 0) {
+    throw new DomainError("HUMAN_WAIT_INVALIDATION_INVALID", "unchanged human wait evidence cannot be invalidated")
+  }
+  next.pendingDecision = null
+  next.status = "working"
+}
+
+function resolveHumanDecision(next, fact) {
+  const pending = next.pendingDecision
+  const decision = fact.decision
+  if (next.status !== "awaiting-user" || !pending || pending.phase !== "awaiting-user") {
+    throw new DomainError("HUMAN_DECISION_NOT_AWAITED", "task is not awaiting this human decision")
+  }
+  if (next.observationInbox.items.length > 0) {
+    throw new DomainError("HUMAN_DECISION_LATE_OBSERVATIONS", "late observations must be reviewed before accepting a human decision")
+  }
+  if (
+    decision?.decisionId !== pending.decisionId
+    || decision.leadBindingRef !== pending.leadBindingRef
+    || !pending.choices.includes(decision.choice)
+    || decision.proof?.mode !== pending.proofMode
+  ) {
+    throw new DomainError("HUMAN_DECISION_MISMATCH", "verified human decision does not match the issued request")
+  }
+  if (
+    pending.proofMode === "verified-event"
+    && decision.proof.messageCursor === pending.afterHostCursor
+  ) {
+    throw new DomainError("HUMAN_DECISION_STALE", "verified human event must be newer than the quiesce cursor")
+  }
+  const currentEvidence = pending.evidence.map(({ artifactId }) => {
+    const artifact = next.artifacts.find((entry) => entry.artifactId === artifactId)
+    return artifact && { artifactId, path: artifact.path, digest: artifact.digest }
+  })
+  const evidenceDigest = digestValue({ stageRunId: next.currentStageRun.stageRunId, evidence: currentEvidence })
+  if (
+    next.currentStageRun.stageRunId !== pending.stageRunId
+    || currentEvidence.some((entry) => !entry)
+    || evidenceDigest !== pending.evidenceDigest
+  ) {
+    throw new DomainError("HUMAN_DECISION_EVIDENCE_STALE", "human decision no longer matches the issued stage evidence")
+  }
+  const decisionRef = assertIdentifier(fact.decisionRef, "fact.decisionRef")
+  const decisionDigest = assertDigest(fact.decisionDigest, "fact.decisionDigest")
+  const artifactRefs = pending.evidence.map(({ artifactId }) => artifactId)
+  const artifactDigests = Object.fromEntries(pending.evidence.map(({ artifactId, digest }) => [artifactId, digest]))
+  next.decisionHistory.push({
+    decisionId: pending.decisionId,
+    stageRunId: pending.stageRunId,
+    choice: decision.choice,
+    proofMode: pending.proofMode,
+    artifactDigests,
+    evidenceDigest: pending.evidenceDigest,
+    quiesceReceiptRef: pending.quiesceReceiptRef,
+    decisionRef,
+    decisionDigest,
+    receivedAt: decision.receivedAt,
+  })
+  next.evidence.push({
+    evidenceId: `evidence-${decisionRef}`,
+    kind: "human-decision",
+    sourceRef: `operations/${decisionRef}.json`,
+    artifactRefs,
+    artifactDigests,
+    result: "unknown",
+    digest: decisionDigest,
+    stageRunId: pending.stageRunId,
+    observedAt: decision.receivedAt,
+    valid: true,
+  })
+  next.pendingDecision = null
+  next.status = "working"
+}
+
+function reopenHumanWait(next, fact) {
+  if (next.status !== "awaiting-user" || next.pendingDecision?.phase !== "awaiting-user") {
+    throw new DomainError("HUMAN_WAIT_NOT_ACTIVE", "only an active human wait can be reopened")
+  }
+  if (fact.reason !== "late-observations" || next.observationInbox.items.length === 0) {
+    throw new DomainError("HUMAN_WAIT_REOPEN_INVALID", "late observation recovery requires durable pending observations")
+  }
+  next.pendingDecision = null
+  next.status = "working"
+}
+
 function validateReceipt(operation, receipt) {
   if (
     receipt?.operationId !== operation.operationId
@@ -367,6 +635,7 @@ function failStop(next, fact) {
 
 function receiveObservation(next, fact) {
   const item = structuredClone(fact.item)
+  item.progression = next.status === "awaiting-user" ? "deferred" : "active"
   assertIdentifier(item?.observationId, "fact.item.observationId")
   assertDigest(item?.digest, "fact.item.digest")
   assertNonEmptyString(item?.dedupeKey, "fact.item.dedupeKey")
@@ -397,6 +666,7 @@ function receiveObservation(next, fact) {
     stateRevision: next.revision + 1,
   })
   next.observationInbox.nextSequence += 1
+  if (next.pendingDecision?.phase === "preparing") next.pendingDecision.observationsAfterPrepare += 1
 }
 
 function consumeObservation(next, fact) {
@@ -473,6 +743,14 @@ function recordArtifact(next, fact) {
   }
   next.artifacts[index] = normalized
   if (previous.digest === normalized.digest) return
+  if (
+    next.status === "awaiting-user"
+    && next.pendingDecision?.phase === "awaiting-user"
+    && next.pendingDecision.evidence.some((entry) => entry.artifactId === artifactId && entry.digest === previous.digest)
+  ) {
+    next.pendingDecision = null
+    next.status = "working"
+  }
   for (const evidence of next.evidence) {
     if (!evidence.valid || evidence.artifactDigests?.[artifactId] !== previous.digest) continue
     evidence.valid = false
@@ -589,6 +867,30 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "execution.idle-exhausted":
       exhaustIdleCorrection(next, fact)
+      return finish(next, fact)
+    case "human-wait.prepared":
+      prepareHumanWait(next, fact)
+      return finish(next, fact)
+    case "human-wait.quiesce-retried":
+      retryHumanQuiesce(next, fact)
+      return finish(next, fact)
+    case "human-wait.quiesce-confirmed":
+      confirmHumanQuiesce(next, fact)
+      return finish(next, fact)
+    case "human-wait.quiesce-blocked":
+      blockHumanQuiesce(next, fact)
+      return finish(next, fact)
+    case "human-wait.activated":
+      activateHumanWait(next, fact)
+      return finish(next, fact)
+    case "human-wait.invalidated":
+      invalidatePreparedHumanWait(next, fact)
+      return finish(next, fact)
+    case "human-decision.resolved":
+      resolveHumanDecision(next, fact)
+      return finish(next, fact)
+    case "human-wait.reopened":
+      reopenHumanWait(next, fact)
       return finish(next, fact)
     case "effect.invocation-started":
       startEffectInvocation(next, fact)

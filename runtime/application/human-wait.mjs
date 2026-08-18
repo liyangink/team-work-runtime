@@ -1,0 +1,284 @@
+import { randomUUID } from "node:crypto"
+
+import { createExecutionAdapterPort } from "../ports/execution.mjs"
+import { digestEffect, digestValue } from "../domain/digests.mjs"
+
+function completedOperation(operation, receipt) {
+  return {
+    kind: "operation",
+    recordId: operation.operationId,
+    value: {
+      operationId: operation.operationId,
+      kind: operation.kind,
+      intent: operation.intent,
+      receipt,
+      invocationCount: operation.invocationCount,
+    },
+  }
+}
+
+export function evaluateHumanGate({ requirement, humanDecisionProof }) {
+  if (!["required", "optional", "disabled"].includes(requirement)) {
+    throw new TypeError("human gate requirement must be required, optional, or disabled")
+  }
+  if (!["verified-event", "trusted-caller", "unsupported"].includes(humanDecisionProof)) {
+    throw new TypeError("human decision proof capability is invalid")
+  }
+  if (requirement === "disabled") return { action: "skip", reason: "disabled" }
+  if (humanDecisionProof === "unsupported") {
+    if (requirement === "optional") return { action: "skip", reason: "proof-unsupported" }
+    const error = new Error("required human decision cannot be verified by this platform")
+    error.code = "HUMAN_DECISION_PROOF_UNSUPPORTED"
+    throw error
+  }
+  return { action: "wait", proofMode: humanDecisionProof }
+}
+
+export function createHumanWait({
+  reconciler,
+  executionAdapter,
+  clock,
+  effectLeaseMs = 120_000,
+  faultInjector = {},
+}) {
+  const execution = createExecutionAdapterPort(executionAdapter)
+
+  async function prepare(taskId, decision) {
+    const capabilities = await execution.capabilities()
+    const gate = evaluateHumanGate({
+      requirement: decision.requirement,
+      humanDecisionProof: capabilities.features.humanDecisionProof,
+    })
+    if (gate.action === "skip") return { changed: false, state: await reconciler.load(taskId), skipped: true, reason: gate.reason }
+    const proofMode = gate.proofMode
+    return reconciler.commit(taskId, (state) => {
+      const createIntent = (attempt) => {
+        const executionRefs = [...new Set(state.workGraph.assignments.flatMap((assignment) => {
+          const executionRef = assignment.attempts.at(-1)?.executionRef
+          return executionRef ? [executionRef] : []
+        }))].sort()
+        const evidence = decision.artifactRefs.map((artifactId) => {
+          const artifact = state.artifacts.find((entry) => entry.artifactId === artifactId)
+          return artifact ? { artifactId, path: artifact.path, digest: artifact.digest } : { artifactId }
+        })
+        const seed = digestValue({
+          taskId,
+          stageRunId: state.currentStageRun.stageRunId,
+          decisionId: decision.decisionId,
+          leadBindingRef: decision.leadBindingRef,
+          executionRefs,
+          evidence,
+          attempt,
+        }).slice(0, 24)
+        const intent = {
+          operationId: `quiesce-${seed}`,
+          effectDigest: "0".repeat(64),
+          taskId,
+          decisionId: decision.decisionId,
+          leadBindingRef: decision.leadBindingRef,
+          executionRefs,
+          clearHostContinuations: true,
+        }
+        intent.effectDigest = digestEffect(intent)
+        return intent
+      }
+      const existing = state.pendingDecision
+      if (existing?.decisionId === decision.decisionId) {
+        const existingRequest = {
+          requirement: existing.requirement,
+          proofMode: existing.proofMode,
+          capabilitySnapshotDigest: existing.capabilitySnapshotDigest,
+          leadBindingRef: existing.leadBindingRef,
+          question: existing.question,
+          choices: existing.choices,
+          artifactRefs: existing.evidence.map(({ artifactId }) => artifactId),
+        }
+        const repeatedRequest = {
+          requirement: decision.requirement,
+          proofMode,
+          capabilitySnapshotDigest: capabilities.digest,
+          leadBindingRef: decision.leadBindingRef,
+          question: decision.question,
+          choices: decision.choices,
+          artifactRefs: decision.artifactRefs,
+        }
+        if (digestValue(existingRequest) !== digestValue(repeatedRequest)) {
+          const error = new Error(`human decision ${decision.decisionId} was repeated with different content`)
+          error.code = "HUMAN_DECISION_CONFLICT"
+          throw error
+        }
+        if (existing.quiesceFailureRef && state.status === "blocked") {
+          const intent = createIntent(existing.quiesceAttempt + 1)
+          return {
+            fact: { type: "human-wait.quiesce-retried", intent, occurredAt: clock() },
+            refs: [existing.decisionId, existing.quiesceFailureRef, intent.operationId],
+          }
+        }
+        return null
+      }
+      const intent = createIntent(1)
+      return {
+        fact: {
+          type: "human-wait.prepared",
+          decision: {
+            ...structuredClone(decision),
+            proofMode,
+            capabilitySnapshotDigest: capabilities.digest,
+          },
+          intent,
+          occurredAt: clock(),
+        },
+        refs: [decision.decisionId, intent.operationId],
+      }
+    })
+  }
+
+  async function reconcile(taskId, operationId) {
+    let state = await reconciler.load(taskId)
+    let operation = state.pendingOperations.find((entry) => entry.operationId === operationId)
+    if (!operation) return { changed: false, state }
+    let fresh = operation.status === "intent-persisted"
+    if (fresh) {
+      const invocationStartedAt = clock()
+      const started = await reconciler.commit(taskId, (current) => {
+        const candidate = current.pendingOperations.find((entry) => entry.operationId === operationId)
+        if (!candidate || candidate.status !== "intent-persisted") return null
+        return {
+          fact: {
+            type: "effect.invocation-started",
+            operationId,
+            invocationId: randomUUID(),
+            leaseExpiresAt: new Date(Date.parse(invocationStartedAt) + effectLeaseMs).toISOString(),
+            occurredAt: invocationStartedAt,
+          },
+          refs: [operationId, current.pendingDecision?.decisionId].filter(Boolean),
+        }
+      })
+      state = started.state
+      operation = state.pendingOperations.find((entry) => entry.operationId === operationId)
+      if (!operation) return { changed: started.changed, state }
+      fresh = started.changed
+    }
+    if (!fresh && Date.parse(operation.leaseExpiresAt) > Date.parse(clock())) {
+      return { changed: false, state, inDoubt: true }
+    }
+    const receipt = fresh
+      ? await execution.quiesce(operation.intent)
+      : await execution.inspectQuiesce(operation.intent)
+    await faultInjector.afterReceipt?.({ taskId, operation: structuredClone(operation), receipt: structuredClone(receipt) })
+    if (receipt.status === "in-doubt") return { changed: false, state, inDoubt: true }
+    const committed = await reconciler.commit(taskId, (current) => {
+      const candidate = current.pendingOperations.find((entry) => entry.operationId === operationId)
+      if (!candidate) return null
+      return {
+        fact: {
+          type: receipt.status === "confirmed" ? "human-wait.quiesce-confirmed" : "human-wait.quiesce-blocked",
+          operationId,
+          receipt,
+          occurredAt: receipt.observedAt,
+        },
+        records: [completedOperation(candidate, receipt)],
+        refs: [operationId, current.pendingDecision?.decisionId].filter(Boolean),
+      }
+    })
+    return { changed: committed.changed, state: committed.state, inDoubt: false }
+  }
+
+  function activate(taskId) {
+    return reconciler.commit(taskId, (state) => {
+      if (state.pendingDecision?.phase !== "preparing" || !state.pendingDecision.quiesceReceiptRef) return null
+      const currentEvidence = state.pendingDecision.evidence.map(({ artifactId }) => {
+        const artifact = state.artifacts.find((entry) => entry.artifactId === artifactId)
+        return artifact && { artifactId, path: artifact.path, digest: artifact.digest }
+      })
+      const stale = state.pendingDecision.observationsAfterPrepare > 0 || currentEvidence.some((entry) => !entry) || digestValue({
+        stageRunId: state.currentStageRun.stageRunId,
+        evidence: currentEvidence,
+      }) !== state.pendingDecision.evidenceDigest
+      return {
+        fact: { type: stale ? "human-wait.invalidated" : "human-wait.activated", occurredAt: clock() },
+        refs: [state.pendingDecision.decisionId, state.pendingDecision.quiesceReceiptRef],
+      }
+    })
+  }
+
+  async function resolve(taskId) {
+    const state = await reconciler.load(taskId)
+    const pending = state.pendingDecision
+    if (state.status !== "awaiting-user" || pending?.phase !== "awaiting-user") {
+      const error = new Error("task is not awaiting a human decision")
+      error.code = "HUMAN_DECISION_NOT_AWAITED"
+      throw error
+    }
+    if (state.observationInbox.items.length > 0) {
+      const reopened = await reconciler.commit(taskId, (current) => {
+        if (current.status !== "awaiting-user" || current.observationInbox.items.length === 0) return null
+        return {
+          fact: {
+            type: "human-wait.reopened",
+            reason: "late-observations",
+            occurredAt: clock(),
+          },
+          refs: [pending.decisionId, ...current.observationInbox.items.map(({ observationId }) => observationId)],
+        }
+      })
+      return { state: reopened.state, accepted: false, reason: "late-observations" }
+    }
+    const decision = await execution.verifyHumanDecision({
+      decisionId: pending.decisionId,
+      leadBindingRef: pending.leadBindingRef,
+      issuedAt: pending.issuedAt,
+      ...(pending.afterHostCursor ? { afterHostCursor: pending.afterHostCursor } : {}),
+      choices: pending.choices,
+    })
+    const decisionRef = `decision-${digestValue({
+      taskId,
+      decisionId: pending.decisionId,
+      stageRunId: pending.stageRunId,
+      evidenceDigest: pending.evidenceDigest,
+      quiesceReceiptRef: pending.quiesceReceiptRef,
+      issuedAt: pending.issuedAt,
+    }).slice(0, 24)}`
+    const value = {
+      operationId: decisionRef,
+      kind: "human-decision",
+      stageRunId: pending.stageRunId,
+      evidenceDigest: pending.evidenceDigest,
+      decision: structuredClone(decision),
+    }
+    const decisionDigest = digestValue(value)
+    const committed = await reconciler.commit(taskId, (current) => {
+      if (
+        current.status !== "awaiting-user"
+        || current.pendingDecision?.decisionId !== pending.decisionId
+      ) return null
+      if (current.observationInbox.items.length > 0) {
+        return {
+          fact: {
+            type: "human-wait.reopened",
+            reason: "late-observations",
+            occurredAt: clock(),
+          },
+          refs: [pending.decisionId, ...current.observationInbox.items.map(({ observationId }) => observationId)],
+        }
+      }
+      return {
+        fact: {
+          type: "human-decision.resolved",
+          decision,
+          decisionRef,
+          decisionDigest,
+          occurredAt: decision.receivedAt,
+        },
+        records: [{ kind: "operation", recordId: decisionRef, value }],
+        refs: [pending.decisionId, decisionRef, pending.stageRunId],
+      }
+    })
+    const accepted = committed.state.decisionHistory.some((entry) => entry.decisionRef === decisionRef)
+    return accepted
+      ? { state: committed.state, decision, accepted: true }
+      : { state: committed.state, accepted: false, reason: committed.state.observationInbox.items.length > 0 ? "late-observations" : "decision-invalidated" }
+  }
+
+  return Object.freeze({ prepare, reconcile, activate, resolve })
+}

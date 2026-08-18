@@ -147,6 +147,7 @@ function fakeExecutionAdapter(overrides = {}) {
     ensureExecution: async () => assert.fail("ensureExecution must be provided"),
     inspectExecution: async () => assert.fail("inspectExecution must be provided"),
     inspectStop: async () => assert.fail("inspectStop must be provided"),
+    inspectQuiesce: async () => assert.fail("inspectQuiesce must be provided"),
     quiesce: async () => assert.fail("not used"),
     verifyHumanDecision: async () => assert.fail("not used"),
     stopExecution: async () => assert.fail("not used"),

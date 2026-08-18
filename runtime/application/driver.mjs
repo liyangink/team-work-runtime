@@ -1,6 +1,7 @@
 import { createEffectCoordinator } from "./effect-coordinator.mjs"
 import { createTaskReconciler } from "./reconciler.mjs"
 import { createSignalHub } from "./signal-hub.mjs"
+import { createHumanWait } from "./human-wait.mjs"
 import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
 
@@ -28,6 +29,7 @@ export function createTaskDriver({
 }) {
   const reconciler = createTaskReconciler({ store, clock })
   const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
+  const humanWait = createHumanWait({ reconciler, executionAdapter, clock, effectLeaseMs, faultInjector })
 
   async function consumeInbox(taskId) {
     return reconciler.commit(taskId, (state) => {
@@ -177,6 +179,14 @@ export function createTaskDriver({
   }
 
   const driver = {
+    async prepareHumanDecision({ taskId, decision }) {
+      return humanWait.prepare(taskId, decision)
+    },
+
+    async resolveHumanDecision({ taskId }) {
+      return humanWait.resolve(taskId)
+    },
+
     async deliverMemberReport({ taskId, assignmentId, attemptId, executionRef, operationKey, report }) {
       validateContract(
         "https://team-work-runtime.dev/schemas/v2/member-delivery#/$defs/memberReport",
@@ -287,13 +297,17 @@ export function createTaskDriver({
       const deadline = now() + Math.max(0, waitBudgetMs)
       for (let index = 0; index < maxInternalTransitions; index += 1) {
         const state = await reconciler.load(taskId)
-        if (["awaiting-user", "completed", "cancelled"].includes(state.status)) return { state, reason: state.status }
+        if (["awaiting-user", "blocked", "completed", "cancelled"].includes(state.status)) return { state, reason: state.status }
         if (state.observationInbox.items.length > 0) {
           await consumeInbox(taskId)
           continue
         }
         const operation = state.pendingOperations[0]
         if (!operation) {
+          if (state.pendingDecision?.phase === "preparing" && state.pendingDecision.quiesceReceiptRef) {
+            const activated = await humanWait.activate(taskId)
+            if (activated.changed) continue
+          }
           const prepared = await prepareNextDispatch(taskId)
           if (prepared.changed) continue
           const idleAssignment = state.workGraph.assignments.find((assignment) => (
@@ -340,7 +354,9 @@ export function createTaskDriver({
           }
           continue
         }
-        const outcome = await effects.reconcile(taskId, operation.operationId)
+        const outcome = operation.kind === "execution.quiesce"
+          ? await humanWait.reconcile(taskId, operation.operationId)
+          : await effects.reconcile(taskId, operation.operationId)
         if (outcome.inDoubt && !outcome.changed) return { state: outcome.state, reason: "in-doubt" }
       }
       throw new Error(`Task Driver exceeded ${maxInternalTransitions} internal transitions`)

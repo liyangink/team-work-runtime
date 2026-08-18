@@ -19,6 +19,7 @@
     "docs/runtime-roadmap.md",
     "runtime/",
     "runtime/application/",
+    "runtime/application/human-wait.mjs",
     "runtime/contracts.mjs",
     "runtime/domain/",
     "runtime/index.mjs",
@@ -54,6 +55,7 @@
     "tests/runtime-v2-domain.test.mjs",
     "tests/runtime-v2-persistence.test.mjs",
     "tests/v2/",
+    "tests/v2/application/human-wait.test.mjs",
     "tests/support/contract-validator.mjs",
     "docs/validation/opencode-real-gateway-2026-08-11.md",
     "docs/validation/opencode-real-gateway-2026-08-11.json"

@@ -56,6 +56,7 @@ export function createTaskAggregate(input) {
       dedupe: [],
     },
     pendingDecision: null,
+    decisionHistory: [],
     pendingOperations: [],
     createdAt,
     updatedAt: createdAt,

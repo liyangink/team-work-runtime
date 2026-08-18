@@ -1,5 +1,5 @@
 import { ContractError, validateContract } from "../contracts.mjs"
-import { digestEffect } from "./digests.mjs"
+import { digestEffect, digestValue } from "./digests.mjs"
 import { findParallelWriteConflict } from "./work-graph-rules.mjs"
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/
@@ -214,6 +214,27 @@ export function assertTaskState(state) {
         || operation.intent.effectDigest !== operation.effectDigest
         || digestEffect(operation.intent) !== operation.effectDigest
       ) failState("stop operation must bind exactly one running assignment attempt")
+    } else if (operation.kind === "execution.quiesce") {
+      if (operation.purpose !== "human-wait") failState("execution quiesce operation must declare human-wait purpose")
+      try {
+        validateContract(
+          "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/quiesceIntent",
+          operation.intent,
+          "pending quiesce intent",
+        )
+      } catch (error) {
+        if (error instanceof ContractError) failState("quiesce operation intent does not match its contract", error.errors)
+        throw error
+      }
+      if (
+        state.pendingDecision?.quiesceOperationId !== operation.operationId
+        || state.pendingDecision?.decisionId !== operation.intent.decisionId
+        || canonicalStringList(state.pendingDecision?.executionRefs ?? []) !== canonicalStringList(operation.intent.executionRefs)
+        || operation.intent.taskId !== state.taskId
+        || operation.intent.operationId !== operation.operationId
+        || operation.intent.effectDigest !== operation.effectDigest
+        || digestEffect(operation.intent) !== operation.effectDigest
+      ) failState("quiesce operation must bind exactly one pending human decision")
     }
   }
   for (const { assignment, attempt } of attemptsById.values()) {
@@ -265,6 +286,56 @@ export function assertTaskState(state) {
       }
     }
   }
+  const pendingDecision = state.pendingDecision
+  if (state.status === "awaiting-user" && pendingDecision?.phase !== "awaiting-user") {
+    failState("awaiting-user requires one issued pending decision")
+  }
+  if (pendingDecision?.phase === "awaiting-user" && state.status !== "awaiting-user") {
+    failState("an issued pending decision requires awaiting-user task state")
+  }
+  if (pendingDecision) {
+    if (pendingDecision.stageRunId !== state.currentStageRun.stageRunId) failState("pending decision must bind the current stage run")
+    const evidenceIds = pendingDecision.evidence.map(({ artifactId }) => artifactId)
+    if (new Set(evidenceIds).size !== evidenceIds.length) failState("pending decision evidence must not repeat artifacts")
+    for (const snapshot of pendingDecision.evidence) {
+      const artifact = artifacts.get(snapshot.artifactId)
+      if (!artifact || artifact.path !== snapshot.path) failState("pending decision evidence must reference a known artifact path")
+      if (pendingDecision.phase === "awaiting-user" && artifact.digest !== snapshot.digest) {
+        failState("issued pending decision cannot retain stale artifact evidence")
+      }
+    }
+    if (digestValue({ stageRunId: pendingDecision.stageRunId, evidence: pendingDecision.evidence }) !== pendingDecision.evidenceDigest) {
+      failState("pending decision evidence digest is invalid")
+    }
+    const quiesce = pendingById.get(pendingDecision.quiesceOperationId)
+    if (pendingDecision.phase === "awaiting-user") {
+      if (
+        state.status !== "awaiting-user"
+        || !pendingDecision.quiesceReceiptRef
+        || !pendingDecision.issuedAt
+        || quiesce
+        || (pendingDecision.proofMode === "verified-event" && !pendingDecision.afterHostCursor)
+      ) failState("issued human decision must have confirmed quiescence and proof cursor state")
+    } else if (pendingDecision.quiesceFailureRef) {
+      if (state.status !== "blocked" || quiesce) failState("failed human wait must remain a blocker without a live quiesce effect")
+    } else if (pendingDecision.quiesceReceiptRef) {
+      if (quiesce) failState("confirmed quiesce cannot remain pending")
+    } else if (!quiesce) {
+      failState("preparing human wait must retain its durable quiesce effect")
+    }
+  }
+  assertUniqueBy(state.decisionHistory, "decisionRef", "resolved decision refs")
+  for (const decision of state.decisionHistory) {
+    if (!runIds.has(decision.stageRunId)) failState("resolved decision stage run must exist")
+    const evidence = state.evidence.find((entry) => entry.sourceRef === `operations/${decision.decisionRef}.json`)
+    if (
+      !evidence
+      || evidence.kind !== "human-decision"
+      || evidence.digest !== decision.decisionDigest
+      || evidence.stageRunId !== decision.stageRunId
+      || canonicalStringList(evidence.artifactRefs) !== canonicalStringList(Object.keys(decision.artifactDigests))
+    ) failState("resolved human decision must retain matching evidence")
+  }
   assertUniqueBy(state.acceptedReportRefs, "reportId", "accepted report ids")
   const inbox = state.observationInbox
   if (inbox.nextSequence !== inbox.acknowledgedThrough + inbox.items.length + 1) {
@@ -273,6 +344,9 @@ export function assertTaskState(state) {
   inbox.items.forEach((item, index) => {
     if (item.sequence !== inbox.acknowledgedThrough + index + 1) failState("observation inbox items must remain ordered")
   })
+  if (state.status === "awaiting-user" && inbox.items.some((item) => item.progression !== "deferred")) {
+    failState("observations received during human wait must remain non-progressing")
+  }
   assertUniqueBy(inbox.items, "observationId", "pending observation ids")
   assertUniqueBy(inbox.items, "dedupeKey", "pending observation dedupe keys")
   assertUniqueBy(inbox.dedupe, "observationId", "observation dedupe ids")

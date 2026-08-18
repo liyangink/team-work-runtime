@@ -923,12 +923,20 @@ type PendingDecision = {
   decisionId: string
   stageRunId: string
   phase: "preparing" | "awaiting-user"
+  requirement: "required" | "optional"
+  proofMode: "verified-event" | "trusted-caller"
+  capabilitySnapshotDigest: string
   leadBindingRef: string
   question: string
   choices: string[]
-  evidence: Array<{ path: string; digest: string }>
+  evidence: Array<{ artifactId: string; path: string; digest: string }>
+  evidenceDigest: string
   executionRefs: string[]
   quiesceOperationId: string
+  quiesceAttempt: number
+  observationsAfterPrepare: number
+  quiesceReceiptRef?: string
+  quiesceFailureRef?: string
   afterHostCursor?: string
   issuedAt?: string
 }
@@ -960,13 +968,15 @@ type QuiesceReceipt = {
 顺序：
 
 1. reducer 只在没有其他 effect-pending/in-doubt 时创建 phase=`preparing` 的 PendingDecision 和 quiesce effect，任务仍是 working；
-2. Effect Coordinator 持久化后调用 `ExecutionAdapter.quiesce`；
+2. HumanWait 持久化后调用 `ExecutionAdapter.quiesce`；回执丢失或进程重启时只能调用 `inspectQuiesce`，不能重复执行平台清理；
 3. 只有 receipt confirmed、所有 execution 已 idle/stopped/isolated、Runtime 再次确认无其他 pending effect、host continuation/TODO 已清理时才能继续；
 4. Runtime 再次清空 inbox 并复核 evidence digest；
 5. 在一个事务中把 PendingDecision 改为 `awaiting-user`、写入 issuedAt；`verified-event` 模式还必须写入 receipt.hostCursor，然后把 task 状态改为 awaiting-user；
 6. quiesce blocked/in-doubt 只能进入 blocked/recovery，禁止向用户展示可批准 Card；
-7. awaiting-user 期间晚到 observation 可以持久记录，但标记为 non-progressing，不运行 Driver；
+7. awaiting-user 期间晚到 observation 可以持久记录，但标记为 non-progressing，不运行 Driver；prepare 后、正式 issued 前出现的新 observation 也会撤销本次等待并回到 working，避免基于未评估新事实发出批准请求；
 8. 用户决定后再评估晚到事实和 evidence digest；任何制品变化都使批准失效。
+
+同一高层决定请求可幂等重放；内容不同则冲突失败。平台返回 blocked quiesce 时任务进入可恢复 blocker，不发出批准请求；原因解除后重放同一高层请求会创建新的 quiesce operation，而不是复用已失败副作用。
 
 人工决定由 PlatformPlugin 从当前 host tool call context 附加，不由 Lead 填写身份信息：
 
@@ -1144,6 +1154,7 @@ interface ExecutionAdapter {
   ensureExecution(effect: DispatchEffect): Promise<ExecutionReceipt>
   inspectExecution(effect: DispatchEffect): Promise<ExecutionReceipt>
   quiesce(input: QuiesceIntent): Promise<QuiesceReceipt>
+  inspectQuiesce(input: QuiesceIntent): Promise<QuiesceReceipt>
   verifyHumanDecision(input: VerifyHumanIntent): Promise<VerifiedHumanDecision>
   stopExecution(input: StopIntent): Promise<StopReceipt>
   inspectStop(input: StopIntent): Promise<StopReceipt>

@@ -1,0 +1,6 @@
+import "./v2/contract/lead-control.test.mjs"
+import "./v2/contract/member-delivery.test.mjs"
+import "./v2/contract/platform-observation.test.mjs"
+import "./v2/contract/ports.test.mjs"
+import "./v2/contract/runtime-version.test.mjs"
+import "./v2/contract/schema-suite.test.mjs"

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-work-runtime.dev/schemas/v2/lead-control",
+  "$defs": {
+    "openIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string", "minLength": 1 },
+        "entryStage": { "type": "string", "minLength": 1 },
+        "completion": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode"],
+              "properties": { "mode": { "const": "workflow" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "stage"],
+              "properties": {
+                "mode": { "const": "through-stage" },
+                "stage": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "existingArtifacts": {
+          "type": "array",
+          "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/artifactRef" }
+        }
+      },
+      "anyOf": [
+        { "required": ["taskId"] },
+        { "required": ["title", "objective", "entryStage", "completion"] }
+      ]
+    },
+    "planIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective"],
+      "properties": {
+        "objective": { "type": "string", "minLength": 1 },
+        "constraints": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/nonEmptyStrings" },
+        "exclusions": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/nonEmptyStrings" },
+        "preferences": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": { "enum": ["auto", "solo", "team"] },
+            "budget": { "enum": ["economy", "balanced", "quality"] },
+            "risk": { "enum": ["normal", "high", "critical"] }
+          }
+        }
+      }
+    },
+    "steeringIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "directive"],
+      "properties": {
+        "action": {
+          "enum": [
+            "choose",
+            "owner-explain",
+            "owner-rework",
+            "collect-evidence",
+            "challenge-again",
+            "expert-arbitrate",
+            "second-expert-opinion",
+            "replace-owner",
+            "replan",
+            "escalate-to-user"
+          ]
+        },
+        "directive": { "type": "string", "minLength": 1 },
+        "targetRef": { "type": "string", "minLength": 1 },
+        "referenceRefs": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/nonEmptyStrings" },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

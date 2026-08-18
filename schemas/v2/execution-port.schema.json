@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-work-runtime.dev/schemas/v2/execution-port",
+  "$defs": {
+    "capabilitySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshotId", "digest", "capturedAt", "agents", "limits", "features"],
+      "properties": {
+        "snapshotId": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "minLength": 1 },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["agentId", "tier", "model", "costWeight", "capabilities"],
+            "properties": {
+              "agentId": { "type": "string", "minLength": 1 },
+              "tier": { "enum": ["junior", "senior", "expert"] },
+              "model": { "type": "string", "minLength": 1 },
+              "effort": { "type": "string", "minLength": 1 },
+              "costWeight": { "enum": [1, 10, 50] },
+              "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxParallel"],
+          "properties": { "maxParallel": { "type": "integer", "minimum": 1 } }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["background", "resume", "humanDecisionProof", "readOnlyHelper", "checkReceipts"],
+          "properties": {
+            "background": { "type": "boolean" },
+            "resume": { "type": "boolean" },
+            "humanDecisionProof": { "enum": ["verified-event", "trusted-caller", "unsupported"] },
+            "readOnlyHelper": { "type": "boolean" },
+            "checkReceipts": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "bindLeadIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "platform", "hostSessionRef"],
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1 },
+        "platform": { "type": "string", "minLength": 1 },
+        "hostSessionRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "bindingReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bindingRef", "taskId", "platform", "hostSessionRef"],
+      "properties": {
+        "bindingRef": { "type": "string", "minLength": 1 },
+        "taskId": { "type": "string", "minLength": 1 },
+        "platform": { "type": "string", "minLength": 1 },
+        "hostSessionRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dispatchEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "taskId", "stageRunId", "assignmentId", "attempt", "role", "assignmentKind", "agentId", "capabilitySnapshotDigest", "mode", "contextRef", "promptRef"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "taskId": { "type": "string", "minLength": 1 },
+        "stageRunId": { "type": "string", "minLength": 1 },
+        "assignmentId": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "role": { "enum": ["owner", "challenger", "expert"] },
+        "assignmentKind": { "type": "string", "pattern": "^(planning|research|design|spec|implementation|integration|test|review|e2e|evidence|custom:.+)$" },
+        "agentId": { "type": "string", "minLength": 1 },
+        "capabilitySnapshotDigest": { "type": "string", "minLength": 1 },
+        "mode": { "const": "background" },
+        "contextRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "resumeExecutionRef": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
+          "then": { "required": ["executionRef"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+          "then": { "required": ["error"] }
+        }
+      ]
+    },
+    "executionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "status", "agentId", "observedAt"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["confirmed", "in-doubt", "failed"] },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "agentId": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "error": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" }
+      }
+    },
+    "quiesceIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "taskId", "decisionId", "leadBindingRef", "executionRefs", "clearHostContinuations"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "taskId": { "type": "string", "minLength": 1 },
+        "decisionId": { "type": "string", "minLength": 1 },
+        "leadBindingRef": { "type": "string", "minLength": 1 },
+        "executionRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "clearHostContinuations": { "const": true }
+      }
+    },
+    "quiesceReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "status", "executions", "hostContinuationsCleared", "observedAt"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["confirmed", "blocked", "in-doubt"] },
+        "executions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["executionRef", "state"],
+            "properties": {
+              "executionRef": { "type": "string", "minLength": 1 },
+              "state": { "enum": ["idle", "stopped", "isolated"] }
+            }
+          }
+        },
+        "hostContinuationsCleared": { "type": "boolean" },
+        "hostCursor": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "verifyHumanIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "leadBindingRef", "issuedAt", "choices"],
+      "properties": {
+        "decisionId": { "type": "string", "minLength": 1 },
+        "leadBindingRef": { "type": "string", "minLength": 1 },
+        "issuedAt": { "type": "string", "format": "date-time" },
+        "afterHostCursor": { "type": "string", "minLength": 1 },
+        "choices": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "verifiedHumanDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "leadBindingRef", "receivedAt", "choice", "proof"],
+      "properties": {
+        "decisionId": { "type": "string", "minLength": 1 },
+        "leadBindingRef": { "type": "string", "minLength": 1 },
+        "receivedAt": { "type": "string", "format": "date-time" },
+        "choice": { "type": "string", "minLength": 1 },
+        "note": { "type": "string" },
+        "proof": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "messageId", "messageCursor"],
+              "properties": {
+                "mode": { "const": "verified-event" },
+                "messageId": { "type": "string", "minLength": 1 },
+                "messageCursor": { "type": "string", "minLength": 1 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "invocationRef"],
+              "properties": {
+                "mode": { "const": "trusted-caller" },
+                "invocationRef": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "stopIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "executionRef", "reason"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "stopReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "effectDigest", "status", "executionRef", "observedAt"],
+      "properties": {
+        "operationId": { "type": "string", "minLength": 1 },
+        "effectDigest": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["confirmed", "in-doubt", "failed"] },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立，尚未开始业务实现。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立，V2-0 契约与骨架正在实施。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -62,7 +62,7 @@
 
 实施：
 
-- 新建 `schemas/v2/`，定义四动作、RuntimeCard、DecisionPacket、MemberReport、ExpertVerdict、TaskState、WorkflowPolicy、TeamPolicy 和 Port receipt；
+- 新建 `schemas/v2/`，定义四动作、RuntimeCard、DecisionPacket、MemberReport、ExpertVerdict 和 Port intent/receipt；TaskState 由 V2-1 随 Domain 不变量定义，Workflow/Team Policy schema 由 V2-4 定义，避免在实现未探明前冻结内部形状；
 - 新建 `runtime/index.mjs`、`lead-control.mjs`、`member-delivery.mjs`、`platform-observation.mjs` 空骨架；
 - 新建 `runtime/ports/execution.mjs` 和 `spec-provider.mjs`；
 - 建立 `tests/v2/contract/` 的正向、损坏、未知字段、版本不兼容 fixture；
@@ -71,7 +71,7 @@
 退出条件：
 
 - 五个稳定 seam 无 OpenCode/OpenSpec 私有字段；
-- `steer` 非法 action/字段组合稳定拒绝；
+- `steer` 未知 action、额外底层编排字段和缺失必需字段稳定拒绝；与当前状态相关的 action 语义由 V2-4 Policy Compiler 校验，不在 schema 中提前硬编码；
 - ActionCard 和 ProblemCard 只有一个 next action；
 - v2 contract tests 全部通过，v1 公开入口尚未切换。
 

@@ -1,0 +1,61 @@
+[
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/lead-control#/$defs/planIntent",
+    "data": {
+      "objective": "审查现有实现",
+      "agentId": "expert-opus"
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/decision-packet",
+    "data": {
+      "packetId": "packet-1",
+      "question": "是否接受？",
+      "stage": "design-review",
+      "roster": [],
+      "claims": [],
+      "rounds": [{ "round": 4, "outcome": "continue", "resolved": [], "unresolved": [] }],
+      "artifactRefs": [],
+      "choices": []
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/dispatchEffect",
+    "data": {
+      "operationId": "op-1",
+      "effectDigest": "sha256:effect",
+      "taskId": "task-1",
+      "stageRunId": "run-1",
+      "assignmentId": "assignment-1",
+      "attempt": 1,
+      "role": "owner",
+      "assignmentKind": "implementation",
+      "agentId": "junior-luna",
+      "capabilitySnapshotDigest": "sha256:capabilities",
+      "mode": "blocking",
+      "contextRef": "context-1",
+      "promptRef": "prompt-1"
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/inspectIntent",
+    "data": {
+      "operationId": "spec-op-1",
+      "effectDigest": "sha256:spec-effect",
+      "task": {
+        "providerId": "openspec",
+        "taskId": "task-1",
+        "stageRunId": "run-9",
+        "configDigest": "sha256:config",
+        "routeStateDigest": "sha256:route"
+      }
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/common#/$defs/artifactRef",
+    "data": {
+      "kind": "source",
+      "locator": { "type": "project-path", "value": "../outside.txt" }
+    }
+  }
+]

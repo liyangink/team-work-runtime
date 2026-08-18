@@ -113,6 +113,7 @@ export function assertTaskState(state) {
   const assignmentIds = new Set(state.workGraph.assignments.map(({ assignmentId }) => assignmentId))
   const unresolvedDependencies = new Map()
   const globalAttemptIds = new Set()
+  const attemptsById = new Map()
   for (const assignment of state.workGraph.assignments) {
     if (assignment.dependsOn.some((dependency) => !assignmentIds.has(dependency))) {
       failState(`assignment ${assignment.assignmentId} references an unknown dependency`)
@@ -133,6 +134,7 @@ export function assertTaskState(state) {
       }
       attemptIds.add(attempt.attemptId)
       globalAttemptIds.add(attempt.attemptId)
+      attemptsById.set(attempt.attemptId, { assignment, attempt })
     })
     if (assignment.attempts.length === 0 && assignment.status !== "planned") {
       failState(`assignment ${assignment.assignmentId} has status without an attempt`)
@@ -152,6 +154,32 @@ export function assertTaskState(state) {
     }
   }
   if (visitedAssignments !== state.workGraph.assignments.length) failState("assignment dependencies must be acyclic")
+  assertUniqueBy(state.pendingOperations, "operationId", "pending operation ids")
+  const pendingById = new Map(state.pendingOperations.map((operation) => [operation.operationId, operation]))
+  for (const operation of state.pendingOperations) {
+    if (operation.kind === "execution.ensure") {
+      const binding = attemptsById.get(operation.attemptId)
+      if (
+        !binding
+        || binding.assignment.assignmentId !== operation.assignmentId
+        || binding.attempt.operationId !== operation.operationId
+        || binding.attempt.effectDigest !== operation.effectDigest
+      ) failState("execution operation must bind exactly one assignment attempt")
+    }
+  }
+  for (const { assignment, attempt } of attemptsById.values()) {
+    const pending = pendingById.get(attempt.operationId)
+    if (["effect-pending", "in-doubt"].includes(attempt.status)) {
+      if (!attempt.operationId || !attempt.effectDigest || !pending) {
+        failState(`assignment ${assignment.assignmentId} has an untracked external effect`)
+      }
+    }
+    if (["running", "reported", "verified", "accepted"].includes(attempt.status)) {
+      if (!attempt.operationId || !attempt.effectDigest || !attempt.receiptRef || !attempt.executionRef || pending) {
+        failState(`assignment ${assignment.assignmentId} cannot be ${attempt.status} without a confirmed receipt`)
+      }
+    }
+  }
   if (state.stagePlan === null && state.workGraph.assignments.length > 0) {
     failState("a work graph cannot exist without a frozen stage plan")
   }
@@ -185,6 +213,7 @@ export function assertTaskState(state) {
       }
     }
   }
+  assertUniqueBy(state.acceptedReportRefs, "reportId", "accepted report ids")
   if (state.costLedger.forecastMin > state.costLedger.forecastMax) failState("cost forecast range is inverted")
   if (state.status === "completed" && state.currentStageRun.status !== "completed") {
     failState("a completed task must have a completed current stage run")

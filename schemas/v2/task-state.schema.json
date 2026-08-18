@@ -30,7 +30,7 @@
     "workGraph": { "$ref": "#/$defs/workGraph" },
     "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
     "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
-    "acceptedReportRefs": { "$ref": "#/$defs/uniqueStrings" },
+    "acceptedReportRefs": { "type": "array", "items": { "$ref": "#/$defs/acceptedReportRef" } },
     "costLedger": { "$ref": "#/$defs/costLedger" },
     "observationInbox": {
       "type": "object",
@@ -42,7 +42,7 @@
       }
     },
     "pendingDecision": { "anyOf": [{ "type": "null" }, { "type": "object" }] },
-    "pendingOperations": { "type": "array", "items": { "type": "object" } },
+    "pendingOperations": { "type": "array", "items": { "$ref": "#/$defs/pendingOperation" } },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
@@ -147,7 +147,25 @@
         "stageRunId": { "$ref": "#/$defs/id" },
         "status": { "enum": ["effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },
         "startedAt": { "type": "string", "format": "date-time" },
-        "completedAt": { "type": "string", "format": "date-time" }
+        "completedAt": { "type": "string", "format": "date-time" },
+        "operationId": { "$ref": "#/$defs/id" },
+        "effectDigest": { "$ref": "#/$defs/digest" },
+        "receiptRef": { "$ref": "#/$defs/id" },
+        "executionRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pendingOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operationId", "kind", "effectDigest", "status", "createdAt"],
+      "properties": {
+        "operationId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["execution.ensure", "execution.stop", "execution.quiesce", "spec.prepare", "spec.archive"] },
+        "assignmentId": { "$ref": "#/$defs/id" },
+        "attemptId": { "$ref": "#/$defs/id" },
+        "effectDigest": { "$ref": "#/$defs/digest" },
+        "status": { "enum": ["intent-persisted", "in-doubt"] },
+        "createdAt": { "type": "string", "format": "date-time" }
       }
     },
     "assignment": {
@@ -162,7 +180,7 @@
         "teamRole": { "enum": ["owner", "challenger", "expert"] },
         "assignmentKind": {
           "type": "string",
-          "pattern": "^(?:planning|research|implementation|integration|test|review|e2e-applicability|custom:[a-z0-9][a-z0-9._-]*)$"
+          "pattern": "^(?:planning|research|design|spec|implementation|integration|test|review|e2e|evidence|e2e-applicability|custom:[a-z0-9][a-z0-9._-]*)$"
         },
         "costTier": { "enum": ["junior", "senior", "expert"] },
         "dependsOn": { "$ref": "#/$defs/uniqueStrings" },
@@ -192,6 +210,15 @@
         "digest": { "$ref": "#/$defs/digest" },
         "stageRunId": { "$ref": "#/$defs/id" },
         "recordedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "acceptedReportRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reportId", "digest"],
+      "properties": {
+        "reportId": { "$ref": "#/$defs/id" },
+        "digest": { "$ref": "#/$defs/digest" }
       }
     },
     "evidence": {

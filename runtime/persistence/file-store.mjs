@@ -1,6 +1,6 @@
 import { lstat, mkdir, readFile, rename, rm } from "node:fs/promises"
 import path from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 import {
   assertIdentifier,
@@ -11,7 +11,13 @@ import {
 } from "../domain/invariants.mjs"
 import { assertProjectRuntimeMajor } from "../version.mjs"
 
-import { newTaskRoot, resolveExistingTaskRoot, resolveStorePaths, resolveTaskSubdirectory } from "./paths.mjs"
+import {
+  newTaskRoot,
+  resolveExistingTaskRoot,
+  resolveSafeFile,
+  resolveStorePaths,
+  resolveTaskSubdirectory,
+} from "./paths.mjs"
 import { recoverTransactions } from "./recovery.mjs"
 import { StoreError } from "./store-error.mjs"
 import { atomicJson, atomicWrite, canonicalJson, syncDirectory, withOwnerLock } from "./transactions.mjs"
@@ -28,7 +34,8 @@ function parseState(source, label) {
 
 async function readState(taskRoot) {
   try {
-    return parseState(await readFile(path.join(taskRoot, "state.json"), "utf8"), "state.json")
+    const statePath = await resolveSafeFile(taskRoot, path.join(taskRoot, "state.json"), "state.json")
+    return parseState(await readFile(statePath, "utf8"), "state.json")
   } catch (error) {
     if (error instanceof StoreError) throw error
     if (error.code === "ENOENT") throw new StoreError("STATE_CORRUPT", "task has no authoritative state.json")
@@ -49,6 +56,35 @@ function assertImmutableIdentity(current, next) {
 }
 
 const recordDirectories = { report: "reports", operation: "operations" }
+
+function digestJson(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function artifactProjection(state) {
+  return {
+    generatedFrom: {
+      taskId: state.taskId,
+      revision: state.revision,
+      stateDigest: digestJson(state),
+    },
+    artifacts: structuredClone(state.artifacts),
+  }
+}
+
+async function writeArtifactProjection(taskRoot, state) {
+  const target = path.join(taskRoot, "artifacts.json")
+  const safeTarget = await resolveSafeFile(taskRoot, target, "artifacts.json", { allowMissing: true })
+  const expected = artifactProjection(state)
+  if (safeTarget) {
+    try {
+      if (canonicalJson(JSON.parse(await readFile(safeTarget, "utf8"))) === canonicalJson(expected)) return
+    } catch {
+      // Generated projections are rebuilt from state.json instead of becoming a second state source.
+    }
+  }
+  await atomicJson(target, expected)
+}
 
 function normalizeJsonValue(value) {
   let invalid = false
@@ -86,8 +122,10 @@ async function normalizeRecords(taskRoot, records = []) {
     const target = path.join(directory, `${record.recordId}.json`)
     const value = normalizeJsonValue(record.value)
     const content = canonicalJson(value)
+    const existingPath = await resolveSafeFile(directory, target, `${key} record`, { allowMissing: true })
     try {
-      const existing = canonicalJson(JSON.parse(await readFile(target, "utf8")))
+      if (!existingPath) throw Object.assign(new Error("record missing"), { code: "ENOENT" })
+      const existing = canonicalJson(JSON.parse(await readFile(existingPath, "utf8")))
       if (existing !== content) {
         throw new StoreError("IMMUTABLE_RECORD_CONFLICT", `${key} already exists with different content`)
       }
@@ -104,8 +142,10 @@ async function writeRecords(taskRoot, records) {
   for (const record of records) {
     const directory = await resolveTaskSubdirectory(taskRoot, recordDirectories[record.kind])
     const target = path.join(directory, `${record.recordId}.json`)
+    const existingPath = await resolveSafeFile(directory, target, `${record.kind}:${record.recordId} record`, { allowMissing: true })
     try {
-      const existing = canonicalJson(JSON.parse(await readFile(target, "utf8")))
+      if (!existingPath) throw Object.assign(new Error("record missing"), { code: "ENOENT" })
+      const existing = canonicalJson(JSON.parse(await readFile(existingPath, "utf8")))
       if (existing !== canonicalJson(record.value)) {
         throw new StoreError("IMMUTABLE_RECORD_CONFLICT", `${record.kind}:${record.recordId} changed during commit`)
       }
@@ -120,30 +160,43 @@ async function writeRecords(taskRoot, records) {
 async function assertAcceptedReportsExist(taskRoot, state, records = [], { corrupt = false } = {}) {
   if (state.acceptedReportRefs.length === 0) return
   const reportsRoot = await resolveTaskSubdirectory(taskRoot, "reports")
-  const included = new Set(records.filter(({ kind }) => kind === "report").map(({ recordId }) => recordId))
-  for (const reportId of state.acceptedReportRefs) {
+  const included = new Map(records.filter(({ kind }) => kind === "report").map((record) => [record.recordId, record.value]))
+  for (const { reportId, digest } of state.acceptedReportRefs) {
     assertIdentifier(reportId, "acceptedReportRef")
-    if (included.has(reportId)) continue
+    let value = included.get(reportId)
     try {
-      JSON.parse(await readFile(path.join(reportsRoot, `${reportId}.json`), "utf8"))
+      if (value === undefined) {
+        const reportPath = await resolveSafeFile(reportsRoot, path.join(reportsRoot, `${reportId}.json`), `accepted report ${reportId}`)
+        value = JSON.parse(await readFile(reportPath, "utf8"))
+      }
     } catch (error) {
+      if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
       const code = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_MISSING"
       throw new StoreError(code, `accepted report ${reportId} has no immutable record`, [{ message: error.message }])
+    }
+    if (digestJson(value) !== digest) {
+      const code = corrupt ? "STATE_CORRUPT" : "IMMUTABLE_RECORD_DIGEST_MISMATCH"
+      throw new StoreError(code, `accepted report ${reportId} does not match its authoritative digest`)
     }
   }
 }
 
-function normalizeAuditEvents(events = []) {
+function normalizeAuditEvents(events = [], { revision, required = false } = {}) {
   if (!Array.isArray(events)) throw new StoreError("AUDIT_EVENT_INVALID", "auditEvents must be an array")
+  if (required && events.length === 0) throw new StoreError("AUDIT_EVENT_REQUIRED", `revision ${revision} requires an audit event`)
   const ids = new Set()
   return events.map((event) => {
     const eventId = assertIdentifier(event?.eventId, "event.eventId")
     if (ids.has(eventId)) throw new StoreError("AUDIT_EVENT_INVALID", `duplicate audit event: ${eventId}`)
     ids.add(eventId)
+    if (!Number.isInteger(event.revision) || event.revision !== revision) {
+      throw new StoreError("AUDIT_EVENT_INVALID", `audit event ${eventId} must bind revision ${revision}`)
+    }
     return {
       eventId,
       type: assertNonEmptyString(event.type, "event.type"),
       occurredAt: assertTimestamp(event.occurredAt, "event.occurredAt"),
+      revision: event.revision,
       refs: [...assertStringList(event.refs ?? [], "event.refs")],
     }
   })
@@ -154,7 +207,8 @@ async function writeAuditEvents(taskRoot, auditEvents) {
   const target = path.join(taskRoot, "events.jsonl")
   let existing
   try {
-    const source = await readFile(target, "utf8")
+    const safeTarget = await resolveSafeFile(taskRoot, target, "events.jsonl")
+    const source = await readFile(safeTarget, "utf8")
     existing = source.split("\n").filter(Boolean).map((line) => JSON.parse(line))
   } catch (error) {
     throw new StoreError("STATE_CORRUPT", "events.jsonl is unreadable", [{ message: error.message }])
@@ -183,7 +237,7 @@ async function commitTransaction(taskRoot, manifest) {
 async function applyPreparedTransaction(taskRoot, manifest, manifestPath) {
   await writeRecords(taskRoot, manifest.records)
   await writeAuditEvents(taskRoot, manifest.auditEvents)
-  await atomicJson(path.join(taskRoot, "artifacts.json"), manifest.state.artifacts)
+  await writeArtifactProjection(taskRoot, manifest.state)
   await atomicJson(path.join(taskRoot, "state.json"), manifest.state)
   await rm(manifestPath)
   return manifest.state
@@ -204,7 +258,10 @@ function validateManifest(manifest, fileId, taskId) {
   if (manifest.state.taskId !== taskId || manifest.state.revision !== manifest.expectedRevision + 1) {
     throw new StoreError("STATE_CORRUPT", "transaction revision does not advance its task exactly once")
   }
-  manifest.auditEvents = normalizeAuditEvents(manifest.auditEvents ?? [])
+  manifest.auditEvents = normalizeAuditEvents(manifest.auditEvents ?? [], {
+    revision: manifest.state.revision,
+    required: true,
+  })
 }
 
 async function recoverTaskRoot(taskRoot, taskId) {
@@ -269,8 +326,14 @@ export function createFileStore({ projectRoot }) {
           for (const directory of taskDirectories) await mkdir(path.join(stagingRoot, directory))
           await atomicJson(path.join(stagingRoot, "state.json"), state)
           await atomicWrite(path.join(stagingRoot, "context.jsonl"), "")
-          await atomicJson(path.join(stagingRoot, "artifacts.json"), [])
-          await atomicWrite(path.join(stagingRoot, "events.jsonl"), "")
+          await atomicJson(path.join(stagingRoot, "artifacts.json"), artifactProjection(state))
+          await atomicWrite(path.join(stagingRoot, "events.jsonl"), `${JSON.stringify({
+            eventId: "task-created",
+            type: "task.created",
+            occurredAt: state.createdAt,
+            revision: 0,
+            refs: [state.currentStageRun.stageRunId],
+          })}\n`)
           await rename(stagingRoot, taskRoot)
           await syncDirectory(resolved.tasksRoot)
           return structuredClone(state)
@@ -287,6 +350,7 @@ export function createFileStore({ projectRoot }) {
         await recoverTaskRoot(taskRoot, taskId)
         const state = await readState(taskRoot)
         await assertAcceptedReportsExist(taskRoot, state, [], { corrupt: true })
+        await writeArtifactProjection(taskRoot, state)
         return structuredClone(state)
       })
     },
@@ -304,7 +368,7 @@ export function createFileStore({ projectRoot }) {
         assertImmutableIdentity(current, state)
         const normalizedRecords = await normalizeRecords(taskRoot, records)
         await assertAcceptedReportsExist(taskRoot, state, normalizedRecords)
-        const normalizedAuditEvents = normalizeAuditEvents(auditEvents)
+        const normalizedAuditEvents = normalizeAuditEvents(auditEvents, { revision: state.revision, required: true })
         const committed = await commitTransaction(taskRoot, {
           schemaVersion: "2.0",
           transactionId: randomUUID(),

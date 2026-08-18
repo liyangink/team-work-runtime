@@ -220,6 +220,8 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     stageRunId: "stage-run-1",
     attemptId: "review-owner-attempt-1",
     attempt: 1,
+    operationId: "dispatch-operation-1",
+    effectDigest: "e".repeat(64),
   }).state
 
   assert.equal(started.workGraph.assignments[0].status, "effect-pending")
@@ -229,7 +231,27 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     stageRunId: "stage-run-1",
     status: "effect-pending",
     startedAt: "2026-08-18T10:02:00.000Z",
+    operationId: "dispatch-operation-1",
+    effectDigest: "e".repeat(64),
   }])
+  assert.deepEqual(started.pendingOperations, [{
+    operationId: "dispatch-operation-1",
+    kind: "execution.ensure",
+    assignmentId: "review-owner",
+    attemptId: "review-owner-attempt-1",
+    effectDigest: "e".repeat(64),
+    status: "intent-persisted",
+    createdAt: "2026-08-18T10:02:00.000Z",
+  }])
+
+  const impossibleRunning = structuredClone(started)
+  impossibleRunning.workGraph.assignments[0].status = "running"
+  impossibleRunning.workGraph.assignments[0].attempts[0].status = "running"
+  impossibleRunning.pendingOperations = []
+  assert.throws(
+    () => assertTaskState(impossibleRunning),
+    (error) => error instanceof DomainError && error.code === "STATE_INVALID",
+  )
   assert.throws(
     () => reduceTask(started, {
       type: "assignment.attempt-started",
@@ -487,4 +509,63 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
   const unauthorizedWrite = structuredClone(planned)
   unauthorizedWrite.workGraph.assignments[1].writableRefs = ["artifact:source"]
   assert.throws(() => assertTaskState(unauthorizedWrite), (error) => error.code === "STATE_INVALID")
+})
+
+test("work graphs accept every assignment kind declared by the Runtime architecture", () => {
+  const kinds = [
+    "planning",
+    "research",
+    "design",
+    "spec",
+    "implementation",
+    "integration",
+    "test",
+    "review",
+    "e2e",
+    "evidence",
+    "e2e-applicability",
+    "custom:security-audit",
+  ]
+  for (const [index, assignmentKind] of kinds.entries()) {
+    const state = createTaskAggregate({
+      taskId: `assignment-kind-${index}`,
+      title: `Validate ${assignmentKind}`,
+      objective: "Keep assignment kinds orthogonal to roles and cost tiers",
+      workflow,
+      entryStage: "code-review",
+      completion: { mode: "through-stage", stage: "code-review" },
+      stageRunId: "stage-run-1",
+      createdAt: "2026-08-18T10:00:00.000Z",
+    })
+    assert.doesNotThrow(() => reduceTask(state, {
+      type: "stage-plan.frozen",
+      expectedRevision: 0,
+      occurredAt: "2026-08-18T10:01:00.000Z",
+      plan: {
+        planId: "plan-1",
+        stageRunId: "stage-run-1",
+        objective: "Validate one assignment kind",
+        inputRefs: [],
+        outputRefs: ["artifact:result"],
+        assignments: [{
+          assignmentId: "owner-1",
+          teamRole: "owner",
+          assignmentKind,
+          costTier: "junior",
+          dependsOn: [],
+          readableRefs: [],
+          writableRefs: ["artifact:result"],
+          completionCriteria: ["produce result"],
+        }],
+      },
+      costLedger: {
+        forecastMin: 1,
+        forecastMax: 1,
+        accrued: 0,
+        uncertain: 0,
+        nextWave: 1,
+        automaticLimit: 1,
+      },
+    }))
+  }
 })

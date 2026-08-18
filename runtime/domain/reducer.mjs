@@ -109,8 +109,13 @@ function startAssignmentAttempt(next, fact) {
     throw new DomainError("ASSIGNMENT_ATTEMPT_INVALID", `next assignment attempt must be ${expectedAttempt}`)
   }
   const attemptId = assertIdentifier(fact.attemptId, "fact.attemptId")
+  const operationId = assertIdentifier(fact.operationId, "fact.operationId")
+  const effectDigest = assertDigest(fact.effectDigest, "fact.effectDigest")
   const duplicate = next.workGraph.assignments.some(({ attempts }) => attempts.some((attempt) => attempt.attemptId === attemptId))
   if (duplicate) throw new DomainError("ASSIGNMENT_ATTEMPT_DUPLICATE", `attempt ${attemptId} already exists`)
+  if (next.pendingOperations.some((operation) => operation.operationId === operationId)) {
+    throw new DomainError("OPERATION_DUPLICATE", `operation ${operationId} already exists`)
+  }
   assignment.status = "effect-pending"
   assignment.attempts.push({
     attemptId,
@@ -118,6 +123,17 @@ function startAssignmentAttempt(next, fact) {
     stageRunId: fact.stageRunId,
     status: "effect-pending",
     startedAt: fact.occurredAt,
+    operationId,
+    effectDigest,
+  })
+  next.pendingOperations.push({
+    operationId,
+    kind: "execution.ensure",
+    assignmentId: assignment.assignmentId,
+    attemptId,
+    effectDigest,
+    status: "intent-persisted",
+    createdAt: fact.occurredAt,
   })
 }
 

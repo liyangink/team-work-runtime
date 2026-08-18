@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -14,6 +15,28 @@ const workflow = {
   stages: ["implementation", "code-review"],
   edges: [{ from: "implementation", to: "code-review" }],
   terminalStages: ["code-review"],
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function digestJson(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+function auditEvent(revision, occurredAt, type = "stage-run.transitioned") {
+  return {
+    eventId: `event-${revision}`,
+    type,
+    occurredAt,
+    revision,
+    refs: ["stage-run-1"],
+  }
 }
 
 async function createProject() {
@@ -57,6 +80,7 @@ test("the file store creates, commits, and reloads the authoritative task snapsh
     taskId: initial.taskId,
     expectedRevision: 0,
     state: next,
+    auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
   })
 
   assert.deepEqual(await store.loadTask(initial.taskId), next)
@@ -73,20 +97,15 @@ test("reports and completed operations are immutable facts committed with state"
     status: "dispatching",
     occurredAt: "2026-08-18T10:01:00.000Z",
   }).state
-  next.acceptedReportRefs = ["report-1"]
   const report = {
     kind: "report",
     recordId: "report-1",
     value: { reportId: "report-1", outcome: "completed" },
   }
-  const event = {
-    eventId: "event-1",
-    type: "stage-run.transitioned",
-    occurredAt: "2026-08-18T10:01:00.000Z",
-    refs: ["stage-run-1"],
-  }
+  next.acceptedReportRefs = [{ reportId: "report-1", digest: digestJson(report.value) }]
+  const event = auditEvent(1, "2026-08-18T10:01:00.000Z")
   await assert.rejects(
-    store.commit({ taskId: initial.taskId, expectedRevision: 0, state: next }),
+    store.commit({ taskId: initial.taskId, expectedRevision: 0, state: next, auditEvents: [event] }),
     (error) => error.code === "IMMUTABLE_RECORD_MISSING",
   )
   await store.commit({
@@ -102,14 +121,21 @@ test("reports and completed operations are immutable facts committed with state"
     report.value,
   )
   assert.deepEqual(
-    JSON.parse((await readFile(path.join(projectRoot, ".team-work", "tasks", initial.taskId, "events.jsonl"), "utf8")).trim()),
+    (await readFile(path.join(projectRoot, ".team-work", "tasks", initial.taskId, "events.jsonl"), "utf8"))
+      .trim().split("\n").map((line) => JSON.parse(line)).at(-1),
     event,
   )
 
   const revisionTwo = structuredClone(next)
   revisionTwo.revision = 2
   revisionTwo.updatedAt = "2026-08-18T10:02:00.000Z"
-  await store.commit({ taskId: initial.taskId, expectedRevision: 1, state: revisionTwo, records: [report], auditEvents: [event] })
+  await store.commit({
+    taskId: initial.taskId,
+    expectedRevision: 1,
+    state: revisionTwo,
+    records: [report],
+    auditEvents: [auditEvent(2, "2026-08-18T10:02:00.000Z")],
+  })
 
   const revisionThree = structuredClone(revisionTwo)
   revisionThree.revision = 3
@@ -120,6 +146,7 @@ test("reports and completed operations are immutable facts committed with state"
       expectedRevision: 2,
       state: revisionThree,
       records: [{ kind: "operation", recordId: "operation-invalid", value: { status: undefined } }],
+      auditEvents: [auditEvent(3, "2026-08-18T10:03:00.000Z")],
     }),
     (error) => error.code === "RECORD_INVALID",
   )
@@ -129,10 +156,21 @@ test("reports and completed operations are immutable facts committed with state"
       expectedRevision: 2,
       state: revisionThree,
       records: [{ ...report, value: { reportId: "report-1", outcome: "changed" } }],
+      auditEvents: [auditEvent(3, "2026-08-18T10:03:00.000Z")],
     }),
     (error) => error.code === "IMMUTABLE_RECORD_CONFLICT",
   )
   assert.equal((await store.loadTask(initial.taskId)).revision, 2)
+
+  const externalReport = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-v2-report-")), "report.json")
+  await writeFile(externalReport, `${JSON.stringify(report.value)}\n`)
+  const reportPath = path.join(projectRoot, ".team-work", "tasks", initial.taskId, "reports", "report-1.json")
+  await rm(reportPath)
+  await symlink(externalReport, reportPath)
+  await assert.rejects(
+    store.loadTask(initial.taskId),
+    (error) => error.code === "PATH_ESCAPE",
+  )
 })
 
 test("loading a task completes an interrupted transaction from its durable intent", async () => {
@@ -158,6 +196,7 @@ test("loading a task completes an interrupted transaction from its durable inten
       recordId: "operation-1",
       value: { operationId: "operation-1", status: "confirmed" },
     }],
+    auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
   })}\n`)
 
   assert.deepEqual(await store.loadTask(initial.taskId), next)
@@ -182,8 +221,18 @@ test("concurrent writers cannot silently overwrite the same task revision", asyn
   }).state
 
   const results = await Promise.allSettled([
-    firstStore.commit({ taskId: initial.taskId, expectedRevision: 0, state: next }),
-    secondStore.commit({ taskId: initial.taskId, expectedRevision: 0, state: next }),
+    firstStore.commit({
+      taskId: initial.taskId,
+      expectedRevision: 0,
+      state: next,
+      auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
+    }),
+    secondStore.commit({
+      taskId: initial.taskId,
+      expectedRevision: 0,
+      state: next,
+      auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
+    }),
   ])
 
   assert.equal(results.filter(({ status }) => status === "fulfilled").length, 1)
@@ -214,6 +263,7 @@ test("a symlinked task subdirectory cannot escape the project", async () => {
       expectedRevision: 0,
       state: next,
       records: [{ kind: "report", recordId: "report-1", value: { result: "pass" } }],
+      auditEvents: [auditEvent(1, "2026-08-18T10:01:00.000Z")],
     }),
     (error) => error.code === "PATH_ESCAPE",
   )
@@ -316,4 +366,79 @@ test("cached paths cannot be swapped for a symlink between store calls", async (
     (error) => error.code === "PATH_ESCAPE",
   )
   assert.deepEqual(await readdir(externalRoot), [])
+})
+
+test("transaction manifests must be regular files inside the task", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const initial = createState("manifest-symlink")
+  await store.createTask(initial)
+  const next = reduceTask(initial, {
+    type: "stage-run.transitioned",
+    expectedRevision: 0,
+    status: "dispatching",
+    occurredAt: "2026-08-18T10:01:00.000Z",
+  }).state
+  const externalManifest = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-v2-manifest-")), "manifest.json")
+  await writeFile(externalManifest, `${JSON.stringify({
+    schemaVersion: "2.0",
+    transactionId: "external",
+    taskId: initial.taskId,
+    expectedRevision: 0,
+    state: next,
+    records: [],
+    auditEvents: [],
+  })}\n`)
+  await symlink(
+    externalManifest,
+    path.join(projectRoot, ".team-work", "tasks", initial.taskId, ".txn", "external.json"),
+  )
+
+  await assert.rejects(store.loadTask(initial.taskId), (error) => error.code === "PATH_ESCAPE")
+})
+
+test("every revision-changing commit requires a revision-bound audit event", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const initial = createState("audit-required")
+  await store.createTask(initial)
+  const next = reduceTask(initial, {
+    type: "stage-run.transitioned",
+    expectedRevision: 0,
+    status: "dispatching",
+    occurredAt: "2026-08-18T10:01:00.000Z",
+  }).state
+
+  await assert.rejects(
+    store.commit({ taskId: initial.taskId, expectedRevision: 0, state: next }),
+    (error) => error.code === "AUDIT_EVENT_REQUIRED",
+  )
+})
+
+test("artifacts.json is a revision-bound projection rebuilt from state.json", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const initial = createState("artifact-projection")
+  await store.createTask(initial)
+  const projectionPath = path.join(projectRoot, ".team-work", "tasks", initial.taskId, "artifacts.json")
+
+  assert.deepEqual(JSON.parse(await readFile(projectionPath, "utf8")), {
+    generatedFrom: {
+      taskId: initial.taskId,
+      revision: 0,
+      stateDigest: digestJson(initial),
+    },
+    artifacts: [],
+  })
+
+  await writeFile(projectionPath, `${JSON.stringify({ artifacts: [{ artifactId: "fake" }] })}\n`)
+  assert.deepEqual(await store.loadTask(initial.taskId), initial)
+  assert.deepEqual(JSON.parse(await readFile(projectionPath, "utf8")), {
+    generatedFrom: {
+      taskId: initial.taskId,
+      revision: 0,
+      stateDigest: digestJson(initial),
+    },
+    artifacts: [],
+  })
 })

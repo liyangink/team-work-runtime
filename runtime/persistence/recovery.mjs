@@ -1,6 +1,7 @@
 import { readFile, readdir } from "node:fs/promises"
 import path from "node:path"
 
+import { resolveSafeFile } from "./paths.mjs"
 import { StoreError } from "./store-error.mjs"
 
 export async function recoverTransactions(transactionRoot, recoverOne) {
@@ -17,11 +18,12 @@ export async function recoverTransactions(transactionRoot, recoverOne) {
     const manifestPath = path.join(transactionRoot, name)
     let manifest
     try {
-      manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+      const safeManifestPath = await resolveSafeFile(transactionRoot, manifestPath, `transaction ${name}`)
+      manifest = JSON.parse(await readFile(safeManifestPath, "utf8"))
     } catch (error) {
+      if (error instanceof StoreError && error.code === "PATH_ESCAPE") throw error
       throw new StoreError("STATE_CORRUPT", `transaction ${name} is unreadable`, [{ message: error.message }])
     }
     await recoverOne(manifest, manifestPath, name.slice(0, -5))
   }
 }
-

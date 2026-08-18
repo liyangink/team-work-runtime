@@ -55,3 +55,21 @@ export function assertChildPath(parent, candidate, label) {
 export async function resolveTaskSubdirectory(taskRoot, name) {
   return resolveDirectoryWithin(taskRoot, path.join(taskRoot, name), `task ${name} directory`)
 }
+
+export async function resolveSafeFile(parent, candidate, label, { allowMissing = false } = {}) {
+  const target = path.resolve(candidate)
+  if (path.dirname(target) !== parent) throw new StoreError("PATH_ESCAPE", `${label} escapes its parent directory`)
+  let metadata
+  try {
+    metadata = await lstat(target)
+  } catch (error) {
+    if (allowMissing && error.code === "ENOENT") return null
+    if (error.code === "ENOENT") throw new StoreError("STATE_CORRUPT", `${label} is missing`)
+    throw new StoreError("STATE_CORRUPT", `cannot inspect ${label}`, [{ message: error.message }])
+  }
+  if (metadata.isSymbolicLink()) throw new StoreError("PATH_ESCAPE", `${label} cannot be a symbolic link`)
+  if (!metadata.isFile()) throw new StoreError("STATE_CORRUPT", `${label} must be a regular file`)
+  const resolved = await realpath(target)
+  if (!isDescendant(parent, resolved)) throw new StoreError("PATH_ESCAPE", `${label} escapes its parent directory`)
+  return resolved
+}

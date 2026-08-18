@@ -7,7 +7,7 @@ import {
 
 const TEAM_ROLES = new Set(["owner", "challenger", "expert"])
 const COST_TIERS = new Set(["junior", "senior", "expert"])
-const ASSIGNMENT_KINDS = /^(?:planning|research|implementation|integration|test|review|e2e-applicability|custom:[a-z0-9][a-z0-9._-]*)$/
+const ASSIGNMENT_KINDS = /^(?:planning|research|design|spec|implementation|integration|test|review|e2e|evidence|e2e-applicability|custom:[a-z0-9][a-z0-9._-]*)$/
 
 function assertAcyclic(assignments) {
   const dependencies = new Map(assignments.map((assignment) => [assignment.assignmentId, new Set(assignment.dependsOn)]))
@@ -73,4 +73,3 @@ export function createWorkGraph(assignments) {
   assertAcyclic(normalized)
   return { assignments: normalized }
 }
-

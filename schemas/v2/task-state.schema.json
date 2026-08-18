@@ -35,10 +35,12 @@
     "observationInbox": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["nextSequence", "pending"],
+      "required": ["nextSequence", "acknowledgedThrough", "items", "dedupe"],
       "properties": {
         "nextSequence": { "type": "integer", "minimum": 1 },
-        "pending": { "type": "array", "items": { "type": "object" } }
+        "acknowledgedThrough": { "type": "integer", "minimum": 0 },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/observationItem" } },
+        "dedupe": { "type": "array", "items": { "$ref": "#/$defs/observationDedupe" } }
       }
     },
     "pendingDecision": { "anyOf": [{ "type": "null" }, { "type": "object" }] },
@@ -151,13 +153,15 @@
         "operationId": { "$ref": "#/$defs/id" },
         "effectDigest": { "$ref": "#/$defs/digest" },
         "receiptRef": { "$ref": "#/$defs/id" },
-        "executionRef": { "type": "string", "minLength": 1 }
+        "executionRef": { "type": "string", "minLength": 1 },
+        "reportRef": { "$ref": "#/$defs/id" },
+        "reportDigest": { "$ref": "#/$defs/digest" }
       }
     },
     "pendingOperation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operationId", "kind", "effectDigest", "status", "createdAt"],
+      "required": ["operationId", "kind", "effectDigest", "status", "invocationCount", "intent", "createdAt"],
       "properties": {
         "operationId": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["execution.ensure", "execution.stop", "execution.quiesce", "spec.prepare", "spec.archive"] },
@@ -165,7 +169,39 @@
         "attemptId": { "$ref": "#/$defs/id" },
         "effectDigest": { "$ref": "#/$defs/digest" },
         "status": { "enum": ["intent-persisted", "in-doubt"] },
+        "invocationCount": { "type": "integer", "minimum": 0 },
+        "intent": { "type": "object" },
+        "lastError": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" },
         "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "observationItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observationId", "sequence", "dedupeKey", "digest", "kind", "receivedAt"],
+      "properties": {
+        "observationId": { "$ref": "#/$defs/id" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "dedupeKey": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "kind": { "enum": ["member-report", "execution-running", "execution-idle", "execution-error", "execution-lost", "check-result", "human-message"] },
+        "assignmentId": { "$ref": "#/$defs/id" },
+        "attemptId": { "$ref": "#/$defs/id" },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "payloadRef": { "type": "string", "minLength": 1 },
+        "receivedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "observationDedupe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dedupeKey", "observationId", "sequence", "digest", "stateRevision"],
+      "properties": {
+        "dedupeKey": { "type": "string", "minLength": 1 },
+        "observationId": { "$ref": "#/$defs/id" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "stateRevision": { "type": "integer", "minimum": 1 }
       }
     },
     "assignment": {

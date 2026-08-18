@@ -83,13 +83,18 @@ async function reclaimOrphanedLock(lockPath) {
 export async function withOwnerLock(lockPath, action) {
   const ownerId = randomUUID()
   let handle
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maxAttempts = 101
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       handle = await open(lockPath, "wx", 0o600)
       break
     } catch (error) {
       if (error.code !== "EEXIST") throw error
-      if (attempt === 0 && await reclaimOrphanedLock(lockPath)) continue
+      if (await reclaimOrphanedLock(lockPath)) continue
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        continue
+      }
       let owner
       try { owner = JSON.parse(await readFile(lockPath, "utf8")) } catch { owner = null }
       throw new StoreError("LOCK_UNAVAILABLE", "task state is locked by another writer", owner ? [owner] : [])

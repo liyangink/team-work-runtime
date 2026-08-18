@@ -49,7 +49,12 @@ export function createTaskAggregate(input) {
       nextWave: 0,
       automaticLimit: 0,
     },
-    observationInbox: { nextSequence: 1, pending: [] },
+    observationInbox: {
+      nextSequence: 1,
+      acknowledgedThrough: 0,
+      items: [],
+      dedupe: [],
+    },
     pendingDecision: null,
     pendingOperations: [],
     createdAt,

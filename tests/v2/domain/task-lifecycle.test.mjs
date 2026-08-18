@@ -5,6 +5,7 @@ import {
   DomainError,
   assertTaskState,
   createTaskAggregate,
+  digestValue,
   projectStageScope,
   reduceTask,
 } from "../../../runtime/domain/index.mjs"
@@ -212,6 +213,22 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     },
   }).state
 
+  const dispatchEffect = {
+    operationId: "dispatch-operation-1",
+    effectDigest: "0".repeat(64),
+    taskId: "attempt-invariants",
+    stageRunId: "stage-run-1",
+    assignmentId: "review-owner",
+    attempt: 1,
+    role: "owner",
+    assignmentKind: "review",
+    agentId: "junior-luna",
+    capabilitySnapshotDigest: "capability-snapshot-1",
+    mode: "background",
+    contextRef: ".team-work/tasks/attempt-invariants/context/owner.md",
+    promptRef: ".team-work/tasks/attempt-invariants/prompts/review-owner.md",
+  }
+  dispatchEffect.effectDigest = digestValue({ ...dispatchEffect, effectDigest: undefined })
   const started = reduceTask(planned, {
     type: "assignment.attempt-started",
     expectedRevision: 1,
@@ -221,7 +238,7 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     attemptId: "review-owner-attempt-1",
     attempt: 1,
     operationId: "dispatch-operation-1",
-    effectDigest: "e".repeat(64),
+    effect: dispatchEffect,
   }).state
 
   assert.equal(started.workGraph.assignments[0].status, "effect-pending")
@@ -232,15 +249,17 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     status: "effect-pending",
     startedAt: "2026-08-18T10:02:00.000Z",
     operationId: "dispatch-operation-1",
-    effectDigest: "e".repeat(64),
+    effectDigest: dispatchEffect.effectDigest,
   }])
   assert.deepEqual(started.pendingOperations, [{
     operationId: "dispatch-operation-1",
     kind: "execution.ensure",
     assignmentId: "review-owner",
     attemptId: "review-owner-attempt-1",
-    effectDigest: "e".repeat(64),
+    effectDigest: dispatchEffect.effectDigest,
     status: "intent-persisted",
+    invocationCount: 0,
+    intent: dispatchEffect,
     createdAt: "2026-08-18T10:02:00.000Z",
   }])
 

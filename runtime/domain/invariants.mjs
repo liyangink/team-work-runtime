@@ -1,4 +1,5 @@
 import { ContractError, validateContract } from "../contracts.mjs"
+import { digestEffect } from "./digests.mjs"
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -158,13 +159,46 @@ export function assertTaskState(state) {
   const pendingById = new Map(state.pendingOperations.map((operation) => [operation.operationId, operation]))
   for (const operation of state.pendingOperations) {
     if (operation.kind === "execution.ensure") {
+      try {
+        validateContract(
+          "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/dispatchEffect",
+          operation.intent,
+          "pending dispatch intent",
+        )
+      } catch (error) {
+        if (error instanceof ContractError) failState("execution operation intent does not match its contract", error.errors)
+        throw error
+      }
       const binding = attemptsById.get(operation.attemptId)
       if (
         !binding
         || binding.assignment.assignmentId !== operation.assignmentId
         || binding.attempt.operationId !== operation.operationId
         || binding.attempt.effectDigest !== operation.effectDigest
+        || operation.intent.operationId !== operation.operationId
+        || operation.intent.effectDigest !== operation.effectDigest
+        || digestEffect(operation.intent) !== operation.effectDigest
       ) failState("execution operation must bind exactly one assignment attempt")
+    } else if (operation.kind === "execution.stop") {
+      try {
+        validateContract(
+          "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/stopIntent",
+          operation.intent,
+          "pending stop intent",
+        )
+      } catch (error) {
+        if (error instanceof ContractError) failState("stop operation intent does not match its contract", error.errors)
+        throw error
+      }
+      const binding = attemptsById.get(operation.attemptId)
+      if (
+        !binding
+        || binding.assignment.assignmentId !== operation.assignmentId
+        || binding.attempt.executionRef !== operation.intent.executionRef
+        || operation.intent.operationId !== operation.operationId
+        || operation.intent.effectDigest !== operation.effectDigest
+        || digestEffect(operation.intent) !== operation.effectDigest
+      ) failState("stop operation must bind exactly one running assignment attempt")
     }
   }
   for (const { assignment, attempt } of attemptsById.values()) {
@@ -178,6 +212,9 @@ export function assertTaskState(state) {
       if (!attempt.operationId || !attempt.effectDigest || !attempt.receiptRef || !attempt.executionRef || pending) {
         failState(`assignment ${assignment.assignmentId} cannot be ${attempt.status} without a confirmed receipt`)
       }
+    }
+    if (["reported", "verified", "accepted"].includes(attempt.status) && (!attempt.reportRef || !attempt.reportDigest)) {
+      failState(`assignment ${assignment.assignmentId} cannot be ${attempt.status} without a durable member report`)
     }
   }
   if (state.stagePlan === null && state.workGraph.assignments.length > 0) {
@@ -214,6 +251,29 @@ export function assertTaskState(state) {
     }
   }
   assertUniqueBy(state.acceptedReportRefs, "reportId", "accepted report ids")
+  const inbox = state.observationInbox
+  if (inbox.nextSequence !== inbox.acknowledgedThrough + inbox.items.length + 1) {
+    failState("observation inbox sequence must be contiguous")
+  }
+  inbox.items.forEach((item, index) => {
+    if (item.sequence !== inbox.acknowledgedThrough + index + 1) failState("observation inbox items must remain ordered")
+  })
+  assertUniqueBy(inbox.items, "observationId", "pending observation ids")
+  assertUniqueBy(inbox.items, "dedupeKey", "pending observation dedupe keys")
+  assertUniqueBy(inbox.dedupe, "observationId", "observation dedupe ids")
+  assertUniqueBy(inbox.dedupe, "dedupeKey", "observation dedupe keys")
+  assertUniqueBy(inbox.dedupe, "sequence", "observation dedupe sequences")
+  if (inbox.dedupe.length !== inbox.nextSequence - 1) failState("observation dedupe summary must retain every allocated sequence")
+  if (inbox.dedupe.some((entry) => entry.stateRevision > state.revision)) {
+    failState("observation dedupe revision cannot be newer than task state")
+  }
+  const dedupeBySequence = new Map(inbox.dedupe.map((entry) => [entry.sequence, entry]))
+  for (const item of inbox.items) {
+    const summary = dedupeBySequence.get(item.sequence)
+    if (!summary || summary.observationId !== item.observationId || summary.dedupeKey !== item.dedupeKey || summary.digest !== item.digest) {
+      failState("pending observation must match its retained dedupe summary")
+    }
+  }
   if (state.costLedger.forecastMin > state.costLedger.forecastMax) failState("cost forecast range is inverted")
   if (state.status === "completed" && state.currentStageRun.status !== "completed") {
     failState("a completed task must have a completed current stage run")

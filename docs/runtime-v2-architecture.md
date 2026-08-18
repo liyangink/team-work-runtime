@@ -999,6 +999,7 @@ v2 不使用完整事件溯源，也不把多个 JSON 文件当成并列状态�
     ├── context.jsonl
     ├── artifacts.json
     ├── reports/<report-id>.json
+    ├── observations/<observation-id>.json
     ├── packets/<packet-id>.json
     ├── packets/<packet-id>.md
     ├── operations/<operation-id>.json
@@ -1009,6 +1010,7 @@ v2 不使用完整事件溯源，也不把多个 JSON 文件当成并列状态�
 
 - `state.json` 是 TaskIntent、entry/completion 投影、任务、当前 stage run、work graph、Cost Ledger、Observation Inbox、PendingDecision、steering、Expert intervention、门禁和所有未完成 operation 的唯一权威快照；
 - `reports/*.json` 是成员提交后不可变的结构化事实，`state.json` 只保存已接受引用与 digest；
+- `observations/*.json` 是平台 observation 的不可变规范化载荷；Inbox 只保存顺序、去重摘要和引用，消费后由审计事件保留 checkpoint；
 - `packets/*.json` 是可验证的结构化决策投影，`packets/*.md` 是面向 Lead 的可读渲染；二者均可由权威状态和不可变报告重建，不得反向驱动状态；
 - `operations/*.json` 保存已经结束的 intent/receipt；未结束 operation 必须同时存在于 `state.json`；
 - `artifacts.json` 是路径、kind、digest、来源和 profile 的索引；

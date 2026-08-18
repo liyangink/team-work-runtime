@@ -18,6 +18,7 @@
     "docs/runtime-v2-workflow-simulation.md",
     "docs/runtime-roadmap.md",
     "runtime/",
+    "runtime/application/",
     "runtime/contracts.mjs",
     "runtime/domain/",
     "runtime/index.mjs",
@@ -49,6 +50,7 @@
     "tests/package-cli.test.mjs",
     "tests/user-config.test.mjs",
     "tests/runtime-v2-contract.test.mjs",
+    "tests/runtime-v2-application.test.mjs",
     "tests/runtime-v2-domain.test.mjs",
     "tests/runtime-v2-persistence.test.mjs",
     "tests/v2/",
@@ -58,7 +60,6 @@
   ],
   "sharedBuild": ["package.json", "package-lock.json"],
   "planned": [
-    "runtime/application/",
     "workflow/",
     "team-work/",
     "spec-providers/openspec/",

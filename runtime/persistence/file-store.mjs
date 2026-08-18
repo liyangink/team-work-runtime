@@ -22,7 +22,7 @@ import { recoverTransactions } from "./recovery.mjs"
 import { StoreError } from "./store-error.mjs"
 import { atomicJson, atomicWrite, canonicalJson, syncDirectory, withOwnerLock } from "./transactions.mjs"
 
-const taskDirectories = ["reports", "packets", "operations", "artifacts", ".txn"]
+const taskDirectories = ["reports", "observations", "packets", "operations", "artifacts", ".txn"]
 
 function parseState(source, label) {
   try {
@@ -55,7 +55,7 @@ function assertImmutableIdentity(current, next) {
   }
 }
 
-const recordDirectories = { report: "reports", operation: "operations" }
+const recordDirectories = { report: "reports", observation: "observations", operation: "operations" }
 
 function digestJson(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")

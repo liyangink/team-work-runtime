@@ -1,4 +1,5 @@
 export { DomainError, assertTaskState } from "./invariants.mjs"
+export { digestEffect, digestValue } from "./digests.mjs"
 export { projectStageScope } from "./stage-plan.mjs"
 export { createTaskAggregate } from "./task-aggregate.mjs"
 export { reduceTask } from "./reducer.mjs"

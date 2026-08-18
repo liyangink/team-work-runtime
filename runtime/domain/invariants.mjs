@@ -334,6 +334,7 @@ export function assertTaskState(state) {
       || evidence.digest !== decision.decisionDigest
       || evidence.stageRunId !== decision.stageRunId
       || canonicalStringList(evidence.artifactRefs) !== canonicalStringList(Object.keys(decision.artifactDigests))
+      || new Set(decision.executionRefs).size !== decision.executionRefs.length
     ) failState("resolved human decision must retain matching evidence")
   }
   assertUniqueBy(state.acceptedReportRefs, "reportId", "accepted report ids")

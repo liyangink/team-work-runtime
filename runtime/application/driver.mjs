@@ -2,6 +2,7 @@ import { createEffectCoordinator } from "./effect-coordinator.mjs"
 import { createTaskReconciler } from "./reconciler.mjs"
 import { createSignalHub } from "./signal-hub.mjs"
 import { createHumanWait } from "./human-wait.mjs"
+import { createFileEvidenceVerifier } from "./evidence-verifier.mjs"
 import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
 
@@ -26,10 +27,12 @@ export function createTaskDriver({
   faultInjector,
   signalHub = createSignalHub(),
   now = Date.now,
+  projectRoot,
+  evidenceVerifier = projectRoot ? createFileEvidenceVerifier({ projectRoot }) : undefined,
 }) {
   const reconciler = createTaskReconciler({ store, clock })
   const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
-  const humanWait = createHumanWait({ reconciler, executionAdapter, clock, effectLeaseMs, faultInjector })
+  const humanWait = createHumanWait({ reconciler, executionAdapter, evidenceVerifier, clock, effectLeaseMs, faultInjector })
 
   async function consumeInbox(taskId) {
     return reconciler.commit(taskId, (state) => {

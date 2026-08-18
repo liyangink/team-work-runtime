@@ -995,6 +995,8 @@ type VerifiedHumanDecision = {
 
 人工决定证据由 `CapabilitySnapshot.features.humanDecisionProof` 固定为三种模式。`verified-event` 下，hostCursor 是 Platform Adapter 定义的单调 opaque cursor；Adapter 必须证明消息属于 leadBindingRef、messageCursor 严格晚于 afterHostCursor。`trusted-caller` 仅允许用于不暴露给 Lead/Agent 的人工 CLI/API 入口，Adapter 必须记录本次人工调用的 invocationRef；standalone CLI 默认使用该模式，不伪造平台消息 cursor。`unsupported` 无法完成 required human gate，Workflow 编译时必须返回可配置诊断，不能运行到门禁后才成为死门。Runtime 在两种可用模式下都必须校验 choice、decisionId、stageRunId 和 evidence digest，才能原子离开 awaiting-user。
 
+V2-3 提供 `compileHumanGateRequirements` 作为 Workflow Compiler 的确定性门禁能力检查入口：一次编译全部 design/final 人工门禁，先处理 `required|optional|disabled` 与 capability，再允许生成运行计划；`prepare` 中的同类检查仅是防御性后备。发出请求和接受决定前还必须通过文件型 EvidenceVerifier 重算当前项目文件指纹，不能只信任 state 中最后登记的 digest。
+
 ## 11. 权威状态与文件布局
 
 v2 不使用完整事件溯源，也不把多个 JSON 文件当成并列状态源。
@@ -1512,6 +1514,7 @@ runtime/
 │   ├── driver.mjs
 │   ├── reconciler.mjs
 │   ├── effect-coordinator.mjs
+│   ├── evidence-verifier.mjs
 │   ├── human-wait.mjs
 │   ├── signal-hub.mjs
 │   └── action-card.mjs

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
 import { createTaskDriver } from "../../../runtime/application/driver.mjs"
-import { evaluateHumanGate } from "../../../runtime/application/human-wait.mjs"
-import { createTaskAggregate, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
+import { compileHumanGateRequirements, evaluateHumanGate } from "../../../runtime/application/human-wait.mjs"
+import { createTaskAggregate, digestEffect, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
 import { createFileStore } from "../../../runtime/persistence/index.mjs"
 
 const workflow = {
@@ -21,6 +21,8 @@ const workflow = {
 async function createProject() {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-human-wait-"))
   await mkdir(path.join(projectRoot, ".team-work", "tasks"), { recursive: true })
+  await mkdir(path.join(projectRoot, "docs"), { recursive: true })
+  await writeFile(path.join(projectRoot, "docs", "design.md"), "approved design contents")
   await writeFile(path.join(projectRoot, ".team-work", "project.json"), `${JSON.stringify({
     runtimeMajor: 2,
     schemaVersion: "2.0",
@@ -135,7 +137,7 @@ async function createRunningTask(store, driver, taskId) {
       artifactId: "design-document",
       kind: "design",
       path: "docs/design.md",
-      digest: digestValue("late delivery design"),
+      digest: digestValue("approved design contents"),
       stageRunId: "stage-run-1",
     },
   }).state
@@ -195,6 +197,7 @@ test("confirmed quiesce is required before the driver enters a static human wait
     },
   })
   const driver = createTaskDriver({
+    projectRoot,
     store,
     executionAdapter,
     clock: () => "2026-08-18T10:03:00.000Z",
@@ -246,6 +249,26 @@ test("human gate capability is resolved before execution so required unsupported
     () => evaluateHumanGate({ requirement: "required", humanDecisionProof: "unsupported" }),
     (error) => error.code === "HUMAN_DECISION_PROOF_UNSUPPORTED",
   )
+  assert.throws(
+    () => compileHumanGateRequirements({
+      gates: [
+        { gateId: "design-approval", requirement: "required" },
+        { gateId: "final-acceptance", requirement: "required" },
+      ],
+      capabilitySnapshot: { features: { humanDecisionProof: "unsupported" } },
+    }),
+    (error) => error.code === "HUMAN_DECISION_PROOF_UNSUPPORTED",
+  )
+  assert.deepEqual(compileHumanGateRequirements({
+    gates: [
+      { gateId: "design-approval", requirement: "optional" },
+      { gateId: "final-acceptance", requirement: "disabled" },
+    ],
+    capabilitySnapshot: { features: { humanDecisionProof: "unsupported" } },
+  }), [
+    { gateId: "design-approval", requirement: "optional", action: "skip", reason: "proof-unsupported" },
+    { gateId: "final-acceptance", requirement: "disabled", action: "skip", reason: "disabled" },
+  ])
 })
 
 test("a verified adapter decision is bound to the issued stage and artifact evidence", async () => {
@@ -280,7 +303,7 @@ test("a verified adapter decision is bound to the issued stage and artifact evid
     "2026-08-18T10:03:01.000Z",
     "2026-08-18T10:05:00.000Z",
   ]
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => times.shift() ?? "2026-08-18T10:05:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => times.shift() ?? "2026-08-18T10:05:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -306,10 +329,24 @@ test("a verified adapter decision is bound to the issued stage and artifact evid
   assert.equal(resolved.state.evidence[0].kind, "human-decision")
   assert.equal(resolved.state.evidence[0].valid, true)
 
-  await rm(path.join(
+  const decisionPath = path.join(
     projectRoot,
     `.team-work/tasks/${taskId}/operations/${resolved.state.decisionHistory[0].decisionRef}.json`,
-  ))
+  )
+  const decisionRecord = await readFile(decisionPath, "utf8")
+  await rm(decisionPath)
+  await assert.rejects(store.loadTask(taskId), (error) => error.code === "STATE_CORRUPT")
+  await writeFile(decisionPath, decisionRecord)
+
+  const quiescePath = path.join(
+    projectRoot,
+    `.team-work/tasks/${taskId}/operations/${resolved.state.decisionHistory[0].quiesceReceiptRef}.json`,
+  )
+  const quiesceRecord = JSON.parse(await readFile(quiescePath, "utf8"))
+  quiesceRecord.intent.leadBindingRef = "binding:another-lead"
+  quiesceRecord.intent.effectDigest = digestEffect(quiesceRecord.intent)
+  quiesceRecord.receipt.effectDigest = quiesceRecord.intent.effectDigest
+  await writeFile(quiescePath, JSON.stringify(quiesceRecord))
   await assert.rejects(store.loadTask(taskId), (error) => error.code === "STATE_CORRUPT")
 })
 
@@ -341,7 +378,7 @@ test("late member delivery is durable but non-progressing until new human input 
       return assert.fail("late facts must be reviewed before asking the adapter for a decision")
     },
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
   await createRunningTask(store, driver, taskId)
   await driver.prepareHumanDecision({
     taskId,
@@ -418,6 +455,7 @@ test("a restart inspects an in-doubt quiesce instead of repeating the external e
     },
   })
   const interrupted = createTaskDriver({
+    projectRoot,
     store,
     executionAdapter,
     clock: () => "2026-08-18T10:03:00.000Z",
@@ -438,6 +476,7 @@ test("a restart inspects an in-doubt quiesce instead of repeating the external e
   assert.equal((await store.loadTask(taskId)).pendingOperations[0].status, "in-doubt")
 
   const recovered = createTaskDriver({
+    projectRoot,
     store,
     executionAdapter,
     clock: () => "2026-08-18T10:10:00.000Z",
@@ -467,7 +506,7 @@ test("a blocked quiesce becomes a recoverable blocker and never issues an approv
       }
     },
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -521,7 +560,7 @@ test("changing an issued approval artifact invalidates the wait instead of accep
       observedAt: "2026-08-18T10:04:00.000Z",
     }),
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -576,7 +615,7 @@ test("evidence changed during quiesce reopens safely without issuing a stale app
       observedAt: "2026-08-18T10:05:00.000Z",
     }),
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -650,7 +689,7 @@ test("verified-event decisions must be newer than the host cursor captured at qu
       }
     },
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -679,7 +718,19 @@ test("repeating the same wait request is idempotent but conflicting content is r
   const store = createFileStore({ projectRoot })
   const taskId = "idempotent-human-wait"
   await createWorkingTask(store, taskId)
-  const driver = createTaskDriver({ store, executionAdapter: adapter() })
+  let capabilityCalls = 0
+  const baseAdapter = adapter()
+  const driver = createTaskDriver({
+    projectRoot,
+    store,
+    executionAdapter: adapter({
+      capabilities: async () => {
+        capabilityCalls += 1
+        const snapshot = await baseAdapter.capabilities()
+        return { ...snapshot, digest: `capability-digest-${capabilityCalls}` }
+      },
+    }),
+  })
   const request = {
     taskId,
     decision: {
@@ -696,6 +747,7 @@ test("repeating the same wait request is idempotent but conflicting content is r
   const duplicate = await driver.prepareHumanDecision(request)
   assert.equal(duplicate.changed, false)
   assert.equal(duplicate.state.revision, first.state.revision)
+  assert.equal(capabilityCalls, 1)
   await assert.rejects(
     driver.prepareHumanDecision({
       ...request,
@@ -752,7 +804,7 @@ test("a report racing with human verification wins and invalidates the decision 
       }
     },
   })
-  driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
+  driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
   await createRunningTask(store, driver, taskId)
   await driver.prepareHumanDecision({
     taskId,
@@ -815,7 +867,7 @@ test("an observation arriving during quiesce is drained and prevents a stale app
       }
     },
   })
-  driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
+  driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:30.000Z" })
   await createRunningTask(store, driver, taskId)
   await driver.prepareHumanDecision({
     taskId,
@@ -851,7 +903,7 @@ test("a malformed confirmed receipt cannot create an awaiting-user state", async
       observedAt: "2026-08-18T10:04:00.000Z",
     }),
   })
-  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
   await driver.prepareHumanDecision({
     taskId,
     decision: {
@@ -871,4 +923,47 @@ test("a malformed confirmed receipt cannot create an awaiting-user state", async
   const state = await store.loadTask(taskId)
   assert.notEqual(state.status, "awaiting-user")
   assert.equal(state.pendingOperations[0].status, "in-doubt")
+})
+
+test("an unregistered filesystem change invalidates approval before the adapter can accept it", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const taskId = "external-artifact-change"
+  await createWorkingTask(store, taskId)
+  let verifyCalls = 0
+  const executionAdapter = adapter({
+    quiesce: async (intent) => ({
+      operationId: intent.operationId,
+      effectDigest: intent.effectDigest,
+      status: "confirmed",
+      executions: [],
+      hostContinuationsCleared: true,
+      observedAt: "2026-08-18T10:04:00.000Z",
+    }),
+    verifyHumanDecision: async () => {
+      verifyCalls += 1
+      return assert.fail("stale filesystem evidence must be rejected before human verification")
+    },
+  })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:03:00.000Z" })
+  await driver.prepareHumanDecision({
+    taskId,
+    decision: {
+      decisionId: "approve-design",
+      requirement: "required",
+      leadBindingRef: "binding:lead-1",
+      question: "是否批准当前方案进入实施？",
+      choices: ["approve", "revise"],
+      artifactRefs: ["design-document"],
+    },
+  })
+  await driver.run({ taskId, waitBudgetMs: 0 })
+  await writeFile(path.join(projectRoot, "docs", "design.md"), "externally changed contents")
+
+  const resolved = await driver.resolveHumanDecision({ taskId })
+  assert.equal(resolved.accepted, false)
+  assert.equal(resolved.reason, "evidence-changed")
+  assert.equal(resolved.state.status, "working")
+  assert.equal(resolved.state.pendingDecision, null)
+  assert.equal(verifyCalls, 0)
 })

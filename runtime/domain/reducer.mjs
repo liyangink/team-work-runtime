@@ -452,7 +452,7 @@ function activateHumanWait(next, fact) {
   next.status = "awaiting-user"
 }
 
-function invalidatePreparedHumanWait(next) {
+function invalidatePreparedHumanWait(next, fact) {
   const decision = next.pendingDecision
   if (!decision || decision.phase !== "preparing" || !decision.quiesceReceiptRef || next.pendingOperations.length > 0) {
     throw new DomainError("HUMAN_WAIT_INVALIDATION_INVALID", "only a quiesced preparing decision can be invalidated")
@@ -465,7 +465,7 @@ function invalidatePreparedHumanWait(next) {
     currentEvidence.every(Boolean)
     && digestValue({ stageRunId: next.currentStageRun.stageRunId, evidence: currentEvidence }) === decision.evidenceDigest
   )
-  if (evidenceUnchanged && decision.observationsAfterPrepare === 0) {
+  if (evidenceUnchanged && decision.observationsAfterPrepare === 0 && fact.reason !== "evidence-or-observation-changed") {
     throw new DomainError("HUMAN_WAIT_INVALIDATION_INVALID", "unchanged human wait evidence cannot be invalidated")
   }
   next.pendingDecision = null
@@ -516,6 +516,8 @@ function resolveHumanDecision(next, fact) {
     stageRunId: pending.stageRunId,
     choice: decision.choice,
     proofMode: pending.proofMode,
+    leadBindingRef: pending.leadBindingRef,
+    executionRefs: pending.executionRefs,
     artifactDigests,
     evidenceDigest: pending.evidenceDigest,
     quiesceReceiptRef: pending.quiesceReceiptRef,
@@ -543,8 +545,11 @@ function reopenHumanWait(next, fact) {
   if (next.status !== "awaiting-user" || next.pendingDecision?.phase !== "awaiting-user") {
     throw new DomainError("HUMAN_WAIT_NOT_ACTIVE", "only an active human wait can be reopened")
   }
-  if (fact.reason !== "late-observations" || next.observationInbox.items.length === 0) {
-    throw new DomainError("HUMAN_WAIT_REOPEN_INVALID", "late observation recovery requires durable pending observations")
+  if (
+    !["late-observations", "evidence-changed"].includes(fact.reason)
+    || (fact.reason === "late-observations" && next.observationInbox.items.length === 0)
+  ) {
+    throw new DomainError("HUMAN_WAIT_REOPEN_INVALID", "human wait recovery reason is not supported by current durable facts")
   }
   next.pendingDecision = null
   next.status = "working"

@@ -232,7 +232,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "decisionId", "stageRunId", "choice", "proofMode", "artifactDigests",
+        "decisionId", "stageRunId", "choice", "proofMode", "leadBindingRef", "executionRefs", "artifactDigests",
         "evidenceDigest", "quiesceReceiptRef", "decisionRef", "decisionDigest", "receivedAt"
       ],
       "properties": {
@@ -240,6 +240,8 @@
         "stageRunId": { "$ref": "#/$defs/id" },
         "choice": { "type": "string", "minLength": 1 },
         "proofMode": { "enum": ["verified-event", "trusted-caller"] },
+        "leadBindingRef": { "type": "string", "minLength": 1 },
+        "executionRefs": { "$ref": "#/$defs/uniqueStrings" },
         "artifactDigests": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/digest" }

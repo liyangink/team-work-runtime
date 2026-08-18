@@ -239,12 +239,21 @@ async function assertDurableReferencesExist(taskRoot, state, records = [], { cor
     const recordId = state.pendingDecision.quiesceReceiptRef ?? state.pendingDecision.quiesceFailureRef
     const operation = await readRecord("operation", recordId)
     const expectedStatus = state.pendingDecision.quiesceReceiptRef ? "confirmed" : "blocked"
+    const receiptExecutions = [...(operation.receipt?.executions ?? [])]
+      .map(({ executionRef, state: executionState }) => ({ executionRef, state: executionState }))
+      .sort((left, right) => left.executionRef.localeCompare(right.executionRef))
     if (
       operation.operationId !== recordId
       || operation.kind !== "execution.quiesce"
+      || operation.intent?.decisionId !== state.pendingDecision.decisionId
+      || operation.intent?.leadBindingRef !== state.pendingDecision.leadBindingRef
+      || canonicalJson(operation.intent?.executionRefs) !== canonicalJson(state.pendingDecision.executionRefs)
       || operation.receipt?.status !== expectedStatus
       || operation.receipt?.operationId !== recordId
       || operation.receipt?.effectDigest !== operation.intent?.effectDigest
+      || (expectedStatus === "confirmed" && operation.receipt?.hostContinuationsCleared !== true)
+      || (expectedStatus === "confirmed" && canonicalJson(receiptExecutions.map(({ executionRef }) => executionRef)) !== canonicalJson(state.pendingDecision.executionRefs))
+      || (expectedStatus === "confirmed" && receiptExecutions.some(({ state: executionState }) => !["idle", "stopped", "isolated"].includes(executionState)))
     ) {
       throw new StoreError(mismatchCode, `operation:${recordId} does not prove its human-wait state`)
     }
@@ -265,11 +274,21 @@ async function assertDurableReferencesExist(taskRoot, state, records = [], { cor
       throw new StoreError(mismatchCode, `operation:${decision.decisionRef} does not prove its human decision`)
     }
     const quiesce = await readRecord("operation", decision.quiesceReceiptRef)
+    const receiptExecutions = [...(quiesce.receipt?.executions ?? [])]
+      .map(({ executionRef, state: executionState }) => ({ executionRef, state: executionState }))
+      .sort((left, right) => left.executionRef.localeCompare(right.executionRef))
     if (
       quiesce.operationId !== decision.quiesceReceiptRef
       || quiesce.kind !== "execution.quiesce"
+      || quiesce.intent?.decisionId !== decision.decisionId
+      || quiesce.intent?.leadBindingRef !== decision.leadBindingRef
+      || canonicalJson(quiesce.intent?.executionRefs) !== canonicalJson(decision.executionRefs)
       || quiesce.receipt?.status !== "confirmed"
       || quiesce.receipt?.operationId !== decision.quiesceReceiptRef
+      || quiesce.receipt?.effectDigest !== quiesce.intent?.effectDigest
+      || quiesce.receipt?.hostContinuationsCleared !== true
+      || canonicalJson(receiptExecutions.map(({ executionRef }) => executionRef)) !== canonicalJson(decision.executionRefs)
+      || receiptExecutions.some(({ state: executionState }) => !["idle", "stopped", "isolated"].includes(executionState))
     ) {
       throw new StoreError(mismatchCode, `operation:${decision.quiesceReceiptRef} does not prove decision quiescence`)
     }

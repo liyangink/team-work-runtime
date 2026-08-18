@@ -34,16 +34,71 @@ export function evaluateHumanGate({ requirement, humanDecisionProof }) {
   return { action: "wait", proofMode: humanDecisionProof }
 }
 
+export function compileHumanGateRequirements({ gates, capabilitySnapshot }) {
+  if (!Array.isArray(gates) || gates.length === 0) throw new TypeError("human gate declarations are required")
+  const gateIds = new Set()
+  return gates.map((gate) => {
+    if (typeof gate?.gateId !== "string" || gate.gateId === "" || gateIds.has(gate.gateId)) {
+      throw new TypeError("human gate ids must be unique non-empty strings")
+    }
+    gateIds.add(gate.gateId)
+    const compiled = evaluateHumanGate({
+      requirement: gate.requirement,
+      humanDecisionProof: capabilitySnapshot?.features?.humanDecisionProof,
+    })
+    return Object.freeze({ gateId: gate.gateId, requirement: gate.requirement, ...compiled })
+  })
+}
+
 export function createHumanWait({
   reconciler,
   executionAdapter,
+  evidenceVerifier,
   clock,
   effectLeaseMs = 120_000,
   faultInjector = {},
 }) {
   const execution = createExecutionAdapterPort(executionAdapter)
 
+  async function evidenceIsCurrent(evidence) {
+    if (!evidenceVerifier || typeof evidenceVerifier.verify !== "function") {
+      const error = new Error("human decisions require an EvidenceVerifier")
+      error.code = "EVIDENCE_VERIFIER_REQUIRED"
+      throw error
+    }
+    return (await evidenceVerifier.verify(evidence)).valid
+  }
+
+  function compareExistingRequest(existing, decision) {
+    const existingRequest = {
+      requirement: existing.requirement,
+      leadBindingRef: existing.leadBindingRef,
+      question: existing.question,
+      choices: existing.choices,
+      artifactRefs: existing.evidence.map(({ artifactId }) => artifactId),
+    }
+    const repeatedRequest = {
+      requirement: decision.requirement,
+      leadBindingRef: decision.leadBindingRef,
+      question: decision.question,
+      choices: decision.choices,
+      artifactRefs: decision.artifactRefs,
+    }
+    if (digestValue(existingRequest) !== digestValue(repeatedRequest)) {
+      const error = new Error(`human decision ${decision.decisionId} was repeated with different content`)
+      error.code = "HUMAN_DECISION_CONFLICT"
+      throw error
+    }
+  }
+
   async function prepare(taskId, decision) {
+    const beforeCapabilityCheck = await reconciler.load(taskId)
+    if (beforeCapabilityCheck.pendingDecision?.decisionId === decision.decisionId) {
+      compareExistingRequest(beforeCapabilityCheck.pendingDecision, decision)
+      if (!beforeCapabilityCheck.pendingDecision.quiesceFailureRef) {
+        return { changed: false, state: beforeCapabilityCheck }
+      }
+    }
     const capabilities = await execution.capabilities()
     const gate = evaluateHumanGate({
       requirement: decision.requirement,
@@ -51,7 +106,7 @@ export function createHumanWait({
     })
     if (gate.action === "skip") return { changed: false, state: await reconciler.load(taskId), skipped: true, reason: gate.reason }
     const proofMode = gate.proofMode
-    return reconciler.commit(taskId, (state) => {
+    return reconciler.commit(taskId, async (state) => {
       const createIntent = (attempt) => {
         const executionRefs = [...new Set(state.workGraph.assignments.flatMap((assignment) => {
           const executionRef = assignment.attempts.at(-1)?.executionRef
@@ -84,30 +139,13 @@ export function createHumanWait({
       }
       const existing = state.pendingDecision
       if (existing?.decisionId === decision.decisionId) {
-        const existingRequest = {
-          requirement: existing.requirement,
-          proofMode: existing.proofMode,
-          capabilitySnapshotDigest: existing.capabilitySnapshotDigest,
-          leadBindingRef: existing.leadBindingRef,
-          question: existing.question,
-          choices: existing.choices,
-          artifactRefs: existing.evidence.map(({ artifactId }) => artifactId),
-        }
-        const repeatedRequest = {
-          requirement: decision.requirement,
-          proofMode,
-          capabilitySnapshotDigest: capabilities.digest,
-          leadBindingRef: decision.leadBindingRef,
-          question: decision.question,
-          choices: decision.choices,
-          artifactRefs: decision.artifactRefs,
-        }
-        if (digestValue(existingRequest) !== digestValue(repeatedRequest)) {
-          const error = new Error(`human decision ${decision.decisionId} was repeated with different content`)
-          error.code = "HUMAN_DECISION_CONFLICT"
-          throw error
-        }
+        compareExistingRequest(existing, decision)
         if (existing.quiesceFailureRef && state.status === "blocked") {
+          if (proofMode !== existing.proofMode) {
+            const error = new Error("human decision proof capability changed while recovering a blocked wait")
+            error.code = "HUMAN_DECISION_CAPABILITY_CHANGED"
+            throw error
+          }
           const intent = createIntent(existing.quiesceAttempt + 1)
           return {
             fact: { type: "human-wait.quiesce-retried", intent, occurredAt: clock() },
@@ -115,6 +153,15 @@ export function createHumanWait({
           }
         }
         return null
+      }
+      const evidence = decision.artifactRefs.map((artifactId) => {
+        const artifact = state.artifacts.find((entry) => entry.artifactId === artifactId)
+        return artifact && { artifactId, path: artifact.path, digest: artifact.digest }
+      })
+      if (evidence.some((entry) => !entry) || !await evidenceIsCurrent(evidence)) {
+        const error = new Error("human decision artifacts do not match their registered evidence")
+        error.code = "ARTIFACT_EVIDENCE_STALE"
+        throw error
       }
       const intent = createIntent(1)
       return {
@@ -185,7 +232,7 @@ export function createHumanWait({
   }
 
   function activate(taskId) {
-    return reconciler.commit(taskId, (state) => {
+    return reconciler.commit(taskId, async (state) => {
       if (state.pendingDecision?.phase !== "preparing" || !state.pendingDecision.quiesceReceiptRef) return null
       const currentEvidence = state.pendingDecision.evidence.map(({ artifactId }) => {
         const artifact = state.artifacts.find((entry) => entry.artifactId === artifactId)
@@ -194,9 +241,13 @@ export function createHumanWait({
       const stale = state.pendingDecision.observationsAfterPrepare > 0 || currentEvidence.some((entry) => !entry) || digestValue({
         stageRunId: state.currentStageRun.stageRunId,
         evidence: currentEvidence,
-      }) !== state.pendingDecision.evidenceDigest
+      }) !== state.pendingDecision.evidenceDigest || !await evidenceIsCurrent(currentEvidence)
       return {
-        fact: { type: stale ? "human-wait.invalidated" : "human-wait.activated", occurredAt: clock() },
+        fact: {
+          type: stale ? "human-wait.invalidated" : "human-wait.activated",
+          ...(stale ? { reason: "evidence-or-observation-changed" } : {}),
+          occurredAt: clock(),
+        },
         refs: [state.pendingDecision.decisionId, state.pendingDecision.quiesceReceiptRef],
       }
     })
@@ -224,6 +275,20 @@ export function createHumanWait({
       })
       return { state: reopened.state, accepted: false, reason: "late-observations" }
     }
+    if (!await evidenceIsCurrent(pending.evidence)) {
+      const reopened = await reconciler.commit(taskId, (current) => {
+        if (current.status !== "awaiting-user" || current.pendingDecision?.decisionId !== pending.decisionId) return null
+        return {
+          fact: {
+            type: "human-wait.reopened",
+            reason: "evidence-changed",
+            occurredAt: clock(),
+          },
+          refs: [pending.decisionId, ...pending.evidence.map(({ artifactId }) => artifactId)],
+        }
+      })
+      return { state: reopened.state, accepted: false, reason: "evidence-changed" }
+    }
     const decision = await execution.verifyHumanDecision({
       decisionId: pending.decisionId,
       leadBindingRef: pending.leadBindingRef,
@@ -247,7 +312,7 @@ export function createHumanWait({
       decision: structuredClone(decision),
     }
     const decisionDigest = digestValue(value)
-    const committed = await reconciler.commit(taskId, (current) => {
+    const committed = await reconciler.commit(taskId, async (current) => {
       if (
         current.status !== "awaiting-user"
         || current.pendingDecision?.decisionId !== pending.decisionId
@@ -260,6 +325,16 @@ export function createHumanWait({
             occurredAt: clock(),
           },
           refs: [pending.decisionId, ...current.observationInbox.items.map(({ observationId }) => observationId)],
+        }
+      }
+      if (!await evidenceIsCurrent(current.pendingDecision.evidence)) {
+        return {
+          fact: {
+            type: "human-wait.reopened",
+            reason: "evidence-changed",
+            occurredAt: clock(),
+          },
+          refs: [pending.decisionId, ...current.pendingDecision.evidence.map(({ artifactId }) => artifactId)],
         }
       }
       return {
@@ -277,7 +352,7 @@ export function createHumanWait({
     const accepted = committed.state.decisionHistory.some((entry) => entry.decisionRef === decisionRef)
     return accepted
       ? { state: committed.state, decision, accepted: true }
-      : { state: committed.state, accepted: false, reason: committed.state.observationInbox.items.length > 0 ? "late-observations" : "decision-invalidated" }
+      : { state: committed.state, accepted: false, reason: committed.state.observationInbox.items.length > 0 ? "late-observations" : "evidence-changed" }
   }
 
   return Object.freeze({ prepare, reconcile, activate, resolve })

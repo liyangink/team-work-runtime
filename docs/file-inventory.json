@@ -19,6 +19,7 @@
     "docs/runtime-roadmap.md",
     "runtime/",
     "runtime/application/",
+    "runtime/application/evidence-verifier.mjs",
     "runtime/application/human-wait.mjs",
     "runtime/contracts.mjs",
     "runtime/domain/",

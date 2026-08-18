@@ -544,14 +544,14 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
 })
 
 test("parallel owners cannot share writable refs unless the work graph serializes them", () => {
-  const owner = (assignmentId, dependsOn) => ({
+  const owner = (assignmentId, dependsOn, writableRef = "artifact:shared-output") => ({
     assignmentId,
     teamRole: "owner",
     assignmentKind: "implementation",
     costTier: "junior",
     dependsOn,
     readableRefs: ["artifact:source"],
-    writableRefs: ["artifact:shared-output"],
+    writableRefs: [writableRef],
     completionCriteria: ["produce result"],
     execution,
   })
@@ -588,6 +588,21 @@ test("parallel owners cannot share writable refs unless the work graph serialize
   fact.plan.assignments[1] = owner("owner-b", ["owner-a"])
   const serialized = reduceTask(base, fact).state
   assert.equal(serialized.workGraph.assignments.length, 2)
+
+  fact.plan.assignments = [
+    owner("owner-a", []),
+    owner("integration-owner", ["owner-a"], "artifact:integration"),
+    owner("owner-c", ["integration-owner"]),
+  ]
+  const transitivelySerialized = reduceTask(base, fact).state
+  assert.equal(transitivelySerialized.workGraph.assignments.length, 3)
+
+  const corrupted = structuredClone(transitivelySerialized)
+  corrupted.workGraph.assignments.find(({ assignmentId }) => assignmentId === "owner-c").dependsOn = []
+  assert.throws(
+    () => assertTaskState(corrupted),
+    (error) => error instanceof DomainError && error.code === "STATE_INVALID",
+  )
 })
 
 test("work graphs accept every assignment kind declared by the Runtime architecture", () => {

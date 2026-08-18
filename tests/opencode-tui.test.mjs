@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
-import { loadTeamPanel } from "../plugins/opencode/tui/team-sessions.mjs"
+import { loadTeamPanel, loadTeamPanelSync, resolvePanelProjectRoot } from "../plugins/opencode/tui/team-sessions.mjs"
 import { createTeamWorkTui } from "../plugins/opencode/tui/team-tui-plugin.mjs"
 
 async function fixture() {
@@ -44,7 +44,12 @@ async function fixture() {
   return { projectRoot, taskId }
 }
 
-test("Team sidebar resolves the bound task and presents live managed sessions", async () => {
+test("Team sidebar uses the current directory for a non-VCS filesystem-root worktree", () => {
+  assert.equal(resolvePanelProjectRoot({ directory: "/tmp/project", worktree: "/" }), path.resolve("/tmp/project"))
+  assert.equal(resolvePanelProjectRoot({ directory: "/repo/subdir", worktree: "/repo" }), path.resolve("/repo"))
+})
+
+test("Team sidebar resolves the bound task and presents managed session snapshot", async () => {
   const { projectRoot, taskId } = await fixture()
   const panel = await loadTeamPanel({
     projectRoot,
@@ -58,6 +63,17 @@ test("Team sidebar resolves the bound task and presents live managed sessions", 
     { workItemId: "owner-1", status: "busy", title: "实现消息重试", navigable: true },
     { workItemId: "review-1", status: "idle", title: "挑战实现方案", navigable: true },
   ])
+})
+
+test("Team sidebar synchronous snapshot matches the validated async projection", async () => {
+  const { projectRoot } = await fixture()
+  const input = {
+    projectRoot,
+    currentSessionId: "lead-1",
+    statusFor: (sessionId) => sessionId === "child-busy" ? { type: "busy" } : { type: "idle" },
+  }
+
+  assert.deepEqual(loadTeamPanelSync(input), await loadTeamPanel(input))
 })
 
 test("Team sidebar keeps the same task visible after navigating into a child session", async () => {
@@ -141,6 +157,16 @@ test("OpenCode TUI submodule registers one sidebar slot and passes the selected 
   assert.equal(registration.order, 350)
   assert.equal(output, "team-sidebar")
   assert.deepEqual(rendered, [{ api, context: { theme: "theme" }, sessionId: "child-1" }])
+})
+
+test("Team sidebar follows official reactive session state without timers or event subscriptions", async () => {
+  const source = await readFile(path.join(import.meta.dirname, "../plugins/opencode/tui/team-sidebar.tsx"), "utf8")
+  assert.match(source, /createMemo/)
+  assert.match(source, /state\.session\.count\(\)/)
+  assert.doesNotMatch(source, /createEffect|createSignal|setInterval|\.event\.on\(/)
+  assert.match(source, /loadTeamPanelSync/)
+  assert.doesNotMatch(source, /glyph:\s*"\?"/)
+  assert.match(source, /状态未载入/)
 })
 
 test("disabled OpenCode platform does not register the Team sidebar", async () => {

@@ -232,11 +232,11 @@ test("task semantics bind gates to valid non-future evidence and require complet
   const task = await readJson("tests/fixtures/runtime/task.valid.json")
   const workItems = await readJson("tests/fixtures/runtime/work-items.valid.json")
   const evidence = {
-    evidenceId: "review-evidence", stage: "code-review", path: "artifacts/review.md",
+    evidenceId: "review-evidence", stage: "code-review", stageRun: 1, path: "artifacts/review.md",
     status: "valid", recordedAtRevision: 1,
   }
   const gate = {
-    gateId: "review-gate", stage: "code-review", kind: "semantic", status: "passed",
+    gateId: "review-gate", stage: "code-review", stageRun: 1, kind: "semantic", status: "passed",
     evidenceRefs: [evidence.evidenceId],
     decision: { decidedBy: "lead", reason: "reviewed", decidedAt: "2026-08-10T08:10:00.000Z" },
   }
@@ -298,6 +298,26 @@ test("task semantics bind gates to valid non-future evidence and require complet
     })),
   }
   assert.deepEqual(validateTaskAgainstWorkflow(completed, workflow, { workItems: finishedItems }), [])
+  const historicalEvidence = {
+    ...evidence,
+    evidenceId: "superseded-review-proof",
+    status: "invalidated",
+    invalidatedAtRevision: 3,
+    invalidationReason: "stage reopened",
+  }
+  const supersededItems = {
+    ...finishedItems,
+    items: [
+      {
+        ...finishedItems.items[0],
+        workItemId: "old-review",
+        stageRun: 1,
+        acceptance: { ...finishedItems.items[0].acceptance, evidenceRefs: [historicalEvidence.evidenceId] },
+      },
+      { ...finishedItems.items[0], workItemId: "new-review", stageRun: 2 },
+    ],
+  }
+  assert.deepEqual(validateTaskAgainstWorkflow({ ...completed, stageRun: 3, evidence: [evidence, finalEvidence, historicalEvidence] }, workflow, { workItems: supersededItems }), [])
   assert.match(validateTaskAgainstWorkflow(completed, workflow, { workItems: { ...finishedItems, taskId: "another-task" } }).map(({ message }) => message).join("\n"), /another task/)
   const foreignItem = structuredClone(finishedItems)
   foreignItem.items[0].taskId = "another-task"
@@ -377,7 +397,7 @@ test("work-item state controls submission and Lead acceptance records", async ()
     }],
   }
   assert.deepEqual(validate(schemaId("work-item"), retried), [])
-  assert.deepEqual(validateWorkItemsSemantics({ schemaVersion: "1.0", taskId: retried.taskId, revision: 2, items: [retried] }), [])
+  assert.deepEqual(validateWorkItemsSemantics({ schemaVersion: "1.1", taskId: retried.taskId, revision: 2, items: [retried] }), [])
 
   const cancelledAfterRework = {
     ...workItem,
@@ -435,12 +455,12 @@ test("rollback planning resets later gates and invalidates later evidence", asyn
   const enriched = {
     ...task,
     evidence: [
-      { evidenceId: "design-proof", stage: "design", path: "artifacts/design.md", status: "valid", recordedAtRevision: 1 },
-      { evidenceId: "review-proof", stage: "code-review", path: "artifacts/review.md", status: "valid", recordedAtRevision: 2 },
+      { evidenceId: "design-proof", stage: "design", stageRun: 1, path: "artifacts/design.md", status: "valid", recordedAtRevision: 1 },
+      { evidenceId: "review-proof", stage: "code-review", stageRun: 1, path: "artifacts/review.md", status: "valid", recordedAtRevision: 2 },
     ],
     gates: [
-      { gateId: "design-gate", stage: "design", kind: "semantic", status: "pending", evidenceRefs: [] },
-      { gateId: "review-gate", stage: "code-review", kind: "semantic", status: "pending", evidenceRefs: [] },
+      { gateId: "design-gate", stage: "design", stageRun: 1, kind: "semantic", status: "pending", evidenceRefs: [] },
+      { gateId: "review-gate", stage: "code-review", stageRun: 1, kind: "semantic", status: "pending", evidenceRefs: [] },
     ],
   }
   const planned = planRollback(enriched, workflow, "design", { reason: "assumption failed", evidenceRefs: ["review-proof"] })

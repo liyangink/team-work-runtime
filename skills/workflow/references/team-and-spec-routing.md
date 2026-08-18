@@ -31,7 +31,15 @@ Workflow 通过 `task team` 记录 `solo` 或 `team` 决策及理由；进入新
 - `auto`：工具 ready 时调用；missing 时记录跳过依据，从 `design-review` 直接进入 `implementation`；
 - `required`：工具 missing 时阻塞并形成可修复 blocker，提示初始化，不得跳过；
 - `disabled`：明确跳过 SPEC，不调用 SPEC Skill；
-- SPEC Skill 返回状态、制品引用、验证证据、开放问题和建议下一阶段；Workflow 通过 `task spec` 持久化执行状态与制品；
+- SPEC provider 返回状态、制品引用、验证证据、开放问题和建议下一阶段；Workflow 通过 Runtime 持久化执行状态与制品；
 - Workflow 注册返回制品，检查当前门禁，再决定进入 `spec-review` 或等待/返工。
+
+OpenSpec 路由由 PlatformPlugin 的确定性适配器执行，而不是由 Lead 拼装命令或路径：
+
+- 进入 `spec` 时创建或恢复与 `task-id` 同名的活动 change；
+- proposal 完成后以 `openspec status/instructions` 为准推进 design/specs，最后推进 tasks，不硬编码可能变化的 schema 顺序；
+- 派单只选择当前 change 中已经 ready 的 artifact 类型；同一 work item 返工时可续派其 done artifact。delta specs 只补充 proposal 已确认的 capability 名称，物理路径由适配器生成，provider instructions 自动随派单注入 Owner；
+- Runtime 拒绝 canonical `openspec/specs/`、`openspec/changes/archive/` 和其他活动 change 的 Agent 产物路径；
+- `openspec status` 未完成时不得进入 `spec-review`；最终人工验收通过后才执行严格校验和 archive。
 
 未来可加入其他 SPEC 实现，但路由语义保持不变，具体命令不写入本 Skill。

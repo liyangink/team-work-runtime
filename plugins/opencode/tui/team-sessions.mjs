@@ -1,4 +1,5 @@
 import { lstat, readFile, readdir, realpath } from "node:fs/promises"
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs"
 import path from "node:path"
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -11,9 +12,25 @@ const STATUS_ORDER = new Map([
   ["lost", 5],
 ])
 
+export function resolvePanelProjectRoot({ directory, worktree }) {
+  const current = path.resolve(directory)
+  if (typeof worktree !== "string" || !worktree) return current
+  const candidate = path.resolve(worktree)
+  return candidate === path.parse(candidate).root ? current : candidate
+}
+
 async function readJson(target) {
   try {
     return JSON.parse(await readFile(target, "utf8"))
+  } catch (error) {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) return null
+    throw error
+  }
+}
+
+function readJsonSync(target) {
+  try {
+    return JSON.parse(readFileSync(target, "utf8"))
   } catch (error) {
     if (error.code === "ENOENT" || error instanceof SyntaxError) return null
     throw error
@@ -26,6 +43,21 @@ async function resolveControlDirectory(projectRoot, segments) {
     current = path.join(current, segment)
     try {
       const info = await lstat(current)
+      if (info.isSymbolicLink() || !info.isDirectory()) return null
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return null
+      throw error
+    }
+  }
+  return current
+}
+
+function resolveControlDirectorySync(projectRoot, segments) {
+  let current = projectRoot
+  for (const segment of segments) {
+    current = path.join(current, segment)
+    try {
+      const info = lstatSync(current)
       if (info.isSymbolicLink() || !info.isDirectory()) return null
     } catch (error) {
       if (error.code === "ENOENT" || error.code === "ENOTDIR") return null
@@ -65,11 +97,38 @@ async function loadMappings(projectRoot) {
   return mappings
 }
 
+function loadMappingsSync(projectRoot) {
+  const root = resolveControlDirectorySync(projectRoot, [".team-work", "platform", "opencode", "sessions"])
+  if (!root) return []
+  const mappings = []
+  for (const taskDirectory of readdirSync(root, { withFileTypes: true })) {
+    if (!taskDirectory.isDirectory() || taskDirectory.isSymbolicLink() || !IDENTIFIER.test(taskDirectory.name)) continue
+    const taskRoot = path.join(root, taskDirectory.name)
+    for (const entry of readdirSync(taskRoot, { withFileTypes: true })) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) continue
+      const workItemId = entry.name.slice(0, -5)
+      if (!IDENTIFIER.test(workItemId)) continue
+      const mapping = readJsonSync(path.join(taskRoot, entry.name))
+      if (isMapping(mapping, taskDirectory.name, workItemId)) mappings.push(mapping)
+    }
+  }
+  return mappings
+}
+
 async function loadBinding(projectRoot, currentSessionId) {
   if (!IDENTIFIER.test(currentSessionId)) return null
   const root = await resolveControlDirectory(projectRoot, [".team-work", "bindings", "opencode"])
   if (!root) return null
   const binding = await readJson(path.join(root, `${currentSessionId}.json`))
+  if (binding?.schemaVersion !== "1.0" || binding.platform !== "opencode" || binding.sessionKey !== currentSessionId) return null
+  return IDENTIFIER.test(binding.taskId ?? "") ? binding : null
+}
+
+function loadBindingSync(projectRoot, currentSessionId) {
+  if (!IDENTIFIER.test(currentSessionId)) return null
+  const root = resolveControlDirectorySync(projectRoot, [".team-work", "bindings", "opencode"])
+  if (!root) return null
+  const binding = readJsonSync(path.join(root, `${currentSessionId}.json`))
   if (binding?.schemaVersion !== "1.0" || binding.platform !== "opencode" || binding.sessionKey !== currentSessionId) return null
   return IDENTIFIER.test(binding.taskId ?? "") ? binding : null
 }
@@ -96,12 +155,7 @@ function memberStatus(mapping, statusFor) {
   }
 }
 
-export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor }) {
-  if (typeof projectRoot !== "string" || !projectRoot || typeof currentSessionId !== "string") return null
-  const root = await realpath(path.resolve(projectRoot)).catch(() => null)
-  if (!root) return null
-  const mappings = await loadMappings(root)
-  const binding = await loadBinding(root, currentSessionId)
+function buildTeamPanel({ mappings, binding, currentSessionId, statusFor }) {
   const taskId = resolveTask(binding, mappings, currentSessionId)
   if (!taskId) return null
   const currentMapping = mappings.find(({ taskId: candidate, sessionId }) => candidate === taskId && sessionId === currentSessionId)
@@ -130,4 +184,30 @@ export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor }
       || left.workItemId.localeCompare(right.workItemId)
     ))
   return { taskId, leadSessionId, currentSessionId, members }
+}
+
+export async function loadTeamPanel({ projectRoot, currentSessionId, statusFor }) {
+  if (typeof projectRoot !== "string" || !projectRoot || typeof currentSessionId !== "string") return null
+  const root = await realpath(path.resolve(projectRoot)).catch(() => null)
+  if (!root) return null
+  const mappings = await loadMappings(root)
+  const binding = await loadBinding(root, currentSessionId)
+  return buildTeamPanel({ mappings, binding, currentSessionId, statusFor })
+}
+
+export function loadTeamPanelSync({ projectRoot, currentSessionId, statusFor }) {
+  if (typeof projectRoot !== "string" || !projectRoot || typeof currentSessionId !== "string") return null
+  let root
+  try {
+    root = realpathSync(path.resolve(projectRoot))
+  } catch {
+    return null
+  }
+  try {
+    const mappings = loadMappingsSync(root)
+    const binding = loadBindingSync(root, currentSessionId)
+    return buildTeamPanel({ mappings, binding, currentSessionId, statusFor })
+  } catch {
+    return null
+  }
 }

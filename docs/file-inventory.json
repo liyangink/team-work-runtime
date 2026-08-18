@@ -20,6 +20,7 @@
     "skills/workflow/references/human-review.md",
     "skills/team-work/",
     "plugins/opencode/",
+    "plugins/opencode/src/lead-controller.mjs",
     "tests/fixtures/runtime/",
     "tests/repository-contract.test.mjs",
     "tests/core-runtime.test.mjs",

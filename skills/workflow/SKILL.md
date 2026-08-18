@@ -20,7 +20,7 @@ Runtime 的可靠调用、revision 和错误处理见 [Runtime 调用约定](ref
 
 1. 明确当前阶段目标、验收条件、待产出制品和验证方法。
 2. 评估 solo/team。用户明确要求团队时选择 `team`；否则根据并行价值决定。`solo` 表示单一 Owner 串行执行，`team` 表示多个 Owner 可并行；两种模式都由 `team-work` Skill 派发具体工作，Lead 不亲自执行。通过 Runtime 记录模式和理由，并提供任务 ID、当前阶段、目标、约束和 Platform Profile。
-3. `spec` 阶段按项目的 `auto|required|disabled` 路由执行或跳过 SPEC。通过 Runtime 记录 SPEC 状态与制品。Workflow 只负责衔接、上下文和门禁，具体规范流程由所选 SPEC Skill 执行。
+3. `spec` 阶段按项目的 `auto|required|disabled` 路由执行或跳过 SPEC。通过平台提供的受管 SPEC provider 创建或恢复当前任务实例，根据 provider 返回的 artifact 状态和 instructions 派发成员，完成后由 provider 校验并通过 Runtime 登记制品。Lead 不自行指定 canonical、archive 或历史变更路径。
 4. 收集 Owner、挑战者和必要 Expert 的提交。内容正确性由工作成员与 Expert 裁决；Lead 只核对流程、制品、证据和裁决链完整，再注册制品并更新 Runtime，不能以成员自报完成代替验收。
 5. 依次处理确定性、语义和人工门禁。方案审查完成后处理 `design-approval`，最终收尾时处理 `final-acceptance`；默认都必须进入 `awaiting-user` 并取得用户明确决定。进入 E2E 前把适用性判断记录为 `e2e-applicability` gate。所有门禁按项目配置和证据处理，Lead 不替用户批准。
 

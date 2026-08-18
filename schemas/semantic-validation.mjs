@@ -91,9 +91,13 @@ export function validateTaskAgainstWorkflow(task, workflow, { loadedWorkflowDige
       for (const workItemIssue of validateWorkItemsSemantics(workItems)) {
         issues.push(issue(`workItems.${workItemIssue.path}`, workItemIssue.message))
       }
-      if (workItems.items.some(({ status }) => !["accepted", "cancelled"].includes(status))) issues.push(issue("status", "completed task has unfinished work items"))
+      const latestRunByStage = new Map()
+      for (const item of workItems.items) latestRunByStage.set(item.stage, Math.max(latestRunByStage.get(item.stage) ?? 0, item.stageRun ?? 1))
+      const effectiveItems = workItems.items.filter((item) => (item.stageRun ?? 1) === latestRunByStage.get(item.stage))
+      if (effectiveItems.some(({ status }) => !["accepted", "cancelled"].includes(status))) issues.push(issue("status", "completed task has unfinished work items"))
       workItems.items.forEach((item, index) => {
         if (!stages.has(item.stage)) issues.push(issue(`workItems.items[${index}].stage`, `unknown stage: ${item.stage}`))
+        if ((item.stageRun ?? 1) !== latestRunByStage.get(item.stage)) return
         if (item.status !== "accepted") return
         if (!item.submission || item.acceptance?.decision !== "accepted") {
           issues.push(issue(`workItems.items[${index}]`, "accepted work item requires submission and Lead acceptance"))

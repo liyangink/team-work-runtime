@@ -4,9 +4,9 @@
   "title": "Team-work Task",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "taskId", "workflow", "status", "stage", "entryStage", "revision", "spec", "teamDecision", "gates", "evidence", "createdAt", "updatedAt"],
+  "required": ["schemaVersion", "taskId", "workflow", "status", "stage", "entryStage", "stageRun", "stageRunRequiresWork", "revision", "spec", "teamDecision", "gates", "evidence", "createdAt", "updatedAt"],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.1" },
     "taskId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
     "title": { "type": "string", "minLength": 1, "maxLength": 240 },
     "workflow": {
@@ -23,6 +23,8 @@
     "status": { "enum": ["active", "awaiting-user", "completed", "cancelled"] },
     "stage": { "type": "string", "minLength": 1 },
     "entryStage": { "type": "string", "minLength": 1 },
+    "stageRun": { "type": "integer", "minimum": 1 },
+    "stageRunRequiresWork": { "type": "boolean" },
     "revision": { "type": "integer", "minimum": 0 },
     "spec": {
       "type": "object",
@@ -95,10 +97,11 @@
     "gate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["gateId", "stage", "kind", "status", "evidenceRefs"],
+      "required": ["gateId", "stage", "stageRun", "kind", "status", "evidenceRefs"],
       "properties": {
         "gateId": { "type": "string", "minLength": 1 },
         "stage": { "type": "string", "minLength": 1 },
+        "stageRun": { "type": "integer", "minimum": 1 },
         "kind": { "enum": ["deterministic", "semantic", "human"] },
         "status": { "enum": ["pending", "passed", "rejected", "blocked", "overridden"] },
         "blocker": { "type": "string", "minLength": 1 },
@@ -138,10 +141,11 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["evidenceId", "stage", "path", "status", "recordedAtRevision"],
+      "required": ["evidenceId", "stage", "stageRun", "path", "status", "recordedAtRevision"],
       "properties": {
         "evidenceId": { "type": "string", "minLength": 1 },
         "stage": { "type": "string", "minLength": 1 },
+        "stageRun": { "type": "integer", "minimum": 1 },
         "path": { "$ref": "#/$defs/projectPath" },
         "digest": { "$ref": "#/$defs/digest" },
         "status": { "enum": ["valid", "invalidated"] },

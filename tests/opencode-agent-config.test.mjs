@@ -40,11 +40,14 @@ test("explicit user agents become restart-time OpenCode subagent configuration",
       team_work_assist: "deny",
       team_work_assist_status: "deny",
       team_work_assist_collect: "deny",
-      team_work_work_create: "deny",
-      team_work_spawn: "deny",
-      team_work_resume: "deny",
-      team_work_wait: "deny",
-      team_work_stop: "deny",
+      team_work_overview: "deny",
+      team_work_begin: "deny",
+      team_work_register: "deny",
+      team_work_dispatch: "deny",
+      team_work_assess: "deny",
+      team_work_continue: "deny",
+      team_work_review_gate: "deny",
+      team_work_sync: "deny",
     },
   })
 })
@@ -78,13 +81,13 @@ test("one independent helper binding creates two hidden read-only assistants", (
     assert.equal(config.agent[id].permission.bash, "deny")
     assert.equal(config.agent[id].permission.task, "deny")
     assert.equal(config.agent[id].permission.team_work_assist, "deny")
-    assert.equal(config.agent[id].permission.team_work_wait, "deny")
+    assert.equal(config.agent[id].permission.team_work_sync, "deny")
   }
   assert.notEqual(config.agent["team-work-explore"].prompt, config.agent["team-work-librarian"].prompt)
   assert.equal(config.agent["team-work-explore"].permission.webfetch, "deny")
   assert.equal(config.agent["team-work-librarian"].permission.webfetch, "allow")
   assert.equal(config.agent["junior-flash"].permission.team_work_assist, "allow")
-  assert.equal(config.agent["junior-flash"].permission.team_work_wait, "deny")
+  assert.equal(config.agent["junior-flash"].permission.team_work_sync, "deny")
 })
 
 test("dynamic agent configuration rejects names outside the installed catalog", () => {

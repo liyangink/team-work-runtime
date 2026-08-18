@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "taskId", "revision", "items"],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.1" },
     "taskId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
     "revision": { "type": "integer", "minimum": 0 },
     "items": { "type": "array", "items": { "$ref": "https://team-work.local/schemas/work-item.schema.json" } }

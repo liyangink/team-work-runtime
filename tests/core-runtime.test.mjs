@@ -64,7 +64,8 @@ test("user can initialize a project and create a task at any workflow stage", as
 test("Workflow persists team decisions and SPEC lifecycle through Runtime", async () => {
   const projectRoot = await project()
   await writeFile(path.join(projectRoot, "design.md"), "approved design\n")
-  await writeFile(path.join(projectRoot, "spec.md"), "implementation spec\n")
+  await mkdir(path.join(projectRoot, "openspec/changes/policy-state"), { recursive: true })
+  await writeFile(path.join(projectRoot, "openspec/changes/policy-state/spec.md"), "implementation spec\n")
   await writeFile(path.join(projectRoot, "requirement.md"), "research requirement\n")
   await run(projectRoot, "init")
   await run(projectRoot, "task", "create", "--task", "policy-state", "--entry-stage", "spec")
@@ -87,16 +88,16 @@ test("Workflow persists team decisions and SPEC lifecycle through Runtime", asyn
   const completed = await run(
     projectRoot,
     "task", "spec", "--task", "policy-state", "--status", "completed",
-    "--artifacts", "spec.md", "--expected-revision", "2",
+    "--artifacts", "openspec/changes/policy-state/spec.md", "--expected-revision", "2",
   )
   assert.equal(completed.data.task.spec.status, "completed")
-  assert.deepEqual(completed.data.task.spec.artifactRefs, ["spec.md"])
+  assert.deepEqual(completed.data.task.spec.artifactRefs, ["openspec/changes/policy-state/spec.md"])
   assert.equal(completed.revision, 3)
 
   const missingArtifact = await runResult(
     projectRoot,
     "task", "spec", "--task", "policy-state", "--status", "completed",
-    "--artifacts", "missing.md", "--expected-revision", "3",
+    "--artifacts", "openspec/changes/policy-state/missing.md", "--expected-revision", "3",
   )
   assert.equal(missingArtifact.envelope.error.code, "INVALID_ARGUMENT")
 
@@ -114,6 +115,85 @@ test("Workflow persists team decisions and SPEC lifecycle through Runtime", asyn
   const advanced = await run(projectRoot, "flow", "advance", "--task", "stage-team-reset", "--outcome", "pass", "--expected-revision", "2")
   assert.equal(advanced.data.task.stage, "design")
   assert.deepEqual(advanced.data.task.teamDecision, { mode: "undecided" })
+})
+
+test("OpenSpec lifecycle accepts only the task active change and blocks premature stage advancement", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "design.md"), "approved design\n")
+  await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.spec.status = "ready"
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  await run(projectRoot, "task", "create", "--task", "safe-change", "--entry-stage", "spec")
+  await run(
+    projectRoot,
+    "context", "register", "--task", "safe-change", "--context", "design",
+    "--kind", "design", "--path", "design.md", "--profiles", "lead,check", "--expected-revision", "0",
+  )
+
+  const premature = await runResult(projectRoot, "flow", "advance", "--task", "safe-change", "--outcome", "pass", "--expected-revision", "1")
+  assert.equal(premature.envelope.error.code, "GATE_BLOCKED")
+  assert.ok(premature.envelope.error.blockers.some(({ code }) => code === "SPEC_LIFECYCLE_INCOMPLETE"))
+
+  await mkdir(path.join(projectRoot, "openspec/changes/safe-change/specs/example"), { recursive: true })
+  await writeFile(path.join(projectRoot, "openspec/changes/safe-change/proposal.md"), "proposal\n")
+  await writeFile(path.join(projectRoot, "openspec/changes/safe-change/design.md"), "design\n")
+  await writeFile(path.join(projectRoot, "openspec/changes/safe-change/tasks.md"), "tasks\n")
+  await writeFile(path.join(projectRoot, "openspec/changes/safe-change/specs/example/spec.md"), "spec\n")
+
+  const started = await run(projectRoot, "task", "spec", "--task", "safe-change", "--status", "in-progress", "--expected-revision", "1")
+  const completed = await run(
+    projectRoot,
+    "task", "spec", "--task", "safe-change", "--status", "completed",
+    "--artifacts", "openspec/changes/safe-change/proposal.md,openspec/changes/safe-change/design.md,openspec/changes/safe-change/tasks.md,openspec/changes/safe-change/specs/example/spec.md",
+    "--expected-revision", String(started.revision),
+  )
+  assert.equal(completed.data.task.spec.status, "completed")
+  assert.equal((await run(projectRoot, "flow", "advance", "--task", "safe-change", "--outcome", "pass", "--expected-revision", String(completed.revision))).data.to, "spec-review")
+})
+
+test("OpenSpec policy rejects canonical, archived, and foreign change paths from agent work", async () => {
+  const projectRoot = await project()
+  await run(projectRoot, "init")
+  const configPath = path.join(projectRoot, ".team-work/config.yaml")
+  const config = JSON.parse(await readFile(configPath, "utf8"))
+  config.spec.status = "ready"
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`)
+  await run(projectRoot, "task", "create", "--task", "path-policy", "--entry-stage", "implementation")
+
+  for (const [workId, artifact] of [
+    ["canonical", "openspec/specs/example/spec.md"],
+    ["archived", "openspec/changes/archive/2026-08-01-old/specs/example/spec.md"],
+    ["foreign", "openspec/changes/another-change/proposal.md"],
+    ["wrong-stage", "openspec/changes/path-policy/proposal.md"],
+  ]) {
+    const result = await runResult(
+      projectRoot,
+      "work", "create", "--task", "path-policy", "--work", workId,
+      "--owner", "junior-luna", "--scope", "invalid OpenSpec write", "--done-when", "written",
+      "--artifacts", artifact, "--expected-revision", "0",
+    )
+    assert.equal(result.envelope.error.code, "GATE_BLOCKED")
+    assert.ok(result.envelope.error.blockers.some(({ code }) => ["OPENSPEC_PATH_FORBIDDEN", "OPENSPEC_STAGE_FORBIDDEN"].includes(code)))
+  }
+
+  const taskList = await run(
+    projectRoot,
+    "work", "create", "--task", "path-policy", "--work", "task-progress",
+    "--owner", "junior-luna", "--scope", "record implementation progress", "--done-when", "updated",
+    "--artifacts", "openspec/changes/path-policy/tasks.md", "--expected-revision", "0",
+  )
+  assert.equal(taskList.data.workItem.assignment.artifactPaths[0], "openspec/changes/path-policy/tasks.md")
+
+  await run(projectRoot, "task", "create", "--task", "test-stage-policy", "--entry-stage", "test")
+  const testStageWrite = await runResult(
+    projectRoot,
+    "work", "create", "--task", "test-stage-policy", "--work", "task-progress",
+    "--owner", "junior-luna", "--scope", "wrong stage task progress", "--done-when", "updated",
+    "--artifacts", "openspec/changes/test-stage-policy/tasks.md", "--expected-revision", "0",
+  )
+  assert.equal(testStageWrite.envelope.error.blockers[0].code, "OPENSPEC_STAGE_FORBIDDEN")
 })
 
 test("user registers minimal context and checks only the current stage gate", async () => {
@@ -238,11 +318,80 @@ test("optional SPEC and E2E branches follow the declared skip and internal rewor
   assert.equal(skippedE2e.data.to, "finish")
 
   await run(projectRoot, "task", "create", "--task", "e2e-loop", "--entry-stage", "e2e")
+  assert.equal((await run(projectRoot, "task", "show", "--task", "e2e-loop")).data.task.stageRun, 1)
   await run(projectRoot, "context", "register", "--task", "e2e-loop", "--context", "source", "--kind", "source", "--path", "source.md", "--profiles", "lead,check", "--expected-revision", "0")
   await run(projectRoot, "context", "register", "--task", "e2e-loop", "--context", "test-scope", "--kind", "test-scope", "--path", "scope.md", "--profiles", "lead,check", "--expected-revision", "1")
   const reworked = await run(projectRoot, "flow", "advance", "--task", "e2e-loop", "--outcome", "rework", "--expected-revision", "2")
   assert.equal(reworked.data.from, "e2e")
   assert.equal(reworked.data.to, "e2e")
+  assert.equal(reworked.data.task.stageRun, 2)
+  assert.equal(reworked.data.task.stageRunRequiresWork, true)
+  const emptyRework = await runResult(projectRoot, "flow", "check", "--task", "e2e-loop")
+  assert.equal(emptyRework.envelope.error.code, "GATE_BLOCKED")
+  assert.ok(emptyRework.envelope.error.blockers.some(({ code }) => code === "STAGE_RUN_DELIVERY_REQUIRED"))
+})
+
+test("rollback keeps accepted history but requires a fresh delivery when the stage is revisited", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "source.md"), "source\n")
+  await writeFile(path.join(projectRoot, "scope.md"), "scope\n")
+  await writeFile(path.join(projectRoot, "old-e2e.md"), "old E2E delivery\n")
+  await writeFile(path.join(projectRoot, "implementation.md"), "corrected implementation\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "rollback-runs", "--entry-stage", "e2e")
+  await run(projectRoot, "context", "register", "--task", "rollback-runs", "--context", "source", "--kind", "source", "--path", "source.md", "--profiles", "lead,implement,check", "--expected-revision", "0")
+  await run(projectRoot, "context", "register", "--task", "rollback-runs", "--context", "test-scope", "--kind", "test-scope", "--path", "scope.md", "--profiles", "lead,check", "--expected-revision", "1")
+  await run(projectRoot, "context", "register", "--task", "rollback-runs", "--context", "review-scope", "--kind", "review-scope", "--path", "scope.md", "--profiles", "lead,check", "--expected-revision", "2")
+  await run(projectRoot, "context", "register", "--task", "rollback-runs", "--context", "requirement", "--kind", "requirement", "--path", "scope.md", "--profiles", "lead,implement,check", "--expected-revision", "3")
+
+  await run(projectRoot, "work", "create", "--task", "rollback-runs", "--work", "old-e2e", "--owner", "senior-terra", "--scope", "Original E2E", "--done-when", "E2E delivered", "--artifacts", "old-e2e.md", "--expected-revision", "4")
+  await run(projectRoot, "work", "start", "--task", "rollback-runs", "--work", "old-e2e", "--expected-revision", "5")
+  await run(projectRoot, "work", "submit", "--task", "rollback-runs", "--work", "old-e2e", "--scenario", "e2e", "--scope-refs", "source.md", "--outcome", "pass", "--artifacts", "old-e2e.md", "--summary", "Original E2E passed", "--expected-revision", "6")
+  await run(projectRoot, "flow", "decide", "--task", "rollback-runs", "--gate", "work-old-e2e", "--kind", "semantic", "--status", "passed", "--actor", "expert", "--reason", "Original evidence accepted", "--evidence", "old-e2e-proof", "--evidence-path", "old-e2e.md", "--expected-revision", "7")
+  await run(projectRoot, "work", "accept", "--task", "rollback-runs", "--work", "old-e2e", "--actor", "lead", "--evidence", "old-e2e-proof", "--expected-revision", "8")
+
+  const rolledBack = await run(projectRoot, "flow", "rollback", "--task", "rollback-runs", "--to", "implementation", "--reason", "Product defect requires implementation repair", "--evidence", "old-e2e-proof", "--expected-revision", "9")
+  assert.equal(rolledBack.data.task.stageRun, 2)
+  assert.equal(rolledBack.data.task.stageRunRequiresWork, true)
+
+  await run(projectRoot, "work", "create", "--task", "rollback-runs", "--work", "implementation-fix", "--owner", "senior-terra", "--scope", "Fix product defect", "--done-when", "Implementation delivered", "--artifacts", "implementation.md", "--expected-revision", "10")
+  await run(projectRoot, "work", "start", "--task", "rollback-runs", "--work", "implementation-fix", "--expected-revision", "11")
+  await run(projectRoot, "work", "submit", "--task", "rollback-runs", "--work", "implementation-fix", "--scenario", "implementation", "--scope-refs", "source.md", "--outcome", "pass", "--artifacts", "implementation.md", "--summary", "Implementation corrected", "--expected-revision", "12")
+  await run(projectRoot, "flow", "decide", "--task", "rollback-runs", "--gate", "work-implementation-fix", "--kind", "semantic", "--status", "passed", "--actor", "expert", "--reason", "Correction accepted", "--evidence", "implementation-proof", "--evidence-path", "implementation.md", "--expected-revision", "13")
+  await run(projectRoot, "work", "accept", "--task", "rollback-runs", "--work", "implementation-fix", "--actor", "lead", "--evidence", "implementation-proof", "--expected-revision", "14")
+  await run(projectRoot, "flow", "advance", "--task", "rollback-runs", "--outcome", "pass", "--expected-revision", "15")
+  await run(projectRoot, "flow", "advance", "--task", "rollback-runs", "--outcome", "pass", "--expected-revision", "16")
+  await run(projectRoot, "flow", "decide", "--task", "rollback-runs", "--gate", "e2e-applicability", "--kind", "semantic", "--status", "passed", "--actor", "lead", "--reason", "E2E remains applicable", "--evidence", "e2e-route-proof", "--evidence-path", "scope.md", "--expected-revision", "17")
+  const revisited = await run(projectRoot, "flow", "advance", "--task", "rollback-runs", "--outcome", "pass", "--expected-revision", "18")
+  assert.equal(revisited.data.task.stage, "e2e")
+  assert.equal(revisited.data.task.stageRun, 5)
+  assert.equal(revisited.data.task.stageRunRequiresWork, true)
+
+  const blocked = await runResult(projectRoot, "flow", "check", "--task", "rollback-runs")
+  assert.equal(blocked.envelope.error.code, "GATE_BLOCKED")
+  assert.ok(blocked.envelope.error.blockers.some(({ code }) => code === "STAGE_RUN_DELIVERY_REQUIRED"))
+  assert.ok(!blocked.envelope.error.blockers.some(({ code }) => code === "INVALID_ACCEPTANCE_EVIDENCE"))
+  assert.ok(!blocked.envelope.error.blockers.some(({ code, path: blockerPath }) => code === "GATE_NOT_PASSED" && blockerPath === "work-old-e2e"))
+})
+
+test("a previously visited stage reopens even when its first visit produced no evidence", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "requirement.md"), "requirement\n")
+  await writeFile(path.join(projectRoot, "research.md"), "research rerun\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "history-revisit", "--entry-stage", "research")
+  await run(projectRoot, "context", "register", "--task", "history-revisit", "--context", "requirement", "--kind", "requirement", "--path", "requirement.md", "--profiles", "lead,research,implement,check", "--expected-revision", "0")
+  await run(projectRoot, "flow", "decide", "--task", "history-revisit", "--gate", "research-baseline", "--kind", "semantic", "--status", "passed", "--actor", "senior-terra", "--reason", "Initial research context checked", "--evidence", "research-baseline-proof", "--evidence-path", "requirement.md", "--expected-revision", "1")
+  await run(projectRoot, "flow", "advance", "--task", "history-revisit", "--outcome", "pass", "--expected-revision", "2")
+  await run(projectRoot, "flow", "rollback", "--task", "history-revisit", "--to", "research", "--reason", "Research assumptions changed", "--evidence", "research-baseline-proof", "--expected-revision", "3")
+  await run(projectRoot, "work", "create", "--task", "history-revisit", "--work", "research-rerun", "--owner", "junior-luna", "--scope", "Repeat research", "--done-when", "Research updated", "--artifacts", "research.md", "--expected-revision", "4")
+  await run(projectRoot, "work", "start", "--task", "history-revisit", "--work", "research-rerun", "--expected-revision", "5")
+  await run(projectRoot, "work", "submit", "--task", "history-revisit", "--work", "research-rerun", "--scenario", "research", "--scope-refs", "requirement.md", "--outcome", "pass", "--artifacts", "research.md", "--summary", "Research refreshed", "--expected-revision", "6")
+  await run(projectRoot, "flow", "decide", "--task", "history-revisit", "--gate", "work-research-rerun", "--kind", "semantic", "--status", "passed", "--actor", "senior-terra", "--reason", "Research checked", "--evidence", "research-rerun-proof", "--evidence-path", "research.md", "--expected-revision", "7")
+  await run(projectRoot, "work", "accept", "--task", "history-revisit", "--work", "research-rerun", "--actor", "lead", "--evidence", "research-rerun-proof", "--expected-revision", "8")
+  const revisited = await run(projectRoot, "flow", "advance", "--task", "history-revisit", "--outcome", "pass", "--expected-revision", "9")
+  assert.equal(revisited.data.task.stage, "design")
+  assert.equal(revisited.data.task.stageRunRequiresWork, true)
 })
 
 test("design cannot advance until an awaited user approves the current design artifact", async () => {
@@ -266,7 +415,7 @@ test("design cannot advance until an awaited user approves the current design ar
   )
   assert.equal(waiting.data.task.status, "awaiting-user")
   assert.deepEqual(waiting.data.task.gates.find(({ gateId }) => gateId === "design-approval"), {
-    gateId: "design-approval", stage: "design-review", kind: "human", status: "pending", evidenceRefs: [],
+    gateId: "design-approval", stage: "design-review", stageRun: 1, kind: "human", status: "pending", evidenceRefs: [],
   })
   assert.equal(
     (await runResult(projectRoot, "task", "resume", "--task", "design-human-review", "--expected-revision", "2")).envelope.error.code,
@@ -328,6 +477,30 @@ test("design cannot advance until an awaited user approves the current design ar
   await writeFile(path.join(projectRoot, "design.md"), "Changed after implementation started\n")
   const laterStale = await runResult(projectRoot, "flow", "advance", "--task", "design-human-review", "--outcome", "pass", "--expected-revision", "7")
   assert.ok(laterStale.envelope.error.blockers.some(({ code, gateId }) => code === "EVIDENCE_CHANGED" && gateId === "design-approval"))
+})
+
+test("Runtime resolves an awaited human decision from stored gate and evidence", async () => {
+  const projectRoot = await project()
+  await writeFile(path.join(projectRoot, "design.md"), "approved design\n")
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "runtime-human", "--entry-stage", "design-review")
+  await run(
+    projectRoot,
+    "task", "await", "--task", "runtime-human", "--gate", "design-approval",
+    "--evidence-path", "design.md", "--question", "是否批准？", "--blocker", "等待确认",
+    "--required-decision", "批准或驳回", "--expected-revision", "0",
+  )
+
+  const resolved = await run(
+    projectRoot,
+    "flow", "human", "--task", "runtime-human", "--status", "passed",
+    "--reason", "用户明确批准", "--actor", "user", "--evidence", "human-approved",
+    "--expected-revision", "1",
+  )
+
+  assert.equal(resolved.data.gate.gateId, "design-approval")
+  assert.equal(resolved.data.evidence.path, "design.md")
+  assert.equal(resolved.data.task.status, "active")
 })
 
 test("optional human review may be skipped but an explicit rejection routes to rework", async () => {
@@ -776,6 +949,32 @@ test("doctor diagnoses corrupt state and replays an interrupted write transactio
   assert.equal((await run(projectRoot, "doctor", "--repair", "--force")).data.healthy, true)
 })
 
+test("migrate upgrades pre-stage-run task state idempotently", async () => {
+  const projectRoot = await project()
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "legacy-state", "--entry-stage", "implementation")
+  const taskPath = path.join(projectRoot, ".team-work/tasks/legacy-state/task.json")
+  const workItemsPath = path.join(projectRoot, ".team-work/tasks/legacy-state/work-items.json")
+  const task = JSON.parse(await readFile(taskPath, "utf8"))
+  task.schemaVersion = "1.0"
+  delete task.stageRun
+  delete task.stageRunRequiresWork
+  await writeFile(taskPath, `${JSON.stringify(task, null, 2)}\n`)
+  const workItems = JSON.parse(await readFile(workItemsPath, "utf8"))
+  workItems.schemaVersion = "1.0"
+  await writeFile(workItemsPath, `${JSON.stringify(workItems, null, 2)}\n`)
+
+  const first = await run(projectRoot, "migrate")
+  assert.equal(first.data.migrated, true)
+  assert.equal(first.data.tasks, 1)
+  assert.equal(JSON.parse(await readFile(taskPath, "utf8")).stageRun, 1)
+  assert.equal(JSON.parse(await readFile(workItemsPath, "utf8")).items.length, 0)
+
+  const second = await run(projectRoot, "migrate")
+  assert.equal(second.data.migrated, false)
+  assert.equal(second.data.tasks, 0)
+})
+
 test("generated context view and audit events can be rebuilt from authoritative state", async () => {
   const projectRoot = await project()
   await writeFile(path.join(projectRoot, "requirement.md"), "Build the runtime\n")
@@ -832,6 +1031,19 @@ test("current-stage work must be accepted or cancelled before flow can advance",
   assert.equal((await run(projectRoot, "flow", "check", "--task", "gated-work")).data.gate.ok, true)
 })
 
+test("work assignment may declare output paths before the worker creates them", async () => {
+  const projectRoot = await project()
+  await run(projectRoot, "init")
+  await run(projectRoot, "task", "create", "--task", "planned-output", "--entry-stage", "implementation")
+  const created = await run(
+    projectRoot,
+    "work", "create", "--task", "planned-output", "--work", "owner-delivery",
+    "--owner", "junior-luna", "--scope", "Implement the change", "--done-when", "Code is ready",
+    "--artifacts", ".team-work/tasks/planned-output/artifacts/implementation.md", "--expected-revision", "0",
+  )
+  assert.equal(created.data.workItem.assignment.artifactPaths[0], ".team-work/tasks/planned-output/artifacts/implementation.md")
+})
+
 test("initialization is idempotent and never overwrites explicit project configuration", async () => {
   const projectRoot = await project()
   await run(projectRoot, "init")
@@ -845,6 +1057,21 @@ test("initialization is idempotent and never overwrites explicit project configu
   assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")).spec, config.spec)
   assert.equal((await run(projectRoot, "version")).data.apiVersion, "1.0")
   assert.equal((await run(projectRoot, "migrate")).data.migrated, false)
+})
+
+test("project SPEC readiness updates are locked and preserve unrelated configuration", async () => {
+  const projectRoot = await project()
+  await run(projectRoot, "init")
+  const [left, right] = await Promise.all([
+    runResult(projectRoot, "project", "spec", "--mode", "auto", "--status", "ready"),
+    runResult(projectRoot, "project", "spec", "--mode", "required", "--status", "ready"),
+  ])
+  assert.ok([left, right].some(({ exitCode }) => exitCode === 0))
+  assert.ok([left, right].every(({ envelope }) => envelope.ok || envelope.error.code === "LOCK_UNAVAILABLE"))
+  const config = JSON.parse(await readFile(path.join(projectRoot, ".team-work/config.yaml"), "utf8"))
+  assert.ok(["auto", "required"].includes(config.spec.mode))
+  assert.equal(config.spec.status, "ready")
+  assert.deepEqual(config.humanReview, { "design-approval": "required", "final-acceptance": "required" })
 })
 
 test("project human-review configuration rejects unknown gates", async () => {

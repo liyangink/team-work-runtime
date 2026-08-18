@@ -37,7 +37,9 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 14. standalone 使用不得被无关平台 Hook 或可选 SPEC Skill 阻塞。错误必须保留最后有效制品，并可诊断、重试和恢复。
 15. SPEC 与 E2E 都是显式路由：SPEC 按 `auto|required|disabled` 处理；E2E 必须判断适用性但可在有证据时跳过。E2E 制品问题留在内部小循环，产品缺陷回实施，系统性测试策略缺口才回测试。
 16. PlatformPlugin 可为受管成员提供独立模型配置的临时只读助手，用于代码探索和资料检索。助手不是团队成员或 work-item Owner，不进入收敛、评分和技术裁决，不得修改文件或继续委托；调用成员必须核验并整合结果。辅助派发仍必须 background/non-blocking，且不得依赖 OMO 等可选增强。
-17. 默认工程 Workflow 在方案审查后和任务完成前分别设置 `design-approval`、`final-acceptance` 人工门禁，默认都为 `required`，可由项目配置改为 `optional|disabled`，但 Agent 不得自行降级。人工批准必须绑定当前制品指纹；批准制品变化后必须重新确认。方案文档是需求、范围与实现方向的人机唯一批准基线，必须用朴实语言完整描述修改点和影响；引用核心代码时只能基于已读取的代码事实，拟议内容必须明确标为伪代码或建议。
+17. 默认工程 Workflow 在方案审查后和任务完成前分别设置 `design-approval`、`final-acceptance` 人工门禁，默认都为 `required`，可由项目配置改为 `optional|disabled`，但 Agent 不得自行降级。人工批准必须绑定当前制品指纹；批准制品变化后必须重新确认。方案文档是需求、范围与实现方向的人机唯一批准基线，必须用朴实语言完整描述修改点和影响；引用核心代码时只能基于已读取的代码事实，拟议内容必须明确标为伪代码或建议。`awaiting-user` 是静止状态：进入前必须清理平台外部续跑队列，等待期间不得创建后台任务、定时检查或状态轮询，只能由新的用户输入恢复。
+18. Runtime 必须把人工门禁、合法边选择、SPEC 可用性、revision 与恢复状态收敛为确定性深 Interface；不得要求 Lead 记忆或拼装底层字段。Lead 面向用户只报告完成内容、当前阶段、关键制品、分歧/风险和下一步，不得用工具名或 Runtime 状态黑话替代研发进展。
+19. 使用 OpenSpec 时，任务的活动 change 默认与稳定 `task-id` 同名。proposal 后按 provider 的 `status/instructions` 推进 design/specs，最后生成 tasks；Agent 只能修改当前活动 change，禁止直接修改 canonical specs、archive 或其他任务的 change。离开 SPEC 后只能更新当前 change 的 `tasks.md` 实施进度，需求或设计变化必须回到 SPEC。SPEC 完成必须由 provider 状态确认，且只能在最终验收通过后的收尾环节验证并归档。
 
 ## 变更要求
 

@@ -188,7 +188,7 @@ CoreRuntime 只验证后两类门禁是否具有合法决策、理由和证据�
 - 用户明确要求 team 时，Workflow 选择 `team`；否则根据场景和并行价值判断 `solo/team`；
 - 两种模式都调用 Team-work：`solo` 派发一个成员 Owner，`team` 派发多个边界互斥的 Owner；Lead 均不承担具体工作；
 - 在 SPEC 路由点读取 `spec.type/skill/root/mode/status`；`auto` 可跳过，`required` 缺失时阻塞，`disabled` 始终跳过；
-- SPEC Skill 负责具体规范流程，Workflow 只负责阶段衔接、上下文和门禁。
+- SPEC provider adapter 负责具体规范生命周期，Workflow 只负责阶段衔接、上下文和门禁。OpenSpec Adapter 以 task-id 绑定活动 change，按 `status/instructions` 驱动 artifact，Runtime 拒绝 canonical/archive/foreign change 写入，最终验收后才验证并归档。
 
 CoreRuntime 根据 Workflow 的 `specRoute` 标记和项目 SPEC 状态校验进入/跳过边，避免直接调用 Runtime 命令绕过 `required` 或跳过已 ready 的默认路由。
 
@@ -306,9 +306,15 @@ plugins/opencode/
 
 OpenCode Adapter 对受管 `solo/team` 派发只暴露 background/non-blocking Interface，不允许 Team-work 选择阻塞式 subagent 调用。Lead 在成员运行期间继续维护 Harness 或派发其他独立工作，并只在场景定义的同步点查询状态和收集结果，禁止转而承担成员的具体工作。底层工具若收到受管任务的阻塞式请求，Adapter 必须拒绝或确定性改写为 background；普通非 Team-work 调用不受此规则影响。
 
-Adapter 按 work item 的派发轮次持久记录 `idle/error/lost` 待同步提示；`idle` 事件必须复核原生实时状态，避免上一轮延迟事件错配到新的 busy 派发。事件只唤醒当前进程内的有界等待，提示本身保存在既有 session mapping 中，因而可跨会话恢复。Lead 等待默认 10 秒、最长 30 秒，事件遗漏时低频复核原生 session 状态；返回只表示应收集消息，不替代制品验收、Workflow 流转或用户输入队列。首版不实现自动续写 Lead、独立 Inbox、永久定时任务或第二套 Agent 调度器。
+Adapter 按 work item 的派发轮次持久记录 `idle/error/lost` 待同步提示；`idle` 事件必须复核原生实时状态，避免上一轮延迟事件错配到新的 busy 派发。一次 `team_work_sync` 工具调用在 Plugin 内挂起，默认 5 分钟、最长 30 分钟，由 session 事件直接唤醒；开始挂起时只读取一次原生状态，用于恢复进程重启或已遗漏事件，此后不做定时轮询。提示保存在既有 session mapping 中，可跨会话恢复。返回只表示应收集消息，不替代制品验收或 Workflow 流转；首版不实现自动续写 Lead、独立 Inbox、永久定时任务或第二套 Agent 调度器。
 
-首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `solo/team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过 `team_work_spawn`。spawn 在创建 child session 前必须验证 Platform Profile 中的已解析 Agent、活动任务拓扑、Runtime work item、唯一 Owner 和可派发状态；同一 work item 的后续轮次必须 `resume`，只有旧 session 已失联或停止时才能替换并保留历史。SDK 返回错误与网络抛错统一为可恢复的平台错误；已删除会话报告为 `lost` 而不是伪装成 `idle`。
+人工门禁的 `awaiting-user` 与成员同步不同，它是静止状态。PlatformPlugin 在进入前检查宿主外部 TODO 已无未完成项；等待期间抑制待同步提示，并拒绝 `team_work_sync`。宿主 Todo 只允许执行一次“全部完成/取消”的清理写入，避免其他插件将条件性待办解释为可自动续跑工作。
+
+首版使用 Plugin `tool.execute.before` 在已绑定或唯一可解析的活动 `solo/team` 任务中拒绝原生阻塞 `task`，并要求受管派发通过意图级 `team_work_dispatch`。该工具在创建 child session 前验证 Platform Profile 中的已解析 Agent、活动任务拓扑、Runtime work item、唯一 Owner 和可派发状态，并自动完成 create/start/spawn 或 start/resume；只有旧 session 已失联或停止时才能替换并保留历史。SDK 返回错误与网络抛错统一为可恢复的平台错误；已删除会话报告为 `lost` 而不是伪装成 `idle`。
+
+Lead 只看到意图级控制面：overview、begin、register、dispatch、sync、assess、continue 和技术门禁。`continue` 是深 Module 的外部 Interface：CoreRuntime 用 `flow.await`、`flow.human`、`flow.proceed` 固化人工门禁、已保存制品、SPEC 路由和合法前进边；PlatformPlugin 只验证真实用户消息、刷新平台能力并把一次意图组合成确定性操作。通用 Runtime command、gate/revision、任意 JSON、取消/停止和底层 spawn/resume 不进入模型工具面。
+
+控制面响应提供阶段中文名、状态、工作项计数、阻塞和唯一下一步，不返回完整 task 文档。Lead 的用户汇报只描述完成内容、当前阶段、制品、分歧/风险和下一步，不泄漏内部工具与状态字段。领域错误仍保留 blocker 与 remediation，但 Plugin 不通过 abort 中止 OpenCode 生成轮次。
 
 OpenCode 能力约束参考：[Plugins](https://opencode.ai/docs/plugins/)、[Agent Skills](https://opencode.ai/docs/skills/)、[Agents](https://opencode.ai/docs/agents/)、[Custom Tools](https://opencode.ai/docs/custom-tools/)。
 

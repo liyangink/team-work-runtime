@@ -37,41 +37,47 @@ test("OpenCode guide preserves child sessions and emits clickable file reference
   assert.match(combined, /用户[^。\n]*(?:文件|制品|代码)[^。\n]*(?:Markdown|可点击)/i)
 })
 
-test("OpenCode managed resume distinguishes its arguments from generic delegation tools", async () => {
+test("OpenCode dispatch owns background and session continuation details", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
   const recovery = await read("plugins/opencode/guides/recovery.md")
   const combined = `${plugin}\n${guide}\n${recovery}`
 
-  assert.match(plugin, /team_work_resume[^]*只传[^。\n]*task_id[^。\n]*work_item_id[^。\n]*prompt/)
+  assert.match(plugin, /team_work_dispatch[^]*Lead 不传 revision、session_id 或 background 参数/)
   assert.match(combined, /不要传[^。\n]*session_id[^。\n]*run_in_background[^。\n]*background/)
-  assert.match(guide, /team_work_resume[^。\n]*自身[^。\n]*非阻塞/)
+  assert.match(guide, /team_work_dispatch[^。\n]*自身[^。\n]*非阻塞/)
   assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不代表|不是)[^。\n]*(?:session|网关)/i)
   assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不得|不要)[^。\n]*(?:降级|容灾|重建)/)
-  assert.match(recovery, /team_work_resume[^。\n]*(?:网关|session)[^。\n]*(?:status|恢复)/i)
+  assert.match(recovery, /team_work_dispatch[^。\n]*网关/i)
+  assert.match(recovery, /恢复[^。\n]*session/i)
 })
 
 test("OpenCode bounded wait remains a synchronization hint rather than a completion signal", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
 
-  assert.match(plugin, /team_work_wait/)
-  assert.match(plugin, /最长 30 秒/)
+  assert.match(plugin, /team_work_sync/)
+  assert.match(plugin, /最长 30 分钟/)
   assert.match(guide, /ready[^。\n]*不表示[^。\n]*验收/)
   assert.match(guide, /待同步[^]*不复制成员正文/)
   assert.match(guide, /不会[^。\n]*第二套调度队列|不会[^。\n]*自动推进 Workflow/)
 })
 
-test("OpenCode exposes a strongly typed work-item creation tool before managed spawn", async () => {
+test("OpenCode exposes a small intent-level Lead tool surface", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
-  const genericCommands = plugin.slice(plugin.indexOf("const runtimeCommands"), plugin.indexOf("const contextFor"))
-  assert.match(plugin, /team_work_work_create:\s*tool\(/)
+  for (const name of ["overview", "begin", "register", "dispatch", "assess", "continue", "review_gate", "sync"]) {
+    assert.match(plugin, new RegExp(`team_work_${name}:\\s*tool\\(`))
+  }
+  assert.doesNotMatch(plugin, /team_work_(?:progress|user_review):\s*tool\(/)
+  assert.doesNotMatch(plugin, /team_work_runtime:\s*tool\(/)
+  assert.doesNotMatch(plugin, /team_work_work_(?:create|start|submit|accept|rework):\s*tool\(/)
+  assert.doesNotMatch(plugin, /team_work_(?:spawn|resume|status|wait|collect|stop):\s*tool\(/)
   assert.match(plugin, /workItemId:\s*args\.work_item_id/)
   assert.match(plugin, /artifactPaths:\s*args\.artifact_paths/)
   assert.match(plugin, /doneWhen:\s*args\.done_when/)
-  assert.doesNotMatch(genericCommands, /"work\.create"/)
-  assert.match(guide, /team_work_work_create.*work\.start.*team_work_spawn/s)
+  assert.match(guide, /team_work_dispatch.*team_work_assess.*team_work_continue/s)
+  assert.match(guide, /不可重试[^。\n]*(?:不要|不得)[^。\n]*重复/)
 })
 
 test("new implementation documents have valid local links", async () => {
@@ -131,7 +137,7 @@ test("README is the single user guide with intro, quick start, and one fixed con
   assert.match(usage, /停用[^。\n]*保留[^。\n]*(?:配置|任务|\.team-work)/)
   assert.doesNotMatch(quickStart, /doctor|debug agent|model-map|plugins\/opencode\/scripts/)
   assert.equal([...faq.matchAll(/^### /gm)].length, 1)
-  assert.doesNotMatch(usage, /USAGE\.md|--model-map|## OpenCode 注意事项|OMO|## 开发文档|archive/)
+  assert.doesNotMatch(usage, /USAGE\.md|--model-map|## OpenCode 注意事项|OMO|## 开发文档|## (?:Archive|历史归档)/)
   assert.doesNotMatch(usage, /发布前真实网关验收|下一项最小验收/)
   assert.doesNotMatch(report, /下一项最小验收/)
   assert.match(report, /双成员后台派发/)

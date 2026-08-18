@@ -473,6 +473,74 @@ async function safeProjectEntry(project, relativePath) {
   return resolved
 }
 
+async function safeFutureProjectEntry(project, relativePath) {
+  if (!relativePath || path.isAbsolute(relativePath) || relativePath.includes("\\") || relativePath.split("/").includes("..") || /^[A-Za-z]:/.test(relativePath)) {
+    throw new RuntimeError("INVALID_ARGUMENT", `unsafe project path: ${relativePath}`)
+  }
+  const target = path.resolve(project.root, relativePath)
+  if (target !== project.root && !target.startsWith(`${project.root}${path.sep}`)) {
+    throw new RuntimeError("INVALID_ARGUMENT", `project path escapes project root: ${relativePath}`)
+  }
+  let cursor = project.root
+  for (const segment of relativePath.split("/").slice(0, -1)) {
+    cursor = path.join(cursor, segment)
+    try {
+      const metadata = await lstat(cursor)
+      if (metadata.isSymbolicLink()) throw new RuntimeError("INVALID_ARGUMENT", `project path crosses a symbolic link: ${relativePath}`)
+      if (!metadata.isDirectory()) throw new RuntimeError("INVALID_ARGUMENT", `project path parent is not a directory: ${relativePath}`)
+    } catch (error) {
+      if (error.code === "ENOENT") break
+      throw error
+    }
+  }
+  return target
+}
+
+function normalizedProjectPrefix(value) {
+  return `${String(value ?? "").replace(/^\/+|\/+$/g, "")}/`
+}
+
+function openSpecPathPolicy(project, task, artifactPaths, { requireActiveChange = false, allowArchivedAtFinish = false, enforceWorkStage = false } = {}) {
+  if (project.config.spec.type !== "openspec" || project.config.spec.mode === "disabled") return
+  const specRoot = normalizedProjectPrefix(project.config.spec.root)
+  const activeRoot = `${specRoot}changes/${task.taskId}/`
+  const archiveRoot = `${specRoot}changes/archive/`
+  for (const artifact of artifactPaths ?? []) {
+    const candidate = String(artifact).replace(/^\.\//, "")
+    const managed = candidate === activeRoot.slice(0, -1) || candidate.startsWith(activeRoot)
+    const archived = candidate.startsWith(archiveRoot)
+      && candidate.slice(archiveRoot.length).split("/")[0]?.endsWith(`-${task.taskId}`)
+    if (managed) {
+      const implementationTaskList = task.stage === "implementation" && candidate === `${activeRoot}tasks.md`
+      if (!enforceWorkStage || ["spec", "spec-review"].includes(task.stage) || implementationTaskList) continue
+      throw new RuntimeError("GATE_BLOCKED", "OpenSpec content changes require the SPEC workflow stage", {
+        exitCode: 4,
+        task,
+        blockers: [{
+          code: "OPENSPEC_STAGE_FORBIDDEN",
+          kind: "spec",
+          path: candidate,
+          message: `Stage ${task.stage} may update only ${activeRoot}tasks.md; return to SPEC for proposal, design, or requirement changes`,
+        }],
+        remediation: ["Roll back to the SPEC stage for content changes", `Only implementation task progress may update ${activeRoot}tasks.md`],
+      })
+    }
+    if (allowArchivedAtFinish && task.stage === "finish" && archived) continue
+    if (!requireActiveChange && !candidate.startsWith(specRoot)) continue
+    throw new RuntimeError("GATE_BLOCKED", "OpenSpec artifacts must belong to the current active change", {
+      exitCode: 4,
+      task,
+      blockers: [{
+        code: "OPENSPEC_PATH_FORBIDDEN",
+        kind: "spec",
+        path: candidate,
+        message: `Use ${activeRoot}; agents must not write canonical specs, archived changes, or another task's change`,
+      }],
+      remediation: [`Create or resume the active OpenSpec change ${task.taskId}`, `Use artifact paths under ${activeRoot}`],
+    })
+  }
+}
+
 async function registerContext(project, input, clock, dryRun) {
   const task = await loadTask(project, input.taskId)
   assertRevision(task, input.expectedRevision)
@@ -543,15 +611,34 @@ async function rebuildContext(project, input, dryRun) {
 
 async function evaluateCurrentStage(project, task) {
   const entries = await loadContextEntries(project, task)
-  const gate = evaluateStageGate(project.workflow, task.stage, entries, task.gates)
+  const workflowGateIds = new Set((project.workflow.gates ?? []).map(({ id }) => id))
+  const gate = evaluateStageGate(project.workflow, task.stage, entries, task.gates.filter(({ gateId, stageRun }) => workflowGateIds.has(gateId) && stageRun === task.stageRun))
   const workItems = await loadWorkItems(project, task)
-  const pending = workItems.items.filter((item) => item.stage === task.stage && !["accepted", "cancelled"].includes(item.status))
+  const currentRunItems = workItems.items.filter((item) => item.stage === task.stage && item.stageRun === task.stageRun)
+  const pending = currentRunItems.filter((item) => !["accepted", "cancelled"].includes(item.status))
   for (const item of pending) {
     gate.blockers.push({ code: "WORK_ITEM_PENDING", kind: "work-item", path: item.workItemId, message: `Work item ${item.workItemId} is ${item.status}` })
   }
-  for (const item of workItems.items.filter((candidate) => candidate.stage === task.stage && candidate.status === "accepted")) {
+  const accepted = currentRunItems.filter((candidate) => candidate.status === "accepted")
+  if (task.stageRunRequiresWork && accepted.length === 0) {
+    gate.blockers.push({
+      code: "STAGE_RUN_DELIVERY_REQUIRED",
+      kind: "work-item",
+      path: `${task.stage}#${task.stageRun}`,
+      message: "Reopened workflow stage requires a newly accepted delivery",
+    })
+  }
+  for (const item of accepted) {
     const validEvidence = new Set(task.evidence.filter(({ status }) => status === "valid").map(({ evidenceId }) => evidenceId))
     if (item.acceptance.evidenceRefs.some((ref) => !validEvidence.has(ref))) gate.blockers.push({ code: "INVALID_ACCEPTANCE_EVIDENCE", kind: "work-item", path: item.workItemId, message: "Accepted work item references invalid evidence" })
+  }
+  if (["spec", "spec-review"].includes(task.stage) && project.config.spec.mode !== "disabled" && task.spec.status !== "completed") {
+    gate.blockers.push({
+      code: "SPEC_LIFECYCLE_INCOMPLETE",
+      kind: "spec",
+      path: `${normalizedProjectPrefix(project.config.spec.root)}changes/${task.taskId}`,
+      message: "The configured SPEC provider has not completed the active change artifacts",
+    })
   }
   gate.ok = gate.blockers.length === 0
   return { gate, workItems }
@@ -648,7 +735,7 @@ async function requiredGateDecision(project, task, gateId) {
   const declaration = declaredGate(project, gateId)
   const mode = configuredGateMode(project, declaration)
   if (mode === "disabled") return null
-  const gate = task.gates.find(({ gateId: id, stage }) => id === gateId && stage === task.stage)
+  const gate = task.gates.find(({ gateId: id, stage, stageRun }) => id === gateId && stage === task.stage && stageRun === task.stageRun)
   if (mode === "optional" && !gate) return null
   const acceptedStatuses = declaration?.kind === "human" ? ["passed"] : ["passed", "overridden"]
   if (gate && acceptedStatuses.includes(gate.status) && (!declaration || gate.kind === declaration.kind)) return gateEvidenceBlocker(project, task, gate)
@@ -716,6 +803,7 @@ async function decideFlow(project, input, clock, dryRun) {
   const evidence = {
     evidenceId,
     stage: task.stage,
+    stageRun: task.stageRun,
     path: input.evidencePath,
     digest: digest(await readFile(evidenceTarget)),
     status: "valid",
@@ -724,6 +812,7 @@ async function decideFlow(project, input, clock, dryRun) {
   const gate = {
     gateId: safeId(input.gateId, "gate id"),
     stage: task.stage,
+    stageRun: task.stageRun,
     kind: input.kind,
     status: input.status,
     ...(input.blocker ? { blocker: input.blocker } : {}),
@@ -744,6 +833,45 @@ async function decideFlow(project, input, clock, dryRun) {
   if (isHuman) delete nextTask.awaitingUser
   const persisted = await persistTask(project, task, nextTask, "flow.decided", clock, { refs: [gate.gateId, evidenceId], reason: input.reason, dryRun })
   return success({ dryRun: Boolean(dryRun), gate, evidence, task: persisted }, persisted)
+}
+
+async function decideAwaitedHuman(project, input, clock, dryRun) {
+  const task = await loadTask(project, input.taskId)
+  assertRevision(task, input.expectedRevision)
+  if (task.status !== "awaiting-user" || !task.awaitingUser?.gateRef || !task.awaitingUser?.evidencePath) {
+    throw new RuntimeError("HUMAN_DECISION_REQUIRED", "task is not waiting on a complete human-review checkpoint", {
+      exitCode: 4,
+      task,
+      blockers: [{ code: "HUMAN_DECISION_REQUIRED", kind: "human", ...(task.awaitingUser?.gateRef ? { gateId: task.awaitingUser.gateRef } : {}) }],
+      remediation: ["Request the declared human review before recording the user's decision"],
+    })
+  }
+  if (input.actor !== "user") throw new RuntimeError("HUMAN_DECISION_REQUIRED", "human decisions must be attributed to the user", { exitCode: 4, task })
+  return decideFlow(project, {
+    ...input,
+    gateId: task.awaitingUser.gateRef,
+    evidencePath: task.awaitingUser.evidencePath,
+    kind: "human",
+  }, clock, dryRun)
+}
+
+async function awaitDeclaredHuman(project, input, clock, dryRun) {
+  const task = await loadTask(project, input.taskId)
+  assertRevision(task, input.expectedRevision)
+  const candidates = (project.workflow.gates ?? []).filter((declaration) => (
+    declaration.kind === "human"
+      && declaration.stage === task.stage
+      && configuredGateMode(project, declaration) !== "disabled"
+  ))
+  if (candidates.length !== 1) {
+    throw new RuntimeError("HUMAN_GATE_REQUIRED", `stage ${task.stage} must resolve exactly one enabled human gate`, {
+      exitCode: 4,
+      task,
+      blockers: candidates.map(({ id }) => ({ code: "HUMAN_GATE_AMBIGUOUS", kind: "human", gateId: id })),
+      remediation: ["Declare exactly one enabled human-review gate for this workflow stage"],
+    })
+  }
+  return transitionTask(project, { ...input, gateId: candidates[0].id }, "await", clock, dryRun)
 }
 
 function enforceSpecRoute(project, task, transition) {
@@ -806,16 +934,23 @@ async function advanceFlow(project, input, clock, dryRun) {
   const nextRevision = task.revision + 1
   const stageOrder = new Map(project.workflow.stages.map(({ id }, index) => [id, index]))
   const movesBackward = stageOrder.get(transition.to) < stageOrder.get(task.stage)
+  const events = await readJsonLines(path.join(project.stateRoot, `tasks/${task.taskId}/events.jsonl`), "events log")
+  const revisitsStage = task.entryStage === transition.to || events.some(({ type, refs }) => (
+    ["flow.advanced", "flow.rolled-back"].includes(type) && refs?.includes(transition.to)
+  ))
+  const reopensStage = transition.to === task.stage || movesBackward || revisitsStage
   const resetReason = `workflow ${input.outcome} moved ${task.stage} to ${transition.to}`
   const nextTask = {
     ...task,
     stage: transition.to,
+    stageRun: task.stageRun + 1,
+    stageRunRequiresWork: reopensStage || ["rework", "fail", "test-gap"].includes(input.outcome),
     teamDecision: { mode: "undecided" },
     revision: nextRevision,
     updatedAt: now(clock),
     ...(movesBackward ? {
       gates: task.gates.map((gate) => (stageOrder.get(gate.stage) > stageOrder.get(transition.to)
-        ? { gateId: gate.gateId, stage: gate.stage, kind: gate.kind, status: "pending", evidenceRefs: [] }
+        ? { gateId: gate.gateId, stage: gate.stage, stageRun: task.stageRun + 1, kind: gate.kind, status: "pending", evidenceRefs: [] }
         : gate)),
       evidence: task.evidence.map((evidence) => (evidence.status === "valid" && stageOrder.get(evidence.stage) > stageOrder.get(transition.to)
         ? { ...evidence, status: "invalidated", invalidatedAtRevision: nextRevision, invalidationReason: resetReason }
@@ -824,6 +959,34 @@ async function advanceFlow(project, input, clock, dryRun) {
   }
   const persisted = await persistTask(project, task, nextTask, "flow.advanced", clock, { refs: [...new Set([task.stage, transition.to, transition.requiredGate].filter(Boolean))], dryRun })
   return success({ dryRun: Boolean(dryRun), from: task.stage, to: transition.to, outcome: input.outcome, task: persisted }, persisted)
+}
+
+async function proceedFlow(project, input, clock, dryRun) {
+  const task = await loadTask(project, input.taskId)
+  assertRevision(task, input.expectedRevision)
+  if (input.outcome) return advanceFlow(project, input, clock, dryRun)
+  const transitions = project.workflow.transitions.filter(({ from, outcome }) => (
+    from === task.stage && ["pass", "skip"].includes(outcome)
+  ))
+  const stages = new Map(project.workflow.stages.map((stage) => [stage.id, stage]))
+  const entersSpec = transitions.find(({ to }) => stages.get(to)?.specRoute)
+  const skipsSpec = entersSpec && transitions.find(({ outcome }) => outcome === "skip")
+  let selected
+  if (entersSpec && skipsSpec) {
+    const ready = project.config.spec.status === "ready" && project.config.spec.mode !== "disabled"
+    selected = ready ? entersSpec : project.config.spec.mode === "required" ? entersSpec : skipsSpec
+  } else if (transitions.length === 1) {
+    selected = transitions[0]
+  } else {
+    throw new RuntimeError("WORKFLOW_DECISION_REQUIRED", `stage ${task.stage} has more than one valid forward result`, {
+      exitCode: 4,
+      task,
+      blockers: transitions.map(({ outcome, to }) => ({ code: "WORKFLOW_DECISION_REQUIRED", kind: "workflow", outcome, path: to })),
+      remediation: ["Provide the reviewed business result for this stage"],
+    })
+  }
+  if (!selected) throw new RuntimeError("ILLEGAL_TRANSITION", `stage ${task.stage} has no forward transition`, { exitCode: 4, task })
+  return advanceFlow(project, { ...input, outcome: selected.outcome }, clock, dryRun)
 }
 
 async function rollbackFlow(project, input, clock, dryRun) {
@@ -842,10 +1005,12 @@ async function rollbackFlow(project, input, clock, dryRun) {
   const nextTask = {
     ...task,
     stage: input.to,
+    stageRun: task.stageRun + 1,
+    stageRunRequiresWork: true,
     teamDecision: { mode: "undecided" },
     revision: nextRevision,
     gates: task.gates.map((gate) => gatesToReset.has(gate.gateId)
-      ? { gateId: gate.gateId, stage: gate.stage, kind: gate.kind, status: "pending", evidenceRefs: [] }
+      ? { gateId: gate.gateId, stage: gate.stage, stageRun: task.stageRun + 1, kind: gate.kind, status: "pending", evidenceRefs: [] }
       : gate),
     evidence: task.evidence.map((evidence) => evidenceToInvalidate.has(evidence.evidenceId)
       ? { ...evidence, status: "invalidated", invalidatedAtRevision: nextRevision, invalidationReason: input.reason }
@@ -918,13 +1083,15 @@ async function createWork(project, input, clock, dryRun) {
   if (!project.workflow.stages.some(({ id }) => id === itemStage) || itemStage !== task.stage) throw new RuntimeError("INVALID_ARGUMENT", "work item stage must be the current workflow stage", { task })
   const workItemId = safeId(input.workItemId, "work item id")
   if (document.items.some(({ workItemId: existing }) => existing === workItemId)) throw new RuntimeError("WORK_ITEM_CONFLICT", `work item already exists: ${workItemId}`, { exitCode: 3, task })
-  for (const artifact of input.artifactPaths ?? []) await safeProjectEntry(project, artifact)
+  openSpecPathPolicy(project, task, input.artifactPaths, { enforceWorkStage: true })
+  for (const artifact of input.artifactPaths ?? []) await safeFutureProjectEntry(project, artifact)
   const timestamp = now(clock)
   const item = {
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     workItemId,
     taskId: task.taskId,
     stage: itemStage,
+    stageRun: task.stageRun,
     owner: input.owner,
     status: "queued",
     attempt: 1,
@@ -984,6 +1151,7 @@ async function transitionWork(project, input, action, clock, dryRun) {
     }
   }
   if (action === "submit") {
+    openSpecPathPolicy(project, task, input.artifactPaths, { enforceWorkStage: true })
     for (const artifact of input.artifactPaths ?? []) await safeProjectEntry(project, artifact)
     nextItem.submission = {
       scenario: input.scenario,
@@ -1076,6 +1244,27 @@ const specTransitions = {
   disabled: new Set(["in-progress", "disabled"]),
 }
 
+async function updateProjectSpecReadiness(project, input, dryRun) {
+  const mode = input.mode
+  const status = input.status
+  if (!["auto", "required", "disabled"].includes(mode) || !["ready", "missing", "disabled"].includes(status)) {
+    throw new RuntimeError("INVALID_ARGUMENT", "project SPEC readiness requires a valid mode and status")
+  }
+  if ((mode === "disabled") !== (status === "disabled")) {
+    throw new RuntimeError("INVALID_ARGUMENT", "disabled SPEC mode and status must be set together")
+  }
+  const configPath = path.join(project.stateRoot, "config.yaml")
+  if (dryRun) return success({ dryRun: true, spec: { ...project.config.spec, mode, status } })
+  return withLock(path.join(project.stateRoot, ".project.lock"), async () => {
+    const current = await readJson(configPath, "project config")
+    await validate("project-config", current)
+    const next = { ...current, spec: { ...current.spec, mode, status } }
+    await validate("project-config", next)
+    await atomicJson(configPath, next)
+    return success({ spec: next.spec })
+  })
+}
+
 async function updateSpec(project, input, clock, dryRun) {
   const task = await loadTask(project, input.taskId)
   assertRevision(task, input.expectedRevision)
@@ -1084,6 +1273,12 @@ async function updateSpec(project, input, clock, dryRun) {
     throw new RuntimeError("ILLEGAL_TRANSITION", `cannot move SPEC from ${task.spec.status} to ${input.status}`, { exitCode: 4, task })
   }
   const artifactRefs = input.artifactPaths ?? task.spec.artifactRefs
+  if (["in-progress", "completed"].includes(input.status)) {
+    openSpecPathPolicy(project, task, artifactRefs, {
+      requireActiveChange: artifactRefs.length > 0,
+      allowArchivedAtFinish: input.status === "completed",
+    })
+  }
   for (const artifact of artifactRefs) await safeProjectEntry(project, artifact)
   if (input.status === "completed" && !artifactRefs.length) throw new RuntimeError("INVALID_ARGUMENT", "completed SPEC requires at least one artifact", { task })
   const nextTask = {
@@ -1107,7 +1302,8 @@ async function transitionTask(project, input, action, clock, dryRun) {
   let nextTask
   let workItems
   if (action === "await") {
-    if (task.status !== "active") throw new RuntimeError("ILLEGAL_TRANSITION", "only an active task can await user input", { exitCode: 4, task })
+    const repairsGateLessWait = task.status === "awaiting-user" && !task.awaitingUser?.gateRef && Boolean(input.gateId)
+    if (task.status !== "active" && !repairsGateLessWait) throw new RuntimeError("ILLEGAL_TRANSITION", "only an active task can await user input", { exitCode: 4, task })
     const declaration = input.gateId ? declaredGate(project, input.gateId) : null
     if (input.gateId && (!declaration || declaration.kind !== "human" || declaration.stage !== task.stage || configuredGateMode(project, declaration) === "disabled")) {
       throw new RuntimeError("INVALID_ARGUMENT", "awaited gate must be an enabled human gate declared for the current stage", { exitCode: 4, task })
@@ -1123,6 +1319,7 @@ async function transitionTask(project, input, action, clock, dryRun) {
       ? [...task.gates.filter(({ gateId }) => gateId !== declaration.id), {
           gateId: declaration.id,
           stage: task.stage,
+          stageRun: task.stageRun,
           kind: "human",
           status: "pending",
           evidenceRefs: [],
@@ -1138,7 +1335,7 @@ async function transitionTask(project, input, action, clock, dryRun) {
         requiredDecision: input.requiredDecision,
         ...(input.gateId ? { gateRef: input.gateId } : {}),
         ...(reviewEvidencePath ? { evidencePath: reviewEvidencePath } : {}),
-        requestedAt: timestamp,
+        requestedAt: repairsGateLessWait ? task.awaitingUser.requestedAt : timestamp,
       },
     }
   } else if (action === "resume") {
@@ -1310,13 +1507,15 @@ async function createTask(project, input, clock) {
     if (await exists(taskRoot)) throw new RuntimeError("WORK_ITEM_CONFLICT", `task already exists: ${taskId}`, { exitCode: 3 })
     const timestamp = now(clock)
     const task = {
-      schemaVersion: "1.0",
+      schemaVersion: "1.1",
       taskId,
       ...(input.title ? { title: input.title } : {}),
       workflow: { ...project.config.workflow },
       status: "active",
       stage,
       entryStage: stage,
+      stageRun: 1,
+      stageRunRequiresWork: false,
       revision: 0,
       spec: { status: "not-started", artifactRefs: [], configDigest: digest(JSON.stringify(project.config.spec)) },
       teamDecision: { mode: "undecided" },
@@ -1329,7 +1528,7 @@ async function createTask(project, input, clock) {
     await mkdir(path.join(taskRoot, "artifacts"), { recursive: true })
     await mkdir(path.join(taskRoot, ".txn"), { recursive: true })
     await atomicJson(path.join(taskRoot, "task.json"), task)
-    await atomicJson(path.join(taskRoot, "work-items.json"), { schemaVersion: "1.0", taskId, revision: 0, items: [] })
+    await atomicJson(path.join(taskRoot, "work-items.json"), { schemaVersion: "1.1", taskId, revision: 0, items: [] })
     await atomicWrite(path.join(taskRoot, "context.jsonl"), "")
     await atomicWrite(path.join(taskRoot, "events.jsonl"), "")
     await atomicWrite(path.join(taskRoot, "index.md"), `# ${input.title ?? taskId}\n\n当前阶段：${stage}\n`)
@@ -1337,14 +1536,86 @@ async function createTask(project, input, clock) {
   })
 }
 
+async function migrateProject(project, clock) {
+  const tasksRoot = path.join(project.stateRoot, "tasks")
+  const entries = await readdir(tasksRoot, { withFileTypes: true }).catch((error) => {
+    if (error.code === "ENOENT") return []
+    throw error
+  })
+  let migratedTasks = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue
+    const taskId = safeId(entry.name, "task id")
+    const taskRoot = path.join(tasksRoot, taskId)
+    const migrated = await withLock(path.join(taskRoot, ".lock"), async () => {
+      const task = await readJson(path.join(taskRoot, "task.json"), "task state")
+      const document = await readJson(path.join(taskRoot, "work-items.json"), "work-items document")
+      if (!["1.0", "1.1"].includes(task.schemaVersion) || !["1.0", "1.1"].includes(document.schemaVersion)) {
+        throw new RuntimeError("STATE_CORRUPT", "unsupported task schema version", { exitCode: 70 })
+      }
+      if (task.schemaVersion === "1.1" && document.schemaVersion === "1.1") {
+        await validate("task", task)
+        await validate("work-items", document)
+        return false
+      }
+      if (task.schemaVersion !== "1.0" || document.schemaVersion !== "1.0") {
+        throw new RuntimeError("STATE_CORRUPT", "task and work-items schema versions do not match", { exitCode: 70 })
+      }
+
+      const nextRevision = task.revision + 1
+      const nextTask = {
+        ...task,
+        schemaVersion: "1.1",
+        stageRun: Number.isInteger(task.stageRun) ? task.stageRun : 1,
+        stageRunRequiresWork: typeof task.stageRunRequiresWork === "boolean" ? task.stageRunRequiresWork : false,
+        gates: task.gates.map((gate) => ({ ...gate, stageRun: Number.isInteger(gate.stageRun) ? gate.stageRun : 1 })),
+        evidence: task.evidence.map((evidence) => ({ ...evidence, stageRun: Number.isInteger(evidence.stageRun) ? evidence.stageRun : 1 })),
+        revision: nextRevision,
+        updatedAt: now(clock),
+      }
+      const nextDocument = {
+        ...document,
+        schemaVersion: "1.1",
+        revision: nextRevision,
+        items: document.items.map((item) => ({
+          ...item,
+          schemaVersion: "1.1",
+          stageRun: Number.isInteger(item.stageRun) ? item.stageRun : 1,
+        })),
+      }
+      await validate("task", nextTask)
+      await validate("work-items", nextDocument)
+      const semanticIssues = validateWorkItemsSemantics(nextDocument)
+      if (semanticIssues.length) throw new RuntimeError("STATE_CORRUPT", "legacy work-items cannot be migrated safely", {
+        exitCode: 70,
+        task: nextTask,
+        blockers: semanticIssues.map((issue) => ({ code: "WORK_ITEMS_INVALID", kind: "work-item", ...issue })),
+      })
+      const event = await prepareEvent(nextTask, "runtime.migrated", clock, ["stage-run"])
+      await withLock(path.join(taskRoot, ".events.lock"), async () => {
+        const eventsContent = await preparedEventContent(path.join(taskRoot, "events.jsonl"), event)
+        await commitTaskFiles(taskRoot, taskId, [
+          { relativePath: "task.json", content: `${JSON.stringify(nextTask, null, 2)}\n` },
+          { relativePath: "work-items.json", content: `${JSON.stringify(nextDocument, null, 2)}\n` },
+          { relativePath: "events.jsonl", content: eventsContent },
+        ])
+      })
+      return true
+    })
+    if (migrated) migratedTasks += 1
+  }
+  return success({ migrated: migratedTasks > 0, schemaVersion: "1.1", tasks: migratedTasks })
+}
+
 export async function executeRuntime(request, dependencies = {}) {
   const clock = dependencies.clock ?? (() => new Date())
   try {
-    if (request.command === "version") return success({ runtimeVersion: "0.1.0-beta.0", apiVersion: "1.0", schemaVersion: "1.0" })
+    if (request.command === "version") return success({ runtimeVersion: "0.1.0-beta.0", apiVersion: "1.0", schemaVersion: "1.1" })
     if (request.command === "init") return await initialize(request.projectRoot, clock)
     if (request.command === "doctor") return await doctorProject(request.projectRoot, request.input.repair, request.input.force)
     const project = await loadProject(request.projectRoot)
-    if (request.command === "migrate") return success({ migrated: false, schemaVersion: "1.0" })
+    if (request.command === "migrate") return await migrateProject(project, clock)
+    if (request.command === "project.spec") return await updateProjectSpecReadiness(project, request.input, request.dryRun)
     if (request.command === "task.create") return await createTask(project, request.input, clock)
     if (request.command === "task.show") {
       const task = await resolveTask(project, request.input)
@@ -1362,7 +1633,10 @@ export async function executeRuntime(request, dependencies = {}) {
     if (request.command === "context.rebuild") return await rebuildContext(project, request.input, request.dryRun)
     if (request.command === "flow.check") return await checkFlow(project, request.input.taskId)
     if (request.command === "flow.status") return await flowStatus(project, request.input.taskId)
+    if (request.command === "flow.await") return await awaitDeclaredHuman(project, request.input, clock, request.dryRun)
     if (request.command === "flow.decide") return await decideFlow(project, request.input, clock, request.dryRun)
+    if (request.command === "flow.human") return await decideAwaitedHuman(project, request.input, clock, request.dryRun)
+    if (request.command === "flow.proceed") return await proceedFlow(project, request.input, clock, request.dryRun)
     if (request.command === "flow.advance") return await advanceFlow(project, request.input, clock, request.dryRun)
     if (request.command === "flow.rollback") return await rollbackFlow(project, request.input, clock, request.dryRun)
     if (request.command === "work.create") return await createWork(project, request.input, clock, request.dryRun)

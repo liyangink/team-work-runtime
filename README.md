@@ -225,7 +225,7 @@ flowchart LR
 
 Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者和 Expert 各有独立 work item；同一 work item 的多轮协作复用同一 session，跨阶段、换 Owner、失联或需要独立第二意见时才重建。
 
-默认有两个固定人工门禁：方案团队审查完成后的方案批准，以及任务完成前的最终验收。其他人工介入仍只在用户预先指定、高风险或团队无法自主收敛时触发。Lead 用简短普通回复说明结论、依据、可定位产物、修改影响、分歧/风险和建议，再提出一个明确问题；用户追问技术细节时转交原 Owner、挑战者或 Expert，不自行大量探索或猜测。
+默认有两个固定人工门禁：方案团队审查完成后的方案批准，以及任务完成前的最终验收。其他人工介入仍只在用户预先指定、高风险或团队无法自主收敛时触发。Lead 用简短普通回复说明结论、依据、可定位产物、修改影响、分歧/风险和建议，再提出一个明确问题；进入等待前清理外部续跑队列，等待期间不创建后台任务或定时轮询。用户追问技术细节时转交原 Owner、挑战者或 Expert，不自行大量探索或猜测。
 
 方案文档是需求、范围和实现方向的人机唯一批准基线。它必须用朴实语言完整描述修改点及影响；复杂关系使用适宜图表。重大核心逻辑可以引用附文件位置的现有代码片段，但不得臆造代码事实；拟议代码必须明确标注为伪代码或建议实现。批准绑定当前文档指纹，文档变化后必须重新确认。
 
@@ -236,6 +236,8 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 - `auto`：OpenSpec ready 时使用，missing 时跳过 SPEC。
 - `required`：OpenSpec missing 时阻塞。
 - `disabled`：始终跳过 SPEC。
+
+启用后，平台适配器会创建或恢复与 task-id 同名的活动 change。proposal 完成后按照 OpenSpec 实际返回的 `status/instructions` 推进 design/specs，最后生成 tasks；Lead 只选择 artifact 类型和 proposal 已确认的 capability 名称，物理路径由 Harness 生成。Runtime 会拒绝直接修改 canonical specs、archive 或其他 change，OpenSpec 未完成时也不能进入 SPEC 审查。离开 SPEC 后，仅实施阶段允许更新活动 change 的 `tasks.md`；需求或设计变化必须返回 SPEC。实现、测试和最终人工验收完成后，收尾环节才会严格验证并归档该 change。
 
 未使用 OpenSpec 时，Workflow 可根据方案直接进入实施，收尾阶段也只汇总实际存在的制品。未来可通过同一路由接入 Spec Kit 等工具。
 
@@ -332,9 +334,13 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagent，并把当前有效 Agent Profile 写入项目上下文。
 
-进入已绑定的团队任务后，OpenCode 右侧栏会显示 `Team` 区域：持续列出当前任务的受管成员、Agent、work item 以及工作中、重试、空闲、停止或失联状态。点击成员可直接进入对应 child session；进入成员会话后列表仍保留，并可一键返回 Lead。该视图只读取 Runtime 已有的 task/session 映射，不维护第二份团队状态。
+Lead 使用意图级工具控制 Harness：`team_work_overview` 只返回当前阶段、工作项数量、阻塞和下一步，`team_work_dispatch` 统一创建与后台派发，`team_work_sync` 挂起等待成员事件，`team_work_assess` 登记交付与独立审查，`team_work_continue` 统一处理阶段推进、人工审核和受管 SPEC 生命周期。门禁标识、底层 Runtime command、revision、session ID、SPEC 命令及路径选择都不暴露给模型。
 
-所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 用 resume 复用 child session。Plugin 持久记录成员当前派发轮次的待同步提示；Lead 可在明确同步点短暂调用 `team_work_wait`，事件到达会立即返回，事件遗漏则低频复核，默认 10 秒且最长 30 秒。随后仍须用 `team_work_collect` 核对消息、制品和证据；成员空闲、自报完成或平台显示完成都不等于验收通过。
+进入已绑定的团队任务后，OpenCode 右侧栏会显示 `Team` 区域：载入当前任务的受管成员、Agent、work item 及状态。点击成员可直接进入对应 child session；进入成员会话后列表仍保留，并可一键返回 Lead。成员创建或官方 session 状态变化时，侧栏从同步映射快照重算；“状态未载入”不表示成员不存在或失联。该视图不维护第二份团队状态，也不在 TUI 内运行后台轮询或私有事件监听。
+
+所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 由 `team_work_dispatch` 自动复用 child session。`team_work_sync` 默认挂起 5 分钟、最长 30 分钟，由 OpenCode session 事件直接唤醒；开始挂起时只做一次恢复快照，等待期间不轮询模型或平台状态。成员空闲、自报完成或平台显示完成都不等于验收通过。
+
+Lead 面向用户只汇报完成内容、当前研发阶段、关键制品、未决分歧或风险和下一步；除非在诊断故障，不应把工具名、门禁字段、revision、session 或 Runtime 命令写进工作汇报。
 
 受管成员的只读辅助同样使用非阻塞 child session。助手只做代码探索或资料检索，不创建 Runtime work item；成员在同步点收集结果后自行核验和整合。
 

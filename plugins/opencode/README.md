@@ -36,7 +36,7 @@ OpenCode 会自动发现全局 `plugins/` 下的 Server 入口；TUI 入口按�
 
 Plugin 启动时读取 `spec.command` 和 `spec.mode`。项目首次初始化时用 `--version` 与只读的 `list --json` 检查 OpenSpec；只有返回 `{ "changes": [...] }` 才标为 `ready`。
 
-`auto` 在 missing 时跳过 SPEC，`required` 会阻塞，`disabled` 始终跳过。Plugin 不会静默安装工具或修改 OpenSpec 资产。
+`auto` 在 missing 时跳过 SPEC，`required` 会阻塞，`disabled` 始终跳过。Plugin 不会静默安装工具。进入 SPEC 后，Plugin 会以 task-id 创建或恢复活动 change，读取 `status/instructions` 约束派单，完成时登记制品；最终人工验收通过后才执行严格校验和 archive。Agent 不能直接修改 canonical specs、archive 或其他任务 change。
 
 ## 生命周期
 
@@ -51,7 +51,9 @@ npx team-work-runtime@latest uninstall
 
 ## 平台运行规则
 
-OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中展示当前任务成员状态并调用原生 session route 跳转；Installer 统一装配和更新 Server/TUI 两类入口，并提供软启停与安全卸载。
+OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中同步读取当前任务成员快照并调用原生 session route 跳转，不注册后台轮询或异步状态订阅；Installer 统一装配和更新 Server/TUI 两类入口，并提供软启停与安全卸载。
+
+Server 为 Lead 提供少量意图级工具：`team_work_dispatch` 收敛创建—启动—派发，`team_work_assess` 收敛提交—审查—验收，`team_work_continue` 收敛人工审核与阶段推进。Runtime command、gate、revision、session ID、SPEC 探测和合法边选择都留在实现内。领域失败保留稳定错误和可执行 `remediation`，但不会中止 OpenCode 主会话；普通成员无权调用 Runtime 或 Lead 控制面工具。
 
 `solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；同一 work item 默认复用 child session，失联或停止后才受控替换并保留历史。禁止用阻塞式 `task` 工具替代受管派发。
 

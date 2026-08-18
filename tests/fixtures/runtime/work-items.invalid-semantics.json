@@ -1,13 +1,14 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "taskId": "review-existing-code",
   "revision": 0,
   "items": [
     {
-      "schemaVersion": "1.0",
+      "schemaVersion": "1.1",
       "workItemId": "duplicate",
       "taskId": "review-existing-code",
       "stage": "code-review",
+      "stageRun": 1,
       "owner": "senior-a",
       "status": "queued",
       "attempt": 1,
@@ -22,10 +23,11 @@
       "updatedAt": "2026-08-10T08:00:00.000Z"
     },
     {
-      "schemaVersion": "1.0",
+      "schemaVersion": "1.1",
       "workItemId": "duplicate",
       "taskId": "review-existing-code",
       "stage": "code-review",
+      "stageRun": 1,
       "owner": "senior-b",
       "status": "queued",
       "attempt": 1,

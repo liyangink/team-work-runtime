@@ -228,6 +228,7 @@ async function allowedManagedPaths(sourceRoot) {
     "plugins/team-work.js",
     "plugins/team-work-tui.tsx",
     `${PLATFORM_ROOT}/profile.json`,
+    `${PLATFORM_ROOT}/lead-controller.mjs`,
     ...MANAGED_AGENT_PATHS,
   ])
   for (const [source, destination] of [
@@ -420,12 +421,12 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
     helpers,
     dispatch: { managedMode: "background", blockingPolicy: "reject" },
     operations: {
-      spawn: { supported: true, tool: "team_work_spawn" },
-      assign: { supported: true, tool: "team_work_spawn" },
-      resume: { supported: true, tool: "team_work_resume" },
-      status: { supported: true, tool: "team_work_status" },
-      wait: { supported: true, tool: "team_work_wait" },
-      stop: { supported: true, tool: "team_work_stop" },
+      spawn: { supported: true, tool: "team_work_dispatch" },
+      assign: { supported: true, tool: "team_work_dispatch" },
+      resume: { supported: true, tool: "team_work_dispatch" },
+      status: { supported: true, tool: "team_work_sync" },
+      wait: { supported: true, tool: "team_work_sync" },
+      stop: { supported: false, tool: null },
       message: { supported: false, tool: null },
       assist: { supported: Boolean(helper), tool: helper ? "team_work_assist" : null },
       assistStatus: { supported: Boolean(helper), tool: helper ? "team_work_assist_status" : null },
@@ -454,6 +455,7 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
   await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
   await addTree(files, path.join(sourceRoot, "plugins/opencode/tui"), "team-work/tui")
   files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
+  files.set("team-work/lead-controller.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/lead-controller.mjs")))
   files.set("team-work/opencode-activation.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/activation.mjs")))
   files.set("team-work/opencode-agent-config.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/agent-config.mjs")))
   files.set("team-work/installer/user-config.mjs", await readFile(path.join(sourceRoot, "installer/user-config.mjs")))

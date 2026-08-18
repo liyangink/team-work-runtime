@@ -34,7 +34,7 @@ function unwrap(response) {
     throw failure("OPENCODE_API_ERROR", message, {
       retryable: true,
       statusCode: response.error?.status ?? response.response?.status,
-      remediation: ["查询 child session 状态", "网关恢复后使用 team_work_resume 重试", "持续失败时记录基础设施 blocker"],
+      remediation: ["使用 team_work_sync 查询 child session 状态", "网关恢复后使用 team_work_dispatch 续派", "持续失败时记录基础设施 blocker"],
     })
   }
   return response && Object.hasOwn(response, "data") ? response.data : response
@@ -131,6 +131,55 @@ function stableJson(value) {
 
 function eventFingerprint(value) {
   return createHash("sha256").update(stableJson(value)).digest("hex")
+}
+
+function uniqueRemediation(existing, additions) {
+  return [...new Set([...(existing ?? []), ...additions].filter(Boolean))]
+}
+
+export function withRuntimeRemediation(result, request = {}) {
+  const error = result?.envelope?.error
+  if (!error) return result
+  const command = request.command ?? ""
+  const additions = []
+
+  if (error.retryable === false) additions.push("该错误不可重试；不要重复同一个工具调用")
+  if (error.code === "TASK_NOT_FOUND" && command === "work.start") {
+    additions.push("调用 team_work_dispatch；它会自动判断应创建、启动、首次派发还是续派")
+  }
+  if (error.code === "ILLEGAL_TRANSITION" && command.startsWith("work.")) {
+    additions.push("先调用 team_work_overview，再按业务意图使用 team_work_dispatch 或 team_work_assess；不要手工驱动 work 状态")
+  }
+  if (error.code === "INVALID_ARGUMENT") {
+    const typed = {
+      "work.submit": "team_work_assess",
+      "work.accept": "team_work_assess",
+      "work.rework": "team_work_assess",
+      "flow.decide": "team_work_review_gate；人工审核使用 team_work_continue",
+    }[command]
+    if (typed) additions.push(`改用强类型 ${typed}，不要读取 Runtime 源码猜测 JSON 字段`)
+  }
+  if (error.code === "REVISION_CONFLICT") {
+    additions.push("先调用 task.show 或 work.show 读取最新 revision，重新判断后只重放一次写操作")
+  }
+  if (!additions.length) return result
+  return {
+    ...result,
+    envelope: {
+      ...result.envelope,
+      error: {
+        ...error,
+        remediation: uniqueRemediation(error.remediation, additions),
+      },
+    },
+  }
+}
+
+export function resolveOpenCodeProjectRoot({ directory, worktree }) {
+  const current = path.resolve(directory)
+  if (typeof worktree !== "string" || !worktree) return current
+  const candidate = path.resolve(worktree)
+  return candidate === path.parse(candidate).root ? current : candidate
 }
 
 export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platformProfile, platformSettings, now = () => new Date(), runtimeExecutor, assignmentValidator, waitPollMs = 1_000, waitIdleGraceMs = 1_500 }) {
@@ -244,7 +293,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       const status = statuses[mapping.sessionId]
       return !status || status.type === "idle"
     } catch {
-      // 不确定时不消费 idle 事件；有界等待的低频复核仍可恢复遗漏通知。
+      // 不确定时不消费 idle 事件；下一次显式挂起开始时的一次恢复快照可处理遗漏通知。
       return false
     }
   }
@@ -378,6 +427,29 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     })
   }
 
+  async function managedTaskForSession(sessionId) {
+    requireIdentifier(sessionId, "sessionId")
+    let mapping = null
+    let bound = false
+    try {
+      mapping = await findMapping(sessionId)
+      bound = await hasRuntimeBinding(sessionId)
+      const task = runtimeData(await executeRuntime({
+        command: "task.show",
+        input: mapping ? { taskId: mapping.taskId } : { platform: "opencode", sessionKey: sessionId },
+      }), "task.show").task
+      return {
+        managed: new Set(["active", "awaiting-user"]).has(task.status)
+          && new Set(["solo", "team"]).has(task.teamDecision?.mode),
+        task,
+      }
+    } catch {
+      // 已有 child mapping 或 Runtime binding 就属于受管会话；状态损坏时必须
+      // fail-closed，不能因此放行外部控制队列。完全无受管证据的会话仍放行。
+      return { managed: Boolean(mapping || bound), task: null }
+    }
+  }
+
   async function executeRuntime(request) {
     if (runtimeExecutor) return runtimeExecutor(request)
     const runtime = await import(pathToFileURL(path.join(installedPlatformRoot, "runtime/core.mjs")).href)
@@ -421,6 +493,15 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     }
   }
 
+  async function persistSpecReadiness(mode, status) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await executeRuntime({ command: "project.spec", input: { mode, status } })
+      if (result.exitCode === 0) return result.envelope.data.spec
+      if (result.envelope?.error?.code !== "LOCK_UNAVAILABLE" || attempt === 2) return runtimeData(result, "project.spec")
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)))
+    }
+  }
+
   async function synchronizeSpecReadiness() {
     let settings = platformSettings
     if (!settings) {
@@ -437,8 +518,9 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     if (config.spec?.type !== "openspec") return
     const mode = ["auto", "required", "disabled"].includes(settings.spec.mode) ? settings.spec.mode : "auto"
     if (mode === "disabled") {
-      const spec = { ...config.spec, mode, status: "disabled" }
-      if (JSON.stringify(config.spec) !== JSON.stringify(spec)) await atomicJson(configPath, { ...config, spec })
+      if (config.spec.mode !== mode || config.spec.status !== "disabled") {
+        await persistSpecReadiness(mode, "disabled")
+      }
       return
     }
     let ready = false
@@ -455,8 +537,240 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       // SPEC 是可选路由；未安装或未初始化只保持 missing，不阻塞其他阶段。
     }
     const status = ready ? "ready" : "missing"
-    const spec = { ...config.spec, mode, status }
-    if (JSON.stringify(config.spec) !== JSON.stringify(spec)) await atomicJson(configPath, { ...config, spec })
+    if (config.spec.mode !== mode || config.spec.status !== status) {
+      await persistSpecReadiness(mode, status)
+    }
+  }
+
+  async function openSpecSettings() {
+    let settings = platformSettings
+    if (!settings) {
+      settings = JSON.parse(await readFile(path.join(installedPlatformRoot, "settings.json"), "utf8").catch((error) => {
+        throw failure("SPEC_PROVIDER_UNAVAILABLE", `无法读取 SPEC provider 配置：${error.message}`, { retryable: false })
+      }))
+    }
+    if (settings?.spec?.provider !== "openspec" || typeof settings.spec.command !== "string" || settings.spec.mode === "disabled") {
+      throw failure("SPEC_PROVIDER_UNAVAILABLE", "OpenSpec provider 未启用或未配置命令", { retryable: false })
+    }
+    return settings.spec
+  }
+
+  async function runOpenSpec(args, { timeout = 30_000 } = {}) {
+    const settings = await openSpecSettings()
+    try {
+      return await execFile(settings.command, args, {
+        cwd: root,
+        encoding: "utf8",
+        timeout,
+        maxBuffer: 8 * 1024 * 1024,
+      })
+    } catch (error) {
+      throw failure("SPEC_PROVIDER_FAILED", `OpenSpec ${args.join(" ")} 失败：${error.stderr?.trim() || error.message}`, {
+        retryable: false,
+        cause: error,
+        remediation: ["修复 OpenSpec 命令或变更内容后重试", "不要降级为直接修改 canonical 或 archive 文档"],
+      })
+    }
+  }
+
+  async function projectSpecConfig() {
+    return JSON.parse(await readFile(path.join(root, ".team-work/config.yaml"), "utf8"))
+  }
+
+  async function openSpecChange(taskId, { create = false } = {}) {
+    requireIdentifier(taskId, "taskId")
+    await ensureProjectReady()
+    await synchronizeSpecReadiness()
+    const config = await projectSpecConfig()
+    if (config.spec.type !== "openspec" || config.spec.status !== "ready") {
+      throw failure("SPEC_PROVIDER_UNAVAILABLE", "OpenSpec 当前不可用，不能创建或推进 SPEC", { retryable: false })
+    }
+    const specRoot = `${String(config.spec.root).replace(/^\/+|\/+$/g, "")}/`
+    const activeRoot = `${specRoot}changes/${taskId}/`
+    if (create && !await pathExists(path.join(root, activeRoot))) {
+      await runOpenSpec(["new", "change", taskId, "--schema", "spec-driven"])
+    }
+    if (!await pathExists(path.join(root, activeRoot))) {
+      throw failure("SPEC_CHANGE_NOT_FOUND", `未找到当前任务的活动 OpenSpec change：${taskId}`, {
+        retryable: false,
+        remediation: [`通过受管 SPEC 流程创建 ${activeRoot}`, "不要复用 archive 或其他任务的 change"],
+      })
+    }
+    const { stdout } = await runOpenSpec(["status", "--change", taskId, "--json"])
+    let status
+    try {
+      status = JSON.parse(stdout)
+    } catch {
+      throw failure("SPEC_PROVIDER_INVALID_RESPONSE", "OpenSpec status 未返回合法 JSON", { retryable: false })
+    }
+    const instructions = []
+    const ready = []
+    for (const artifact of status.artifacts ?? []) {
+      if (!["ready", "done"].includes(artifact.status)) continue
+      const instruction = await runOpenSpec(["instructions", artifact.id, "--change", taskId, "--json"])
+      try {
+        const parsed = JSON.parse(instruction.stdout)
+        instructions.push(parsed)
+        if (artifact.status === "ready") ready.push(parsed)
+      } catch {
+        throw failure("SPEC_PROVIDER_INVALID_RESPONSE", `OpenSpec instructions ${artifact.id} 未返回合法 JSON`, { retryable: false })
+      }
+    }
+    return { ...status, activeRoot, instructions, ready }
+  }
+
+  async function collectFiles(relativeRoot, predicate = () => true) {
+    const collected = []
+    async function visit(relativeDirectory) {
+      const entries = await readdir(path.join(root, relativeDirectory), { withFileTypes: true })
+      for (const entry of entries) {
+        const relativePath = `${relativeDirectory.replace(/\/$/, "")}/${entry.name}`
+        if (entry.isDirectory()) await visit(relativePath)
+        else if (entry.isFile() && predicate(relativePath)) collected.push(relativePath)
+      }
+    }
+    await visit(relativeRoot.replace(/\/$/, ""))
+    return collected.sort()
+  }
+
+  async function writeOpenSpecManifest(taskId, lifecycle, artifactRefs) {
+    const manifestPath = `.team-work/tasks/${taskId}/artifacts/openspec-change.md`
+    const lines = [
+      `# OpenSpec change: ${taskId}`,
+      "",
+      `生命周期：${lifecycle}`,
+      "",
+      "以下路径是事实源；本文件只保存稳定索引：",
+      "",
+      ...artifactRefs.map((entry) => `- \`${entry}\``),
+      "",
+    ]
+    await atomicFile(path.join(root, manifestPath), lines.join("\n"))
+    return manifestPath
+  }
+
+  async function ensureOpenSpec(taskId) {
+    const change = await openSpecChange(taskId, { create: true })
+    let task = runtimeData(await executeRuntime({ command: "task.show", input: { taskId } }), "task.show").task
+    if (task.stage !== "spec") throw failure("SPEC_STAGE_REQUIRED", `当前阶段 ${task.stage} 不能创建 OpenSpec change`, { retryable: false })
+    if (task.spec.status !== "in-progress") {
+      task = runtimeData(await executeRuntime({
+        command: "task.spec",
+        input: { taskId, status: "in-progress", reason: "OpenSpec active change prepared", expectedRevision: task.revision },
+      }), "task.spec").task
+    }
+    return { task, change }
+  }
+
+  async function prepareOpenSpecDispatch({ taskId, artifactId, capabilities = [], prompt, allowCompleted = false }) {
+    const { change } = await ensureOpenSpec(taskId)
+    const activeRoot = change.activeRoot
+    if (!["proposal", "design", "specs", "tasks"].includes(artifactId)) {
+      throw failure("SPEC_ARTIFACT_REQUIRED", "SPEC 派单必须选择 proposal、design、specs 或 tasks", { retryable: false })
+    }
+    const state = change.artifacts?.find(({ id }) => id === artifactId)
+    const dispatchable = state?.status === "ready" || (allowCompleted && state?.status === "done")
+    if (!dispatchable) {
+      throw failure("SPEC_ARTIFACT_NOT_READY", `${artifactId} 当前状态 ${state?.status ?? "unknown"}，不可派发`, {
+        retryable: false,
+        remediation: ["按 provider 返回的 ready artifact 顺序派发", "done artifact 只允许原 work item 的返工或续派"],
+      })
+    }
+    const instruction = change.instructions.find((entry) => entry.artifactId === artifactId)
+    if (!instruction) throw failure("SPEC_PROVIDER_INVALID_RESPONSE", `OpenSpec 未返回 ${artifactId} instructions`, { retryable: false })
+    let artifactPaths
+    if (artifactId === "specs") {
+      if (!Array.isArray(capabilities) || capabilities.length === 0) {
+        throw failure("SPEC_CAPABILITY_REQUIRED", "specs artifact 必须提供 proposal 中已经确认的 capability 名称", { retryable: false })
+      }
+      const invalid = capabilities.find((entry) => !/^[a-z0-9][a-z0-9-]{0,127}$/.test(entry))
+      if (invalid) throw failure("SPEC_CAPABILITY_INVALID", `capability 必须使用 kebab-case：${invalid}`, { retryable: false })
+      artifactPaths = [...new Set(capabilities)].map((entry) => `${activeRoot}specs/${entry}/spec.md`)
+    } else {
+      if (capabilities.length) throw failure("SPEC_CAPABILITY_INVALID", `${artifactId} 不接受 capability 参数`, { retryable: false })
+      artifactPaths = [`${activeRoot}${instruction.outputPath}`]
+    }
+    const target = artifactId === "specs" ? artifactPaths.join("、") : artifactPaths[0]
+    const providerGuide = [
+      `[OpenSpec ${instruction.artifactId}]`,
+      `目标：${target}`,
+      instruction.instruction,
+      `模板：\n${instruction.template}`,
+    ].join("\n")
+    return { prompt: `${prompt}\n\n${providerGuide}`, artifactPaths, change }
+  }
+
+  async function completeOpenSpec(taskId) {
+    const change = await openSpecChange(taskId)
+    if (!change.isComplete) return { complete: false, change }
+    const artifactRefs = await collectFiles(change.activeRoot, (entry) => entry.endsWith(".md"))
+    if (!artifactRefs.length) throw failure("SPEC_PROVIDER_INVALID_RESPONSE", "OpenSpec 声称完成但没有可登记的 Markdown 制品", { retryable: false })
+    let task = runtimeData(await executeRuntime({ command: "task.show", input: { taskId } }), "task.show").task
+    if (task.spec.status !== "completed" || JSON.stringify(task.spec.artifactRefs) !== JSON.stringify(artifactRefs)) {
+      task = runtimeData(await executeRuntime({
+        command: "task.spec",
+        input: { taskId, status: "completed", artifactPaths: artifactRefs, reason: "OpenSpec provider reports all required artifacts complete", expectedRevision: task.revision },
+      }), "task.spec").task
+    }
+    const manifestPath = await writeOpenSpecManifest(taskId, "active-complete", artifactRefs)
+    const contexts = runtimeData(await executeRuntime({ command: "context.list", input: { taskId } }), "context.list").entries
+    if (!contexts.some(({ contextId }) => contextId === "openspec-change")) {
+      runtimeData(await executeRuntime({
+        command: "context.register",
+        input: {
+          taskId, contextId: "openspec-change", path: manifestPath, kind: "spec",
+          profiles: ["lead", "implement", "check"], priority: 100, mustRead: true,
+          summary: `OpenSpec ${taskId} 活动变更制品索引`, expectedRevision: task.revision,
+        },
+      }), "context.register")
+      task = runtimeData(await executeRuntime({ command: "task.show", input: { taskId } }), "task.show").task
+    }
+    return { complete: true, task, change, artifactRefs, manifestPath }
+  }
+
+  async function archivedOpenSpecRoot(taskId) {
+    const config = await projectSpecConfig()
+    const archiveRoot = `${String(config.spec.root).replace(/^\/+|\/+$/g, "")}/changes/archive`
+    let entries
+    try {
+      entries = await readdir(path.join(root, archiveRoot), { withFileTypes: true })
+    } catch (error) {
+      if (error.code === "ENOENT") return null
+      throw error
+    }
+    return entries
+      .filter((entry) => entry.isDirectory() && entry.name.endsWith(`-${taskId}`))
+      .map((entry) => `${archiveRoot}/${entry.name}`)
+      .sort()
+      .at(-1) ?? null
+  }
+
+  async function archiveOpenSpec(taskId) {
+    requireIdentifier(taskId, "taskId")
+    await ensureProjectReady()
+    const config = await projectSpecConfig()
+    const specRoot = `${String(config.spec.root).replace(/^\/+|\/+$/g, "")}/`
+    const activeRoot = `${specRoot}changes/${taskId}`
+    let archivedRoot = await archivedOpenSpecRoot(taskId)
+    const hadActive = await pathExists(path.join(root, activeRoot))
+    if (hadActive) {
+      const change = await openSpecChange(taskId)
+      if (!change.isComplete) throw failure("SPEC_ARCHIVE_BLOCKED", "OpenSpec change 尚未完成，不能归档", { retryable: false })
+      await runOpenSpec(["validate", taskId, "--type", "change", "--strict", "--json", "--no-interactive"])
+      await runOpenSpec(["archive", taskId, "--yes"], { timeout: 60_000 })
+      archivedRoot = await archivedOpenSpecRoot(taskId)
+    }
+    if (!archivedRoot) throw failure("SPEC_ARCHIVE_NOT_FOUND", "OpenSpec archive 完成后未找到归档目录", { retryable: false })
+    const artifactRefs = await collectFiles(archivedRoot, (entry) => entry.endsWith(".md"))
+    let task = runtimeData(await executeRuntime({ command: "task.show", input: { taskId } }), "task.show").task
+    if (JSON.stringify(task.spec.artifactRefs) !== JSON.stringify(artifactRefs)) {
+      task = runtimeData(await executeRuntime({
+        command: "task.spec",
+        input: { taskId, status: "completed", artifactPaths: artifactRefs, reason: "OpenSpec change archived at workflow finish", expectedRevision: task.revision },
+      }), "task.spec").task
+    }
+    const manifestPath = await writeOpenSpecManifest(taskId, "archived", artifactRefs)
+    return { task, archivedRoot, artifactRefs, manifestPath, recovered: !hadActive }
   }
 
   async function ensureProjectReady() {
@@ -466,6 +780,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           const initialized = await executeRuntime({ command: "init", input: {} })
           runtimeData(initialized, "init")
         }
+        runtimeData(await executeRuntime({ command: "migrate", input: {} }), "migrate")
         await copyPlatformContext()
         await synchronizeSpecReadiness()
       })().catch((error) => {
@@ -478,10 +793,11 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
 
   function runtimeData(result, operation) {
     if (result?.exitCode === 0) return result.envelope.data
-    throw failure(result?.envelope?.code ?? "RUNTIME_VALIDATION_FAILED", `${operation} 失败：${result?.envelope?.message ?? "Runtime 拒绝操作"}`, {
-      retryable: Boolean(result?.envelope?.retryable),
-      blockers: result?.envelope?.blockers ?? [],
-      remediation: result?.envelope?.remediation ?? [],
+    const error = result?.envelope?.error ?? result?.envelope ?? {}
+    throw failure(error.code ?? "RUNTIME_VALIDATION_FAILED", `${operation} 失败：${error.message ?? "Runtime 拒绝操作"}`, {
+      retryable: Boolean(error.retryable),
+      blockers: error.blockers ?? [],
+      remediation: error.remediation ?? [],
     })
   }
 
@@ -620,7 +936,49 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     }
   }
 
+  async function resolveUserDecision({ sessionId, requestedAt }) {
+    requireIdentifier(sessionId, "sessionId")
+    const messages = await callSdk("OpenCode session.messages", () => client.session.messages({
+      path: { id: sessionId },
+      query: { directory: root },
+    })) ?? []
+    const threshold = new Date(requestedAt).getTime()
+    const candidate = messages
+      .filter(({ info }) => info?.role === "user" && Number(info.time?.created) >= threshold)
+      .at(-1)
+    const content = candidate?.parts?.filter(({ type, ignored }) => type === "text" && !ignored).map(({ text }) => text).join("\n").trim() ?? ""
+    const rejected = /(?:拒绝|不同意|不批准|不通过|不要继续|驳回|返工|\breject\b|\bno\b)/i.test(content)
+    const approved = !rejected && /(?:批准|同意|确认|通过|可以|继续|\bapprove\b|\baccept\b|\byes\b)/i.test(content)
+    if (!candidate || !content || (!approved && !rejected)) {
+      throw failure("EXPLICIT_USER_DECISION_REQUIRED", "未找到人工门禁请求之后用户明确的批准或驳回决定", { retryable: false })
+    }
+    return { action: rejected ? "reject" : "approve", messageId: candidate.info.id, content }
+  }
+
   return {
+    resolveUserDecision,
+    ensureOpenSpec,
+    prepareOpenSpecDispatch,
+    completeOpenSpec,
+    archiveOpenSpec,
+
+    async assertUserDecision({ sessionId, action, requestedAt }) {
+      const decision = await resolveUserDecision({ sessionId, requestedAt })
+      if (decision.action !== action) {
+        throw failure("EXPLICIT_USER_DECISION_REQUIRED", `未找到人工门禁请求之后用户明确的 ${action} 决定`, { retryable: false })
+      }
+      return decision
+    },
+
+    async assertAgentAvailable(agent) {
+      requireIdentifier(agent, "agent")
+      await ensureProjectReady()
+      const profile = JSON.parse(await readFile(path.join(root, ".team-work/platform/opencode/profile.json"), "utf8"))
+      const candidate = profile.agents?.find(({ id }) => id === agent)
+      if (!candidate?.resolvedModel) throw failure("AGENT_UNAVAILABLE", `Agent ${agent} 未安装或模型未解析`)
+      return candidate
+    },
+
     async spawn({ taskId, workItemId, parentSessionId, agent, contextProfile = "implement", prompt, title }) {
       requireIdentifier(taskId, "taskId")
       requireIdentifier(workItemId, "workItemId")
@@ -894,7 +1252,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       return { ...collected, messages }
     },
 
-    async wait({ taskId, workItemIds, requesterSessionId, timeoutMs = 10_000, signal }) {
+    async wait({ taskId, workItemIds, requesterSessionId, timeoutMs = 300_000, signal }) {
       requireIdentifier(taskId, "taskId")
       if (requesterSessionId) {
         requireIdentifier(requesterSessionId, "requesterSessionId")
@@ -902,12 +1260,12 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
           throw failure("WAIT_LEAD_REQUIRED", "只有 Lead 控制面可以等待团队同步；成员继续执行自己的 work item")
         }
       }
-      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
-        throw failure("INVALID_WAIT_TIMEOUT", "timeoutMs 必须是 1 到 30000 的整数")
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 1_800_000) {
+        throw failure("INVALID_WAIT_TIMEOUT", "timeoutMs 必须是 1 到 1800000 的整数")
       }
       const startedAt = Date.now()
       const deadline = startedAt + timeoutMs
-      let reconcileError
+      let recoveryError
 
       const resultFrom = (mappings) => {
         const items = mappings.flatMap((mapping) => {
@@ -931,42 +1289,43 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
         return { outcome, taskId, waitedMs: Date.now() - startedAt, items }
       }
 
-      while (true) {
-        let mappings = await listTaskMappings(taskId, workItemIds)
-        const available = resultFrom(mappings)
-        if (available) return available
+      let mappings = await listTaskMappings(taskId, workItemIds)
+      const available = resultFrom(mappings)
+      if (available) return available
 
-        try {
-          const reconcileBudgetMs = Math.max(1, Math.min(waitPollMs, deadline - Date.now()))
-          const statuses = await settleWithin(
-            callSdk("OpenCode session.status", () => client.session.status({ query: { directory: root } })),
-            reconcileBudgetMs,
-          ) ?? {}
-          for (const mapping of mappings) {
-            const dispatchedAt = new Date(mapping.lastDispatchAt ?? mapping.createdAt).getTime()
-            if (Date.now() - dispatchedAt < waitIdleGraceMs) continue
-            const status = statuses[mapping.sessionId]
-            if (status?.type === "idle") await recordPendingSync(mapping, "idle", { source: "reconcile" })
-            if (status) continue
-            try {
-              await settleWithin(
-                callSdk("OpenCode session.get", () => client.session.get({ path: { id: mapping.sessionId }, query: { directory: root } })),
-                Math.max(1, Math.min(waitPollMs, deadline - Date.now())),
-              )
-              await recordPendingSync(mapping, "idle", { source: "reconcile" })
-            } catch (error) {
-              if (error.statusCode === 404) await markLost(mapping, "OpenCode 无法找到 child session")
-              else throw error
-            }
+      // 只在挂起开始时读取一次原生状态，用于恢复进程重启或已经遗漏的事件。
+      // 此后完全由 OpenCode session 事件唤醒，不再用模型或定时状态轮询推进。
+      try {
+        const recoveryBudgetMs = Math.max(1, Math.min(waitPollMs, deadline - Date.now()))
+        const statuses = await settleWithin(
+          callSdk("OpenCode session.status", () => client.session.status({ query: { directory: root } })),
+          recoveryBudgetMs,
+        ) ?? {}
+        for (const mapping of mappings) {
+          const dispatchedAt = new Date(mapping.lastDispatchAt ?? mapping.createdAt).getTime()
+          if (Date.now() - dispatchedAt < waitIdleGraceMs) continue
+          const status = statuses[mapping.sessionId]
+          if (status?.type === "idle") await recordPendingSync(mapping, "idle", { source: "recovery" })
+          if (status) continue
+          try {
+            await settleWithin(
+              callSdk("OpenCode session.get", () => client.session.get({ path: { id: mapping.sessionId }, query: { directory: root } })),
+              Math.max(1, Math.min(waitPollMs, deadline - Date.now())),
+            )
+            await recordPendingSync(mapping, "idle", { source: "recovery" })
+          } catch (error) {
+            if (error.statusCode === 404) await markLost(mapping, "OpenCode 无法找到 child session")
+            else throw error
           }
-          reconcileError = undefined
-        } catch (error) {
-          reconcileError = errorSummary(error)
         }
-        mappings = await listTaskMappings(taskId, workItemIds)
-        const reconciled = resultFrom(mappings)
-        if (reconciled) return reconciled
+      } catch (error) {
+        recoveryError = errorSummary(error)
+      }
 
+      while (true) {
+        mappings = await listTaskMappings(taskId, workItemIds)
+        const signaled = resultFrom(mappings)
+        if (signaled) return signaled
         const remainingMs = deadline - Date.now()
         if (remainingMs <= 0) {
           return {
@@ -974,10 +1333,10 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
             taskId,
             waitedMs: Date.now() - startedAt,
             items: [],
-            ...(reconcileError ? { reconcileError } : {}),
+            ...(recoveryError ? { recoveryError } : {}),
           }
         }
-        await waitForSignal(Math.min(waitPollMs, remainingMs), signal)
+        await waitForSignal(remainingMs, signal)
       }
     },
 
@@ -1025,13 +1384,21 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
       if (mapping) {
         lines.push(`work-item: ${mapping.workItemId}`, `agent: ${mapping.agent}`)
         lines.push("只读取分配范围所需路径；摘要不能替代原文，不要扫描无关任务资产：")
+      } else if (task.status === "awaiting-user") {
+        lines.push("当前正在等待用户明确决定；提交一次简明请求后停止本轮，不得启动后台任务、定时检查、team_work_sync 或反复 overview 轮询。")
+        lines.push("如果外部 TODO 仍有未完成项，只可用 todowrite 将全部标为 completed/cancelled；不要保留‘用户回复后继续’之类 pending 项。")
       } else {
         lines.push("这是 Lead 控制面索引；不要扫描整个任务目录或代替成员处理具体内容：")
+        lines.push("创建、启动与后台派发统一使用 team_work_dispatch；同一 work item 会自动续派原会话。")
+        lines.push("提交、审查与验收统一使用 team_work_assess；阶段推进、人工审核和批准恢复统一使用 team_work_continue。")
+        if (task.stage === "spec") lines.push("OpenSpec 生命周期由 Harness 管理：只派发当前 change 的 ready/返工 artifact，不要直接修改 canonical specs、archive 或历史 change。")
+        lines.push("对用户只汇报：完成了什么、当前阶段、关键制品、未决分歧/风险、下一步；不要复述工具名、gate、revision、session 或 Runtime 命令等内部黑话。")
+        lines.push("不可重试错误不要重复调用；按 remediation 改动作或参数，不要读取 Runtime 源码猜测接口。")
       }
       for (const entry of rendered.envelope.data.entries) {
         lines.push(`- ${entry.mustRead ? "[必读] " : ""}${entry.path} (${entry.kind})${entry.summary ? `：${entry.summary}` : ""}`)
       }
-      if (!mapping) {
+      if (!mapping && task.status !== "awaiting-user") {
         let mappings = []
         try {
           mappings = await listTaskMappings(task.taskId)
@@ -1042,7 +1409,7 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
         if (pending.length) {
           lines.push("", "[待同步成员]")
           for (const candidate of pending) {
-            lines.push(`- ${candidate.workItemId} · ${candidate.pendingSync.kind} · dispatch ${candidate.pendingSync.dispatchSeq}；调用 team_work_collect 核对消息和制品后再决定下一步`)
+            lines.push(`- ${candidate.workItemId} · ${candidate.pendingSync.kind} · dispatch ${candidate.pendingSync.dispatchSeq}；调用 team_work_sync 核对消息和制品后再决定下一步`)
           }
         }
       }
@@ -1051,8 +1418,8 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
 
     async runtime(request) {
       await ensureProjectReady()
-      if (request.command === "doctor") await synchronizeSpecReadiness()
-      return executeRuntime(request)
+      if (["doctor", "flow.advance", "flow.proceed"].includes(request.command)) await synchronizeSpecReadiness()
+      return withRuntimeRemediation(await executeRuntime(request), request)
     },
 
     async handleEvent(event) {
@@ -1083,21 +1450,40 @@ export function createOpenCodeAdapter({ client, projectRoot, platformRoot, platf
     },
 
     async isManagedTeamSession(sessionId) {
-      let mapping = null
-      let bound = false
-      try {
-        mapping = await findMapping(sessionId)
-        bound = await hasRuntimeBinding(sessionId)
-        const task = runtimeData(await executeRuntime({
-          command: "task.show",
-          input: mapping ? { taskId: mapping.taskId } : { platform: "opencode", sessionKey: sessionId },
-        }), "task.show").task
-        return task.status === "active" && new Set(["solo", "team"]).has(task.teamDecision?.mode)
-      } catch {
-        // 已有 child mapping 或 Runtime binding 就属于受管会话；状态损坏时必须
-        // fail-closed，不能因此放行原生阻塞 task。完全无受管证据的会话仍放行。
-        return Boolean(mapping || bound)
+      return (await managedTaskForSession(sessionId)).managed
+    },
+
+    async assertExternalTodoWriteAllowed(sessionId, todos) {
+      const { managed } = await managedTaskForSession(sessionId)
+      if (!managed) return { managed: false }
+      const cleanupOnly = Array.isArray(todos) && todos.every(({ status }) => new Set(["completed", "cancelled"]).has(status))
+      if (!cleanupOnly) {
+        throw failure("TEAM_WORK_EXTERNAL_TODO_REJECTED", "受管任务以 Runtime task/work-item 为唯一控制状态；todowrite 只允许清空既有待办，不得新增 pending/in_progress 项", {
+          retryable: false,
+          remediation: ["如已有外部 TODO，将所有项目标为 completed/cancelled 后重试", "后续工作只登记为 Runtime work item"],
+        })
       }
+      return { managed: true, cleanupOnly: true }
+    },
+
+    async assertNoPendingExternalTodos(sessionId) {
+      requireIdentifier(sessionId, "sessionId")
+      if (typeof client.session.todo !== "function") {
+        throw failure("OPENCODE_CAPABILITY_MISSING", "OpenCode session.todo 不可用，无法安全进入人工等待", { retryable: false })
+      }
+      const todos = await callSdk("OpenCode session.todo", () => client.session.todo({
+        path: { id: sessionId },
+        query: { directory: root },
+      })) ?? []
+      const pending = todos.filter(({ status }) => !new Set(["completed", "cancelled"]).has(status))
+      if (pending.length) {
+        throw failure("EXTERNAL_TODO_BLOCKS_HUMAN_WAIT", `进入人工等待前必须清理 ${pending.length} 个外部 TODO，避免 continuation 后台轮询`, {
+          retryable: false,
+          blockers: pending.map(({ content, status }) => ({ code: "EXTERNAL_TODO_PENDING", kind: "platform", path: status, message: content })),
+          remediation: ["调用 todowrite 将所有既有项目标为 completed/cancelled", "不要创建‘用户回复后继续’的 pending TODO", "清理后重新调用 team_work_continue"],
+        })
+      }
+      return { pending: 0 }
     },
 
     async isManagedHelperSession(sessionId) {

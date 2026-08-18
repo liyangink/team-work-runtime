@@ -13,6 +13,7 @@
 ```text
 team-work init --project <root> --json
 team-work doctor --project <root> --json
+team-work project spec --project <root> --mode <auto|required|disabled> --status <ready|missing|disabled> --json
 team-work task create --project <root> --task <task-id> --title <title> --entry-stage <stage> --json
 team-work task show --project <root> --task <task-id> --json
 team-work task bind --project <root> --task <task-id> --platform <platform> --session <session> --json
@@ -42,6 +43,8 @@ team-work task complete --project <root> --task <task-id> --summary <summary> --
 首次 `task bind` 不传 `--expected-revision`；覆盖已有绑定时传上次 `data.binding.revision`，不要传 task revision。绑定不改变 task revision。
 
 创建团队工作项及验收命令由 `team-work` Skill 使用，Workflow 只消费已验收结果。
+
+`project spec` 和 `task spec` 都是 provider 适配层使用的底层状态接口。前者在 Runtime 项目锁内更新可用性，后者记录任务生命周期。配置 OpenSpec 时，Lead 不直接调用它们，也不自行填写路径；OpenSpec Adapter 会把状态和制品限定到当前任务的活动 change，并在最终收尾归档后更新引用。
 
 ## 错误分支
 

@@ -42,6 +42,14 @@ async function readStableProjectFile(root, candidate, relativePath) {
     }
     const resolved = await realpath(candidate)
     if (!isInside(root, resolved)) throw verifierError("EVIDENCE_PATH_ESCAPE", `artifact resolves outside project root: ${relativePath}`)
+    const finalLinked = await lstat(candidate, { bigint: true })
+    const finalResolved = await lstat(resolved, { bigint: true })
+    if (
+      finalLinked.isSymbolicLink()
+      || !finalLinked.isFile()
+      || !sameFile(before, finalLinked)
+      || !sameFile(before, finalResolved)
+    ) return { mismatch: "path-replaced-after-resolution" }
     return { content }
   } catch (error) {
     if (["ELOOP", "EMLINK"].includes(error.code)) {

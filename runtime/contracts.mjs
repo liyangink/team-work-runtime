@@ -13,6 +13,7 @@ const schemaFiles = [
   "execution-port.schema.json",
   "spec-provider.schema.json",
   "decision-packet.schema.json",
+  "project-marker.schema.json",
 ]
 
 const ajv = new Ajv2020({ allErrors: true, strict: true, strictRequired: false })

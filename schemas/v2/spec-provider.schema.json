@@ -101,17 +101,7 @@
         "status": { "enum": ["confirmed", "blocked", "in-doubt"] },
         "archiveRefs": { "type": "array", "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }, "uniqueItems": true },
         "observedAt": { "type": "string", "format": "date-time" }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
-          "then": { "required": ["result"] }
-        },
-        {
-          "if": { "properties": { "status": { "const": "missing" } }, "required": ["status"] },
-          "then": { "not": { "required": ["result"] } }
-        }
-      ]
+      }
     },
     "inspectIntent": {
       "type": "object",
@@ -136,7 +126,25 @@
         "result": { "oneOf": [{ "$ref": "#/$defs/capability" }, { "$ref": "#/$defs/archiveReceipt" }] },
         "blocker": { "type": "string", "minLength": 1 },
         "observedAt": { "type": "string", "format": "date-time" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
+          "then": { "required": ["result"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "missing" } }, "required": ["status"] },
+          "then": { "not": { "required": ["result"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "prepare" } }, "required": ["kind", "result"] },
+          "then": { "properties": { "result": { "$ref": "#/$defs/capability" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "archive" } }, "required": ["kind", "result"] },
+          "then": { "properties": { "result": { "$ref": "#/$defs/archiveReceipt" } } }
+        }
+      ]
     }
   }
 }

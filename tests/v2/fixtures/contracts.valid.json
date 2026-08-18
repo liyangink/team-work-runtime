@@ -11,6 +11,8 @@
     "schemaRef": "https://team-work-runtime.dev/schemas/v2/decision-packet",
     "data": {
       "packetId": "packet-1",
+      "version": 1,
+      "factsDigest": "sha256:facts",
       "question": "是否接受并发策略？",
       "stage": "design-review",
       "roster": [
@@ -61,6 +63,34 @@
         "configDigest": "sha256:config",
         "routeStateDigest": "sha256:route"
       }
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/archiveReceipt",
+    "data": {
+      "operationId": "spec-op-1",
+      "effectDigest": "sha256:spec-effect",
+      "task": {
+        "providerId": "openspec",
+        "taskId": "task-1",
+        "stageRunId": "run-9",
+        "configDigest": "sha256:config",
+        "routeStateDigest": "sha256:route"
+      },
+      "status": "confirmed",
+      "archiveRefs": ["openspec/changes/archive/task-1"],
+      "observedAt": "2026-08-18T10:00:00.000Z"
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/executionReceipt",
+    "data": {
+      "operationId": "op-1",
+      "effectDigest": "sha256:effect",
+      "status": "confirmed",
+      "executionRef": "execution-1",
+      "agentId": "junior-luna",
+      "observedAt": "2026-08-18T10:00:00.000Z"
     }
   }
 ]

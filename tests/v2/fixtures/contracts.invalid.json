@@ -10,11 +10,13 @@
     "schemaRef": "https://team-work-runtime.dev/schemas/v2/decision-packet",
     "data": {
       "packetId": "packet-1",
+      "version": 1,
+      "factsDigest": "sha256:facts",
       "question": "是否接受？",
       "stage": "design-review",
       "roster": [],
       "claims": [],
-      "rounds": [{ "round": 4, "outcome": "continue", "resolved": [], "unresolved": [] }],
+      "rounds": [{ "round": 0, "outcome": "continue", "resolved": [], "unresolved": [] }],
       "artifactRefs": [],
       "choices": []
     }
@@ -56,6 +58,26 @@
     "data": {
       "kind": "source",
       "locator": { "type": "project-path", "value": "../outside.txt" }
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/execution-port#/$defs/executionReceipt",
+    "data": {
+      "operationId": "op-1",
+      "effectDigest": "sha256:effect",
+      "status": "confirmed",
+      "agentId": "junior-luna",
+      "observedAt": "2026-08-18T10:00:00.000Z"
+    }
+  },
+  {
+    "schemaRef": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/operationInspection",
+    "data": {
+      "operationId": "spec-op-1",
+      "effectDigest": "sha256:spec-effect",
+      "kind": "archive",
+      "status": "confirmed",
+      "observedAt": "2026-08-18T10:00:00.000Z"
     }
   }
 ]

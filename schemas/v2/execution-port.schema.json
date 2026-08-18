@@ -86,17 +86,7 @@
         "contextRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
         "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
         "resumeExecutionRef": { "type": "string", "minLength": 1 }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
-          "then": { "required": ["executionRef"] }
-        },
-        {
-          "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
-          "then": { "required": ["error"] }
-        }
-      ]
+      }
     },
     "executionReceipt": {
       "type": "object",
@@ -110,7 +100,17 @@
         "agentId": { "type": "string", "minLength": 1 },
         "observedAt": { "type": "string", "format": "date-time" },
         "error": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "confirmed" } }, "required": ["status"] },
+          "then": { "required": ["executionRef"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+          "then": { "required": ["error"] }
+        }
+      ]
     },
     "quiesceIntent": {
       "type": "object",

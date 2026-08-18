@@ -3,9 +3,11 @@
   "$id": "https://team-work-runtime.dev/schemas/v2/decision-packet",
   "type": "object",
   "additionalProperties": false,
-  "required": ["packetId", "question", "stage", "roster", "claims", "rounds", "artifactRefs", "choices"],
+  "required": ["packetId", "version", "factsDigest", "question", "stage", "roster", "claims", "rounds", "artifactRefs", "choices"],
   "properties": {
     "packetId": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "factsDigest": { "type": "string", "minLength": 1 },
     "question": { "type": "string", "minLength": 1 },
     "stage": { "type": "string", "minLength": 1 },
     "roster": {
@@ -44,7 +46,7 @@
         "additionalProperties": false,
         "required": ["round", "outcome", "resolved", "unresolved"],
         "properties": {
-          "round": { "type": "integer", "minimum": 1, "maximum": 3 },
+          "round": { "type": "integer", "minimum": 1 },
           "outcome": { "type": "string", "minLength": 1 },
           "resolved": { "type": "array", "items": { "type": "string" } },
           "unresolved": { "type": "array", "items": { "type": "string" } }

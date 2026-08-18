@@ -30,6 +30,9 @@ test("every Runtime v2 JSON schema compiles under strict Draft 2020-12 validatio
   for (const name of names) {
     const schema = await loadJson(path.join(schemaDirectory, name))
     assert.equal(typeof ajv.getSchema(schema.$id), "function", name)
+    for (const definition of Object.keys(schema.$defs ?? {})) {
+      assert.equal(typeof ajv.getSchema(`${schema.$id}#/$defs/${definition}`), "function", `${name}#${definition}`)
+    }
   }
 })
 

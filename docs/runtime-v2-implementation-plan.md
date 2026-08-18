@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0、V2-1 已完成并通过两轴终审；V2-2 已完成实现和首轮审查修正，正在终审。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0、V2-1、V2-2 均已完成并通过两轴终审，下一里程碑为 V2-3。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 

@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立，V2-0 已完成；V2-1 Domain 与文件 Store 已完成实现和自动化测试，正在两轴终审。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 契约与骨架、V2-1 Domain 与文件 Store 已完成并通过两轴终审，下一里程碑为 V2-2。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 

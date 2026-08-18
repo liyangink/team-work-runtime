@@ -1,5 +1,7 @@
 # team-work-runtime Multiagent Engineering Loop 设计
 
+> 状态：v1 历史设计基线，不再是目标架构。Runtime v2 以 [`runtime-v2-architecture.md`](runtime-v2-architecture.md) 为规范性设计，以 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md) 跟踪实施。
+
 状态：设计基线，指导 Runtime、Workflow、Team-work 与首个平台 Plugin 的实现。产品约束见 [`AGENTS.md`](../AGENTS.md)，阶段计划见 [`runtime-roadmap.md`](runtime-roadmap.md)。
 
 ## 1. 产品定位

@@ -14,10 +14,10 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 ## 四个 Module
 
-- **Workflow**：主导上下文计划、研发阶段、任务状态、流程门禁、solo/team 判断和 SPEC Skill 路由。
-- **Team-work**：负责团队成本、拓扑、分工、场景协作、收敛、汇报和通用恢复规则；Skill 不充当数据库。
-- **CoreRuntime**：用平台无关 CLI 执行 task/context/flow/work-item 的确定性操作；初版使用文本文件、原子写入和文件锁。
-- **PlatformPlugin**：负责安装装配、Agent、Hook、上下文注入、平台工具映射、配置扫描和平台增量指南。任务数据必须留在项目 `.team-work/`。
+- **Workflow**：提供机器可读的上下文计划、研发阶段、流程门禁、solo/team 判断和 SPEC/E2E 路由 Policy。
+- **Team-work**：提供团队成本、拓扑、分工、场景协作、收敛、汇报和通用恢复 Policy；Skill 不充当数据库或状态机。
+- **CoreRuntime**：通过平台无关的 LeadControl、MemberDelivery 和 PlatformObservationSink 执行任务状态、工作图、上下文、门禁、派发事务与恢复；使用文本文件、原子写入和文件锁。
+- **PlatformPlugin**：负责安装装配、Agent、Hook、上下文注入、平台工具映射、配置扫描和平台增量指南，并实现 Runtime 所需的执行 Adapter。任务数据必须留在项目 `.team-work/`。
 
 ## 核心规则
 
@@ -30,10 +30,10 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 7. `check` 保持只读；门禁失败必须返回 blocker、证据和修复建议。强制恢复必须记录原因和原 blocker，避免“死门”。
 8. Agent 声称完成、平台状态完成或消息送达都不代表验收通过；Lead 只能核对流程、制品、证据和复核链是否完整。非作者 Expert 在核心环节给出技术裁决，但 Owner 必须独立核验，可用证据接受或提出异议；Lead 不强行裁定技术分歧，三轮仍未收敛时交用户决定。
 9. Hook 可以校验、注入和记录事件，但不得代替 Lead 做语义验收或静默推进阶段。
-10. 执行拓扑由 Workflow 或用户决定：`solo` 是一个成员 Owner 串行工作，`team` 是多个 Owner 并行工作；两种模式的具体工作都由 Team-work 派发，Lead 不得亲自执行。Workflow 运行时不依赖 PlatformPlugin Implementation。
+10. 执行拓扑由 Workflow Policy 或用户目标决定：`solo` 是一个成员 Owner 串行工作，`team` 是多个 Owner 并行工作；Runtime 根据 Team-work Policy 物化工作图并通过 Execution Adapter 派发，Lead 不得亲自执行。Workflow 运行时不依赖 PlatformPlugin Implementation。
 11. 每个相对完整工作单元都必须由非作者 Senior 或 Expert 挑战；核心环节还必须由非作者 Expert 作技术内容裁决。挑战者从成本、合理性、事实、推理、需求、边界和失败路径主动找漏洞，并给出证据与最小修正。
 12. 每项工作必须有唯一 Owner、范围、完成条件和产物路径；同一工作项跨轮次复用成员会话。自主讨论与审查最多三轮，之后直接请求用户决定；用户可显式授权有目标、有预算的有限追加轮次。
-13. 团队评分只用于后续选模优化，不进入当前任务循环；默认由 Lead 记录、转发成员和 Expert 的结论再续派，不依赖 N-to-N 实时通信，也不得由 Lead 重写技术结论。
+13. 团队评分只用于后续选模优化，不进入当前任务循环；成员和 Expert 通过结构化报告交付，Runtime 记录并按工作图续派，不依赖 N-to-N 实时通信，也不得由 Lead 重写技术结论。
 14. standalone 使用不得被无关平台 Hook 或可选 SPEC Skill 阻塞。错误必须保留最后有效制品，并可诊断、重试和恢复。
 15. SPEC 与 E2E 都是显式路由：SPEC 按 `auto|required|disabled` 处理；E2E 必须判断适用性但可在有证据时跳过。E2E 制品问题留在内部小循环，产品缺陷回实施，系统性测试策略缺口才回测试。
 16. PlatformPlugin 可为受管成员提供独立模型配置的临时只读助手，用于代码探索和资料检索。助手不是团队成员或 work-item Owner，不进入收敛、评分和技术裁决，不得修改文件或继续委托；调用成员必须核验并整合结果。辅助派发仍必须 background/non-blocking，且不得依赖 OMO 等可选增强。
@@ -52,6 +52,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 ## 当前基线
 
+- Runtime v2 不兼容重构设计已通过交叉终审和人工确认，当前进入实施规划；目标控制面只有 `open / plan / run / steer`，不得新增 v2 到 v1 命令族的包装、回退或兼容路径。
 - 第一版 PlatformPlugin 以 OpenCode 为实现目标，优先验证多模型兼容、subagent/session、上下文注入和 Lead 控制面协作；不得把 Claude Agent Teams 作为 Runtime 或 Workflow 的前置能力。
 - OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。Agent model/effort 由 Plugin 启动时读取用户配置并动态注入。
 - Runtime 1.0 契约、文件型 CoreRuntime MVP、Workflow 与 Team-work Policy Skill 已完成自动化测试和 Terra 交叉审查；OpenCode PlatformPlugin 的安装生命周期、原生异步 child session、Runtime Tool 和上下文 Hook 已落地。低成本多模型平台链路 E2E 已完成，含 Senior 挑战者的正式 Workflow 场景 E2E 尚待完成。

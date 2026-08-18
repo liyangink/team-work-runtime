@@ -1,45 +1,35 @@
 # team-work-runtime Roadmap
 
-状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，OpenCode PlatformPlugin 正在完成正式场景验收。不可变规则见 [`AGENTS.md`](../AGENTS.md)，实现设计见 [`runtime-plugin-design.md`](runtime-plugin-design.md)，逐项实施与验收见 [`runtime-implementation-plan.md`](runtime-implementation-plan.md)。
+状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认，当前进入实施规划，业务实现尚未开始。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
 
-## 目标结构
+下列 Phase 0–3 记录 v1 已完成基线，Phase 4 记录已落地但尚未完成正式 E2E 的部分实现；它们用于识别可复用的不变量，不再代表下一版目标结构。v2 通过人工设计审核后，以其实施切割替换后续 v1 验收计划；在此之前不得把 v2 能力描述为已经可用。
 
-```text
-runtime/        CoreRuntime：task、context、flow、work-item、event
-skills/         Workflow 与 Team-work
-plugins/        claude-code、opencode、omo
-schemas/        project-config、task、context、workflow、work-item(s)、event、binding、platform-profile、response
-```
+## v2 重构进度
 
-项目状态统一放在 `.team-work/`：
+- 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
+- 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
+- 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
+- v2 实现：实施计划已建立，尚未开始 V2-0 契约与骨架。
 
-```text
-.team-work/
-├── config.yaml
-├── workflows/engineering.yaml
-├── bindings/<platform>/<session-key>.json
-├── platform/<platform>/{profile.json,guides/}
-├── tasks/<task-id>/{task.json,context.jsonl,index.md,work-items.json,events.jsonl,artifacts/}
-└── archive/
-```
+| v2 里程碑 | 状态 |
+| --- | --- |
+| V2-0 契约与骨架 | 待开始 |
+| V2-1 Domain 与 Store | 待开始 |
+| V2-2 Driver、Observation 与 durable effect | 待开始 |
+| V2-3 人工等待与决定凭证 | 待开始 |
+| V2-4 Workflow/Team-work Compiler | 待开始 |
+| V2-5 平台无关 in-memory E2E | 待开始 |
+| V2-6 OpenCode/OpenSpec Adapter | 待开始 |
+| V2-7 OpenCode 控制面切换 | 待开始 |
+| V2-8 安装生命周期、真实 E2E 与发布 | 待开始 |
 
-## 已冻结决策
-
-- 产品只保留 Workflow、Team-work、CoreRuntime、PlatformPlugin 四个核心 Module。
-- 初版使用文件、原子写入和文件锁，不引入数据库或常驻服务。
-- 原始制品不复制；`context.jsonl` 是索引，`index.md` 是生成视图。
-- OpenSpec 是默认 SPEC Skill；PlatformPlugin 安装期准备工具并写入项目 Workflow Config，Workflow 运行期只读取配置。
-- Workflow 决定 `solo/team` 执行拓扑；两种模式都由 Team-work 派发成员工作，Lead 不承担具体工作或技术内容裁决。
-- 默认在方案审查后和任务完成前设置可配置的强制人工门禁；用户批准绑定制品指纹，制品变化后必须重新确认。
-- 先完成 OpenCode PlatformPlugin，再适配 Claude Code 和 OMO；首版不依赖平台原生 Team Agent。
-
-## Phase 0：规则冻结
+## v1 Phase 0：规则冻结
 
 状态：完成。
 
 仓库已提供 `AGENTS.md`、本 Roadmap、Runtime 契约和约束测试，并只保留当前实现；旧 OMO/Claude Code 资产仅存在于拆分前的 Git 历史。后续 Agent 不依赖聊天历史或本地 memory 即可恢复方向。
 
-## Phase 1：Runtime 契约
+## v1 Phase 1：Runtime 契约
 
 状态：完成。
 
@@ -57,7 +47,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 完成标准：schema 有正常和损坏 fixture；状态边可测试枚举；契约不包含平台私有字段。
 
-## Phase 2：Core Runtime MVP
+## v1 Phase 2：Core Runtime MVP
 
 状态：完成。
 
@@ -71,7 +61,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 - 上下文只输出最小索引和路径；
 - 写操作具有 dry-run 或等价检查路径。
 
-## Phase 3：Workflow 与 Team-work
+## v1 Phase 3：Workflow 与 Team-work
 
 状态：完成。
 
@@ -82,7 +72,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 完成标准：两者可独立 forward test；Team-work 可 standalone 从适配的实际研发阶段创建轻量任务；不解析平台原始配置或复制 Runtime 状态机。
 
-## Phase 4：OpenCode PlatformPlugin
+## v1 Phase 4：OpenCode PlatformPlugin
 
 状态：进行中。
 
@@ -104,7 +94,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中从实际研发阶段完成 Workflow 路由、Owner、挑战者、核心 Expert 裁决、Lead 控制面验收和最终制品的正式场景 E2E。
 
-## Phase 5：Claude Code 与 OMO PlatformPlugin
+## v1 Phase 5：Claude Code 与 OMO PlatformPlugin
 
 状态：待开始。
 
@@ -113,7 +103,7 @@ schemas/        project-config、task、context、workflow、work-item(s)、even
 
 完成标准：同一个任务可以由不同 CLI 继续，平台 ID 变化不影响任务身份和制品历史。
 
-## Phase 6：稳定性
+## v1 Phase 6：稳定性
 
 状态：待开始。
 

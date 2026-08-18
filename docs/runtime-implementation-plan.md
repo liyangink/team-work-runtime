@@ -1,5 +1,7 @@
 # Runtime 实施与验收地图
 
+> 状态：v1 历史实施记录，不再指导新实现。Runtime v2 请以 [`runtime-v2-architecture.md`](runtime-v2-architecture.md) 和 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md) 为准。
+
 本文件把 [`runtime-roadmap.md`](runtime-roadmap.md) 拆成可顺序交付的实施项。每项完成后必须同时提交实现、契约/文档、fixture 和自动化测试；不得只以“Agent 已完成”作为验收。
 
 ## architecture-baseline: 四 Module 与 OpenCode 首版基线

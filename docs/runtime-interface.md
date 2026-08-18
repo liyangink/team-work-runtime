@@ -1,5 +1,7 @@
 # CoreRuntime Interface 1.0
 
+> 状态：v1 历史契约，仅用于识别待替换的安全不变量，不再指导 v2 实现。v2 契约见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md) 和 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)。
+
 本契约定义 Workflow、Team-work 和 PlatformPlugin 共同使用的稳定 CLI + JSON Interface。CoreRuntime 不理解模型、成本、团队拓扑或平台原生工具。
 
 ## 1. 命令面

@@ -5,6 +5,7 @@ import { createHumanWait } from "./human-wait.mjs"
 import { createFileEvidenceVerifier } from "./evidence-verifier.mjs"
 import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
+import { costWeightForTier } from "../../policy/kernel.mjs"
 
 const terminalReasons = new Set(["needs-plan", "awaiting-user", "blocked", "completed", "cancelled"])
 
@@ -61,6 +62,8 @@ export function createTaskDriver({
         && candidate.dependsOn.every((dependency) => byId.get(dependency)?.status === "accepted")
       ))
       if (!assignment) return null
+      const projectedCost = state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(assignment.costTier)
+      if (projectedCost > state.costLedger.automaticLimit) return null
       const attempt = assignment.attempts.length + 1
       const seed = digestValue({
         taskId: state.taskId,
@@ -313,6 +316,17 @@ export function createTaskDriver({
           }
           const prepared = await prepareNextDispatch(taskId)
           if (prepared.changed) continue
+          const readyAssignment = state.workGraph.assignments.find((candidate) => (
+            candidate.status === "planned"
+            && candidate.execution
+            && candidate.dependsOn.every((dependency) => (
+              state.workGraph.assignments.find(({ assignmentId }) => assignmentId === dependency)?.status === "accepted"
+            ))
+          ))
+          if (
+            readyAssignment
+            && state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(readyAssignment.costTier) > state.costLedger.automaticLimit
+          ) return { state, reason: "budget-decision" }
           const idleAssignment = state.workGraph.assignments.find((assignment) => (
             assignment.status === "running" && assignment.attempts.at(-1)?.idleObservedAt
           ))

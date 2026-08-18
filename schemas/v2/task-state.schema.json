@@ -4,7 +4,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "runtimeMajor", "schemaVersion", "taskId", "revision", "title", "objective",
+    "runtimeMajor", "schemaVersion", "taskId", "revision", "title", "objective", "taskIntent", "taskIntentRevision", "taskIntentHistory",
     "workflow", "scope", "status", "currentStageRun", "stageRuns", "stagePlan",
     "workGraph", "artifacts", "evidence", "acceptedReportRefs", "costLedger",
     "observationInbox", "pendingDecision", "decisionHistory", "pendingOperations", "createdAt", "updatedAt"
@@ -16,6 +16,9 @@
     "revision": { "type": "integer", "minimum": 0 },
     "title": { "type": "string", "minLength": 1 },
     "objective": { "type": "string", "minLength": 1 },
+    "taskIntent": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/taskIntent" }] },
+    "taskIntentRevision": { "type": "integer", "minimum": 0 },
+    "taskIntentHistory": { "type": "array", "items": { "$ref": "#/$defs/taskIntentHistoryEntry" } },
     "workflow": { "$ref": "#/$defs/workflowPin" },
     "scope": { "$ref": "#/$defs/stageScope" },
     "status": { "enum": ["needs-plan", "working", "awaiting-user", "blocked", "completed", "cancelled"] },
@@ -55,6 +58,38 @@
       "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
     },
     "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "taskIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective", "constraints", "exclusions", "preferences"],
+      "properties": {
+        "objective": { "type": "string", "minLength": 1 },
+        "constraints": { "$ref": "#/$defs/uniqueStrings" },
+        "exclusions": { "$ref": "#/$defs/uniqueStrings" },
+        "preferences": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["execution", "budget", "risk"],
+          "properties": {
+            "execution": { "enum": ["auto", "solo", "team"] },
+            "budget": { "enum": ["economy", "balanced", "quality"] },
+            "risk": { "enum": ["normal", "high", "critical"] }
+          }
+        }
+      }
+    },
+    "taskIntentHistoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "intent", "stageRunId", "reason", "supersededAt"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "intent": { "$ref": "#/$defs/taskIntent" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "reason": { "type": "string", "minLength": 1 },
+        "supersededAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "uniqueStrings": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
@@ -130,15 +165,125 @@
     "stagePlan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["planId", "stageRunId", "objective", "inputRefs", "outputRefs", "assignments"],
+      "required": ["planId", "stageRunId", "objective", "inputRefs", "outputRefs", "assignments", "teamMode", "policyPins", "convergence", "routes", "costProjection"],
       "properties": {
         "planId": { "$ref": "#/$defs/id" },
         "stageRunId": { "$ref": "#/$defs/id" },
         "objective": { "type": "string", "minLength": 1 },
         "inputRefs": { "$ref": "#/$defs/uniqueStrings" },
         "outputRefs": { "$ref": "#/$defs/uniqueStrings" },
-        "assignments": { "$ref": "#/$defs/uniqueStrings" }
+        "assignments": { "$ref": "#/$defs/uniqueStrings" },
+        "teamMode": { "enum": ["solo", "team"] },
+        "policyPins": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workflow", "team", "agentCatalogDigest"],
+          "properties": {
+            "workflow": { "$ref": "#/$defs/workflowPin" },
+            "team": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["policyId", "version", "digest"],
+              "properties": {
+                "policyId": { "$ref": "#/$defs/id" },
+                "version": { "type": "string", "minLength": 1 },
+                "digest": { "$ref": "#/$defs/digest" }
+              }
+            },
+            "agentCatalogDigest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        "convergence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxAutonomousRounds", "currentRound"],
+          "properties": {
+            "maxAutonomousRounds": { "const": 3 },
+            "currentRound": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "costProjection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scopeStages", "branchPathCount", "specDecision", "e2eDecision", "maxAutonomousRounds"],
+          "properties": {
+            "scopeStages": { "$ref": "#/$defs/uniqueStrings" },
+            "branchPathCount": { "type": "integer", "minimum": 0 },
+            "specDecision": { "enum": ["use-provider", "skip", "block"] },
+            "e2eDecision": { "enum": ["run", "skip", "block", "assessment-required"] },
+            "maxAutonomousRounds": { "const": 3 }
+          }
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["humanGates", "spec", "e2e"],
+          "properties": {
+            "humanGates": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["gateId", "requirement", "action"],
+                "properties": {
+                  "gateId": { "$ref": "#/$defs/id" },
+                  "requirement": { "enum": ["required", "optional", "disabled"] },
+                  "action": { "enum": ["wait", "skip"] },
+                  "proofMode": { "enum": ["verified-event", "trusted-caller"] },
+                  "reason": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+            "spec": { "$ref": "#/$defs/specRoute" },
+            "e2e": { "$ref": "#/$defs/e2eRoute" }
+          }
+        }
       }
+    },
+    "specRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "configDigest", "probeDigest", "decision", "reason", "digest"],
+      "properties": {
+        "mode": { "enum": ["auto", "required", "disabled"] },
+        "configDigest": { "$ref": "#/$defs/digest" },
+        "probeDigest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "decision": { "enum": ["use-provider", "skip", "block"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "e2eRoute": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "mode", "userRequired", "taskIntentDigest", "artifactSnapshotDigest"],
+          "properties": {
+            "kind": { "const": "assessment-required" },
+            "mode": { "enum": ["auto", "required", "disabled"] },
+            "userRequired": { "type": "boolean" },
+            "taskIntentDigest": { "$ref": "#/$defs/digest" },
+            "artifactSnapshotDigest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "userRequired", "taskIntentDigest", "artifactSnapshotDigest", "assessmentDigest", "decision", "evidenceRefs", "reason", "digest"],
+          "properties": {
+            "mode": { "enum": ["auto", "required", "disabled"] },
+            "userRequired": { "type": "boolean" },
+            "taskIntentDigest": { "$ref": "#/$defs/digest" },
+            "artifactSnapshotDigest": { "$ref": "#/$defs/digest" },
+            "assessmentDigest": { "$ref": "#/$defs/digest" },
+            "decision": { "enum": ["run", "skip", "block"] },
+            "evidenceRefs": { "$ref": "#/$defs/uniqueStrings" },
+            "reason": { "type": "string", "minLength": 1 },
+            "digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ]
     },
     "attempt": {
       "type": "object",

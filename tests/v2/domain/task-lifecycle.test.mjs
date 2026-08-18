@@ -9,11 +9,12 @@ import {
   projectStageScope,
   reduceTask,
 } from "../../../runtime/domain/index.mjs"
+import { compiledPlanMetadata, TEST_AGENT_CATALOG_DIGEST, TEST_TASK_INTENT } from "../support/compiled-plan.mjs"
 
 const digest = "a".repeat(64)
 const execution = {
   agentId: "test-agent",
-  capabilitySnapshotDigest: "capability-snapshot-1",
+  capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
   contextRef: ".team-work/context/member.md",
   promptRef: ".team-work/prompts/assignment.md",
 }
@@ -53,6 +54,45 @@ test("a task can enter at any declared stage and stop at a local completion stag
   assert.deepEqual(state.scope.stages, ["code-review"])
   assert.deepEqual(state.scope.edges, [])
   assert.deepEqual(state.scope.completionStages, ["code-review"])
+  assert.equal(state.taskIntent, null)
+  assert.equal(state.taskIntentRevision, 0)
+  assert.deepEqual(state.taskIntentHistory, [])
+})
+
+test("TaskIntent is recorded once and remains the inherited source for later stage plans", () => {
+  const initial = createTaskAggregate({
+    taskId: "intent-inheritance",
+    title: "Keep task intent",
+    objective: "Implement and review the requested behavior",
+    workflow,
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "code-review" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  })
+  const intent = {
+    objective: "Implement and review the requested behavior",
+    constraints: ["preserve public API"],
+    exclusions: ["unrelated refactors"],
+    preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+  }
+  const recorded = reduceTask(initial, {
+    type: "task-intent.recorded",
+    expectedRevision: 0,
+    intent,
+    occurredAt: "2026-08-18T10:01:00.000Z",
+  }).state
+
+  assert.deepEqual(recorded.taskIntent, intent)
+  assert.throws(
+    () => reduceTask(recorded, {
+      type: "task-intent.recorded",
+      expectedRevision: 1,
+      intent: { ...intent, objective: "silently replace the task" },
+      occurredAt: "2026-08-18T10:02:00.000Z",
+    }),
+    (error) => error instanceof DomainError && error.code === "TASK_INTENT_ALREADY_RECORDED",
+  )
 })
 
 test("the pure reducer advances only across a declared edge and starts a new stage run", () => {
@@ -121,9 +161,11 @@ test("freezing a stage plan materializes a validated work graph and cost ledger"
   })
   const result = reduceTask(initial, {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: initial.scope.stages }),
       planId: "plan-1",
       stageRunId: "stage-run-1",
       objective: "Produce an evidence-backed code review",
@@ -179,6 +221,68 @@ test("freezing a stage plan materializes a validated work graph and cost ledger"
   })
 })
 
+test("a controlled replan atomically revises TaskIntent and preserves its prior revision", () => {
+  const initial = createTaskAggregate({
+    taskId: "replan-review",
+    title: "Replan a stable review",
+    objective: "Replace a stale work graph safely",
+    workflow,
+    entryStage: "code-review",
+    completion: { mode: "through-stage", stage: "code-review" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  })
+  const planned = reduceTask(initial, {
+    type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
+    expectedRevision: 0,
+    occurredAt: "2026-08-18T10:01:00.000Z",
+    plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: initial.scope.stages }),
+      planId: "plan-replan",
+      stageRunId: "stage-run-1",
+      objective: "Review the current implementation",
+      inputRefs: ["artifact:source"],
+      outputRefs: ["artifact:review"],
+      assignments: [{
+        assignmentId: "review-owner",
+        teamRole: "owner",
+        assignmentKind: "review",
+        costTier: "junior",
+        dependsOn: [],
+        readableRefs: ["artifact:source"],
+        writableRefs: ["artifact:review"],
+        completionCriteria: ["submit the review"],
+        execution,
+      }],
+    },
+    costLedger: { forecastMin: 1, forecastMax: 3, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit: 20 },
+  }).state
+
+  const replanned = reduceTask(planned, {
+    type: "stage.replanned",
+    expectedRevision: planned.revision,
+    nextStageRunId: "stage-run-2",
+    reason: "Apply a newly confirmed scope constraint",
+    taskIntent: {
+      ...TEST_TASK_INTENT,
+      constraints: ["preserve the public API"],
+    },
+    occurredAt: "2026-08-18T10:02:00.000Z",
+  }).state
+
+  assert.equal(replanned.status, "needs-plan")
+  assert.equal(replanned.currentStageRun.stageRunId, "stage-run-2")
+  assert.equal(replanned.currentStageRun.round, 2)
+  assert.equal(replanned.stagePlan, null)
+  assert.deepEqual(replanned.taskIntent.constraints, ["preserve the public API"])
+  assert.equal(replanned.taskIntentRevision, 2)
+  assert.equal(replanned.taskIntentHistory.length, 1)
+  assert.deepEqual(replanned.taskIntentHistory[0].intent, TEST_TASK_INTENT)
+  assert.equal(replanned.taskIntentHistory[0].stageRunId, "stage-run-1")
+  assert.equal(replanned.stageRuns[0].status, "rework")
+})
+
 test("an assignment attempt is monotonic and belongs to the current stage run", () => {
   const initial = createTaskAggregate({
     taskId: "attempt-invariants",
@@ -192,9 +296,11 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
   })
   const planned = reduceTask(initial, {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: initial.scope.stages }),
       planId: "plan-1",
       stageRunId: "stage-run-1",
       objective: "Review one artifact",
@@ -232,7 +338,7 @@ test("an assignment attempt is monotonic and belongs to the current stage run", 
     role: "owner",
     assignmentKind: "review",
     agentId: "junior-luna",
-    capabilitySnapshotDigest: "capability-snapshot-1",
+    capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
     mode: "background",
     contextRef: ".team-work/tasks/attempt-invariants/context/owner.md",
     promptRef: ".team-work/tasks/attempt-invariants/prompts/review-owner.md",
@@ -491,9 +597,11 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
   })
   const planned = reduceTask(initial, {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: initial.scope.stages }),
       planId: "plan-1",
       stageRunId: "stage-run-1",
       objective: "Review independently",
@@ -567,9 +675,12 @@ test("parallel owners cannot share writable refs unless the work graph serialize
   })
   const fact = {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: base.scope.stages }),
+      teamMode: "team",
       planId: "plan-writes",
       stageRunId: "stage-run-1",
       objective: "Produce one shared output safely",
@@ -633,9 +744,11 @@ test("work graphs accept every assignment kind declared by the Runtime architect
     })
     assert.doesNotThrow(() => reduceTask(state, {
       type: "stage-plan.frozen",
+      taskIntent: TEST_TASK_INTENT,
       expectedRevision: 0,
       occurredAt: "2026-08-18T10:01:00.000Z",
       plan: {
+        ...compiledPlanMetadata({ workflow, scopeStages: state.scope.stages }),
         planId: "plan-1",
         stageRunId: "stage-run-1",
         objective: "Validate one assignment kind",

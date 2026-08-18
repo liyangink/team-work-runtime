@@ -8,6 +8,7 @@ import { createTaskDriver } from "../../../runtime/application/driver.mjs"
 import { compileHumanGateRequirements, evaluateHumanGate } from "../../../runtime/application/human-wait.mjs"
 import { assertTaskState, createTaskAggregate, digestEffect, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
 import { createFileStore } from "../../../runtime/persistence/index.mjs"
+import { compiledPlanMetadata, TEST_AGENT_CATALOG_DIGEST, TEST_TASK_INTENT } from "../support/compiled-plan.mjs"
 
 const workflow = {
   workflowId: "engineering",
@@ -94,9 +95,11 @@ async function createRunningTask(store, driver, taskId) {
   await store.createTask(state)
   state = reduceTask(state, {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow }),
       planId: "plan-1",
       stageRunId: "stage-run-1",
       objective: "Produce a design for approval",
@@ -113,7 +116,7 @@ async function createRunningTask(store, driver, taskId) {
         completionCriteria: ["submit the design"],
         execution: {
           agentId: "junior-luna",
-          capabilitySnapshotDigest: "capability-digest-1",
+          capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
           contextRef: `.team-work/tasks/${taskId}/context/owner.md`,
           promptRef: `.team-work/tasks/${taskId}/prompts/design-owner.md`,
         },

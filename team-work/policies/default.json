@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "2.0",
+  "policyId": "default",
+  "version": "2026-08-18",
+  "costWeights": { "junior": 1, "senior": 10, "expert": 50 },
+  "automaticLimits": { "economy": 70, "balanced": 200, "quality": 500 },
+  "maxAutonomousRounds": 3,
+  "concurrencySoftLimit": 4,
+  "scenes": {
+    "research": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
+    "design": { "ownerTier": "senior", "challengerTier": "senior", "core": true },
+    "design-review": { "ownerTier": "junior", "challengerTier": "senior", "core": true },
+    "spec": { "ownerTier": "junior", "challengerTier": "senior", "core": true },
+    "spec-review": { "ownerTier": "junior", "challengerTier": "senior", "core": true },
+    "implementation": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
+    "test": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
+    "code-review": {
+      "ownerTier": "junior",
+      "challengerTier": "senior",
+      "core": true,
+      "requiredPerspectives": [
+        "requirements-and-change-summary",
+        "defects-and-security",
+        "error-handling",
+        "logic-simulation",
+        "test-coverage",
+        "types-and-invariants",
+        "standards-and-compliance",
+        "impact-scope"
+      ]
+    },
+    "e2e": { "ownerTier": "junior", "challengerTier": "senior", "core": true },
+    "finish": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
+    "planning": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
+    "e2e-applicability": { "ownerTier": "junior", "challengerTier": "senior", "core": false }
+  },
+  "e2eTemplate": [
+    { "packageId": "path-design", "assignmentKind": "e2e", "outputRefs": ["artifact:e2e-design"], "dependsOn": [], "completionCriteria": ["define real user paths, environment, boundaries, and success criteria"] },
+    { "packageId": "fixture-implementation", "assignmentKind": "e2e", "outputRefs": ["artifact:e2e-fixtures"], "dependsOn": ["path-design"], "completionCriteria": ["implement repeatable fixtures and scripts with cleanup"] },
+    { "packageId": "execution", "assignmentKind": "e2e", "outputRefs": ["artifact:e2e-result"], "dependsOn": ["fixture-implementation"], "completionCriteria": ["execute in the controlled environment and preserve raw evidence"] }
+  ]
+}

@@ -9,6 +9,7 @@ import { createTaskAggregate, digestEffect, reduceTask } from "../../../runtime/
 import { createMemberDelivery } from "../../../runtime/member-delivery.mjs"
 import { createPlatformObservationSink } from "../../../runtime/platform-observation.mjs"
 import { createFileStore } from "../../../runtime/persistence/index.mjs"
+import { compiledPlanMetadata, TEST_AGENT_CATALOG_DIGEST, TEST_TASK_INTENT } from "../support/compiled-plan.mjs"
 
 const workflow = {
   workflowId: "engineering",
@@ -33,7 +34,7 @@ function event(revision, type, occurredAt) {
   return { eventId: `${type.replaceAll(".", "-")}-${revision}`, type, occurredAt, revision, refs: ["stage-run-1"] }
 }
 
-async function createDispatchPendingTask(store, taskId = "driver-dispatch", { prepareOnly = false } = {}) {
+async function createDispatchPendingTask(store, taskId = "driver-dispatch", { prepareOnly = false, automaticLimit = 2 } = {}) {
   let state = createTaskAggregate({
     taskId,
     title: "Dispatch one member",
@@ -47,9 +48,11 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch", { pr
   await store.createTask(state)
   let result = reduceTask(state, {
     type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
     expectedRevision: 0,
     occurredAt: "2026-08-18T10:01:00.000Z",
     plan: {
+      ...compiledPlanMetadata({ workflow }),
       planId: "plan-1",
       stageRunId: "stage-run-1",
       objective: "Implement the requested change",
@@ -66,13 +69,13 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch", { pr
         completionCriteria: ["submit a structured report"],
         execution: {
           agentId: "junior-luna",
-          capabilitySnapshotDigest: "capability-snapshot-1",
+          capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
           contextRef: `.team-work/tasks/${taskId}/context/owner.md`,
           promptRef: `.team-work/tasks/${taskId}/prompts/implementation-owner.md`,
         },
       }],
     },
-    costLedger: { forecastMin: 1, forecastMax: 2, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit: 2 },
+    costLedger: { forecastMin: 1, forecastMax: 2, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit },
   })
   state = await store.commit({
     taskId,
@@ -91,7 +94,7 @@ async function createDispatchPendingTask(store, taskId = "driver-dispatch", { pr
     role: "owner",
     assignmentKind: "implementation",
     agentId: "junior-luna",
-    capabilitySnapshotDigest: "capability-snapshot-1",
+    capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
     mode: "background",
     contextRef: `.team-work/tasks/${taskId}/context/owner.md`,
     promptRef: `.team-work/tasks/${taskId}/prompts/implementation-owner.md`,
@@ -186,6 +189,19 @@ test("the driver derives a durable background dispatch from a frozen planned ass
   assert.equal(outcome.state.workGraph.assignments[0].status, "running")
 })
 
+test("the driver stops before a ready assignment would exceed the automatic cost limit", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "budget-gate", { prepareOnly: true, automaticLimit: 0 })
+  const driver = createTaskDriver({ store, executionAdapter: fakeExecutionAdapter() })
+
+  const before = await store.loadTask("budget-gate")
+  const outcome = await driver.run({ taskId: "budget-gate", waitBudgetMs: 0 })
+
+  assert.equal(outcome.reason, "budget-decision")
+  assert.deepEqual(await store.loadTask("budget-gate"), before)
+})
+
 test("the driver persists invocation state before dispatch and commits only a confirmed receipt as running", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })
@@ -198,6 +214,7 @@ test("the driver persists invocation state before dispatch and commits only a co
       assert.equal(durable.workGraph.assignments[0].status, "in-doubt")
       assert.equal(durable.pendingOperations[0].status, "in-doubt")
       assert.equal(durable.pendingOperations[0].invocationCount, 1)
+      assert.equal(durable.costLedger.uncertain, 1)
       return {
         operationId: effect.operationId,
         effectDigest: effect.effectDigest,
@@ -223,6 +240,8 @@ test("the driver persists invocation state before dispatch and commits only a co
   assert.equal(outcome.state.workGraph.assignments[0].attempts[0].receiptRef, "dispatch-operation-1")
   assert.equal(outcome.state.workGraph.assignments[0].attempts[0].executionRef, "member-session-1")
   assert.deepEqual(outcome.state.pendingOperations, [])
+  assert.equal(outcome.state.costLedger.uncertain, 0)
+  assert.equal(outcome.state.costLedger.accrued, 1)
   const operation = JSON.parse(await readFile(path.join(
     projectRoot,
     ".team-work/tasks/driver-dispatch/operations/dispatch-operation-1.json",
@@ -272,6 +291,7 @@ test("a restart inspects an in-doubt dispatch instead of creating a second execu
   const uncertain = await store.loadTask("recover-dispatch")
   assert.equal(uncertain.pendingOperations[0].status, "in-doubt")
   assert.equal(uncertain.workGraph.assignments[0].status, "in-doubt")
+  assert.equal(uncertain.costLedger.uncertain, 1)
 
   const recovered = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:10:00.000Z" })
   const outcome = await recovered.run({ taskId: "recover-dispatch", waitBudgetMs: 0 })
@@ -280,6 +300,8 @@ test("a restart inspects an in-doubt dispatch instead of creating a second execu
   assert.equal(inspectCalls, 1)
   assert.equal(outcome.reason, "waiting-report")
   assert.equal(outcome.state.workGraph.assignments[0].attempts[0].executionRef, "member-session-recovered")
+  assert.equal(outcome.state.costLedger.uncertain, 0)
+  assert.equal(outcome.state.costLedger.accrued, 1)
 })
 
 test("a concurrent driver does not inspect or repeat an invocation whose durable lease is still active", async () => {
@@ -468,7 +490,12 @@ test("platform observations use the same durable sequence and dedupe protocol", 
     }),
     inspectExecution: async () => assert.fail("not used"),
   })
-  const driver = createTaskDriver({ store, executionAdapter })
+  const driver = createTaskDriver({
+    store,
+    executionAdapter,
+    clock: () => "2026-08-18T10:03:00.000Z",
+    now: () => Date.parse("2026-08-18T10:04:00.500Z"),
+  })
   await driver.run({ taskId: "platform-observation", waitBudgetMs: 0 })
   const sink = createPlatformObservationSink({
     observe: (observation) => driver.observe({ taskId: "platform-observation", observation }),

@@ -21,6 +21,9 @@ export function createTaskAggregate(input) {
     revision: 0,
     title,
     objective,
+    taskIntent: null,
+    taskIntentRevision: 0,
+    taskIntentHistory: [],
     workflow: {
       workflowId: input.workflow.workflowId,
       version: input.workflow.version,

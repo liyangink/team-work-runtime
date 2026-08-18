@@ -80,6 +80,11 @@ export function assertTaskState(state) {
   }
 
   const stageSet = new Set(state.scope.stages)
+  if (
+    (state.taskIntent === null && (state.taskIntentRevision !== 0 || state.taskIntentHistory.length !== 0))
+    || (state.taskIntent !== null && state.taskIntentRevision !== state.taskIntentHistory.length + 1)
+    || state.taskIntentHistory.some((entry, index) => entry.revision !== index + 1)
+  ) failState("task intent revision and history must form a contiguous immutable chain")
   if (!stageSet.has(state.scope.entryStage) || !stageSet.has(state.currentStageRun.stage)) {
     failState("entry and current stages must belong to the projected workflow scope")
   }
@@ -92,6 +97,10 @@ export function assertTaskState(state) {
 
   const runs = [...state.stageRuns, state.currentStageRun]
   assertUniqueBy(runs, "stageRunId", "stage run ids")
+  const runIdSet = new Set(runs.map(({ stageRunId }) => stageRunId))
+  if (state.taskIntentHistory.some(({ stageRunId }) => !runIdSet.has(stageRunId))) {
+    failState("task intent history must reference a known stage run")
+  }
   const sequences = runs.map(({ sequence }) => sequence).sort((left, right) => left - right)
   if (sequences.some((sequence, index) => sequence !== index + 1) || state.currentStageRun.sequence !== runs.length) {
     failState("stage run sequence must be contiguous and end at the current run")
@@ -260,6 +269,56 @@ export function assertTaskState(state) {
     if (state.stagePlan.stageRunId !== state.currentStageRun.stageRunId) failState("stage plan must target the current stage run")
     if (state.stagePlan.assignments.length !== assignmentIds.size || state.stagePlan.assignments.some((id) => !assignmentIds.has(id))) {
       failState("stage plan assignment refs must exactly match the work graph")
+    }
+    const compilerFields = [state.stagePlan.policyPins, state.stagePlan.routes, state.stagePlan.convergence, state.stagePlan.teamMode, state.stagePlan.costProjection]
+    if (compilerFields.some((value) => value !== undefined) && compilerFields.some((value) => value === undefined)) {
+      failState("compiled stage plan metadata must be complete")
+    }
+    if (state.stagePlan.policyPins) {
+      const pinnedWorkflow = state.stagePlan.policyPins.workflow
+      if (
+        pinnedWorkflow.workflowId !== state.workflow.workflowId
+        || pinnedWorkflow.version !== state.workflow.version
+        || pinnedWorkflow.digest !== state.workflow.digest
+      ) failState("compiled stage plan workflow pin must match the task")
+      if (state.workGraph.assignments.some((assignment) => (
+        assignment.execution.capabilitySnapshotDigest !== state.stagePlan.policyPins.agentCatalogDigest
+      ))) failState("compiled assignments must use the pinned agent catalog")
+      if (
+        state.stagePlan.convergence.maxAutonomousRounds !== 3
+        || state.stagePlan.convergence.currentRound !== state.currentStageRun.round
+      ) failState("compiled convergence must bind the current stage round")
+      if (
+        state.stagePlan.costProjection.maxAutonomousRounds !== state.stagePlan.convergence.maxAutonomousRounds
+        || state.stagePlan.costProjection.specDecision !== state.stagePlan.routes.spec.decision
+        || state.stagePlan.costProjection.e2eDecision !== (state.stagePlan.routes.e2e.decision ?? state.stagePlan.routes.e2e.kind)
+        || state.stagePlan.costProjection.scopeStages.length !== state.scope.stages.length
+        || state.stagePlan.costProjection.scopeStages.some((stage, index) => stage !== state.scope.stages[index])
+      ) failState("compiled cost projection must bind the task scope, routes, and convergence limit")
+      const ownerCount = state.workGraph.assignments.filter(({ teamRole }) => teamRole === "owner").length
+      if (state.stagePlan.teamMode !== (ownerCount > 1 ? "team" : "solo")) {
+        failState("compiled team mode must match its owner topology")
+      }
+      const specRoute = state.stagePlan.routes.spec
+      if (digestValue({
+        mode: specRoute.mode,
+        configDigest: specRoute.configDigest,
+        probeDigest: specRoute.probeDigest,
+        decision: specRoute.decision,
+        reason: specRoute.reason,
+      }) !== specRoute.digest) failState("compiled SPEC route digest is invalid")
+      const e2eRoute = state.stagePlan.routes.e2e
+      if (e2eRoute.taskIntentDigest !== digestValue(state.taskIntent)) failState("compiled E2E route must bind the inherited task intent")
+      if (!e2eRoute.kind && digestValue({
+        mode: e2eRoute.mode,
+        userRequired: e2eRoute.userRequired,
+        taskIntentDigest: e2eRoute.taskIntentDigest,
+        artifactSnapshotDigest: e2eRoute.artifactSnapshotDigest,
+        assessmentDigest: e2eRoute.assessmentDigest,
+        decision: e2eRoute.decision,
+        evidenceRefs: e2eRoute.evidenceRefs,
+        reason: e2eRoute.reason,
+      }) !== e2eRoute.digest) failState("compiled E2E route digest is invalid")
     }
   }
 

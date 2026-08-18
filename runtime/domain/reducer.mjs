@@ -10,6 +10,7 @@ import {
 import { normalizeStagePlan } from "./stage-plan.mjs"
 import { createWorkGraph } from "./work-graph.mjs"
 import { digestEffect, digestValue } from "./digests.mjs"
+import { costWeightForTier } from "../../policy/kernel.mjs"
 
 const stageRunTransitions = new Map([
   ["planned", new Set(["dispatching"])],
@@ -18,6 +19,18 @@ const stageRunTransitions = new Map([
   ["waiting-reports", new Set(["reviewing"])],
   ["reviewing", new Set(["ready-to-advance"])],
 ])
+function executionOperationCost(operation, assignment) {
+  return operation.kind === "execution.ensure" ? costWeightForTier(assignment.costTier) : 0
+}
+
+function releaseUncertainCost(next, operation, assignment) {
+  const relativeCost = executionOperationCost(operation, assignment)
+  if (relativeCost === 0) return
+  if (next.costLedger.uncertain < relativeCost) {
+    throw new DomainError("COST_LEDGER_INVALID", "uncertain cost cannot be released below zero")
+  }
+  next.costLedger.uncertain -= relativeCost
+}
 
 function prepare(state, fact) {
   if (!state || typeof state !== "object" || state.runtimeMajor !== 2) {
@@ -84,9 +97,39 @@ function normalizeCostLedger(ledger) {
   return Object.fromEntries(fields.map((field) => [field, ledger[field]]))
 }
 
+function normalizeTaskIntent(intent) {
+  const execution = intent?.preferences?.execution ?? "auto"
+  const budget = intent?.preferences?.budget ?? "balanced"
+  const risk = intent?.preferences?.risk ?? "normal"
+  if (!["auto", "solo", "team"].includes(execution) || !["economy", "balanced", "quality"].includes(budget) || !["normal", "high", "critical"].includes(risk)) {
+    throw new DomainError("TASK_INTENT_INVALID", "task intent preferences are invalid")
+  }
+  return {
+    objective: assertNonEmptyString(intent?.objective, "intent.objective"),
+    constraints: [...assertStringList(intent?.constraints ?? [], "intent.constraints")],
+    exclusions: [...assertStringList(intent?.exclusions ?? [], "intent.exclusions")],
+    preferences: { execution, budget, risk },
+  }
+}
+
+function recordTaskIntent(next, fact) {
+  if (next.taskIntent !== null) {
+    throw new DomainError("TASK_INTENT_ALREADY_RECORDED", "task intent changes require a controlled stage replan")
+  }
+  if (next.currentStageRun.status !== "planned" || next.stagePlan !== null) {
+    throw new DomainError("TASK_INTENT_STATE_INVALID", "task intent must be recorded before the first stage plan is frozen")
+  }
+  next.taskIntent = normalizeTaskIntent(fact.intent)
+  next.taskIntentRevision = 1
+}
+
 function freezeStagePlan(next, fact) {
   if (next.currentStageRun.status !== "planned" || next.stagePlan !== null) {
     throw new DomainError("STAGE_PLAN_ALREADY_FROZEN", "the current stage run already has an active plan")
+  }
+  if (next.taskIntent === null) {
+    if (!fact.taskIntent) throw new DomainError("TASK_INTENT_REQUIRED", "a stage plan cannot freeze without its inherited task intent")
+    recordTaskIntent(next, { intent: fact.taskIntent })
   }
   const plan = normalizeStagePlan(fact.plan, next.currentStageRun.stageRunId)
   next.stagePlan = { ...plan, assignments: plan.assignments.map(({ assignmentId }) => assignmentId) }
@@ -280,6 +323,7 @@ function startEffectInvocation(next, fact) {
   }
   operation.status = "in-doubt"
   operation.invocationCount += 1
+  next.costLedger.uncertain += executionOperationCost(operation, assignment)
   operation.invocationId = assertIdentifier(fact.invocationId, "fact.invocationId")
   operation.leaseExpiresAt = assertTimestamp(fact.leaseExpiresAt, "fact.leaseExpiresAt")
   if (Date.parse(operation.leaseExpiresAt) < Date.parse(fact.occurredAt)) {
@@ -560,7 +604,12 @@ function validateReceipt(operation, receipt) {
     receipt?.operationId !== operation.operationId
     || receipt.effectDigest !== operation.effectDigest
   ) {
-    throw new DomainError("EFFECT_RECEIPT_MISMATCH", "effect receipt does not match its persisted intent")
+    throw new DomainError("EFFECT_RECEIPT_MISMATCH", "effect receipt does not match its persisted intent", [{
+      expectedOperationId: operation.operationId,
+      actualOperationId: receipt?.operationId,
+      expectedEffectDigest: operation.effectDigest,
+      actualEffectDigest: receipt?.effectDigest,
+    }])
   }
 }
 
@@ -570,6 +619,9 @@ function confirmEffect(next, fact) {
   if (fact.receipt.status !== "confirmed" || typeof fact.receipt.executionRef !== "string" || fact.receipt.executionRef === "") {
     throw new DomainError("EFFECT_RECEIPT_INVALID", "a running assignment requires a confirmed execution receipt")
   }
+  const relativeCost = executionOperationCost(operation, assignment)
+  releaseUncertainCost(next, operation, assignment)
+  next.costLedger.accrued += relativeCost
   assignment.status = "running"
   attempt.status = "running"
   if (operation.purpose === "dispatch") {
@@ -593,6 +645,7 @@ function scheduleEffectRetry(next, fact) {
   if (operation.status !== "in-doubt" || fact.receipt.status !== "failed" || fact.receipt.error?.retryable !== true) {
     throw new DomainError("EFFECT_RETRY_INVALID", "only a retryable failed invocation can be scheduled again")
   }
+  releaseUncertainCost(next, operation, assignment)
   operation.status = "intent-persisted"
   operation.lastError = structuredClone(fact.receipt.error)
   delete operation.invocationId
@@ -609,6 +662,7 @@ function failEffect(next, fact) {
   if (fact.receipt.status !== "failed") {
     throw new DomainError("EFFECT_FAILURE_INVALID", "only a failed receipt can block an execution effect")
   }
+  releaseUncertainCost(next, operation, assignment)
   assignment.status = "blocked"
   attempt.status = "blocked"
   attempt.receiptRef = operation.operationId
@@ -849,9 +903,63 @@ function reopenStage(next, fact) {
   next.workGraph = { assignments: [] }
 }
 
+function replanStage(next, fact) {
+  if (["completed", "cancelled", "awaiting-user"].includes(next.status)) {
+    throw new DomainError("STAGE_REPLAN_INVALID", `cannot replan a ${next.status} task`)
+  }
+  if (
+    next.pendingOperations.length > 0
+    || next.workGraph.assignments.some((assignment) => (
+      ["effect-pending", "running", "reported", "in-doubt"].includes(assignment.status)
+    ))
+  ) throw new DomainError("STAGE_REPLAN_NOT_QUIESCENT", "replan requires a stable stage with no active external work")
+  const nextStageRunId = assertIdentifier(fact.nextStageRunId, "fact.nextStageRunId")
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  if (next.stageRuns.some((run) => run.stageRunId === nextStageRunId) || next.currentStageRun.stageRunId === nextStageRunId) {
+    throw new DomainError("STAGE_RUN_DUPLICATE", `stage run ${nextStageRunId} already exists`)
+  }
+  const previous = next.currentStageRun
+  if (fact.taskIntent) {
+    const revisedIntent = normalizeTaskIntent(fact.taskIntent)
+    if (digestValue(revisedIntent) === digestValue(next.taskIntent)) {
+      throw new DomainError("TASK_INTENT_UNCHANGED", "a replan intent revision must change the inherited task intent")
+    }
+    next.taskIntentHistory.push({
+      revision: next.taskIntentRevision,
+      intent: structuredClone(next.taskIntent),
+      stageRunId: previous.stageRunId,
+      reason,
+      supersededAt: fact.occurredAt,
+    })
+    next.taskIntent = revisedIntent
+    next.taskIntentRevision += 1
+  }
+  next.stageRuns.push({ ...previous, status: "rework", reason, completedAt: fact.occurredAt })
+  next.currentStageRun = {
+    stageRunId: nextStageRunId,
+    sequence: previous.sequence + 1,
+    round: previous.round + 1,
+    stage: previous.stage,
+    status: "planned",
+  }
+  next.stagePlan = null
+  next.workGraph = { assignments: [] }
+  next.status = "needs-plan"
+  next.costLedger = {
+    ...next.costLedger,
+    forecastMin: next.costLedger.accrued,
+    forecastMax: next.costLedger.accrued,
+    uncertain: 0,
+    nextWave: 0,
+  }
+}
+
 export function reduceTask(state, fact) {
   const next = prepare(state, fact)
   switch (fact.type) {
+    case "task-intent.recorded":
+      recordTaskIntent(next, fact)
+      return finish(next, fact)
     case "stage-run.transitioned":
       transitionStageRun(next, fact)
       return finish(next, fact)
@@ -932,6 +1040,9 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "stage.reopened":
       reopenStage(next, fact)
+      return finish(next, fact)
+    case "stage.replanned":
+      replanStage(next, fact)
       return finish(next, fact)
     default:
       throw new DomainError("FACT_UNSUPPORTED", `unsupported task fact: ${fact.type}`)

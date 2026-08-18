@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-work-runtime.dev/schemas/v2/agent-catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["digest", "agents"],
+  "properties": {
+    "digest": { "$ref": "#/$defs/digest" },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agentId", "tier", "modelFamily", "assignmentKinds"],
+        "properties": {
+          "agentId": { "$ref": "#/$defs/id" },
+          "tier": { "enum": ["junior", "senior", "expert"] },
+          "modelFamily": { "type": "string", "minLength": 1 },
+          "assignmentKinds": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/nonEmptyStrings" },
+          "available": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$" },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

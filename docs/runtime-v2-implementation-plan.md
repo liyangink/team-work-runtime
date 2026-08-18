@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 至 V2-3 均已完成并通过两轴终审，下一里程碑为 V2-4。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 至 V2-4 均已完成并通过两轴终审，下一里程碑为 V2-5。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-完成 V2-3 两轴终审后进入 V2-4：实现 Workflow 与 Team-work Policy Compiler，把十阶段流程、角色协作、成本、收敛和恢复规则编译为不可变 StagePlan/WorkGraph；继续不接入 OpenCode/OpenSpec Adapter，也不提前公开切换 Lead 控制面。
+进入 V2-5：用 Fake Execution/SPEC Adapter 装配平台无关 in-memory Harness，只经 `LeadControl`、`MemberDelivery` 与 `PlatformObservationSink` 跑通 planning/E2E preflight、正式 StagePlan、solo/team、人工驳回、三轮收敛、成本选择和恢复分支；继续不接入 OpenCode/OpenSpec Adapter，也不提前公开切换 Lead 控制面。

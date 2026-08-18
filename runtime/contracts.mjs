@@ -15,6 +15,10 @@ const schemaFiles = [
   "decision-packet.schema.json",
   "project-marker.schema.json",
   "task-state.schema.json",
+  "workflow-policy.schema.json",
+  "team-policy.schema.json",
+  "stage-plan-proposal.schema.json",
+  "agent-catalog.schema.json",
 ]
 
 const ajv = new Ajv2020({ allErrors: true, strict: true, strictRequired: false })

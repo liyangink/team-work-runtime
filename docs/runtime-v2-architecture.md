@@ -672,6 +672,12 @@ Lead intent / member report / platform observation
 - 校验 Lead 干预的目标、角色独立性、预算和轮次上限；
 - 不访问文件、不派发、不写状态。
 
+V2-4 将这个内部 seam 落为纯函数组合：`compilePolicyPlan` 负责装配，Workflow Compiler 只解释版本固定的工程流程、当前阶段合同及 SPEC/E2E 决定表，Team-work Compiler 只解释成本、角色、拓扑和收敛策略。输入 Policy、StagePlanProposal 与规范化 Agent Catalog 均先通过版本化 Schema；输出中的 Workflow/Team/Agent Catalog pin、路由决定和三轮上限随 StagePlan 一起冻结。复杂阶段先生成低成本 planning bootstrap，只有带内容 digest 的结构化 proposal 才能形成正式工作图。
+
+Planning bootstrap 与 E2E 适用性评估是两种显式 `preflight`，不是可冻结的正式 StagePlan。Compiler 分别返回 `planning-bootstrap` 或 `route-assessment`，其结果经 V2-5 的 Driver 持久执行并验收后，Compiler 才能用 proposal 或 assessment 生成唯一的 delivery StagePlan；Domain 明确拒绝把带 `preflightKind` 的工作图冻结为阶段计划。这样既保留前置工作的 durable execution，也不破坏“每个 stage run 的正式 StagePlan 一次冻结、执行中不可替换”的约束。
+
+TaskIntent 是 Task Aggregate 的持久、带 revision 的事实：第一次 `plan` 前规范化写入，后续阶段 Compiler 默认继承；StagePlan 仍按 stage run 不可变。用户目标或约束发生变化时必须走受控 `replan`，由一个原子事实关闭旧 stage run、保存旧 intent revision 并创建继承新 intent 的 stage run，不得原地修改已经执行的 StagePlan。
+
 ### 8.4 Task Driver
 
 - 反复执行 reducer 直到稳定点；
@@ -746,6 +752,10 @@ v1 的 Markdown Skill 同时承担规则、教程和命令手册，导致 Lead �
 - 可选的同档成员互评；评分只在最终收敛后记录，供后续选模评估，不进入当前任务返工循环；
 - 结构化报告和汇报规则。
 
+默认机器 Policy 把代码 Review 的八个必需视角作为 Owner 完成合同，而不是按预算删减视角；E2E 则物化“路径设计 Owner → 独立审查 → 夹具/脚本 Owner → 独立审查 → 执行 Owner → 结果复核 → Expert 裁决”的内部 DAG。审查链到 ExpertVerdict 为止，不再递归审查 Challenger 报告或 ExpertVerdict。
+
+Agent Catalog 的 `agentId` 标识模型/配置候选，不等于成员或执行 session 身份。Owner 与其复核 Expert 必须形成不同 assignment，并由 V2-5/V2-6 在执行时绑定不同 session；优先选择不同 `agentId`/模型族，候选不足时允许复用配置但绝不允许复用作者 session。
+
 ### Cost Ledger
 
 Runtime 为任务保存独立于技术状态的相对成本账本：
@@ -771,6 +781,12 @@ type E2ERouteAssessment = {
   criticalCrossSystemPath: boolean
   environment: "ready" | "missing" | "unknown"
   evidenceRefs: string[]
+  artifactSnapshotDigest: string
+  evidenceSnapshotDigest: string
+  ownerAssignmentId: string
+  challengerAssignmentId: string
+  ownerSessionDigest: string
+  challengerSessionDigest: string
   ownerReportRef: string
   challengerReportRef: string
   digest: string
@@ -780,6 +796,8 @@ type E2ERouteState = {
   digest: string
   mode: "auto" | "required" | "disabled"
   userRequired: boolean
+  taskIntentDigest: string
+  artifactSnapshotDigest: string
   assessmentDigest: string
   decision: "run" | "skip" | "block"
   evidenceRefs: string[]
@@ -799,7 +817,7 @@ type E2ERouteState = {
 | `required` | 总是 | `ready` | `run` |
 | `required` | 总是 | `missing|unknown` | `block` |
 
-Compiler 必须把 mode、TaskIntent 约束、assessment digest、证据引用和决定物化为 `E2ERouteState`，固定到 `state.json` 和后续 StagePlan。`skip` 必须有可定位证据；`block` 必须给出环境或配置恢复条件；`run` 才能物化下述 E2E 工作图。TaskIntent、assessment 或关联制品 fingerprint 变化时，旧路由失效并必须重新评估。
+Compiler 必须把 mode、TaskIntent 约束、assessment digest、证据引用和决定物化为 `E2ERouteState`，固定到 `state.json` 和后续 StagePlan。Assessment 必须来自 Runtime 已验证的 Owner/Challenger assignment 与不同 session，并绑定制品及证据快照；只提供字符串结论不能路由。`skip` 必须有可定位证据；`block` 必须给出环境或配置恢复条件；`run` 才能物化下述 E2E 工作图。TaskIntent、assessment 或关联制品 fingerprint 变化时，旧路由失效并必须重新评估。
 
 ### E2E 内部工作图
 

@@ -96,6 +96,9 @@ export function normalizeStagePlan(plan, currentStageRunId) {
   if (!plan || typeof plan !== "object") {
     throw new DomainError("STAGE_PLAN_INVALID", "stage plan must be an object")
   }
+  if (plan.preflightKind) {
+    throw new DomainError("STAGE_PLAN_PREFLIGHT", "a planning or route-assessment preflight cannot be frozen as the delivery stage plan")
+  }
   assertIdentifier(plan.planId, "plan.planId")
   if (plan.stageRunId !== currentStageRunId) {
     throw new DomainError("STAGE_PLAN_STALE", "stage plan does not target the current stage run")

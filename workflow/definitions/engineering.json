@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "2.0",
+  "workflowId": "engineering",
+  "version": "2026-08-18",
+  "terminalStages": ["finish"],
+  "gates": [
+    { "gateId": "design-approval", "stage": "design-review", "requirement": "required", "artifactKind": "design" },
+    { "gateId": "final-acceptance", "stage": "finish", "requirement": "required", "artifactKind": "delivery-report" }
+  ],
+  "stages": [
+    { "id": "research", "label": "需求调研", "requiredInputs": ["requirement"], "outputs": ["research-report"], "assignmentKind": "research", "teamScene": "research", "planning": "conditional" },
+    { "id": "design", "label": "方案设计", "requiredInputs": ["requirement"], "outputs": ["design"], "assignmentKind": "design", "teamScene": "design", "planning": "required" },
+    { "id": "design-review", "label": "方案审查", "requiredInputs": ["design"], "outputs": ["design-review"], "assignmentKind": "review", "teamScene": "design-review", "planning": "conditional" },
+    { "id": "spec", "label": "SPEC", "requiredInputs": ["design"], "outputs": ["spec"], "assignmentKind": "spec", "teamScene": "spec", "planning": "required", "route": "spec" },
+    { "id": "spec-review", "label": "SPEC 审查", "requiredInputs": ["spec"], "outputs": ["spec-review"], "assignmentKind": "review", "teamScene": "spec-review", "planning": "conditional" },
+    { "id": "implementation", "label": "实施", "requiredInputs": ["requirement"], "outputs": ["source"], "assignmentKind": "implementation", "teamScene": "implementation", "planning": "conditional" },
+    { "id": "test", "label": "测试", "requiredInputs": ["source"], "outputs": ["test-code", "test-result"], "assignmentKind": "test", "teamScene": "test", "planning": "conditional" },
+    { "id": "code-review", "label": "代码审查", "requiredInputs": ["source", "review-scope"], "outputs": ["code-review"], "assignmentKind": "review", "teamScene": "code-review", "planning": "conditional", "route": "e2e" },
+    { "id": "e2e", "label": "E2E", "requiredInputs": ["source", "test-scope"], "outputs": ["e2e-result"], "assignmentKind": "e2e", "teamScene": "e2e", "planning": "required", "route": "e2e" },
+    { "id": "finish", "label": "收尾", "requiredInputs": [], "outputs": ["delivery-report"], "assignmentKind": "evidence", "teamScene": "finish", "planning": "conditional" }
+  ],
+  "edges": [
+    { "from": "research", "to": "design", "outcome": "pass" },
+    { "from": "design", "to": "design-review", "outcome": "pass" },
+    { "from": "design-review", "to": "design", "outcome": "rework" },
+    { "from": "design-review", "to": "spec", "outcome": "use-spec" },
+    { "from": "design-review", "to": "implementation", "outcome": "skip-spec" },
+    { "from": "spec", "to": "spec-review", "outcome": "pass" },
+    { "from": "spec-review", "to": "spec", "outcome": "rework" },
+    { "from": "spec-review", "to": "design", "outcome": "design-gap" },
+    { "from": "spec-review", "to": "implementation", "outcome": "pass" },
+    { "from": "implementation", "to": "test", "outcome": "pass" },
+    { "from": "test", "to": "implementation", "outcome": "product-defect" },
+    { "from": "test", "to": "test", "outcome": "test-defect" },
+    { "from": "test", "to": "code-review", "outcome": "pass" },
+    { "from": "code-review", "to": "implementation", "outcome": "implementation-defect" },
+    { "from": "code-review", "to": "test", "outcome": "test-gap" },
+    { "from": "code-review", "to": "e2e", "outcome": "run-e2e" },
+    { "from": "code-review", "to": "finish", "outcome": "skip-e2e" },
+    { "from": "e2e", "to": "e2e", "outcome": "e2e-defect" },
+    { "from": "e2e", "to": "implementation", "outcome": "product-defect" },
+    { "from": "e2e", "to": "test", "outcome": "test-strategy-gap" },
+    { "from": "e2e", "to": "finish", "outcome": "pass" }
+  ]
+}

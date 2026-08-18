@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立，V2-0 契约与骨架已完成，下一里程碑为 V2-1 Domain 与文件 Store。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立，V2-0 已完成；V2-1 Domain 与文件 Store 已完成实现和自动化测试，正在两轴终审。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-开始 V2-1，先用纯 Reducer tracer bullet 固定 Task Aggregate 的最小状态与转移，再实现文件 Store。不提前实现 Driver、Platform Adapter 或安装器改造。
+完成 V2-1 两轴终审后进入 V2-2：实现 Driver、Observation Inbox 与 durable effect。V2-2 不改动 Lead Interface，也不提前接入 Platform Adapter 或安装器。

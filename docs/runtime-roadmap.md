@@ -1,6 +1,6 @@
 # team-work-runtime Roadmap
 
-状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认，V2-0 契约与骨架已完成。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
+状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认；V2-0 已完成，V2-1 Domain 与文件 Store 已完成实现和自动化测试，正在终审。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
 
 下列 Phase 0–3 记录 v1 已完成基线，Phase 4 记录已落地但尚未完成正式 E2E 的部分实现；它们用于识别可复用的不变量，不再代表下一版目标结构。v2 通过人工设计审核后，以其实施切割替换后续 v1 验收计划；在此之前不得把 v2 能力描述为已经可用。
 
@@ -9,12 +9,12 @@
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 契约与骨架已完成并通过两轴终审；下一步为 V2-1 Domain 与 Store。
+- v2 实现：V2-0 契约与骨架已完成并通过两轴终审；V2-1 已完成实现和 240 项全量自动化测试，正在两轴终审。
 
 | v2 里程碑 | 状态 |
 | --- | --- |
 | V2-0 契约与骨架 | 完成 |
-| V2-1 Domain 与 Store | 待开始 |
+| V2-1 Domain 与 Store | 终审中 |
 | V2-2 Driver、Observation 与 durable effect | 待开始 |
 | V2-3 人工等待与决定凭证 | 待开始 |
 | V2-4 Workflow/Team-work Compiler | 待开始 |

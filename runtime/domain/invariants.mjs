@@ -334,6 +334,7 @@ export function assertTaskState(state) {
       || evidence.digest !== decision.decisionDigest
       || evidence.stageRunId !== decision.stageRunId
       || canonicalStringList(evidence.artifactRefs) !== canonicalStringList(Object.keys(decision.artifactDigests))
+      || evidence.artifactRefs.some((artifactId) => evidence.artifactDigests[artifactId] !== decision.artifactDigests[artifactId])
       || new Set(decision.executionRefs).size !== decision.executionRefs.length
     ) failState("resolved human decision must retain matching evidence")
   }

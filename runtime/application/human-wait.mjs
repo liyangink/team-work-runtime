@@ -100,9 +100,9 @@ export function createHumanWait({
       }
     }
     const capabilities = await execution.capabilities()
-    const gate = evaluateHumanGate({
-      requirement: decision.requirement,
-      humanDecisionProof: capabilities.features.humanDecisionProof,
+    const [gate] = compileHumanGateRequirements({
+      gates: [{ gateId: decision.decisionId, requirement: decision.requirement }],
+      capabilitySnapshot: capabilities,
     })
     if (gate.action === "skip") return { changed: false, state: await reconciler.load(taskId), skipped: true, reason: gate.reason }
     const proofMode = gate.proofMode

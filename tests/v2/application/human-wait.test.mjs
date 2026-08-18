@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
 import { createTaskDriver } from "../../../runtime/application/driver.mjs"
 import { compileHumanGateRequirements, evaluateHumanGate } from "../../../runtime/application/human-wait.mjs"
-import { createTaskAggregate, digestEffect, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
+import { assertTaskState, createTaskAggregate, digestEffect, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
 import { createFileStore } from "../../../runtime/persistence/index.mjs"
 
 const workflow = {
@@ -271,6 +271,41 @@ test("human gate capability is resolved before execution so required unsupported
   ])
 })
 
+test("the Driver compiles a required gate before creating any quiesce intent", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const taskId = "unsupported-required-gate"
+  await createWorkingTask(store, taskId)
+  const base = await adapter().capabilities()
+  const driver = createTaskDriver({
+    projectRoot,
+    store,
+    executionAdapter: adapter({
+      capabilities: async () => ({
+        ...base,
+        features: { ...base.features, humanDecisionProof: "unsupported" },
+      }),
+    }),
+  })
+  const before = await store.loadTask(taskId)
+
+  await assert.rejects(
+    driver.prepareHumanDecision({
+      taskId,
+      decision: {
+        decisionId: "design-approval",
+        requirement: "required",
+        leadBindingRef: "binding:lead-1",
+        question: "是否批准当前方案进入实施？",
+        choices: ["approve", "revise"],
+        artifactRefs: ["design-document"],
+      },
+    }),
+    (error) => error.code === "HUMAN_DECISION_PROOF_UNSUPPORTED",
+  )
+  assert.deepEqual(await store.loadTask(taskId), before)
+})
+
 test("a verified adapter decision is bound to the issued stage and artifact evidence", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })
@@ -328,6 +363,9 @@ test("a verified adapter decision is bound to the issued stage and artifact evid
   assert.match(resolved.state.decisionHistory[0].quiesceReceiptRef, /^quiesce-/)
   assert.equal(resolved.state.evidence[0].kind, "human-decision")
   assert.equal(resolved.state.evidence[0].valid, true)
+  const corruptDigestMap = structuredClone(resolved.state)
+  corruptDigestMap.decisionHistory[0].artifactDigests["design-document"] = "f".repeat(64)
+  assert.throws(() => assertTaskState(corruptDigestMap), (error) => error.code === "STATE_INVALID")
 
   const decisionPath = path.join(
     projectRoot,
@@ -966,4 +1004,31 @@ test("an unregistered filesystem change invalidates approval before the adapter 
   assert.equal(resolved.state.status, "working")
   assert.equal(resolved.state.pendingDecision, null)
   assert.equal(verifyCalls, 0)
+})
+
+test("artifact verification rejects a symlink even when it resolves to a readable file", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const taskId = "symlinked-approval-artifact"
+  await createWorkingTask(store, taskId)
+  const externalPath = path.join(path.dirname(projectRoot), `${path.basename(projectRoot)}-outside.md`)
+  await writeFile(externalPath, "approved design contents")
+  await rm(path.join(projectRoot, "docs", "design.md"))
+  await symlink(externalPath, path.join(projectRoot, "docs", "design.md"))
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter: adapter() })
+
+  await assert.rejects(
+    driver.prepareHumanDecision({
+      taskId,
+      decision: {
+        decisionId: "approve-design",
+        requirement: "required",
+        leadBindingRef: "binding:lead-1",
+        question: "是否批准当前方案进入实施？",
+        choices: ["approve", "revise"],
+        artifactRefs: ["design-document"],
+      },
+    }),
+    (error) => error.code === "EVIDENCE_PATH_ESCAPE",
+  )
 })

@@ -1,4 +1,5 @@
-import { lstat, readFile, realpath } from "node:fs/promises"
+import { constants } from "node:fs"
+import { lstat, open, realpath } from "node:fs/promises"
 import path from "node:path"
 
 import { digestValue } from "../domain/digests.mjs"
@@ -12,6 +13,44 @@ function verifierError(code, message) {
   const error = new Error(message)
   error.code = code
   return error
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+function sameSnapshot(left, right) {
+  return sameFile(left, right)
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+}
+
+async function readStableProjectFile(root, candidate, relativePath) {
+  let handle
+  try {
+    handle = await open(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) return { mismatch: "not-regular-file" }
+    const content = await handle.readFile({ encoding: "utf8" })
+    const after = await handle.stat({ bigint: true })
+    if (!sameSnapshot(before, after)) return { mismatch: "changed-during-read" }
+
+    const linked = await lstat(candidate, { bigint: true })
+    if (linked.isSymbolicLink() || !linked.isFile() || !sameFile(before, linked)) {
+      return { mismatch: "path-replaced-during-read" }
+    }
+    const resolved = await realpath(candidate)
+    if (!isInside(root, resolved)) throw verifierError("EVIDENCE_PATH_ESCAPE", `artifact resolves outside project root: ${relativePath}`)
+    return { content }
+  } catch (error) {
+    if (["ELOOP", "EMLINK"].includes(error.code)) {
+      throw verifierError("EVIDENCE_PATH_ESCAPE", `artifact path is a symbolic link: ${relativePath}`)
+    }
+    throw error
+  } finally {
+    await handle?.close()
+  }
 }
 
 export function createFileEvidenceVerifier({ projectRoot }) {
@@ -32,14 +71,12 @@ export function createFileEvidenceVerifier({ projectRoot }) {
         const candidate = path.resolve(root, snapshot.path)
         if (!isInside(root, candidate)) throw verifierError("EVIDENCE_PATH_ESCAPE", `artifact path escapes project root: ${snapshot.path}`)
         try {
-          const metadata = await lstat(candidate)
-          if (metadata.isSymbolicLink() || !metadata.isFile()) {
-            mismatches.push({ artifactId: snapshot.artifactId, path: snapshot.path, reason: "not-regular-file" })
+          const stable = await readStableProjectFile(root, candidate, snapshot.path)
+          if (stable.mismatch) {
+            mismatches.push({ artifactId: snapshot.artifactId, path: snapshot.path, reason: stable.mismatch })
             continue
           }
-          const resolved = await realpath(candidate)
-          if (!isInside(root, resolved)) throw verifierError("EVIDENCE_PATH_ESCAPE", `artifact resolves outside project root: ${snapshot.path}`)
-          const digest = digestValue(await readFile(resolved, "utf8"))
+          const digest = digestValue(stable.content)
           if (digest !== snapshot.digest) {
             mismatches.push({ artifactId: snapshot.artifactId, path: snapshot.path, reason: "digest-mismatch", actualDigest: digest })
           }

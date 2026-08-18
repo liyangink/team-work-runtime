@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -38,4 +38,16 @@ test("Runtime v2 reads the project marker and refuses a v1 root", async () => {
     runtimeMajor: 2,
     schemaVersion: "2.0",
   })
+})
+
+test("Runtime v2 refuses a project marker reached through an escaping symlink", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-project-"))
+  const externalRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-external-"))
+  await writeFile(path.join(externalRoot, "project.json"), JSON.stringify({ runtimeMajor: 2, schemaVersion: "2.0" }))
+  await symlink(externalRoot, path.join(projectRoot, ".team-work"))
+
+  await assert.rejects(
+    assertProjectRuntimeMajor(projectRoot),
+    (error) => error instanceof ContractError && error.code === "STATE_CORRUPT",
+  )
 })

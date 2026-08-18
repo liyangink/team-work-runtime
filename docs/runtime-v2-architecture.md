@@ -441,6 +441,8 @@ Runtime 在存在分歧、返工选择、Expert 仲裁或用户决策时生成�
 ```ts
 type DecisionPacket = {
   packetId: string
+  version: number
+  factsDigest: string
   question: string
   stage: string
   roster: Array<{
@@ -477,6 +479,7 @@ type DecisionPacket = {
 约束：
 
 - 只保留支持当前判断的结论、证据、角色和轮次，不复制原始 transcript；
+- `version` 在同一问题的 packet 更新时递增，`factsDigest` 绑定生成该投影的报告、制品和证据事实；
 - 记录成员角色、成本档位和模型标签，便于 Lead 判断是否需要更换 Owner、增加异质模型或请求第二意见；
 - 已解决项与未解决项必须分开，不能让历史争论淹没当前问题；
 - packet 变化生成新版本，旧版本只供审计；ActionCard 只链接当前版本；

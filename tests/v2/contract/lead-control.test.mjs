@@ -78,3 +78,21 @@ test("LeadControl rejects invalid RuntimeCards and run arguments at the public b
   await assert.rejects(control.plan({ objective: "continue" }), ContractError)
   await assert.rejects(control.run({ waitMs: 1000 }), ContractError)
 })
+
+test("LeadControl rejects unknown, low-level, and incomplete steer intents", async () => {
+  let called = false
+  const control = createLeadControl({
+    open: async () => actionCard,
+    plan: async () => actionCard,
+    run: async () => actionCard,
+    steer: async () => {
+      called = true
+      return actionCard
+    },
+  })
+
+  await assert.rejects(control.steer({ action: "dispatch", directive: "spawn" }), ContractError)
+  await assert.rejects(control.steer({ action: "owner-rework", directive: "fix", sessionId: "private" }), ContractError)
+  await assert.rejects(control.steer({ action: "owner-rework" }), ContractError)
+  assert.equal(called, false)
+})

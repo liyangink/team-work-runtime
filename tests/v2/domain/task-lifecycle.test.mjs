@@ -543,6 +543,53 @@ test("task snapshots cannot smuggle dependency cycles or product writes into rev
   assert.throws(() => assertTaskState(unauthorizedWrite), (error) => error.code === "STATE_INVALID")
 })
 
+test("parallel owners cannot share writable refs unless the work graph serializes them", () => {
+  const owner = (assignmentId, dependsOn) => ({
+    assignmentId,
+    teamRole: "owner",
+    assignmentKind: "implementation",
+    costTier: "junior",
+    dependsOn,
+    readableRefs: ["artifact:source"],
+    writableRefs: ["artifact:shared-output"],
+    completionCriteria: ["produce result"],
+    execution,
+  })
+  const base = createTaskAggregate({
+    taskId: "writable-conflict",
+    title: "Reject overlapping parallel writes",
+    objective: "Prevent two owners from racing on one product artifact",
+    workflow,
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "code-review" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  })
+  const fact = {
+    type: "stage-plan.frozen",
+    expectedRevision: 0,
+    occurredAt: "2026-08-18T10:01:00.000Z",
+    plan: {
+      planId: "plan-writes",
+      stageRunId: "stage-run-1",
+      objective: "Produce one shared output safely",
+      inputRefs: ["artifact:source"],
+      outputRefs: ["artifact:shared-output"],
+      assignments: [owner("owner-a", []), owner("owner-b", [])],
+    },
+    costLedger: { forecastMin: 2, forecastMax: 4, accrued: 0, uncertain: 0, nextWave: 2, automaticLimit: 4 },
+  }
+
+  assert.throws(
+    () => reduceTask(base, fact),
+    (error) => error instanceof DomainError && error.code === "WORK_GRAPH_WRITE_CONFLICT",
+  )
+
+  fact.plan.assignments[1] = owner("owner-b", ["owner-a"])
+  const serialized = reduceTask(base, fact).state
+  assert.equal(serialized.workGraph.assignments.length, 2)
+})
+
 test("work graphs accept every assignment kind declared by the Runtime architecture", () => {
   const kinds = [
     "planning",

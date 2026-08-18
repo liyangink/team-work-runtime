@@ -1,5 +1,6 @@
 import { ContractError, validateContract } from "../contracts.mjs"
 import { digestEffect } from "./digests.mjs"
+import { findParallelWriteConflict } from "./work-graph-rules.mjs"
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -155,6 +156,9 @@ export function assertTaskState(state) {
     }
   }
   if (visitedAssignments !== state.workGraph.assignments.length) failState("assignment dependencies must be acyclic")
+  if (findParallelWriteConflict(state.workGraph.assignments)) {
+    failState("parallel owner assignments cannot share writable refs")
+  }
   assertUniqueBy(state.pendingOperations, "operationId", "pending operation ids")
   const pendingById = new Map(state.pendingOperations.map((operation) => [operation.operationId, operation]))
   for (const operation of state.pendingOperations) {

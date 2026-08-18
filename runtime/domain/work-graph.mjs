@@ -4,6 +4,7 @@ import {
   assertNonEmptyString,
   assertStringList,
 } from "./invariants.mjs"
+import { findParallelWriteConflict } from "./work-graph-rules.mjs"
 
 const TEAM_ROLES = new Set(["owner", "challenger", "expert"])
 const COST_TIERS = new Set(["junior", "senior", "expert"])
@@ -81,5 +82,12 @@ export function createWorkGraph(assignments) {
     }
   }
   assertAcyclic(normalized)
+  const conflict = findParallelWriteConflict(normalized)
+  if (conflict) {
+    throw new DomainError(
+      "WORK_GRAPH_WRITE_CONFLICT",
+      `parallel owners ${conflict.left} and ${conflict.right} share writable refs: ${conflict.sharedRefs.join(", ")}`,
+    )
+  }
   return { assignments: normalized }
 }

@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-work-runtime.dev/schemas/v2/task-state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runtimeMajor", "schemaVersion", "taskId", "revision", "title", "objective",
+    "workflow", "scope", "status", "currentStageRun", "stageRuns", "stagePlan",
+    "workGraph", "artifacts", "evidence", "acceptedReportRefs", "costLedger",
+    "observationInbox", "pendingDecision", "pendingOperations", "createdAt", "updatedAt"
+  ],
+  "properties": {
+    "runtimeMajor": { "const": 2 },
+    "schemaVersion": { "const": "2.0" },
+    "taskId": { "$ref": "#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "title": { "type": "string", "minLength": 1 },
+    "objective": { "type": "string", "minLength": 1 },
+    "workflow": { "$ref": "#/$defs/workflowPin" },
+    "scope": { "$ref": "#/$defs/stageScope" },
+    "status": { "enum": ["needs-plan", "working", "awaiting-user", "blocked", "completed", "cancelled"] },
+    "currentStageRun": { "$ref": "#/$defs/stageRun" },
+    "stageRuns": { "type": "array", "items": { "$ref": "#/$defs/stageRun" } },
+    "stagePlan": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/stagePlan" }
+      ]
+    },
+    "workGraph": { "$ref": "#/$defs/workGraph" },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "acceptedReportRefs": { "$ref": "#/$defs/uniqueStrings" },
+    "costLedger": { "$ref": "#/$defs/costLedger" },
+    "observationInbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nextSequence", "pending"],
+      "properties": {
+        "nextSequence": { "type": "integer", "minimum": 1 },
+        "pending": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "pendingDecision": { "anyOf": [{ "type": "null" }, { "type": "object" }] },
+    "pendingOperations": { "type": "array", "items": { "type": "object" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+    },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "uniqueStrings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "workflowPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowId", "version", "digest"],
+      "properties": {
+        "workflowId": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "completion": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "workflow" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "stage"],
+          "properties": {
+            "mode": { "const": "through-stage" },
+            "stage": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "outcome": { "type": "string", "minLength": 1 }
+      }
+    },
+    "stageScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryStage", "completion", "completionStages", "stages", "edges"],
+      "properties": {
+        "entryStage": { "type": "string", "minLength": 1 },
+        "completion": { "$ref": "#/$defs/completion" },
+        "completionStages": { "$ref": "#/$defs/uniqueStrings" },
+        "stages": { "$ref": "#/$defs/uniqueStrings" },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } }
+      }
+    },
+    "stageRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stageRunId", "sequence", "round", "stage", "status"],
+      "properties": {
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "round": { "type": "integer", "minimum": 1 },
+        "stage": { "type": "string", "minLength": 1 },
+        "status": {
+          "enum": ["planned", "dispatching", "waiting-reports", "reviewing", "ready-to-advance", "in-doubt", "rework", "completed"]
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "stagePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planId", "stageRunId", "objective", "inputRefs", "outputRefs", "assignments"],
+      "properties": {
+        "planId": { "$ref": "#/$defs/id" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "objective": { "type": "string", "minLength": 1 },
+        "inputRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "outputRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "assignments": { "$ref": "#/$defs/uniqueStrings" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attemptId", "attempt", "stageRunId", "status", "startedAt"],
+      "properties": {
+        "attemptId": { "$ref": "#/$defs/id" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId", "teamRole", "assignmentKind", "costTier", "dependsOn",
+        "readableRefs", "writableRefs", "completionCriteria", "status", "attempts"
+      ],
+      "properties": {
+        "assignmentId": { "$ref": "#/$defs/id" },
+        "teamRole": { "enum": ["owner", "challenger", "expert"] },
+        "assignmentKind": {
+          "type": "string",
+          "pattern": "^(?:planning|research|implementation|integration|test|review|e2e-applicability|custom:[a-z0-9][a-z0-9._-]*)$"
+        },
+        "costTier": { "enum": ["junior", "senior", "expert"] },
+        "dependsOn": { "$ref": "#/$defs/uniqueStrings" },
+        "readableRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "writableRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "completionCriteria": { "$ref": "#/$defs/uniqueStrings" },
+        "status": { "enum": ["planned", "effect-pending", "running", "reported", "verified", "accepted", "rework", "lost", "blocked", "in-doubt"] },
+        "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } }
+      }
+    },
+    "workGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assignments"],
+      "properties": {
+        "assignments": { "type": "array", "items": { "$ref": "#/$defs/assignment" } }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "kind", "path", "digest", "stageRunId", "recordedAt"],
+      "properties": {
+        "artifactId": { "$ref": "#/$defs/id" },
+        "kind": { "type": "string", "minLength": 1 },
+        "path": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "recordedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceId", "kind", "sourceRef", "artifactRefs", "artifactDigests", "result", "stageRunId", "observedAt", "valid"],
+      "properties": {
+        "evidenceId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["artifact-digest", "platform-check", "spec-provider", "human-decision", "external-fact", "member-assertion"] },
+        "sourceRef": { "type": "string", "minLength": 1 },
+        "artifactRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "artifactDigests": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/digest" }
+        },
+        "result": { "enum": ["pass", "fail", "unknown"] },
+        "digest": { "$ref": "#/$defs/digest" },
+        "stageRunId": { "$ref": "#/$defs/id" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "valid": { "type": "boolean" },
+        "invalidation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "artifactId", "invalidatedAt"],
+          "properties": {
+            "reason": { "const": "artifact-changed" },
+            "artifactId": { "$ref": "#/$defs/id" },
+            "invalidatedAt": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
+    "costLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["forecastMin", "forecastMax", "accrued", "uncertain", "nextWave", "automaticLimit"],
+      "properties": {
+        "forecastMin": { "type": "number", "minimum": 0 },
+        "forecastMax": { "type": "number", "minimum": 0 },
+        "accrued": { "type": "number", "minimum": 0 },
+        "uncertain": { "type": "number", "minimum": 0 },
+        "nextWave": { "type": "number", "minimum": 0 },
+        "automaticLimit": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

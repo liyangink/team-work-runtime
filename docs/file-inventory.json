@@ -82,6 +82,8 @@
     "tests/v2/domain/preflight-lifecycle.test.mjs",
     "tests/v2/domain/report-lifecycle.test.mjs",
     "tests/v2/e2e/runtime-facade.test.mjs",
+    "tests/v2/e2e/full-workflow.test.mjs",
+    "tests/v2/e2e/happy-path-harness.mjs",
     "tests/v2/persistence/in-memory-store.test.mjs",
     "tests/v2/persistence/durable-reference-validator.test.mjs",
     "tests/v2/policy/policy-compiler.test.mjs",

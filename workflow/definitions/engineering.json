@@ -14,8 +14,8 @@
     { "id": "spec", "label": "SPEC", "requiredInputs": ["design"], "outputs": ["spec"], "assignmentKind": "spec", "teamScene": "spec", "planning": "required", "route": "spec" },
     { "id": "spec-review", "label": "SPEC 审查", "requiredInputs": ["spec"], "outputs": ["spec-review"], "assignmentKind": "review", "teamScene": "spec-review", "planning": "conditional" },
     { "id": "implementation", "label": "实施", "requiredInputs": ["requirement"], "outputs": ["source"], "assignmentKind": "implementation", "teamScene": "implementation", "planning": "conditional" },
-    { "id": "test", "label": "测试", "requiredInputs": ["source"], "outputs": ["test-code", "test-result"], "assignmentKind": "test", "teamScene": "test", "planning": "conditional" },
-    { "id": "code-review", "label": "代码审查", "requiredInputs": ["source", "review-scope"], "outputs": ["code-review"], "assignmentKind": "review", "teamScene": "code-review", "planning": "conditional", "route": "e2e" },
+    { "id": "test", "label": "测试", "requiredInputs": ["source"], "outputs": ["test-code", "test-result", "test-scope"], "assignmentKind": "test", "teamScene": "test", "planning": "conditional" },
+    { "id": "code-review", "label": "代码审查", "requiredInputs": ["source"], "outputs": ["code-review"], "assignmentKind": "review", "teamScene": "code-review", "planning": "conditional", "route": "e2e" },
     { "id": "e2e", "label": "E2E", "requiredInputs": ["source", "test-scope"], "outputs": ["e2e-result"], "assignmentKind": "e2e", "teamScene": "e2e", "planning": "required", "route": "e2e" },
     { "id": "finish", "label": "收尾", "requiredInputs": [], "outputs": ["delivery-report"], "assignmentKind": "evidence", "teamScene": "finish", "planning": "conditional" }
   ],
@@ -40,6 +40,12 @@
     { "from": "e2e", "to": "e2e", "outcome": "e2e-defect" },
     { "from": "e2e", "to": "implementation", "outcome": "product-defect" },
     { "from": "e2e", "to": "test", "outcome": "test-strategy-gap" },
-    { "from": "e2e", "to": "finish", "outcome": "pass" }
+    { "from": "e2e", "to": "finish", "outcome": "pass" },
+    { "from": "finish", "to": "design", "outcome": "return-design" },
+    { "from": "finish", "to": "spec", "outcome": "return-spec" },
+    { "from": "finish", "to": "implementation", "outcome": "return-implementation" },
+    { "from": "finish", "to": "test", "outcome": "return-test" },
+    { "from": "finish", "to": "code-review", "outcome": "return-code-review" },
+    { "from": "finish", "to": "e2e", "outcome": "return-e2e" }
   ]
 }

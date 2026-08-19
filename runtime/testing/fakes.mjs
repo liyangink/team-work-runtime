@@ -65,7 +65,9 @@ export function createFakeExecutionAdapter({ agents, clock = () => new Date().to
     activeMembers() {
       return [...executions.values()].map((binding) => Object.freeze({
         executionRef: binding.executionRef,
+        stageRunId: binding.stageRunId,
         assignmentId: binding.assignmentId,
+        attemptId: binding.attemptId,
         role: binding.role,
         assignmentKind: binding.assignmentKind,
         report: async (report, operationKey = `fake-report-${binding.assignmentId}-${binding.attempt}`) => {
@@ -119,6 +121,7 @@ export function createFakeExecutionAdapter({ agents, clock = () => new Date().to
       effects.set(effect.operationId, receipt)
       executions.set(executionRef, {
         taskId: effect.taskId,
+        stageRunId: effect.stageRunId,
         assignmentId: effect.assignmentId,
         attemptId: `${effect.assignmentId}-attempt-${effect.attempt}`,
         attempt: effect.attempt,

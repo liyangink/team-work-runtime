@@ -87,6 +87,34 @@ function advanceStage(next, fact) {
   next.workGraph = { assignments: [] }
 }
 
+function returnStage(next, fact) {
+  if (next.currentStageRun.status !== "ready-to-advance") {
+    throw new DomainError("STAGE_NOT_READY", "the current stage run is not ready to follow a rework edge")
+  }
+  const currentStage = next.currentStageRun.stage
+  const legal = next.scope.edges.some((edge) => edge.from === currentStage && edge.to === fact.to && edge.outcome === fact.outcome)
+  if (!legal || fact.outcome === "pass") {
+    throw new DomainError("STAGE_EDGE_INVALID", `workflow scope does not allow ${currentStage} -> ${fact.to} via ${fact.outcome}`)
+  }
+  const nextStageRunId = assertIdentifier(fact.nextStageRunId, "fact.nextStageRunId")
+  if (next.stageRuns.some((run) => run.stageRunId === nextStageRunId) || next.currentStageRun.stageRunId === nextStageRunId) {
+    throw new DomainError("STAGE_RUN_DUPLICATE", `stage run ${nextStageRunId} already exists`)
+  }
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  next.stageRuns.push({ ...next.currentStageRun, status: "rework", reason, completedAt: fact.occurredAt })
+  next.currentStageRun = {
+    stageRunId: nextStageRunId,
+    sequence: next.currentStageRun.sequence + 1,
+    round: fact.to === currentStage ? next.currentStageRun.round + 1 : 1,
+    stage: fact.to,
+    status: "planned",
+  }
+  next.stagePlan = null
+  next.preflight = null
+  next.workGraph = { assignments: [] }
+  next.status = "needs-plan"
+}
+
 function skipStage(next, fact) {
   if (
     next.currentStageRun.status !== "planned"
@@ -125,6 +153,40 @@ function normalizeCostLedger(ledger) {
   return Object.fromEntries(fields.map((field) => [field, ledger[field]]))
 }
 
+function approveCostBudget(next, fact) {
+  if (next.status !== "working" || next.pendingDecision || next.pendingOperations.length > 0) {
+    throw new DomainError("COST_BUDGET_APPROVAL_INVALID", "cost approval requires a stable working task")
+  }
+  const assignment = next.workGraph.assignments.find(({ assignmentId }) => assignmentId === fact.assignmentId)
+  const decisionId = assertIdentifier(fact.decisionId, "fact.decisionId")
+  const decision = next.decisionHistory.at(-1)
+  if (
+    !decision
+    || decision.decisionId !== decisionId
+    || !decisionId.startsWith("budget-")
+    || decision.stageRunId !== next.currentStageRun.stageRunId
+    || decision.choice !== "accept"
+  ) {
+    throw new DomainError("COST_BUDGET_APPROVAL_INVALID", "cost approval requires the latest accepted budget decision")
+  }
+  if (!assignment || !["planned", "rework", "lost"].includes(assignment.status) || !assignment.execution) {
+    throw new DomainError("COST_BUDGET_APPROVAL_STALE", "cost approval no longer targets a dispatchable assignment")
+  }
+  const dependenciesAccepted = assignment.dependsOn.every((dependency) => (
+    next.workGraph.assignments.find(({ assignmentId }) => assignmentId === dependency)?.status === "accepted"
+  ))
+  const requiredLimit = next.costLedger.accrued + next.costLedger.uncertain + costWeightForTier(assignment.costTier)
+  if (
+    !dependenciesAccepted
+    || assignment.attempts.length >= (next.stagePlan?.convergence.maxAutonomousRounds ?? 3)
+    || fact.approvedLimit !== requiredLimit
+    || requiredLimit <= next.costLedger.automaticLimit
+  ) {
+    throw new DomainError("COST_BUDGET_APPROVAL_STALE", "cost approval does not match the next dispatch boundary")
+  }
+  next.costLedger.automaticLimit = requiredLimit
+}
+
 function normalizeTaskIntent(intent) {
   const execution = intent?.preferences?.execution ?? "auto"
   const budget = intent?.preferences?.budget ?? "balanced"
@@ -149,6 +211,34 @@ function recordTaskIntent(next, fact) {
   }
   next.taskIntent = normalizeTaskIntent(fact.intent)
   next.taskIntentRevision = 1
+}
+
+function reviseTaskIntent(next, fact) {
+  const previousRun = next.stageRuns.at(-1)
+  if (
+    next.currentStageRun.status !== "planned"
+    || next.stagePlan !== null
+    || next.preflight !== null
+    || next.workGraph.assignments.length > 0
+    || next.pendingOperations.length > 0
+    || previousRun?.status !== "rework"
+  ) {
+    throw new DomainError("TASK_INTENT_REVISION_INVALID", "task intent can change only at a fresh controlled rework run")
+  }
+  const revised = normalizeTaskIntent(fact.intent)
+  if (digestValue(revised) === digestValue(next.taskIntent)) {
+    throw new DomainError("TASK_INTENT_UNCHANGED", "a revised task intent must change the inherited intent")
+  }
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  next.taskIntentHistory.push({
+    revision: next.taskIntentRevision,
+    intent: structuredClone(next.taskIntent),
+    stageRunId: previousRun.stageRunId,
+    reason,
+    supersededAt: fact.occurredAt,
+  })
+  next.taskIntent = revised
+  next.taskIntentRevision += 1
 }
 
 function freezeStagePlan(next, fact) {
@@ -248,7 +338,6 @@ function satisfyPreflight(next, fact) {
     digest: resultDigest,
     evidenceRefs: [...evidenceRefs],
   }
-  next.workGraph = { assignments: [] }
 }
 
 function startAssignmentAttempt(next, fact) {
@@ -451,7 +540,8 @@ function startEffectInvocation(next, fact) {
 }
 
 function prepareHumanWait(next, fact) {
-  if (!["working", "blocked"].includes(next.status)) {
+  const executableNeedsPlan = next.status === "needs-plan" && (next.stagePlan !== null || next.preflight?.status === "active")
+  if (!["working", "blocked"].includes(next.status) && !executableNeedsPlan) {
     throw new DomainError("HUMAN_WAIT_STATE_INVALID", "human wait can only be prepared from working or blocked")
   }
   if (next.pendingDecision || next.pendingOperations.length > 0) {
@@ -465,8 +555,8 @@ function prepareHumanWait(next, fact) {
   const artifactRefs = assertStringList(decision?.artifactRefs, "fact.decision.artifactRefs", { allowEmpty: false })
   const evidence = artifactRefs.map((artifactId) => {
     const artifact = next.artifacts.find((entry) => entry.artifactId === artifactId)
-    if (!artifact || artifact.stageRunId !== next.currentStageRun.stageRunId) {
-      throw new DomainError("HUMAN_WAIT_EVIDENCE_INVALID", `human decision references unavailable current-stage artifact: ${artifactId}`)
+    if (!artifact) {
+      throw new DomainError("HUMAN_WAIT_EVIDENCE_INVALID", `human decision references an unavailable artifact: ${artifactId}`)
     }
     return { artifactId, path: artifact.path, digest: artifact.digest }
   })
@@ -1050,6 +1140,17 @@ function completeTask(next, fact) {
   next.currentStageRun.completedAt = fact.occurredAt
 }
 
+function cancelTask(next, fact) {
+  if (["completed", "cancelled"].includes(next.status) || next.pendingDecision || next.pendingOperations.length > 0) {
+    throw new DomainError("TASK_CANCEL_INVALID", "task cancellation requires a stable non-terminal task")
+  }
+  if (next.workGraph.assignments.some(({ status }) => ["effect-pending", "running", "reported", "in-doubt"].includes(status))) {
+    throw new DomainError("TASK_CANCEL_INVALID", "task cancellation requires quiesced member work")
+  }
+  next.status = "cancelled"
+  next.currentStageRun.reason = assertNonEmptyString(fact.reason, "fact.reason")
+}
+
 function reopenStage(next, fact) {
   if (!["reviewing", "ready-to-advance"].includes(next.currentStageRun.status)) {
     throw new DomainError("STAGE_REWORK_INVALID", "only a reviewed stage run can enter rework")
@@ -1131,11 +1232,17 @@ export function reduceTask(state, fact) {
     case "task-intent.recorded":
       recordTaskIntent(next, fact)
       return finish(next, fact)
+    case "task-intent.revised":
+      reviseTaskIntent(next, fact)
+      return finish(next, fact)
     case "stage-run.transitioned":
       transitionStageRun(next, fact)
       return finish(next, fact)
     case "stage.advanced":
       advanceStage(next, fact)
+      return finish(next, fact)
+    case "stage.returned":
+      returnStage(next, fact)
       return finish(next, fact)
     case "stage.skipped":
       skipStage(next, fact)
@@ -1185,6 +1292,9 @@ export function reduceTask(state, fact) {
     case "human-decision.resolved":
       resolveHumanDecision(next, fact)
       return finish(next, fact)
+    case "cost-budget.approved":
+      approveCostBudget(next, fact)
+      return finish(next, fact)
     case "human-wait.reopened":
       reopenHumanWait(next, fact)
       return finish(next, fact)
@@ -1229,6 +1339,9 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "task.completed":
       completeTask(next, fact)
+      return finish(next, fact)
+    case "task.cancelled":
+      cancelTask(next, fact)
       return finish(next, fact)
     case "stage.reopened":
       reopenStage(next, fact)

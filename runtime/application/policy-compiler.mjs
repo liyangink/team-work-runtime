@@ -30,10 +30,23 @@ export function compilePolicyPlan(input) {
     })),
     capabilitySnapshot: { features: { humanDecisionProof: input.routeInputs?.humanDecisionCapability } },
   })
+  const resolvedE2ERoute = input.routeInputs.e2e.resolvedRoute
+  if (resolvedE2ERoute) {
+    const { digest, ...body } = resolvedE2ERoute
+    if (
+      resolvedE2ERoute.decision !== "run"
+      || resolvedE2ERoute.taskIntentDigest !== digestValue(taskIntent)
+      || digest !== digestValue(body)
+    ) {
+      const error = new Error("persisted E2E route snapshot is invalid or stale")
+      error.code = "E2E_ROUTE_INVALID"
+      throw error
+    }
+  }
   const routes = {
     humanGates,
     spec: compileSpecRoute(input.routeInputs.spec),
-    e2e: compileE2ERoute({
+    e2e: resolvedE2ERoute ?? compileE2ERoute({
       ...input.routeInputs.e2e,
       taskId: input.task.taskId,
       stageRunId: input.task.currentStageRun.stageRunId,

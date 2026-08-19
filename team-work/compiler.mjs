@@ -81,7 +81,7 @@ function createAssignment({ taskId, stageRunId, label, role, kind, tier, depends
   }
 }
 
-export function projectCostLedger({ assignments, policy, budget, accrued = 0, uncertain = 0, futureCostMin = 0, futureCostMax = 0 }) {
+export function projectCostLedger({ assignments, policy, budget, accrued = 0, uncertain = 0, futureCostMin = 0, futureCostMax = 0, approvedLimit = 0 }) {
   validatePolicy(policy)
   if (!Object.hasOwn(policy.automaticLimits, budget)) fail("TEAM_POLICY_INVALID", `no automatic limit for ${budget}`)
   const weight = (assignment) => policy.costWeights[assignment.costTier]
@@ -93,7 +93,7 @@ export function projectCostLedger({ assignments, policy, budget, accrued = 0, un
     accrued,
     uncertain,
     nextWave: roots.reduce((sum, assignment) => sum + weight(assignment), 0),
-    automaticLimit: policy.automaticLimits[budget],
+    automaticLimit: Math.max(policy.automaticLimits[budget], approvedLimit),
   }
 }
 
@@ -507,6 +507,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
     budget: workflowDraft.intent.preferences.budget,
     accrued: task.costLedger?.accrued ?? 0,
     uncertain: task.costLedger?.uncertain ?? 0,
+    approvedLimit: task.costLedger?.automaticLimit ?? 0,
     futureCostMin: futureCost.min,
     futureCostMax: futureCost.max,
   })

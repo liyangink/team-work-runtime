@@ -1,6 +1,7 @@
 import { digestValue } from "../domain/digests.mjs"
 import { createTaskAggregate } from "../domain/task-aggregate.mjs"
 import { compilePolicyPlan } from "./policy-compiler.mjs"
+import { costWeightForTier } from "../../policy/kernel.mjs"
 
 function slug(value) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70)
@@ -192,8 +193,13 @@ export function createTaskLifecycle({
   }
 
   async function availableArtifacts(state) {
+    const excludedArtifactIds = state.preflight?.kind === "route-assessment"
+      ? new Set(state.preflight.plan.outputRefs.map((ref) => artifactIdentity(ref).artifactId))
+      : new Set()
     return [
-      ...state.artifacts.map(({ artifactId, kind, digest }) => ({ kind, ref: `artifact:${artifactId}`, digest })),
+      ...state.artifacts
+        .filter(({ artifactId, kind }) => kind !== "e2e-route-assessment" && !excludedArtifactIds.has(artifactId))
+        .map(({ artifactId, kind, digest }) => ({ kind, ref: `artifact:${artifactId}`, digest })),
       ...state.evidence.flatMap((entry) => {
         const input = inputFromEvidence(entry)
         return input ? [input] : []
@@ -212,6 +218,11 @@ export function createTaskLifecycle({
       specProbe = await specProbe
       if (!specProbe.digest) specProbe = { status: specProbe.status, digest: digestValue(specProbe) }
     }
+    const inheritedE2ERoute = state.currentStageRun.stage === "e2e"
+      ? state.routeDecisions.findLast(({ routeKind, outcome, decision }) => routeKind === "e2e" && outcome === "selected" && decision === "run")?.routeSnapshot
+      : undefined
+    const routeInputs = routeInputsFor(specProbe, e2eAssessment)
+    if (inheritedE2ERoute) routeInputs.e2e.resolvedRoute = inheritedE2ERoute
     return {
       task: state,
       taskIntent: state.taskIntent,
@@ -219,49 +230,54 @@ export function createTaskLifecycle({
       workflowDefinition,
       teamPolicy,
       agentCatalog: normalizedCatalog(),
-      routeInputs: routeInputsFor(specProbe, e2eAssessment),
+      routeInputs,
       ...(proposal ? { proposal } : {}),
     }
+  }
+
+  async function recordRouteOutcome(state, routeKind, route, kind) {
+    const decision = route?.decision
+    const routeDigest = route?.digest ?? digestValue(route)
+    const decisionId = `route-${digestValue({ stageRunId: state.currentStageRun.stageRunId, routeKind, routeDigest }).slice(0, 20)}`
+    if (state.routeDecisions.some((entry) => entry.decisionId === decisionId)) return state
+    return (await reconciler.commit(state.taskId, () => ({
+      fact: {
+        type: "route.decision-recorded",
+        decision: {
+          decisionId,
+          stageRunId: state.currentStageRun.stageRunId,
+          stage: state.currentStageRun.stage,
+          routeKind,
+          outcome: kind === "route-blocked" ? "blocked" : kind === "route-selected" ? "selected" : "skipped",
+          decision,
+          routeDigest,
+          basisRefs: [...new Set([
+            routeDigest,
+            route.configDigest,
+            route.probeDigest,
+            route.taskIntentDigest,
+            route.artifactSnapshotDigest,
+            route.assessmentDigest,
+            ...(route.evidenceRefs ?? []),
+          ].filter(Boolean))],
+          reason: route.reason,
+          recovery: kind === "route-blocked" ? "replan-after-capability-change"
+            : kind === "route-selected" ? "follow-selected-edge"
+              : "follow-skip-edge",
+          ...(kind === "route-selected" ? { routeSnapshot: structuredClone(route) } : {}),
+          recordedAt: clock(),
+        },
+        occurredAt: clock(),
+      },
+      refs: [routeDigest],
+    }))).state
   }
 
   async function installCompiled(state, compiled) {
     if (["route-skip", "route-blocked"].includes(compiled.kind)) {
       const routeKind = workflowDefinition.stages.find(({ id }) => id === state.currentStageRun.stage)?.route
       const route = compiled.routes[routeKind]
-      const decision = route?.decision
-      const routeDigest = route?.digest ?? digestValue(route)
-      const decisionId = `route-${digestValue({ stageRunId: state.currentStageRun.stageRunId, routeKind, routeDigest }).slice(0, 20)}`
-      if (!state.routeDecisions.some((entry) => entry.decisionId === decisionId)) {
-        const recorded = await reconciler.commit(state.taskId, () => ({
-          fact: {
-            type: "route.decision-recorded",
-            decision: {
-              decisionId,
-              stageRunId: state.currentStageRun.stageRunId,
-              stage: state.currentStageRun.stage,
-              routeKind,
-              outcome: compiled.kind === "route-blocked" ? "blocked" : "skipped",
-              decision,
-              routeDigest,
-              basisRefs: [...new Set([
-                routeDigest,
-                route.configDigest,
-                route.probeDigest,
-                route.taskIntentDigest,
-                route.artifactSnapshotDigest,
-                route.assessmentDigest,
-                ...(route.evidenceRefs ?? []),
-              ].filter(Boolean))],
-              reason: route.reason,
-              recovery: compiled.kind === "route-blocked" ? "replan-after-capability-change" : "follow-skip-edge",
-              recordedAt: clock(),
-            },
-            occurredAt: clock(),
-          },
-          refs: [routeDigest],
-        }))
-        state = recorded.state
-      }
+      state = await recordRouteOutcome(state, routeKind, route, compiled.kind)
     }
     if (compiled.kind === "route-skip") {
       const desiredOutcome = compiled.routes.spec.decision === "skip" && workflowDefinition.stages.find(({ id }) => id === state.currentStageRun.stage)?.route === "spec"
@@ -284,7 +300,7 @@ export function createTaskLifecycle({
       }))
       return planCurrentStage(skipped.state)
     }
-    if (["route-blocked", "budget-decision"].includes(compiled.kind)) {
+    if (compiled.kind === "route-blocked") {
       return { state, reason: compiled.kind }
     }
     const result = await reconciler.commit(state.taskId, () => ({
@@ -475,8 +491,40 @@ export function createTaskLifecycle({
     return Promise.all(state.workGraph.assignments.map(async (assignment) => {
       const attempt = assignment.attempts.at(-1)
       const record = await store.loadRecord(state.taskId, "report", attempt.reportRef)
-      return { assignment, report: record.report, reportId: attempt.reportRef }
+      return { assignment, attempt, report: record.report, reportId: attempt.reportRef }
     }))
+  }
+
+  function enrichE2EAssessment(state, parsed, reports) {
+    if (state.preflight?.kind !== "route-assessment") return parsed
+    const owner = reports.find(({ assignment }) => assignment.teamRole === "owner" && assignment.writableRefs.length > 0)
+    const challenger = reports.find(({ assignment }) => assignment.teamRole === "challenger")
+    if (!owner || !challenger || typeof parsed !== "object" || parsed === null) {
+      throw new Error("route assessment requires accepted Owner and Challenger reports")
+    }
+    const evidenceRefs = [...new Set([
+      ...(Array.isArray(parsed.evidenceRefs) ? parsed.evidenceRefs : []),
+      `report:${owner.reportId}`,
+      `report:${challenger.reportId}`,
+    ])]
+    const body = {
+      assessmentId: parsed.assessmentId ?? `assessment-${digestValue({ taskId: state.taskId, stageRunId: state.currentStageRun.stageRunId }).slice(0, 20)}`,
+      taskId: state.taskId,
+      stageRunId: state.currentStageRun.stageRunId,
+      applicable: parsed.applicable,
+      criticalCrossSystemPath: parsed.criticalCrossSystemPath,
+      environment: parsed.environment,
+      evidenceRefs,
+      artifactSnapshotDigest: state.preflight.plan.routes.e2e.artifactSnapshotDigest,
+      evidenceSnapshotDigest: digestValue(evidenceRefs),
+      ownerAssignmentId: owner.assignment.assignmentId,
+      challengerAssignmentId: challenger.assignment.assignmentId,
+      ownerSessionDigest: digestValue(owner.attempt.executionRef),
+      challengerSessionDigest: digestValue(challenger.attempt.executionRef),
+      ownerReportRef: `report:${owner.reportId}`,
+      challengerReportRef: `report:${challenger.reportId}`,
+    }
+    return { ...body, digest: digestValue(body) }
   }
 
   async function reportsAgree(state) {
@@ -525,6 +573,7 @@ export function createTaskLifecycle({
     let parsed
     try {
       parsed = JSON.parse(await artifactRepository.read(outputPath))
+      parsed = enrichE2EAssessment(state, parsed, reports)
     } catch (error) {
       return replanAfterPreflightFailure(state, `preflight result is not readable structured JSON: ${error.message}`)
     }
@@ -537,7 +586,6 @@ export function createTaskLifecycle({
     const provisional = structuredClone(state)
     provisional.preflight.status = "satisfied"
     provisional.preflight.result = result
-    provisional.workGraph = { assignments: [] }
     const extra = state.preflight.kind === "planning-bootstrap" ? { proposal: parsed } : { e2eAssessment: parsed }
     let compiled
     try {
@@ -560,6 +608,7 @@ export function createTaskLifecycle({
     let parsed
     try {
       parsed = JSON.parse(await artifactRepository.read(state.preflight.result.ref))
+      parsed = enrichE2EAssessment(state, parsed, await acceptedReports(state))
     } catch (error) {
       return replanAfterPreflightFailure(state, `satisfied preflight result is invalid JSON: ${error.message}`)
     }
@@ -596,6 +645,37 @@ export function createTaskLifecycle({
     return planCurrentStage(reopened.state)
   }
 
+  async function returnForOutcome(state, outcome, reason) {
+    const ready = await ensureReady(state)
+    const edge = ready.scope.edges.find(({ from, outcome: candidate }) => from === ready.currentStageRun.stage && candidate === outcome)
+    if (!edge) return reopenForRework(ready, reason)
+    const returned = await reconciler.commit(ready.taskId, (snapshot) => ({
+      fact: {
+        type: "stage.returned",
+        to: edge.to,
+        outcome: edge.outcome,
+        nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
+        reason,
+        occurredAt: clock(),
+      },
+      refs: [edge.outcome],
+    }))
+    return planCurrentStage(returned.state)
+  }
+
+  async function routeTeamRework(state) {
+    const reports = await acceptedReports(state)
+    const requested = [...new Set(reports.flatMap(({ report }) => report.recommendation === "accept" || !report.workflowOutcome
+      ? []
+      : [report.workflowOutcome]))]
+    if (requested.length > 1) return reopenForRework(state, `团队对返工路径存在分歧：${requested.join("、")}`)
+    const fallback = state.scope.edges.find(({ from, outcome }) => from === state.currentStageRun.stage && outcome === "rework")?.outcome
+    const outcome = requested[0] ?? fallback
+    return outcome
+      ? returnForOutcome(state, outcome, "团队审查要求沿工作流返工")
+      : reopenForRework(state, "团队审查要求返工")
+  }
+
   function gateFor(state) {
     const gates = state.stagePlan?.routes?.humanGates ?? []
     const stageGate = gates.find(({ stage }) => stage === state.currentStageRun.stage)
@@ -613,6 +693,11 @@ export function createTaskLifecycle({
     const current = state.artifacts.filter(({ stageRunId }) => stageRunId === state.currentStageRun.stageRunId)
     const artifactRefs = [...new Set((matching.length > 0 ? matching : current).map(({ artifactId }) => artifactId))]
     if (artifactRefs.length === 0) throw Object.assign(new Error(`${gate.gateId} requires a registered artifact`), { code: "WORK_CHAIN_INCOMPLETE" })
+    const returnChoices = gate.gateId === "final-acceptance"
+      ? state.scope.edges
+        .filter(({ from, outcome }) => from === state.currentStageRun.stage && outcome?.startsWith("return-"))
+        .map(({ outcome }) => outcome)
+      : []
     await effectDriver.prepareHumanDecision({
       taskId: state.taskId,
       decision: {
@@ -622,7 +707,7 @@ export function createTaskLifecycle({
         leadBindingRef,
         question: gate.gateId === "design-approval" ? "方案是否已经与预期一致，可以进入后续实施？" : "当前成果是否符合预期，可以完成本任务吗？",
         artifactRefs,
-        choices: ["accept", "rework"],
+        choices: returnChoices.length > 0 ? ["accept", ...returnChoices] : ["accept", "rework"],
       },
     })
     return (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state
@@ -647,10 +732,43 @@ export function createTaskLifecycle({
     return { state: (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state, reason: "awaiting-user" }
   }
 
+  function nextBudgetBlockedAssignment(state) {
+    const byId = new Map(state.workGraph.assignments.map((assignment) => [assignment.assignmentId, assignment]))
+    return state.workGraph.assignments.find((assignment) => (
+      ["planned", "rework", "lost"].includes(assignment.status)
+      && assignment.attempts.length < (state.stagePlan?.convergence.maxAutonomousRounds ?? 3)
+      && assignment.execution
+      && assignment.dependsOn.every((dependency) => byId.get(dependency)?.status === "accepted")
+      && state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(assignment.costTier) > state.costLedger.automaticLimit
+    ))
+  }
+
+  async function prepareBudgetDecision(state, leadBindingRef) {
+    capabilities ??= await executionAdapter.capabilities()
+    const assignment = nextBudgetBlockedAssignment(state)
+    if (!assignment) return { state, reason: "budget-decision" }
+    const approvedLimit = state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(assignment.costTier)
+    const artifactRefs = [...new Set(state.artifacts.map(({ artifactId }) => artifactId))]
+    if (artifactRefs.length === 0) return { state, reason: "budget-decision" }
+    await effectDriver.prepareHumanDecision({
+      taskId: state.taskId,
+      decision: {
+        decisionId: `budget-${digestValue({ stageRunId: state.currentStageRun.stageRunId, assignmentId: assignment.assignmentId, approvedLimit }).slice(0, 24)}`,
+        requirement: "required",
+        proofMode: capabilities.features.humanDecisionProof,
+        leadBindingRef,
+        question: `下一位成员会使累计成本从 ${state.costLedger.accrued + state.costLedger.uncertain} 增至 ${approvedLimit}，超过自动上限 ${state.costLedger.automaticLimit}；是否批准本次增额？`,
+        artifactRefs,
+        choices: ["accept", "replan", "stop"],
+      },
+    })
+    return { state: (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state, reason: "awaiting-user" }
+  }
+
   async function finalizeAcceptedGraph(state, leadBindingRef) {
     if (state.preflight?.status === "active") return finishPreflight(state)
-    const ready = await ensureReady(state)
-    if (!await reportsAgree(ready)) return reopenForRework(ready, "团队审查要求返工")
+    let ready = await ensureReady(state)
+    if (!await reportsAgree(ready)) return routeTeamRework(ready)
 
     const gate = gateFor(ready)
     const gateDecisionId = gate && `${gate.gateId}-${ready.currentStageRun.stageRunId}`
@@ -663,7 +781,17 @@ export function createTaskLifecycle({
       return { state: completed.state, reason: "completed" }
     }
     const edge = selectEdge(ready)
-    if (!edge) return { state: ready, reason: "route-blocked" }
+    if (!edge) {
+      const routeKind = workflowDefinition.stages.find(({ id }) => id === ready.currentStageRun.stage)?.route
+      const route = ready.stagePlan?.routes?.[routeKind]
+      if (route?.decision === "block") {
+        return { state: await recordRouteOutcome(ready, routeKind, route, "route-blocked"), reason: "route-blocked" }
+      }
+      return { state: ready, reason: "route-blocked" }
+    }
+    if (edge.outcome === "run-e2e") {
+      ready = await recordRouteOutcome(ready, "e2e", ready.stagePlan.routes.e2e, "route-selected")
+    }
     const advanced = await reconciler.commit(ready.taskId, (snapshot) => ({
       fact: { type: "stage.advanced", to: edge.to, nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`, occurredAt: clock() },
     }))
@@ -674,6 +802,7 @@ export function createTaskLifecycle({
     for (let step = 0; step < 64; step += 1) {
       const outcome = await effectDriver.run({ taskId, waitBudgetMs: 0 })
       const state = outcome.state
+      if (outcome.reason === "budget-decision") return prepareBudgetDecision(state, leadBindingRef)
       if (state.preflight?.status === "satisfied") {
         const result = await compileSatisfiedPreflight(state)
         if (result.reason === "planned") continue
@@ -712,9 +841,40 @@ export function createTaskLifecycle({
       }))
       state = recorded.state
     } else if (digestValue(state.taskIntent) !== digestValue(intent)) {
-      const error = new Error("task intent changes require a controlled replan")
-      error.code = "TASK_INTENT_CONFLICT"
-      throw error
+      const previousRun = state.stageRuns.at(-1)
+      const revisable = state.currentStageRun.status === "planned"
+        && state.stagePlan === null
+        && state.preflight === null
+        && state.workGraph.assignments.length === 0
+        && previousRun?.status === "rework"
+      if (!revisable) {
+        const error = new Error("task intent changes require a controlled replan")
+        error.code = "TASK_INTENT_CONFLICT"
+        throw error
+      }
+      state = (await reconciler.commit(taskId, () => ({
+        fact: {
+          type: "task-intent.revised",
+          intent,
+          reason: previousRun.reason,
+          occurredAt: clock(),
+        },
+        refs: [previousRun.stageRunId],
+      }))).state
+    }
+    const blockedRoute = state.routeDecisions.findLast(({ stageRunId, outcome }) => (
+      stageRunId === state.currentStageRun.stageRunId && outcome === "blocked"
+    ))
+    if (state.status === "blocked" && blockedRoute?.recovery === "replan-after-capability-change" && (state.stagePlan || state.preflight)) {
+      state = (await reconciler.commit(taskId, (snapshot) => ({
+        fact: {
+          type: "stage.replanned",
+          nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
+          reason: "重新检查已变化的流程能力或环境",
+          occurredAt: clock(),
+        },
+        refs: [blockedRoute.decisionId],
+      }))).state
     }
     if (!state.stagePlan && !state.preflight) {
       const installed = await planCurrentStage(state)
@@ -731,22 +891,56 @@ export function createTaskLifecycle({
       throw error
     }
     state = (await effectDriver.resolveHumanDecision({ taskId })).state
-    const choice = state.decisionHistory.at(-1)?.choice
+    const resolvedDecision = state.decisionHistory.at(-1)
+    const choice = resolvedDecision?.choice
     if (choice !== input.directive) {
       const error = new Error("the platform-verified human choice does not match the steering intent")
       error.code = "ACTION_STALE"
       throw error
     }
-    if (choice === "accept") return runToStable({ taskId, leadBindingRef })
-    const reopened = await reconciler.commit(taskId, (snapshot) => ({
-      fact: {
-        type: "stage.reopened",
-        nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
-        reason: input.note || "人工审核要求返工",
-        occurredAt: clock(),
-      },
-    }))
-    const installed = await planCurrentStage(reopened.state)
+    if (choice === "accept") {
+      if (resolvedDecision.decisionId.startsWith("budget-")) {
+        const assignment = nextBudgetBlockedAssignment(state)
+        if (!assignment) {
+          const error = new Error("the approved cost boundary is no longer current")
+          error.code = "ACTION_STALE"
+          throw error
+        }
+        const approvedLimit = state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(assignment.costTier)
+        state = (await reconciler.commit(taskId, () => ({
+          fact: {
+            type: "cost-budget.approved",
+            assignmentId: assignment.assignmentId,
+            approvedLimit,
+            decisionId: resolvedDecision.decisionId,
+            occurredAt: clock(),
+          },
+          refs: [resolvedDecision.decisionId, assignment.assignmentId],
+        }))).state
+      }
+      return runToStable({ taskId, leadBindingRef })
+    }
+    if (resolvedDecision.decisionId.startsWith("budget-") && choice === "stop") {
+      const cancelled = await reconciler.commit(taskId, () => ({
+        fact: { type: "task.cancelled", reason: input.note || "人工决定停止超预算任务", occurredAt: clock() },
+        refs: [resolvedDecision.decisionId],
+      }))
+      return { state: cancelled.state, reason: "cancelled" }
+    }
+    if (resolvedDecision.decisionId.startsWith("budget-")) {
+      const replanned = await reconciler.commit(taskId, (snapshot) => ({
+        fact: {
+          type: "stage.replanned",
+          nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
+          reason: input.note || "人工拒绝追加预算，等待调整范围或预算",
+          occurredAt: clock(),
+        },
+        refs: [resolvedDecision.decisionId],
+      }))
+      return { state: replanned.state, reason: "needs-plan" }
+    }
+    const outcome = choice.startsWith("return-") ? choice : "rework"
+    const installed = await returnForOutcome(state, outcome, input.note || "人工审核要求返工")
     return installed.reason === "planned" ? runToStable({ taskId, leadBindingRef }) : installed
   }
 

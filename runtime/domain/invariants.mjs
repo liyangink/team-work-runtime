@@ -262,21 +262,25 @@ export function assertTaskState(state) {
       failState(`assignment ${assignment.assignmentId} cannot be ${attempt.status} without a durable member report`)
     }
   }
-  const activePreflight = state.preflight?.status === "active"
-  if (state.stagePlan === null && !activePreflight && state.workGraph.assignments.length > 0) {
-    failState("a work graph requires a frozen stage plan or active preflight")
+  const executablePreflight = ["active", "satisfied"].includes(state.preflight?.status)
+  if (state.stagePlan === null && !executablePreflight && state.workGraph.assignments.length > 0) {
+    failState("a work graph requires a frozen stage plan or executable preflight")
   }
-  if (state.stagePlan !== null && activePreflight) failState("delivery and preflight graphs cannot be active together")
+  if (state.stagePlan !== null && executablePreflight) failState("delivery and preflight graphs cannot be active together")
   if (state.preflight) {
     if (state.preflight.stageRunId !== state.currentStageRun.stageRunId) failState("preflight must target the current stage run")
     if (state.preflight.plan.stageRunId !== state.preflight.stageRunId) failState("preflight plan must target its preflight stage run")
     if (state.preflight.result && state.preflight.result.kind !== state.preflight.kind) failState("preflight result kind must match its preflight")
-    if (state.preflight.status === "active") {
-      if (state.preflight.result !== null) failState("an active preflight cannot already contain a result")
+    if (["active", "satisfied"].includes(state.preflight.status)) {
+      if (state.preflight.status === "active" && state.preflight.result !== null) failState("an active preflight cannot already contain a result")
+      if (state.preflight.status === "satisfied" && state.preflight.result === null) failState("a satisfied preflight requires a durable result")
       if (
         state.preflight.plan.assignments.length !== assignmentIds.size
         || state.preflight.plan.assignments.some((id) => !assignmentIds.has(id))
-      ) failState("active preflight assignment refs must exactly match the work graph")
+      ) failState("executable preflight assignment refs must exactly match the work graph")
+      if (state.preflight.status === "satisfied" && state.workGraph.assignments.some(({ status }) => status !== "accepted")) {
+        failState("a satisfied preflight retains only its accepted evidence graph")
+      }
     } else if (state.preflight.result === null) failState("a satisfied or consumed preflight requires a durable result")
   }
   if (state.stagePlan !== null) {
@@ -349,6 +353,11 @@ export function assertTaskState(state) {
   const runIds = new Set(runs.map(({ stageRunId }) => stageRunId))
   assertUniqueBy(state.routeDecisions, "decisionId", "route decision ids")
   if (state.routeDecisions.some((decision) => !runIds.has(decision.stageRunId))) failState("route decision stage run must exist")
+  if (state.routeDecisions.some((decision) => (
+    decision.outcome === "selected"
+      ? decision.routeKind !== "e2e" || decision.decision !== "run" || decision.recovery !== "follow-selected-edge" || decision.routeSnapshot?.digest !== decision.routeDigest
+      : decision.routeSnapshot !== undefined
+  ))) failState("selected route decisions must retain exactly one matching E2E route snapshot")
   if (state.artifacts.some((artifact) => !runIds.has(artifact.stageRunId))) failState("artifact stage run must exist")
   if (state.artifacts.some((artifact) => artifact.path.split("/").some((segment) => segment === "" || segment === "." || segment === ".."))) {
     failState("artifact paths must contain only safe project-relative segments")

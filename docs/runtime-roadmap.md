@@ -9,7 +9,7 @@
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 至 V2-4 均已完成并通过两轴终审；V2-5 已把生命周期编排收回 Task Driver，打通 through-stage solo、planning preflight 转正式多 Owner 计划、Challenger/Expert 后 Owner 证据化回应、可配置人工验收、外部输入登记、SPEC 阻断恢复、报告后重启恢复，以及 File/InMemory Store 一致的持久引用校验。完整 Workflow、SPEC Provider 生命周期、E2E 三模式/内部循环、完整三轮与成本选择、DecisionPacket、`owner-rework / collect-evidence / expert-arbitrate` 等受控 steering 动作和剩余故障矩阵仍待补齐；当前公开 `steer` 只接受 Runtime 已给出的人工选择，不能把 V2-5 描述为完成。
+- v2 实现：V2-0 至 V2-4 均已完成并通过两轴终审；V2-5 已把生命周期编排收回 Task Driver，打通只凭 requirement 启动的完整 Workflow happy path、任意阶段 through-stage、planning preflight 转正式多 Owner 计划、Challenger/Expert 后 Owner 证据化回应、方案与最终人工驳回归因、累计成本增额/重规划/停止、成员选择的语义返工边、E2E run/skip/block 与环境恢复，以及 assessment 验收后重启恢复。E2E run 的已验收路由快照会跨阶段复用，不重复评估。SPEC 三模式的完整 Fake 路由矩阵、E2E 内部失败回流、完整三轮收敛、DecisionPacket、`owner-rework / collect-evidence / expert-arbitrate` 等受控 steering 动作和剩余故障矩阵仍待补齐；SPEC Provider 的 prepare/validate/archive 生命周期属于 V2-6，不是 V2-5 退出条件。当前不能把 V2-5 描述为完成。
 
 | v2 里程碑 | 状态 |
 | --- | --- |

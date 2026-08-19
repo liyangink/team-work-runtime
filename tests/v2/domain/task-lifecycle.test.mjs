@@ -148,6 +148,61 @@ test("the pure reducer advances only across a declared edge and starts a new sta
   assert.deepEqual(result.effects, [])
 })
 
+test("the pure reducer follows an explicit failure outcome without disguising it as normal advancement", () => {
+  const failureWorkflow = {
+    workflowId: "failure-routing",
+    version: "2026-08-19",
+    digest,
+    stages: ["code-review", "implementation", "done"],
+    edges: [
+      { from: "code-review", to: "implementation", outcome: "implementation-defect" },
+      { from: "implementation", to: "done", outcome: "pass" },
+    ],
+    terminalStages: ["done"],
+  }
+  let state = createTaskAggregate({
+    taskId: "return-defect",
+    title: "Return a review defect",
+    objective: "Route the defect to implementation",
+    workflow: failureWorkflow,
+    entryStage: "code-review",
+    completion: { mode: "workflow" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  })
+  for (const [index, status] of ["dispatching", "waiting-reports", "reviewing", "ready-to-advance"].entries()) {
+    state = reduceTask(state, {
+      type: "stage-run.transitioned",
+      expectedRevision: state.revision,
+      status,
+      occurredAt: `2026-08-18T10:0${index + 1}:00.000Z`,
+    }).state
+  }
+  assert.throws(() => reduceTask(state, {
+    type: "stage.returned",
+    expectedRevision: state.revision,
+    to: "implementation",
+    outcome: "test-gap",
+    nextStageRunId: "stage-run-invalid",
+    reason: "unsupported route",
+    occurredAt: "2026-08-18T10:05:00.000Z",
+  }), (error) => error instanceof DomainError && error.code === "STAGE_EDGE_INVALID")
+
+  const returned = reduceTask(state, {
+    type: "stage.returned",
+    expectedRevision: state.revision,
+    to: "implementation",
+    outcome: "implementation-defect",
+    nextStageRunId: "stage-run-2",
+    reason: "independent review found an implementation defect",
+    occurredAt: "2026-08-18T10:05:00.000Z",
+  }).state
+  assert.equal(returned.stageRuns[0].status, "rework")
+  assert.equal(returned.currentStageRun.stage, "implementation")
+  assert.equal(returned.currentStageRun.round, 1)
+  assert.equal(returned.status, "needs-plan")
+})
+
 test("freezing a stage plan materializes a validated work graph and cost ledger", () => {
   const initial = createTaskAggregate({
     taskId: "planned-review",

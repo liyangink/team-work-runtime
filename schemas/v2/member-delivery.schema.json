@@ -50,6 +50,7 @@
           }
         },
         "recommendation": { "enum": ["accept", "rework", "escalate"] },
+        "workflowOutcome": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
         "verdict": { "$ref": "https://team-work-runtime.dev/schemas/v2/expert-verdict" }
       }
     },

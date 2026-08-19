@@ -320,12 +320,13 @@
         "stageRunId": { "$ref": "#/$defs/id" },
         "stage": { "$ref": "#/$defs/id" },
         "routeKind": { "enum": ["spec", "e2e"] },
-        "outcome": { "enum": ["blocked", "skipped"] },
-        "decision": { "enum": ["block", "skip"] },
+        "outcome": { "enum": ["blocked", "skipped", "selected"] },
+        "decision": { "enum": ["block", "skip", "run"] },
         "routeDigest": { "$ref": "#/$defs/digest" },
         "basisRefs": { "$ref": "#/$defs/uniqueStrings" },
         "reason": { "type": "string", "minLength": 1 },
-        "recovery": { "enum": ["replan-after-capability-change", "follow-skip-edge"] },
+        "recovery": { "enum": ["replan-after-capability-change", "follow-skip-edge", "follow-selected-edge"] },
+        "routeSnapshot": { "$ref": "#/$defs/e2eRoute" },
         "recordedAt": { "type": "string", "format": "date-time" }
       }
     },

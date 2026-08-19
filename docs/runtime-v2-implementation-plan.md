@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 至 V2-6 均已完成并通过两轴终审，下一步实施 V2-7。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 至 V2-6 均已完成并通过两轴终审，V2-7 的 [`公开切换清单`](runtime-v2-cutover-checklist.md) 已生成，等待人工确认后实施删除与切换。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 

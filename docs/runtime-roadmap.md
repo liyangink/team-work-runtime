@@ -20,7 +20,7 @@
 | V2-4 Workflow/Team-work Compiler | 完成 |
 | V2-5 平台无关 in-memory E2E | 完成 |
 | V2-6 OpenCode/OpenSpec Adapter | 完成 |
-| V2-7 OpenCode 控制面切换 | 待开始 |
+| V2-7 OpenCode 控制面切换 | 切换清单待人工确认 |
 | V2-8 安装生命周期、真实 E2E 与发布 | 待开始 |
 
 ## v1 Phase 0：规则冻结

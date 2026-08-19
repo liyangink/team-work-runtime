@@ -14,6 +14,7 @@
     "docs/runtime-interface.md",
     "docs/runtime-plugin-design.md",
     "docs/runtime-v2-architecture.md",
+    "docs/runtime-v2-cutover-checklist.md",
     "docs/runtime-v2-implementation-plan.md",
     "docs/runtime-v2-workflow-simulation.md",
     "docs/runtime-roadmap.md",

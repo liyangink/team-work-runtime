@@ -520,7 +520,7 @@ function requestSpecPrepare(next, fact) {
     || next.pendingOperations.length > 0
     || route?.decision !== "use-provider"
     || intent.task?.taskId !== next.taskId
-    || intent.task?.stageRunId !== next.currentStageRun.stageRunId
+    || (!next.specLifecycle.task && intent.task?.stageRunId !== next.currentStageRun.stageRunId)
     || intent.task?.routeStateDigest !== route.digest
     || intent.task?.configDigest !== route.configDigest
     || digestEffect(intent) !== effectDigest
@@ -529,7 +529,15 @@ function requestSpecPrepare(next, fact) {
   }
   if (next.specLifecycle.archive) throw new DomainError("SPEC_ALREADY_ARCHIVED", "an archived SPEC lifecycle cannot prepare another capability")
   if (next.specLifecycle.task && digestValue(next.specLifecycle.task) !== digestValue(intent.task)) {
-    throw new DomainError("SPEC_TASK_CONFLICT", "SPEC provider task binding cannot change after preparation starts")
+    const previous = next.specLifecycle.task
+    const safeRebind = intent.task.providerId === previous.providerId
+      && intent.task.taskId === previous.taskId
+      && intent.task.configDigest === previous.configDigest
+      && intent.task.stageRunId === next.currentStageRun.stageRunId
+    if (!safeRebind) throw new DomainError("SPEC_TASK_CONFLICT", "SPEC provider task binding cannot change outside a current-stage replan")
+    next.specLifecycle.task = structuredClone(intent.task)
+    next.specLifecycle.status = null
+    next.specLifecycle.validation = null
   }
   if (next.specLifecycle.capabilities.some((entry) => entry.operationId === operationId)) {
     throw new DomainError("OPERATION_DUPLICATE", `operation ${operationId} already completed`)
@@ -551,7 +559,8 @@ function requestSpecArchive(next, fact) {
   const intent = structuredClone(fact.intent)
   const operationId = assertIdentifier(intent?.operationId, "fact.intent.operationId")
   const effectDigest = assertDigest(intent?.effectDigest, "fact.intent.effectDigest")
-  const accepted = next.decisionHistory.some(({ decisionId, choice }) => (
+  const finalGateSkipped = next.stagePlan?.routes?.humanGates?.some(({ gateId, action }) => gateId === "final-acceptance" && action === "skip")
+  const accepted = finalGateSkipped || next.decisionHistory.some(({ decisionId, choice }) => (
     choice === "accept"
     && (decisionId.startsWith("final-acceptance-") || decisionId.startsWith("scoped-final-acceptance-"))
   ))
@@ -650,6 +659,7 @@ function confirmSpecPrepare(next, fact) {
   next.specLifecycle.capabilities.push({
     artifact: operation.intent.artifact,
     ...(operation.intent.capabilityNames ? { capabilityNames: [...operation.intent.capabilityNames] } : {}),
+    task: structuredClone(capability.task),
     operationId: operation.operationId,
     effectDigest: operation.effectDigest,
     receiptRef: operation.operationId,
@@ -668,9 +678,11 @@ function recordSpecStatus(next, fact) {
   if (!next.specLifecycle.task || digestValue(status?.task) !== digestValue(next.specLifecycle.task)) {
     throw new DomainError("SPEC_STATUS_INVALID", "SPEC status does not match the persisted provider task")
   }
+  const recoveringProviderBlock = next.specLifecycle.status?.state === "blocked" && next.status === "blocked"
   if (next.specLifecycle.status?.providerRevision !== status.providerRevision) next.specLifecycle.validation = null
   next.specLifecycle.status = status
-  if (next.status === "blocked" && status.state !== "blocked") next.status = "working"
+  if (status.state === "blocked") next.status = "blocked"
+  else if (recoveringProviderBlock) next.status = "working"
 }
 
 function recordSpecValidation(next, fact) {
@@ -680,8 +692,12 @@ function recordSpecValidation(next, fact) {
     || digestValue(validation?.task) !== digestValue(next.specLifecycle.task)
     || validation.providerRevision !== next.specLifecycle.status?.providerRevision
   ) throw new DomainError("SPEC_VALIDATION_INVALID", "SPEC validation must bind the latest provider status")
+  const recoveringValidationBlock = next.specLifecycle.validation
+    && (!next.specLifecycle.validation.valid || !next.specLifecycle.validation.complete)
+    && next.status === "blocked"
   next.specLifecycle.validation = validation
   if (!validation.valid || !validation.complete) next.status = "blocked"
+  else if (recoveringValidationBlock) next.status = "working"
 }
 
 function confirmSpecArchive(next, fact) {

@@ -16,8 +16,8 @@ const workflow = {
   terminalStages: ["finish"],
 }
 
-function specMetadata() {
-  const metadata = compiledPlanMetadata({ workflow })
+function specMetadata(round = 1) {
+  const metadata = compiledPlanMetadata({ workflow, round })
   const body = {
     mode: "required",
     configDigest: "d".repeat(64),
@@ -168,6 +168,71 @@ test("provider status and validation become authoritative Runtime projections", 
   const validation = await driver.validateSpec({ taskId: "spec-validation" })
   assert.equal(validation.state.specLifecycle.validation.valid, true)
   assert.equal(validation.state.specLifecycle.validation.providerRevision, status.state.specLifecycle.status.providerRevision)
+})
+
+test("a SPEC stage replan rebinds the provider task without losing prior capability receipts", async () => {
+  const store = createInMemoryStore()
+  let state = await createPlannedTask(store, "spec-rebind")
+  const driver = createTaskDriver({
+    store,
+    executionAdapter: createFakeExecutionAdapter(),
+    specProviderAdapter: createFakeSpecProvider({ status: "ready", clock: () => "2026-08-19T10:03:00.000Z" }),
+    clock: () => "2026-08-19T10:03:00.000Z",
+  })
+  state = (await driver.prepareSpec({ taskId: "spec-rebind", artifact: "proposal" })).state
+  state = reduceTask(state, {
+    type: "stage.replanned",
+    expectedRevision: state.revision,
+    nextStageRunId: "stage-run-2",
+    reason: "revise the SPEC plan",
+    occurredAt: "2026-08-19T10:04:00.000Z",
+  }).state
+  state = await store.commit({
+    taskId: "spec-rebind",
+    expectedRevision: state.revision - 1,
+    state,
+    auditEvents: [{ eventId: "spec-replan-2", type: "stage.replanned", occurredAt: "2026-08-19T10:04:00.000Z", revision: state.revision, refs: ["stage-run-2"] }],
+  })
+  state = reduceTask(state, {
+    type: "stage-plan.frozen",
+    expectedRevision: state.revision,
+    plan: {
+      ...specMetadata(2),
+      planId: "spec-plan-2",
+      stageRunId: "stage-run-2",
+      objective: "Revise the provider-backed specification",
+      inputRefs: ["artifact:design"],
+      outputRefs: ["artifact:spec"],
+      assignments: [{
+        assignmentId: "spec-owner-2",
+        teamRole: "owner",
+        assignmentKind: "spec",
+        costTier: "junior",
+        dependsOn: [],
+        readableRefs: ["artifact:design"],
+        writableRefs: ["artifact:spec"],
+        completionCriteria: ["complete provider artifact"],
+        execution: {
+          agentId: "junior-luna",
+          capabilitySnapshotDigest: TEST_AGENT_CATALOG_DIGEST,
+          contextRef: ".team-work/tasks/spec-rebind/context/owner-2.md",
+          promptRef: ".team-work/tasks/spec-rebind/prompts/spec-owner-2.md",
+        },
+      }],
+    },
+    costLedger: { forecastMin: 1, forecastMax: 2, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit: 2 },
+    occurredAt: "2026-08-19T10:05:00.000Z",
+  }).state
+  await store.commit({
+    taskId: "spec-rebind",
+    expectedRevision: state.revision - 1,
+    state,
+    auditEvents: [{ eventId: "spec-plan-frozen-2", type: "stage-plan.frozen", occurredAt: "2026-08-19T10:05:00.000Z", revision: state.revision, refs: ["spec-plan-2"] }],
+  })
+
+  const rebound = await driver.prepareSpec({ taskId: "spec-rebind", artifact: "design" })
+  assert.equal(rebound.state.specLifecycle.task.stageRunId, "stage-run-2")
+  assert.deepEqual(rebound.state.specLifecycle.capabilities.map(({ task }) => task.stageRunId), ["stage-run-1", "stage-run-2"])
 })
 
 test("SPEC archive is rejected before final acceptance and recovered by inspect after receipt loss", async () => {

@@ -11,7 +11,7 @@
   ],
   "properties": {
     "runtimeMajor": { "const": 2 },
-    "schemaVersion": { "const": "2.0" },
+    "schemaVersion": { "const": "2.1" },
     "taskId": { "$ref": "#/$defs/id" },
     "revision": { "type": "integer", "minimum": 0 },
     "title": { "type": "string", "minLength": 1 },
@@ -444,10 +444,11 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["artifact", "operationId", "effectDigest", "receiptRef", "capabilityId", "capabilityDigest", "instructionsRef", "readableRefs", "writableRefs", "recordedAt"],
+            "required": ["artifact", "task", "operationId", "effectDigest", "receiptRef", "capabilityId", "capabilityDigest", "instructionsRef", "readableRefs", "writableRefs", "recordedAt"],
             "properties": {
               "artifact": { "enum": ["proposal", "design", "specs", "tasks"] },
               "capabilityNames": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "task": { "$ref": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/taskRef" },
               "operationId": { "$ref": "#/$defs/id" },
               "effectDigest": { "$ref": "#/$defs/digest" },
               "receiptRef": { "$ref": "#/$defs/id" },

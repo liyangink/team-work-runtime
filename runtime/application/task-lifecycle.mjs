@@ -357,6 +357,15 @@ export function createTaskLifecycle({
       if (assignment.teamRole === "owner" && report.artifacts.length === 0 && report.evidenceRefs.length === 0) {
         throw invalidReport("Owner response requires artifact or review evidence")
       }
+      const writableArtifactIds = new Set(assignment.writableRefs
+        .filter((ref) => ref.startsWith("artifact:"))
+        .map((ref) => artifactIdentity(ref).artifactId))
+      const protectedArtifacts = state.artifacts.filter(({ artifactId }) => !writableArtifactIds.has(artifactId))
+      if (protectedArtifacts.length > 0) {
+        const currentInputs = await artifactRepository.snapshot(protectedArtifacts.map(({ path }) => path))
+        const changedInput = protectedArtifacts.find((artifact, index) => artifact.digest !== currentInputs[index].digest)
+        if (changedInput) throw invalidReport(`registered input changed outside the assignment writable scope: ${changedInput.path}`)
+      }
       const declaredRefs = new Set(assignment.writableRefs)
       const reportedRefs = new Set(report.artifacts.map(({ ref }) => ref))
       if (reportedRefs.size !== report.artifacts.length || declaredRefs.size !== reportedRefs.size || [...declaredRefs].some((ref) => !reportedRefs.has(ref))) {
@@ -834,6 +843,21 @@ export function createTaskLifecycle({
       return { state: await prepareGate(ready, gate, leadBindingRef), reason: "awaiting-user" }
     }
     if (ready.scope.completionStages.includes(ready.currentStageRun.stage)) {
+      if (ready.specLifecycle.task && !ready.specLifecycle.archive) {
+        const observed = await effectDriver.recordSpecStatus({ taskId: ready.taskId })
+        ready = observed.state
+        if (ready.status === "blocked") return { state: ready, reason: "blocked" }
+        if (ready.specLifecycle.status?.state !== "complete") return { state: ready, reason: "spec-incomplete" }
+        const validated = await effectDriver.validateSpec({ taskId: ready.taskId })
+        ready = validated.state
+        if (ready.status === "blocked" || !ready.specLifecycle.validation?.valid || !ready.specLifecycle.validation?.complete) {
+          return { state: ready, reason: "blocked" }
+        }
+        const archived = await effectDriver.archiveSpec({ taskId: ready.taskId })
+        ready = archived.state
+        if (archived.inDoubt) return { state: ready, reason: "in-doubt" }
+        if (archived.blocked || !ready.specLifecycle.archive) return { state: ready, reason: "blocked" }
+      }
       const completed = await reconciler.commit(ready.taskId, () => ({ fact: { type: "task.completed", occurredAt: clock() } }))
       return { state: completed.state, reason: "completed" }
     }

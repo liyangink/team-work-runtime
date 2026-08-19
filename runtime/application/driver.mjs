@@ -232,7 +232,7 @@ export function createTaskDriver({
       if (route?.decision !== "use-provider") throw Object.assign(new Error("current stage has no active SPEC Provider route"), { code: "SPEC_ROUTE_INACTIVE" })
       const availability = await specProvider.probe()
       if (availability.status !== "ready") throw Object.assign(new Error("configured SPEC Provider is unavailable"), { code: "SPEC_PROVIDER_MISSING" })
-      const task = state.specLifecycle.task ?? {
+      const task = {
         providerId: availability.providerId,
         taskId: state.taskId,
         stageRunId: state.currentStageRun.stageRunId,

@@ -16,7 +16,7 @@ export function createTaskAggregate(input) {
 
   return assertTaskState({
     runtimeMajor: 2,
-    schemaVersion: "2.0",
+    schemaVersion: "2.1",
     taskId,
     revision: 0,
     title,

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -129,6 +129,14 @@ test("OpenSpec Provider probes independently and prepares one bounded active-cha
   const inspection = await port.inspect({ ...intent, kind: "prepare" })
   assert.equal(inspection.status, "confirmed")
   assert.deepEqual(inspection.result, capability)
+})
+
+test("OpenSpec provider state refuses a nested symlink before writing its journal", async () => {
+  const projectRoot = await project()
+  const external = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-openspec-external-"))
+  await symlink(external, path.join(projectRoot, ".team-work", "spec-providers"))
+  const provider = createSpecProviderAdapterPort(createOpenSpecProvider({ projectRoot, runner: openSpecRunner(projectRoot).runner }))
+  await assert.rejects(provider.probe(), (error) => error.code === "PATH_ESCAPE")
 })
 
 test("prepare inspection reconstructs a change created before the capability receipt was persisted", async () => {

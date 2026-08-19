@@ -93,6 +93,7 @@ export async function assertDurableReferences({ state, loadRecord, mode = "commi
       || operation.receipt?.effectDigest !== capability.effectDigest
       || operation.receipt?.capabilityId !== capability.capabilityId
       || operation.receipt?.capabilityDigest !== capability.capabilityDigest
+      || digestValue(operation.receipt?.task) !== digestValue(capability.task)
       || operation.receipt?.status !== "ready"
     ) mismatch(`operation:${capability.receiptRef} does not prove its SPEC capability`)
   }

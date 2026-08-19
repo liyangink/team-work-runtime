@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 至 V2-5 均已完成并通过两轴终审，下一步实施 V2-6。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 至 V2-6 均已完成并通过两轴终审，下一步实施 V2-7。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-进入 V2-6：实现 OpenCode Execution Adapter 与 OpenSpec Provider，把已经验证的平台能力接入 v2 Port；不复制状态机，也不提前公开切换 Lead 控制面。
+进入 V2-7：把 OpenCode 的公开 Lead 工具、最小上下文、Skill 和只读 TUI 投影切到 v2，并删除 v1 控制命令、状态兼容层和重复编排；切换前保留一次可回退提交。

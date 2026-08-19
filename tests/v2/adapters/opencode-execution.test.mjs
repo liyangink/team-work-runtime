@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -101,6 +101,7 @@ async function configuredAdapter(options = {}) {
     client: sdk.client,
     projectRoot,
     platformProfile: profile(),
+    hostContinuationController: options.hostContinuationController,
     clock: () => new Date("2026-08-19T10:00:00.000Z"),
     faultInjector: options.faultInjector,
   })
@@ -149,6 +150,13 @@ test("OpenCode Execution Adapter exposes the pinned Agent catalog and dispatches
   assert.equal(sdk.calls.create, 1)
   assert.equal(sdk.calls.prompt, 1)
   assert.match(sdk.messages.get(first.executionRef)[0].parts[0].text, /Owner context[\s\S]*Implement the assigned work/)
+})
+
+test("OpenCode adapter state refuses a nested symlink before creating operation files", async () => {
+  const projectRoot = await project()
+  const external = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-opencode-external-"))
+  await symlink(external, path.join(projectRoot, ".team-work", "platform"))
+  await assert.rejects(configuredAdapter({ projectRoot }), (error) => error.code === "PATH_ESCAPE")
 })
 
 test("a new operation resumes the same OpenCode session without exposing session choice to Lead", async () => {
@@ -213,7 +221,7 @@ test("inspect finds an orphan session by operation title and retry uses it inste
 })
 
 test("OpenCode events and check receipts are normalized directly into PlatformObservationSink", async () => {
-  const { sdk, adapter, port, capabilities } = await configuredAdapter()
+  const { projectRoot, sdk, adapter, port, capabilities } = await configuredAdapter()
   const observations = []
   adapter.attachRuntime({ observationSinkFor: () => ({ observe: async (value) => { observations.push(value); return { observationId: "obs", sequence: observations.length, duplicate: false } } }) })
   const receipt = await port.ensureExecution(effect(capabilities))
@@ -221,12 +229,18 @@ test("OpenCode events and check receipts are normalized directly into PlatformOb
   assert.equal(observations.length, 0, "a stale idle event must not override the current busy status")
   sdk.statuses[receipt.executionRef] = { type: "idle" }
   assert.equal(await adapter.handleEvent({ type: "session.idle", properties: { sessionID: receipt.executionRef } }), true)
+  await mkdir(path.join(projectRoot, ".team-work", "checks"), { recursive: true })
+  await writeFile(path.join(projectRoot, ".team-work", "checks", "tool-1.txt"), "all tests passed")
   await adapter.recordCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-1", commandSummary: "npm test", exitCode: 0, outputRef: ".team-work/checks/tool-1.txt" })
   assert.equal(observations[0].kind, "execution")
   assert.equal(observations[0].state, "idle")
   assert.equal(observations[1].kind, "check")
   assert.equal(observations[1].result, "pass")
   assert.equal(observations[1].commandSummary, "npm test")
+  await assert.rejects(
+    adapter.recordCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-escape", commandSummary: "bad", exitCode: 0, outputRef: "../outside.txt" }),
+    (error) => error.code === "PATH_ESCAPE",
+  )
 })
 
 test("a deleted managed child session becomes one durable lost observation without adopting partial output", async () => {
@@ -302,6 +316,33 @@ test("quiesce binds a verified user decision to a message newer than the capture
   assert.equal(decision.choice, "accept")
   assert.equal(decision.proof.mode, "verified-event")
   assert.equal(decision.proof.messageId, "new-user")
+})
+
+test("quiesce clears host continuations through the platform controller before issuing a human wait", async () => {
+  const sdk = fakeClient()
+  const hostSessionRef = sdk.addHostSession()
+  sdk.todos.set(hostSessionRef, [{ id: "pending-1", status: "in_progress", content: "continue later", priority: "high" }])
+  let cleared = 0
+  const setup = await configuredAdapter({
+    sdk,
+    hostSessionRef,
+    hostContinuationController: { clear: async ({ hostSessionRef: target }) => {
+      cleared += 1
+      sdk.todos.set(target, [{ id: "pending-1", status: "cancelled", content: "continue later", priority: "high" }])
+    } },
+  })
+  const quiet = await setup.port.quiesce({
+    operationId: "quiesce-clear",
+    effectDigest: "c".repeat(64),
+    taskId: "task-1",
+    decisionId: "final-acceptance",
+    leadBindingRef: setup.binding.bindingRef,
+    executionRefs: [],
+    clearHostContinuations: true,
+  })
+  assert.equal(cleared, 1)
+  assert.equal(quiet.status, "confirmed")
+  assert.equal(quiet.hostContinuationsCleared, true)
 })
 
 test("stop inspection recovers an abort whose receipt is no longer needed to prove quiescence", async () => {

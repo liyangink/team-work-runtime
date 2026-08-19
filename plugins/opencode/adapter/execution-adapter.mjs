@@ -102,6 +102,26 @@ async function projectRootOf(projectRoot) {
   return { root, control }
 }
 
+async function ensureDirectoryTree(root, target, label) {
+  const relative = path.relative(root, target)
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw fail("PATH_ESCAPE", `${label} escapes its trusted root`)
+  }
+  let cursor = root
+  for (const segment of relative.split(path.sep)) {
+    cursor = path.join(cursor, segment)
+    let metadata
+    try {
+      metadata = await lstat(cursor)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+      await mkdir(cursor).catch((mkdirError) => { if (mkdirError.code !== "EEXIST") throw mkdirError })
+      metadata = await lstat(cursor)
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw fail("PATH_ESCAPE", `${label} crosses a non-directory or symbolic link`)
+  }
+}
+
 async function readProjectFile(root, relativePath, label) {
   if (typeof relativePath !== "string" || relativePath === "" || path.isAbsolute(relativePath)) {
     throw fail("PROJECT_PATH_INVALID", `${label} must be a project-relative path`)
@@ -142,6 +162,7 @@ export function createOpenCodeExecutionAdapter({
   client,
   projectRoot,
   platformProfile,
+  hostContinuationController,
   maxParallel = 8,
   clock = () => new Date(),
   faultInjector = {},
@@ -163,7 +184,7 @@ export function createOpenCodeExecutionAdapter({
         path.join(platform, "bindings", "by-task"),
         path.join(platform, "bindings", "by-ref"),
         path.join(platform, "locks"),
-      ]) await mkdir(directory, { recursive: true })
+      ]) await ensureDirectoryTree(base.control, directory, "OpenCode adapter state")
       return { ...base, platform }
     })()
     return rootsPromise
@@ -274,11 +295,19 @@ export function createOpenCodeExecutionAdapter({
     }))
   }
 
-  async function evaluateQuiesce(intent) {
+  async function evaluateQuiesce(intent, { clear = false } = {}) {
     try {
       const binding = await bindingForRef(intent.leadBindingRef)
       if (binding.taskId !== intent.taskId) throw fail("LEAD_BINDING_CONFLICT", "human wait binding targets another task")
       if (typeof client.session.todo !== "function") throw fail("OPENCODE_CAPABILITY_MISSING", "OpenCode session.todo is required to prove a static human wait")
+      if (clear && hostContinuationController) {
+        if (typeof hostContinuationController.clear !== "function") throw fail("OPENCODE_CAPABILITY_MISSING", "host continuation controller must provide clear()")
+        await hostContinuationController.clear({
+          taskId: intent.taskId,
+          decisionId: intent.decisionId,
+          hostSessionRef: binding.hostSessionRef,
+        })
+      }
       const statuses = await sessionStatuses()
       const executions = []
       for (const executionRef of intent.executionRefs) {
@@ -490,7 +519,7 @@ export function createOpenCodeExecutionAdapter({
           assertOperation(existing, intent, "quiesce")
           return existing.receipt
         }
-        const receipt = await evaluateQuiesce(intent)
+        const receipt = await evaluateQuiesce(intent, { clear: true })
         await faultInjector.afterQuiesceObserved?.({ intent: structuredClone(intent), receipt: structuredClone(receipt) })
         await saveOperation({
           schemaVersion: "2.0",
@@ -639,6 +668,7 @@ export function createOpenCodeExecutionAdapter({
       const base = await roots()
       const projection = await readOptional(recordPath(base, "sessions", requireIdentifier(sessionId, "sessionId")))
       if (!projection) throw fail("SESSION_MAPPING_MISSING", "OpenCode session is not managed by Runtime v2")
+      if (outputRef) await readProjectFile(base.root, outputRef, "check output")
       const result = Number.isInteger(exitCode) ? (exitCode === 0 ? "pass" : "fail") : "unknown"
       return observationSinkFor(projection.taskId).observe({
         kind: "check",

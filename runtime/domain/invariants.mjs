@@ -381,7 +381,7 @@ export function assertTaskState(state) {
           effectDigest: capability.effectDigest,
           capabilityId: capability.capabilityId,
           capabilityDigest: capability.capabilityDigest,
-          task: spec.task,
+          task: capability.task,
           instructionsRef: capability.instructionsRef,
           readableRefs: capability.readableRefs,
           writableRefs: capability.writableRefs,
@@ -395,6 +395,11 @@ export function assertTaskState(state) {
       throw error
     }
     if (spec.task.taskId !== state.taskId) failState("SPEC lifecycle must belong to the current task")
+    if (spec.capabilities.some(({ task }) => (
+      task.taskId !== spec.task.taskId
+      || task.providerId !== spec.task.providerId
+      || task.configDigest !== spec.task.configDigest
+    ))) failState("SPEC capabilities cannot cross provider task or configuration boundaries")
     if (spec.status && digestValue(spec.status.task) !== digestValue(spec.task)) failState("SPEC status must bind the lifecycle task")
     if (spec.validation) {
       if (!spec.status || digestValue(spec.validation.task) !== digestValue(spec.task) || spec.validation.providerRevision !== spec.status.providerRevision) {

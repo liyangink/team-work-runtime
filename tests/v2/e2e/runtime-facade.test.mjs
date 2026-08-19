@@ -488,6 +488,40 @@ test("report verification enforces assignment attribution and does not punish Ru
   assert.equal(execution.activeMembers().some(({ role }) => role === "challenger"), true)
 })
 
+test("report verification rejects an external change to a registered input while a member is running", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const artifacts = createInMemoryArtifactRepository({ "requirements/stable.md": "Stable requirement." })
+  const execution = createFakeExecutionAdapter()
+  const store = createInMemoryStore()
+  const runtime = createRuntimeFacade({
+    store,
+    executionAdapter: execution,
+    artifactRepository: artifacts,
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-19T14:00:00.000Z",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Protect registered inputs",
+    objective: "Reject output produced against an externally changed requirement",
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "implementation" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/stable.md" } }],
+  })
+  await runtime.leadControl.plan({ objective: "Protect registered inputs" })
+  const owner = execution.activeMembers().find(({ role }) => role === "owner")
+  artifacts.write("requirements/stable.md", "Changed by another process.")
+  artifacts.write("src/protected.mjs", "export const protectedInput = true\n", { assignmentId: owner.assignmentId })
+  await owner.report(report("Implemented against the changed input.", [output("artifact:source", "src/protected.mjs")]))
+  await runtime.leadControl.run()
+  const state = await store.loadTask(opened.task.id)
+  const assignment = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === owner.assignmentId)
+  assert.equal(assignment.attempts[0].status, "rework")
+  assert.equal(state.artifacts.some(({ path }) => path === "src/protected.mjs"), false)
+})
+
 test("a rejected preflight review opens a new planning round instead of an illegal stage transition", async () => {
   const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
   const teamPolicy = await loadJson("team-work/policies/default.json")

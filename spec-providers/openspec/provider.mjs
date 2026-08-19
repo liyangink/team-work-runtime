@@ -70,6 +70,26 @@ async function assertNoSymlink(root, target, label, { allowMissing = false } = {
   }
 }
 
+async function ensureDirectoryTree(root, target, label) {
+  const relative = path.relative(root, target)
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw fail("PATH_ESCAPE", `${label} escapes its trusted root`)
+  }
+  let cursor = root
+  for (const segment of relative.split(path.sep)) {
+    cursor = path.join(cursor, segment)
+    let metadata
+    try {
+      metadata = await lstat(cursor)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+      await mkdir(cursor).catch((mkdirError) => { if (mkdirError.code !== "EEXIST") throw mkdirError })
+      metadata = await lstat(cursor)
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw fail("PATH_ESCAPE", `${label} crosses a non-directory or symbolic link`)
+  }
+}
+
 async function collectFiles(projectRoot, relativeDirectory, predicate = () => true) {
   const directory = path.join(projectRoot, relativeDirectory)
   if (!await exists(directory)) return []
@@ -109,7 +129,7 @@ export function createOpenSpecProvider({
       if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw fail("PATH_ESCAPE", "Runtime control root must be a real directory")
       const providerRoot = path.join(control, "spec-providers", "openspec")
       for (const directory of [providerRoot, path.join(providerRoot, "operations"), path.join(providerRoot, "instructions"), path.join(providerRoot, "validation"), path.join(providerRoot, "locks")]) {
-        await mkdir(directory, { recursive: true })
+        await ensureDirectoryTree(control, directory, "OpenSpec provider state")
       }
       return { root, control, providerRoot }
     })()
@@ -298,7 +318,8 @@ export function createOpenSpecProvider({
         const listed = unwrapJson((await run(["list", "--json"], 15_000)).stdout, "OpenSpec list")
         if (!Array.isArray(listed.changes)) throw fail("SPEC_PROVIDER_INVALID_RESPONSE", "OpenSpec list omitted changes")
         return { providerId: "openspec", status: "ready", ...(version ? { version } : {}), observedAt: timestamp(clock) }
-      } catch {
+      } catch (error) {
+        if (error.code === "PATH_ESCAPE") throw error
         return { providerId: "openspec", status: "missing", observedAt: timestamp(clock) }
       }
     },

@@ -14,7 +14,7 @@ function output(ref, path) {
   return { ref, path }
 }
 
-export function createHappyPathHarness({ runtime, execution, artifacts, workflowDefinition, e2eAssessment = {}, transformReport }) {
+export function createHappyPathHarness({ runtime, execution, artifacts, store, workflowDefinition, e2eAssessment = {}, transformReport }) {
   const stages = new Map(workflowDefinition.stages.map((stage) => [stage.id, stage]))
   const delivered = new Set()
   const deliveredAssignments = new Set()
@@ -29,9 +29,13 @@ export function createHappyPathHarness({ runtime, execution, artifacts, workflow
 
   async function deliverMember(member, stageId) {
     const runId = member.stageRunId
+    const state = store ? await store.loadTask(member.taskId) : null
+    const assignment = state?.workGraph.assignments.find(({ assignmentId }) => assignmentId === member.assignmentId)
+    const writableRefs = assignment?.writableRefs
     const latestEvidence = latestEvidenceByRun.get(runId)
+      ?? (state?.acceptedReportRefs.at(-1) ? `report:${state.acceptedReportRefs.at(-1).reportId}` : undefined)
     let memberReport
-    if (member.assignmentId.startsWith("owner-response-")) {
+    if (member.role === "owner" && writableRefs?.length === 0) {
       memberReport = report(
         `Owner independently accepted the ${stageId} review evidence.`,
         [],
@@ -78,9 +82,9 @@ export function createHappyPathHarness({ runtime, execution, artifacts, workflow
         : member.assignmentId.startsWith("owner-fixture-implementation-") ? "artifact:e2e-fixtures"
           : member.assignmentId.startsWith("owner-execution-") ? "artifact:e2e-result"
             : null
-      const outputs = (e2eOutput ? [e2eOutput] : stageOutputs(stageId)).map((ref) => {
+      const outputs = (writableRefs ?? (e2eOutput ? [e2eOutput] : stageOutputs(stageId))).map((ref) => {
         const kind = ref.slice("artifact:".length)
-        const path = `generated/${kind}.md`
+        const path = `generated/${kind.replace(/[^a-zA-Z0-9._-]+/g, "-")}.md`
         artifacts.write(path, `${stageId} artifact ${kind}\n`, { assignmentId: member.assignmentId })
         return output(ref, path)
       })

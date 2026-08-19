@@ -41,6 +41,17 @@ export async function assertDurableReferences({ state, loadRecord, mode = "commi
     throw new StoreError(codes.mismatch, message)
   }
 
+  async function validateDecisionPacket(packetRef, packetDigest) {
+    const prefix = `.team-work/tasks/${state.taskId}/packets/`
+    if (!packetRef.startsWith(prefix) || !packetRef.endsWith(".json")) mismatch("decision packet reference is outside the current task")
+    const recordId = packetRef.slice(prefix.length, -".json".length)
+    if (recordId === "" || recordId.includes("/")) mismatch("decision packet reference is invalid")
+    const packet = await requiredRecord("packet", recordId)
+    if (packet.packetId !== recordId || digestValue(packet) !== packetDigest) {
+      mismatch(`packet:${recordId} does not match its decision projection`)
+    }
+  }
+
   for (const { reportId, digest } of state.acceptedReportRefs) {
     const report = await requiredRecord("report", reportId)
     if (digestValue(report) !== digest) {
@@ -104,6 +115,15 @@ export async function assertDurableReferences({ state, loadRecord, mode = "commi
       mismatch(`operation:${recordId} does not prove its human-wait state`)
     }
   }
+  if (state.pendingDecision?.packetRef) {
+    await validateDecisionPacket(state.pendingDecision.packetRef, state.pendingDecision.packetDigest)
+  }
+  if (state.stagePlan?.intervention) {
+    await validateDecisionPacket(
+      state.stagePlan.intervention.sourcePacketRef,
+      state.stagePlan.intervention.sourcePacketDigest,
+    )
+  }
 
   for (const decision of state.decisionHistory) {
     const record = await requiredRecord("operation", decision.decisionRef)
@@ -136,5 +156,6 @@ export async function assertDurableReferences({ state, loadRecord, mode = "commi
     ) {
       mismatch(`operation:${decision.quiesceReceiptRef} does not prove decision quiescence`)
     }
+    if (decision.packetRef) await validateDecisionPacket(decision.packetRef, decision.packetDigest)
   }
 }

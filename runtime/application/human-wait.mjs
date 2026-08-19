@@ -178,6 +178,9 @@ export function createHumanWait({
           intent,
           occurredAt: clock(),
         },
+        ...(decision.packet ? {
+          records: [{ kind: "packet", recordId: decision.packet.packetId, value: decision.packet }],
+        } : {}),
         refs: [decision.decisionId, intent.operationId],
       }
     })
@@ -352,10 +355,19 @@ export function createHumanWait({
         refs: [pending.decisionId, decisionRef, pending.stageRunId],
       }
     })
-    const accepted = committed.state.decisionHistory.some((entry) => entry.decisionRef === decisionRef)
+    const accepted = committed.changed === true
+      && committed.state.decisionHistory.some((entry) => entry.decisionRef === decisionRef)
     return accepted
       ? { state: committed.state, decision, accepted: true }
-      : { state: committed.state, accepted: false, reason: committed.state.observationInbox.items.length > 0 ? "late-observations" : "evidence-changed" }
+      : {
+          state: committed.state,
+          accepted: false,
+          reason: committed.state.observationInbox.items.length > 0
+            ? "late-observations"
+            : committed.state.status === "awaiting-user"
+              ? "evidence-changed"
+              : "stale-decision",
+        }
   }
 
   return Object.freeze({ prepare, reconcile, activate, resolve })

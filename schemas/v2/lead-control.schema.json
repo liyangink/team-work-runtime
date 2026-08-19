@@ -63,8 +63,16 @@
       "additionalProperties": false,
       "required": ["action", "directive"],
       "properties": {
-        "action": { "const": "choose" },
+        "action": {
+          "enum": ["choose", "owner-rework", "collect-evidence", "expert-arbitrate"]
+        },
         "directive": { "type": "string", "minLength": 1 },
+        "targetRef": { "type": "string", "minLength": 1 },
+        "referenceRefs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
         "note": { "type": "string" }
       }
     }

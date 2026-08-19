@@ -115,7 +115,7 @@
               "required": ["mode", "owners", "challengerTier", "expert", "cost"],
               "properties": {
                 "mode": { "enum": ["solo", "team"] },
-                "owners": { "type": "integer", "minimum": 1 },
+                "owners": { "type": "integer", "minimum": 0 },
                 "challengerTier": { "enum": ["senior", "expert"] },
                 "expert": { "type": "boolean" },
                 "cost": {

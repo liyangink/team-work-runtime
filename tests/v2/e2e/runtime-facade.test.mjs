@@ -144,6 +144,13 @@ test("a through-stage delivery closes through LeadControl and bound member deliv
   assert.equal(cards.at(-1).task.status, "awaiting-user", JSON.stringify(cards.map(({ task, next, report: value }) => ({ status: task.status, next: next.kind, team: value.team }))))
   assert.equal(cards.at(-1).next.kind, "steer")
   assert.deepEqual(cards.at(-1).next.choices.map(({ value }) => value), ["accept", "rework"])
+  assert.ok(cards.at(-1).decision?.packetRef)
+  const packetId = cards.at(-1).decision.packetRef.split("/").at(-1).replace(/\.json$/, "")
+  const packet = await store.loadRecord(cards[0].task.id, "packet", packetId)
+  assert.equal(packet.packetId, packetId)
+  assert.equal(packet.stage, "implementation")
+  assert.ok(packet.roster.some(({ role }) => role === "owner"))
+  assert.ok(packet.roster.some(({ role }) => role === "challenger"))
 
   execution.setHumanChoice("accept")
   cards.push(await runtime.leadControl.steer({ action: "choose", directive: "accept" }))

@@ -20,7 +20,15 @@ function compactCard(state, workflowDefinition, reason) {
           : (!state.stagePlan && !state.preflight) ? "needs-plan"
             : ["waiting-report", "settling-idle", "wait-budget-exhausted", "budget-decision", "in-doubt"].includes(reason) ? reason
               : "stable"
-  return composeActionCard({ taskState: state, workflowDefinition, reason: normalizedReason })
+  const pending = state.pendingDecision
+  const decision = pending?.packetRef ? {
+    summary: "当前判断所需的团队结论、证据和制品已经整理为决策包。",
+    packetRef: pending.packetRef,
+    question: pending.question,
+    choices: pending.choices,
+    ...(pending.decisionId.startsWith("convergence-") ? { disagreement: "团队在三轮内仍未自主收敛。" } : {}),
+  } : undefined
+  return composeActionCard({ taskState: state, workflowDefinition, reason: normalizedReason, decision })
 }
 
 function normalizeIntent(input) {
@@ -124,7 +132,9 @@ export function createRuntimeFacade({
         const result = await driver.steer({ taskId: state.taskId, input, leadBindingRef: leadBinding.bindingRef })
         return compactCard(result.state, workflowDefinition, result.reason)
       } catch (error) {
-        if (error.code === "ACTION_STALE") return problem("ACTION_STALE", error.message, "请按最新卡片中的唯一下一步操作。")
+        if (error.code === "ACTION_STALE" || error.code?.startsWith("STEERING_")) {
+          return problem("ACTION_STALE", error.message, "请读取最新决策包，并只引用其中仍可见的对象。")
+        }
         throw error
       }
     },

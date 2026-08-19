@@ -56,7 +56,7 @@ function assertImmutableIdentity(current, next) {
   }
 }
 
-const recordDirectories = { report: "reports", observation: "observations", operation: "operations" }
+const recordDirectories = { report: "reports", observation: "observations", operation: "operations", packet: "packets" }
 
 function digestJson(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")

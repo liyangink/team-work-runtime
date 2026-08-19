@@ -51,7 +51,7 @@ async function fixture({
     artifacts,
     store,
     workflowDefinition,
-    harness: createHappyPathHarness({ runtime, execution, artifacts, workflowDefinition, e2eAssessment, transformReport }),
+    harness: createHappyPathHarness({ runtime, execution, artifacts, store, workflowDefinition, e2eAssessment, transformReport }),
   }
 }
 
@@ -152,7 +152,7 @@ test("a mid-stage cost boundary becomes an auditable human choice and resumes af
     routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
     clock: () => "2026-08-19T09:00:00.000Z",
   })
-  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, workflowDefinition: setup.workflowDefinition })
+  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, store, workflowDefinition: setup.workflowDefinition })
   await runtime.leadControl.open({
     title: "Review within a constrained automatic budget",
     objective: "Review the existing source",
@@ -187,7 +187,7 @@ test("declining a cost increase returns one controlled replan instead of taking 
     routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
     clock: () => "2026-08-19T09:00:00.000Z",
   })
-  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, workflowDefinition: setup.workflowDefinition })
+  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, store, workflowDefinition: setup.workflowDefinition })
   const opened = await runtime.leadControl.open({
     title: "Replan a constrained review",
     objective: "Review the existing source",
@@ -233,7 +233,7 @@ test("a user can stop cleanly at a cost boundary without dispatching the blocked
     routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
     clock: () => "2026-08-19T09:00:00.000Z",
   })
-  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, workflowDefinition: setup.workflowDefinition })
+  const harness = createHappyPathHarness({ runtime, execution, artifacts: setup.artifacts, store, workflowDefinition: setup.workflowDefinition })
   const opened = await runtime.leadControl.open({
     title: "Stop a constrained review",
     objective: "Review the existing source",
@@ -273,6 +273,8 @@ test("a human rejection reopens only the current stage and can later be accepted
   assert.equal(result.humanDecisions, 2)
   assert.equal(state.stageRuns[0].status, "rework")
   assert.equal(state.currentStageRun.round, 2)
+  const repeated = await runtime.leadControl.steer({ action: "choose", directive: "accept" })
+  assert.equal(repeated.code, "ACTION_STALE")
 })
 
 test("design rejection follows the declared rework edge instead of reopening design-review", async () => {
@@ -490,6 +492,85 @@ test("three autonomous E2E rework rounds stop for one explicit user extension", 
   assert.equal(state.stageRuns.filter(({ stage, status }) => stage === "e2e" && status === "rework").length, 3)
 })
 
+test("Lead steering opens one durable member-owned intervention round from the DecisionPacket", async (t) => {
+  for (const action of ["owner-rework", "collect-evidence", "expert-arbitrate"]) await t.test(action, async () => {
+    const { runtime, harness, store } = await fixture()
+    const opened = await runtime.leadControl.open({
+      title: `Exercise ${action} steering`,
+      objective: "Implement and independently review the requested change",
+      entryStage: "implementation",
+      completion: { mode: "through-stage", stage: "implementation" },
+      existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+    })
+    const waiting = await harness.drive(await runtime.leadControl.plan({
+      objective: "Implement and independently review the requested change",
+      preferences: { budget: "quality" },
+    }), { stopWhen: (card) => card.task?.status === "awaiting-user" })
+    const packetId = waiting.card.decision.packetRef.split("/").at(-1).replace(/\.json$/, "")
+    const packet = await store.loadRecord(opened.task.id, "packet", packetId)
+    const ownerRef = packet.roster.find(({ role }) => role === "owner")?.memberRef
+    const targetRef = action === "collect-evidence" ? packet.artifactRefs[0] : ownerRef
+    assert.ok(targetRef)
+
+    const interventionCard = await runtime.leadControl.steer({
+      action,
+      directive: action === "owner-rework"
+        ? "修订当前实现并复核受影响边界"
+        : action === "collect-evidence"
+          ? "补充失败路径的可验证证据"
+          : "独立裁决当前实现是否满足核心约束",
+      targetRef,
+    })
+    const interventionState = await store.loadTask(opened.task.id)
+    assert.equal(interventionState.stagePlan.intervention.action, action)
+    assert.equal(interventionState.stageRuns.at(-1).status, "rework")
+    assert.equal(interventionState.pendingDecision, null)
+    assert.equal(interventionCard.task.stage, "implementation")
+    if (action === "expert-arbitrate") assert.equal(interventionCard.report.team.owners, 0)
+    assert.ok(interventionCard.report.team.cost.forecastMin >= interventionState.costLedger.accrued)
+
+    const completed = await harness.drive(interventionCard)
+    assert.equal(completed.card.task.status, "completed")
+    const finalState = await store.loadTask(opened.task.id)
+    assert.ok(finalState.decisionHistory.some(({ decisionId, choice }) => (
+      decisionId === interventionState.stagePlan.intervention.resumeDecisionId && choice === "accept"
+    )))
+  })
+})
+
+test("stale or concurrent DecisionPacket steering cannot open two intervention rounds", async () => {
+  const { runtime, harness, store } = await fixture()
+  const opened = await runtime.leadControl.open({
+    title: "Serialize concurrent steering",
+    objective: "Implement and independently review the requested change",
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "implementation" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+  })
+  const waiting = await harness.drive(await runtime.leadControl.plan({
+    objective: "Implement and independently review the requested change",
+    preferences: { budget: "quality" },
+  }), { stopWhen: (card) => card.task?.status === "awaiting-user" })
+  const packetId = waiting.card.decision.packetRef.split("/").at(-1).replace(/\.json$/, "")
+  const packet = await store.loadRecord(opened.task.id, "packet", packetId)
+  const ownerRef = packet.roster.find(({ role }) => role === "owner").memberRef
+  const invalid = await runtime.leadControl.steer({
+    action: "expert-arbitrate",
+    directive: "不得允许制品引用绕过非作者约束",
+    targetRef: packet.artifactRefs[0],
+  })
+  assert.equal(invalid.code, "ACTION_STALE")
+  const calls = await Promise.all([
+    runtime.leadControl.steer({ action: "owner-rework", directive: "修订实现", targetRef: ownerRef }),
+    runtime.leadControl.steer({ action: "expert-arbitrate", directive: "独立裁决", targetRef: ownerRef }),
+  ])
+  assert.equal(calls.filter(({ code }) => code === "ACTION_STALE").length, 1, JSON.stringify(calls))
+  assert.equal(calls.filter(({ task }) => task?.stage === "implementation").length, 1, JSON.stringify(calls))
+  const state = await store.loadTask(opened.task.id)
+  assert.equal(state.stageRuns.filter(({ status }) => status === "rework").length, 1)
+  assert.ok(state.stagePlan.intervention)
+})
+
 test("an unavailable required E2E route blocks once and replans after the environment recovers", async () => {
   const assessment = { applicable: true, criticalCrossSystemPath: true, environment: "missing" }
   const { runtime, harness, store } = await fixture({
@@ -575,6 +656,7 @@ test("a restart between E2E assessment acceptance and formal planning retains bo
     runtime: resumed,
     execution,
     artifacts: interrupted.artifacts,
+    store: durableStore,
     workflowDefinition: interrupted.workflowDefinition,
     e2eAssessment: assessment,
   })

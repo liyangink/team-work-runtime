@@ -8,7 +8,11 @@ export { assertProjectRuntimeMajor, assertRuntimeMajor, RUNTIME_MAJOR } from "./
 export {
   compileHumanGateRequirements,
   compilePolicyPlan,
+  compileSteeringIntervention,
   composeActionCard,
+  composeDecisionPacket,
+  decisionPacketCodePointLength,
+  decisionPacketRef,
   createFileEvidenceVerifier,
   createHumanWait,
   createRuntimeFacade,

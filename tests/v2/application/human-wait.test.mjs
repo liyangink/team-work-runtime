@@ -391,6 +391,61 @@ test("a verified adapter decision is bound to the issued stage and artifact evid
   await assert.rejects(store.loadTask(taskId), (error) => error.code === "STATE_CORRUPT")
 })
 
+test("two concurrent resolutions accept only the commit that changed the awaiting decision", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  const taskId = "concurrent-human-decision"
+  await createWorkingTask(store, taskId)
+  let verifyCalls = 0
+  let releaseVerification
+  const bothVerified = new Promise((resolve) => { releaseVerification = resolve })
+  const executionAdapter = adapter({
+    quiesce: async (intent) => ({
+      operationId: intent.operationId,
+      effectDigest: intent.effectDigest,
+      status: "confirmed",
+      executions: [],
+      hostContinuationsCleared: true,
+      observedAt: "2026-08-18T10:04:00.000Z",
+    }),
+    verifyHumanDecision: async (intent) => {
+      verifyCalls += 1
+      if (verifyCalls === 2) releaseVerification()
+      await bothVerified
+      return {
+        decisionId: intent.decisionId,
+        leadBindingRef: intent.leadBindingRef,
+        receivedAt: "2026-08-18T10:06:00.000Z",
+        choice: "approve",
+        proof: { mode: "trusted-caller", invocationRef: "human-concurrent-choice" },
+      }
+    },
+  })
+  const driver = createTaskDriver({ projectRoot, store, executionAdapter, clock: () => "2026-08-18T10:05:00.000Z" })
+  await driver.prepareHumanDecision({
+    taskId,
+    decision: {
+      decisionId: "approve-design",
+      requirement: "required",
+      leadBindingRef: "binding:lead-1",
+      question: "是否批准当前方案进入实施？",
+      choices: ["approve", "revise"],
+      artifactRefs: ["design-document"],
+    },
+  })
+  await driver.run({ taskId, waitBudgetMs: 0 })
+
+  const resolutions = await Promise.all([
+    driver.resolveHumanDecision({ taskId }),
+    driver.resolveHumanDecision({ taskId }),
+  ])
+
+  assert.equal(resolutions.filter(({ accepted }) => accepted).length, 1)
+  assert.equal(resolutions.filter(({ reason }) => reason === "stale-decision").length, 1)
+  const state = await store.loadTask(taskId)
+  assert.equal(state.decisionHistory.length, 1)
+})
+
 test("late member delivery is durable but non-progressing until new human input reopens the task", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })

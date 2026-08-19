@@ -96,3 +96,29 @@ test("LeadControl rejects unknown, low-level, and incomplete steer intents", asy
   await assert.rejects(control.steer({ action: "owner-rework" }), ContractError)
   assert.equal(called, false)
 })
+
+test("LeadControl accepts a flat controlled intervention without orchestration fields", async () => {
+  let received
+  const control = createLeadControl({
+    open: async () => actionCard,
+    plan: async () => actionCard,
+    run: async () => actionCard,
+    steer: async (input) => {
+      received = input
+      return actionCard
+    },
+  })
+
+  await control.steer({
+    action: "collect-evidence",
+    directive: "补充失败路径证据",
+    targetRef: "reviews/current.md",
+    referenceRefs: ["report:owner"],
+  })
+  assert.deepEqual(received, {
+    action: "collect-evidence",
+    directive: "补充失败路径证据",
+    targetRef: "reviews/current.md",
+    referenceRefs: ["report:owner"],
+  })
+})

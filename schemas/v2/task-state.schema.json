@@ -267,7 +267,31 @@
             "spec": { "$ref": "#/$defs/specRoute" },
             "e2e": { "$ref": "#/$defs/e2eRoute" }
           }
-        }
+        },
+        "intervention": { "$ref": "#/$defs/steeringIntervention" }
+      }
+    },
+    "steeringIntervention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action", "directive", "targetRef", "referenceRefs", "sourceDecisionId", "sourcePacketRef",
+        "sourcePacketDigest", "resumeDecisionId", "resumeQuestion", "resumeChoices", "requirement", "proofMode", "artifactIds"
+      ],
+      "properties": {
+        "action": { "enum": ["owner-rework", "collect-evidence", "expert-arbitrate"] },
+        "directive": { "type": "string", "minLength": 1 },
+        "targetRef": { "type": "string", "minLength": 1 },
+        "referenceRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "sourceDecisionId": { "$ref": "#/$defs/id" },
+        "sourcePacketRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "sourcePacketDigest": { "$ref": "#/$defs/digest" },
+        "resumeDecisionId": { "$ref": "#/$defs/id" },
+        "resumeQuestion": { "type": "string", "minLength": 1 },
+        "resumeChoices": { "$ref": "#/$defs/uniqueStrings" },
+        "requirement": { "enum": ["required", "optional"] },
+        "proofMode": { "enum": ["verified-event", "trusted-caller"] },
+        "artifactIds": { "$ref": "#/$defs/uniqueStrings" }
       }
     },
     "preflight": {
@@ -449,9 +473,15 @@
         "quiesceReceiptRef": { "$ref": "#/$defs/id" },
         "quiesceFailureRef": { "$ref": "#/$defs/id" },
         "afterHostCursor": { "type": "string", "minLength": 1 },
+        "packetRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "packetDigest": { "$ref": "#/$defs/digest" },
         "createdAt": { "type": "string", "format": "date-time" },
         "quiescedAt": { "type": "string", "format": "date-time" },
         "issuedAt": { "type": "string", "format": "date-time" }
+      },
+      "dependentRequired": {
+        "packetRef": ["packetDigest"],
+        "packetDigest": ["packetRef"]
       }
     },
     "resolvedDecision": {
@@ -476,7 +506,13 @@
         "quiesceReceiptRef": { "$ref": "#/$defs/id" },
         "decisionRef": { "$ref": "#/$defs/id" },
         "decisionDigest": { "$ref": "#/$defs/digest" },
+        "packetRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "packetDigest": { "$ref": "#/$defs/digest" },
         "receivedAt": { "type": "string", "format": "date-time" }
+      },
+      "dependentRequired": {
+        "packetRef": ["packetDigest"],
+        "packetDigest": ["packetRef"]
       }
     },
     "observationItem": {

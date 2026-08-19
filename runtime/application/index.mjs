@@ -1,6 +1,8 @@
 export { createTaskDriver } from "./driver.mjs"
 export { composeActionCard, visibleCodePointLength } from "./action-card.mjs"
+export { composeDecisionPacket, decisionPacketCodePointLength, decisionPacketRef } from "./decision-packet.mjs"
 export { createFileEvidenceVerifier } from "./evidence-verifier.mjs"
 export { createHumanWait, compileHumanGateRequirements, evaluateHumanGate } from "./human-wait.mjs"
 export { compilePolicyPlan } from "./policy-compiler.mjs"
 export { createRuntimeFacade } from "./runtime-facade.mjs"
+export { compileSteeringIntervention } from "./steering-intervention.mjs"

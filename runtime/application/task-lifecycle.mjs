@@ -2,6 +2,8 @@ import { digestValue } from "../domain/digests.mjs"
 import { createTaskAggregate } from "../domain/task-aggregate.mjs"
 import { compilePolicyPlan } from "./policy-compiler.mjs"
 import { costWeightForTier } from "../../policy/kernel.mjs"
+import { composeDecisionPacket, decisionPacketRef } from "./decision-packet.mjs"
+import { compileSteeringIntervention } from "./steering-intervention.mjs"
 
 function slug(value) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70)
@@ -495,6 +497,41 @@ export function createTaskLifecycle({
     }))
   }
 
+  async function availableDecisionReports(state) {
+    return Promise.all(state.workGraph.assignments.flatMap((assignment) => {
+      const attempt = assignment.attempts.at(-1)
+      if (!attempt?.reportRef || !["reported", "verified", "accepted"].includes(attempt.status)) return []
+      return [store.loadRecord(state.taskId, "report", attempt.reportRef).then(({ report }) => ({ assignment, report }))]
+    }))
+  }
+
+  async function prepareDecision(state, decision) {
+    const packet = composeDecisionPacket({
+      taskState: state,
+      decision,
+      reports: await availableDecisionReports(state),
+    })
+    return effectDriver.prepareHumanDecision({
+      taskId: state.taskId,
+      decision: {
+        ...decision,
+        packet,
+        packetRef: decisionPacketRef(state.taskId, packet.packetId),
+        packetDigest: digestValue(packet),
+      },
+    })
+  }
+
+  async function currentDecisionPacket(state) {
+    const prefix = `.team-work/tasks/${state.taskId}/packets/`
+    const ref = state.pendingDecision?.packetRef
+    if (!ref?.startsWith(prefix) || !ref.endsWith(".json")) {
+      throw Object.assign(new Error("the current stable point has no readable DecisionPacket"), { code: "ACTION_STALE" })
+    }
+    const packetId = ref.slice(prefix.length, -".json".length)
+    return store.loadRecord(state.taskId, "packet", packetId)
+  }
+
   function enrichE2EAssessment(state, parsed, reports) {
     if (state.preflight?.kind !== "route-assessment") return parsed
     const owner = reports.find(({ assignment }) => assignment.teamRole === "owner" && assignment.writableRefs.length > 0)
@@ -701,9 +738,7 @@ export function createTaskLifecycle({
         .filter(({ from, outcome }) => from === state.currentStageRun.stage && outcome?.startsWith("return-"))
         .map(({ outcome }) => outcome)
       : []
-    await effectDriver.prepareHumanDecision({
-      taskId: state.taskId,
-      decision: {
+    await prepareDecision(state, {
         decisionId: `${gate.gateId}-${state.currentStageRun.stageRunId}`,
         requirement: gate.requirement,
         proofMode: gate.proofMode,
@@ -711,7 +746,6 @@ export function createTaskLifecycle({
         question: gate.gateId === "design-approval" ? "方案是否已经与预期一致，可以进入后续实施？" : "当前成果是否符合预期，可以完成本任务吗？",
         artifactRefs,
         choices: returnChoices.length > 0 ? ["accept", ...returnChoices] : ["accept", "rework"],
-      },
     })
     return (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state
   }
@@ -720,9 +754,7 @@ export function createTaskLifecycle({
     capabilities ??= await executionAdapter.capabilities()
     const artifactRefs = [...new Set(state.artifacts.map(({ artifactId }) => artifactId))]
     if (artifactRefs.length === 0) return { state, reason: "round-limit" }
-    await effectDriver.prepareHumanDecision({
-      taskId: state.taskId,
-      decision: {
+    await prepareDecision(state, {
         decisionId: `convergence-${state.currentStageRun.stageRunId}`,
         requirement: "required",
         proofMode: capabilities.features.humanDecisionProof,
@@ -730,7 +762,6 @@ export function createTaskLifecycle({
         question: "团队已达到自主收敛上限；是否结合你的意见再开启一轮返工？",
         artifactRefs,
         choices: ["rework"],
-      },
     })
     return { state: (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state, reason: "awaiting-user" }
   }
@@ -753,9 +784,7 @@ export function createTaskLifecycle({
     const approvedLimit = state.costLedger.accrued + state.costLedger.uncertain + costWeightForTier(assignment.costTier)
     const artifactRefs = [...new Set(state.artifacts.map(({ artifactId }) => artifactId))]
     if (artifactRefs.length === 0) return { state, reason: "budget-decision" }
-    await effectDriver.prepareHumanDecision({
-      taskId: state.taskId,
-      decision: {
+    await prepareDecision(state, {
         decisionId: `budget-${digestValue({ stageRunId: state.currentStageRun.stageRunId, assignmentId: assignment.assignmentId, approvedLimit }).slice(0, 24)}`,
         requirement: "required",
         proofMode: capabilities.features.humanDecisionProof,
@@ -763,7 +792,6 @@ export function createTaskLifecycle({
         question: `下一位成员会使累计成本从 ${state.costLedger.accrued + state.costLedger.uncertain} 增至 ${approvedLimit}，超过自动上限 ${state.costLedger.automaticLimit}；是否批准本次增额？`,
         artifactRefs,
         choices: ["accept", "replan", "stop"],
-      },
     })
     return { state: (await effectDriver.run({ taskId: state.taskId, waitBudgetMs: 0 })).state, reason: "awaiting-user" }
   }
@@ -772,6 +800,32 @@ export function createTaskLifecycle({
     if (state.preflight?.status === "active") return finishPreflight(state)
     let ready = await ensureReady(state)
     if (!await reportsAgree(ready)) return routeTeamRework(ready)
+
+    const intervention = ready.stagePlan?.intervention
+    if (intervention) {
+      const accepted = ready.decisionHistory.some(({ decisionId, stageRunId, choice }) => (
+        decisionId === intervention.resumeDecisionId
+        && stageRunId === ready.currentStageRun.stageRunId
+        && choice === "accept"
+      ))
+      if (!accepted) {
+        const artifactRefs = [...new Set([
+          ...intervention.artifactIds,
+          ...ready.artifacts.filter(({ stageRunId }) => stageRunId === ready.currentStageRun.stageRunId).map(({ artifactId }) => artifactId),
+        ])].filter((artifactId) => ready.artifacts.some((artifact) => artifact.artifactId === artifactId))
+        if (artifactRefs.length === 0) throw Object.assign(new Error("steering intervention produced no reviewable artifact"), { code: "WORK_CHAIN_INCOMPLETE" })
+        await prepareDecision(ready, {
+          decisionId: intervention.resumeDecisionId,
+          requirement: intervention.requirement,
+          proofMode: intervention.proofMode,
+          leadBindingRef,
+          question: intervention.resumeQuestion,
+          artifactRefs,
+          choices: intervention.resumeChoices,
+        })
+        return { state: (await effectDriver.run({ taskId: ready.taskId, waitBudgetMs: 0 })).state, reason: "awaiting-user" }
+      }
+    }
 
     const gate = gateFor(ready)
     const gateDecisionId = gate && `${gate.gateId}-${ready.currentStageRun.stageRunId}`
@@ -893,12 +947,51 @@ export function createTaskLifecycle({
 
   async function steer({ taskId, input, leadBindingRef }) {
     let state = await reconciler.load(taskId)
+    if (input.action !== "choose") {
+      capabilities ??= await executionAdapter.capabilities()
+      const compiled = compileSteeringIntervention({
+        state,
+        input,
+        packet: await currentDecisionPacket(state),
+        teamPolicy,
+        agentCatalog: normalizedCatalog(),
+      })
+      const opened = await reconciler.commit(taskId, (current) => {
+        if (
+          current.revision !== state.revision
+          || current.pendingDecision?.packetRef !== state.pendingDecision?.packetRef
+          || current.pendingDecision?.packetDigest !== state.pendingDecision?.packetDigest
+        ) {
+          const error = new Error("the DecisionPacket changed before the intervention was committed")
+          error.code = "ACTION_STALE"
+          throw error
+        }
+        return {
+          fact: {
+            type: "steering.intervention-opened",
+            nextStageRunId: compiled.nextStageRunId,
+            plan: compiled.plan,
+            costLedger: compiled.costLedger,
+            reason: input.directive,
+            occurredAt: clock(),
+          },
+          refs: [state.pendingDecision.packetRef, input.action, input.targetRef],
+        }
+      })
+      return runToStable({ taskId: opened.state.taskId, leadBindingRef })
+    }
     if (input.action !== "choose" || state.status !== "awaiting-user" || !state.pendingDecision?.choices.includes(input.directive)) {
       const error = new Error("the current stable point does not accept this choice")
       error.code = "ACTION_STALE"
       throw error
     }
-    state = (await effectDriver.resolveHumanDecision({ taskId })).state
+    const resolution = await effectDriver.resolveHumanDecision({ taskId })
+    if (resolution.accepted !== true) {
+      const error = new Error("the human decision was invalidated before it could be applied")
+      error.code = "ACTION_STALE"
+      throw error
+    }
+    state = resolution.state
     const resolvedDecision = state.decisionHistory.at(-1)
     const choice = resolvedDecision?.choice
     if (choice !== input.directive) {

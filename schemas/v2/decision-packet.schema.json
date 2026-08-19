@@ -19,7 +19,7 @@
         "properties": {
           "memberRef": { "type": "string", "minLength": 1 },
           "role": { "enum": ["owner", "challenger", "expert"] },
-          "assignmentKind": { "type": "string", "pattern": "^(planning|research|design|spec|implementation|integration|test|review|e2e|evidence|custom:.+)$" },
+          "assignmentKind": { "type": "string", "pattern": "^(planning|research|design|spec|implementation|integration|test|review|e2e|evidence|e2e-applicability|custom:.+)$" },
           "tier": { "enum": ["junior", "senior", "expert"] },
           "modelLabel": { "type": "string", "minLength": 1 },
           "status": { "type": "string", "minLength": 1 }

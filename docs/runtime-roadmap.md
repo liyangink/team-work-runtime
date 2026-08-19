@@ -1,6 +1,6 @@
 # team-work-runtime Roadmap
 
-状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-4 均已完成并通过两轴终审，V2-5 正在实施。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
+状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-5 均已完成并通过两轴终审，下一步进入 V2-6 平台适配。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
 
 下列 Phase 0–3 记录 v1 已完成基线，Phase 4 记录已落地但尚未完成正式 E2E 的部分实现；它们用于识别可复用的不变量，不再代表下一版目标结构。v2 通过人工设计审核后，以其实施切割替换后续 v1 验收计划；在此之前不得把 v2 能力描述为已经可用。
 
@@ -9,7 +9,7 @@
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 至 V2-4 均已完成并通过两轴终审；V2-5 已把生命周期编排收回 Task Driver，打通只凭 requirement 启动的完整 Workflow happy path、任意阶段 through-stage、planning preflight 转正式多 Owner 计划、Challenger/Expert 后 Owner 证据化回应、方案与最终人工驳回归因、累计成本增额/重规划/停止、成员选择的语义返工边、E2E run/skip/block 与环境恢复，以及 assessment 验收后重启恢复。E2E run 的已验收路由快照会跨阶段复用，不重复评估。SPEC 三模式的完整 Fake 路由矩阵、E2E 内部失败回流、完整三轮收敛、DecisionPacket、`owner-rework / collect-evidence / expert-arbitrate` 等受控 steering 动作和剩余故障矩阵仍待补齐；SPEC Provider 的 prepare/validate/archive 生命周期属于 V2-6，不是 V2-5 退出条件。当前不能把 V2-5 描述为完成。
+- v2 实现：V2-0 至 V2-5 均已完成并通过两轴终审。V2-5 已把生命周期编排收回 Task Driver，打通只凭 requirement 启动的完整 Workflow happy path、任意阶段 through-stage、planning preflight 转正式多 Owner 计划、Challenger/Expert 后 Owner 证据化回应、方案与最终人工驳回归因、累计成本增额/重规划/停止、成员选择的语义返工边、E2E run/skip/block 与环境恢复，以及 assessment 验收后重启恢复。E2E run 的已验收路由快照会跨阶段复用，不重复评估；Fake SPEC 三模式矩阵、E2E 三类失败回流、三轮后人工有限追加、持久且受预算约束的 DecisionPacket，以及 `owner-rework / collect-evidence / expert-arbitrate` 三种原子受控干预均已通过平台无关 E2E。并发 DecisionPacket 干预和并发人工选择都只能有一个生效；InMemoryStore 异步校验后的 revision 竞争窗口也已关闭。23 项架构故障矩阵已机器化枚举：V2-5 范围全部绑定可执行测试，依赖 OpenCode/OpenSpec Adapter 的 4 项明确留给 V2-6。SPEC Provider 的 prepare/validate/archive 生命周期属于 V2-6。
 
 | v2 里程碑 | 状态 |
 | --- | --- |
@@ -18,7 +18,7 @@
 | V2-2 Driver、Observation 与 durable effect | 完成 |
 | V2-3 人工等待与决定凭证 | 完成 |
 | V2-4 Workflow/Team-work Compiler | 完成 |
-| V2-5 平台无关 in-memory E2E | 进行中 |
+| V2-5 平台无关 in-memory E2E | 完成 |
 | V2-6 OpenCode/OpenSpec Adapter | 待开始 |
 | V2-7 OpenCode 控制面切换 | 待开始 |
 | V2-8 安装生命周期、真实 E2E 与发布 | 待开始 |

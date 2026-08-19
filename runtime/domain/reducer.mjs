@@ -593,6 +593,10 @@ function prepareHumanWait(next, fact) {
     quiesceAttempt: 1,
     observationsAfterPrepare: 0,
     createdAt: fact.occurredAt,
+    ...(decision.packetRef ? {
+      packetRef: assertNonEmptyString(decision.packetRef, "fact.decision.packetRef"),
+      packetDigest: assertDigest(decision.packetDigest, "fact.decision.packetDigest"),
+    } : {}),
   }
   next.pendingOperations.push({
     operationId: intent.operationId,
@@ -772,6 +776,7 @@ function resolveHumanDecision(next, fact) {
     decisionRef,
     decisionDigest,
     receivedAt: decision.receivedAt,
+    ...(pending.packetRef ? { packetRef: pending.packetRef, packetDigest: pending.packetDigest } : {}),
   })
   next.evidence.push({
     evidenceId: `evidence-${decisionRef}`,
@@ -1174,6 +1179,47 @@ function reopenStage(next, fact) {
   next.workGraph = { assignments: [] }
 }
 
+function openSteeringIntervention(next, fact) {
+  const pending = next.pendingDecision
+  const intervention = fact.plan?.intervention
+  if (
+    next.status !== "awaiting-user"
+    || pending?.phase !== "awaiting-user"
+    || !["reviewing", "ready-to-advance"].includes(next.currentStageRun.status)
+    || next.pendingOperations.length > 0
+    || next.observationInbox.items.length > 0
+  ) throw new DomainError("STEERING_INTERVENTION_INVALID", "steering intervention requires a quiescent reviewed human-wait state")
+  if (
+    !intervention
+    || intervention.sourceDecisionId !== pending.decisionId
+    || intervention.sourcePacketRef !== pending.packetRef
+    || intervention.sourcePacketDigest !== pending.packetDigest
+  ) throw new DomainError("STEERING_AUTHORITY_STALE", "steering intervention no longer matches the issued DecisionPacket")
+  const nextStageRunId = assertIdentifier(fact.nextStageRunId, "fact.nextStageRunId")
+  if (fact.plan.stageRunId !== nextStageRunId || intervention.resumeDecisionId === pending.decisionId) {
+    throw new DomainError("STEERING_INTERVENTION_INVALID", "steering intervention must create a fresh stage run and decision")
+  }
+  if (next.stageRuns.some((run) => run.stageRunId === nextStageRunId) || next.currentStageRun.stageRunId === nextStageRunId) {
+    throw new DomainError("STAGE_RUN_DUPLICATE", `stage run ${nextStageRunId} already exists`)
+  }
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  const previous = next.currentStageRun
+  next.stageRuns.push({ ...previous, status: "rework", reason, completedAt: fact.occurredAt })
+  next.currentStageRun = {
+    stageRunId: nextStageRunId,
+    sequence: previous.sequence + 1,
+    round: previous.round + 1,
+    stage: previous.stage,
+    status: "planned",
+  }
+  next.stagePlan = null
+  next.preflight = null
+  next.workGraph = { assignments: [] }
+  next.pendingDecision = null
+  next.status = "working"
+  freezeStagePlan(next, fact)
+}
+
 function replanStage(next, fact) {
   if (["completed", "cancelled", "awaiting-user"].includes(next.status)) {
     throw new DomainError("STAGE_REPLAN_INVALID", `cannot replan a ${next.status} task`)
@@ -1345,6 +1391,9 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "stage.reopened":
       reopenStage(next, fact)
+      return finish(next, fact)
+    case "steering.intervention-opened":
+      openSteeringIntervention(next, fact)
       return finish(next, fact)
     case "stage.replanned":
       replanStage(next, fact)

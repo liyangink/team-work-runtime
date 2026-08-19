@@ -3,7 +3,7 @@ import { digestValue } from "../domain/digests.mjs"
 import { assertDurableReferences } from "./durable-reference-validator.mjs"
 import { StoreError } from "./store-error.mjs"
 
-const recordKinds = new Set(["report", "observation", "operation"])
+const recordKinds = new Set(["report", "observation", "operation", "packet"])
 
 function clone(value) {
   return structuredClone(value)
@@ -92,6 +92,10 @@ export function createInMemoryStore() {
         pending.set(key, clone(record.value))
       }
       await assertTaskDurableReferences(taskId, state, records, pending)
+      const latest = tasks.get(taskId)
+      if (!latest || latest.revision !== expectedRevision) {
+        throw new StoreError("REVISION_CONFLICT", "task revision changed while validating the commit")
+      }
       const knownEvents = events.get(taskId) ?? []
       if (!Array.isArray(auditEvents) || auditEvents.length === 0) throw new StoreError("AUDIT_REQUIRED", "commit requires an audit event")
       for (const event of auditEvents) {

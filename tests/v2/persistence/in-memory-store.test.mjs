@@ -94,3 +94,41 @@ test("the in-memory Store rejects bad durable references without consuming a rev
   )
   assert.equal((await store.loadTask(initial.taskId)).revision, 0)
 })
+
+test("the in-memory Store rechecks revision after async validation so concurrent commits cannot both win", async () => {
+  const store = createInMemoryStore()
+  const initial = createTaskAggregate({
+    taskId: "memory-concurrent-commit",
+    title: "Serialize in-memory commits",
+    objective: "Match the production Store revision contract",
+    workflow,
+    entryStage: "implementation",
+    completion: { mode: "workflow" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+  })
+  await store.createTask(initial)
+  const next = reduceTask(initial, {
+    type: "stage-run.transitioned",
+    expectedRevision: 0,
+    status: "dispatching",
+    occurredAt: "2026-08-18T10:01:00.000Z",
+  }).state
+  const commit = (suffix) => store.commit({
+    taskId: initial.taskId,
+    expectedRevision: 0,
+    state: next,
+    auditEvents: [{
+      eventId: `event-${suffix}`,
+      type: "stage-run.transitioned",
+      occurredAt: "2026-08-18T10:01:00.000Z",
+      revision: 1,
+      refs: ["stage-run-1"],
+    }],
+  })
+
+  const outcomes = await Promise.allSettled([commit("left"), commit("right")])
+  assert.equal(outcomes.filter(({ status }) => status === "fulfilled").length, 1)
+  assert.equal(outcomes.filter(({ status, reason }) => status === "rejected" && reason.code === "REVISION_CONFLICT").length, 1)
+  assert.equal((await store.loadTask(initial.taskId)).revision, 1)
+})

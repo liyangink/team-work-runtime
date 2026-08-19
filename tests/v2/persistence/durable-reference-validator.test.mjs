@@ -161,3 +161,20 @@ test("the shared validator rejects digest mismatches and invalid human-wait rece
     (error) => error.code === "STATE_CORRUPT",
   )
 })
+
+test("an active steering intervention retains its source DecisionPacket as a durable fact", async () => {
+  const input = fixture()
+  const packet = { packetId: "decision-packet-1", factsDigest: "c".repeat(64) }
+  input.state.taskId = "packet-task"
+  input.state.stagePlan = {
+    intervention: {
+      sourcePacketRef: ".team-work/tasks/packet-task/packets/decision-packet-1.json",
+      sourcePacketDigest: digest(packet),
+    },
+  }
+  input.records.set("packet:decision-packet-1", packet)
+  await validate(input)
+
+  input.records.delete("packet:decision-packet-1")
+  await assert.rejects(validate(input), (error) => error.code === "IMMUTABLE_RECORD_MISSING")
+})

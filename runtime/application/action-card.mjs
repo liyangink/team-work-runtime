@@ -136,7 +136,7 @@ function reportFor(state, stage, reason, decision) {
   const challengers = assignments.filter(({ teamRole }) => teamRole === "challenger")
   const team = assignments.length === 0 ? undefined : {
     mode: state.stagePlan?.teamMode ?? (deliveryOwners.length > 1 ? "team" : "solo"),
-    owners: Math.max(1, deliveryOwners.length),
+    owners: deliveryOwners.length,
     challengerTier: challengers.some(({ costTier }) => costTier === "expert") ? "expert" : "senior",
     expert: assignments.some(({ teamRole }) => teamRole === "expert"),
     cost: {

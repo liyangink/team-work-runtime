@@ -64,6 +64,7 @@ export function createFakeExecutionAdapter({ agents, clock = () => new Date().to
     },
     activeMembers() {
       return [...executions.values()].map((binding) => Object.freeze({
+        taskId: binding.taskId,
         executionRef: binding.executionRef,
         stageRunId: binding.stageRunId,
         assignmentId: binding.assignmentId,

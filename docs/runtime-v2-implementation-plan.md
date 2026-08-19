@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 至 V2-4 均已完成并通过两轴终审，V2-5 正在实施。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：规划已建立；V2-0 至 V2-5 均已完成并通过两轴终审，下一步实施 V2-6。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-进入 V2-5：用 Fake Execution/SPEC Adapter 装配平台无关 in-memory Harness，只经 `LeadControl`、`MemberDelivery` 与 `PlatformObservationSink` 跑通 planning/E2E preflight、正式 StagePlan、solo/team、人工驳回、三轮收敛、成本选择和恢复分支；继续不接入 OpenCode/OpenSpec Adapter，也不提前公开切换 Lead 控制面。
+进入 V2-6：实现 OpenCode Execution Adapter 与 OpenSpec Provider，把已经验证的平台能力接入 v2 Port；不复制状态机，也不提前公开切换 Lead 控制面。

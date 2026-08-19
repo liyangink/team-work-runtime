@@ -111,8 +111,21 @@
         "operationId": { "type": "string", "minLength": 1 },
         "effectDigest": { "type": "string", "minLength": 1 },
         "kind": { "enum": ["prepare", "archive"] },
-        "task": { "$ref": "#/$defs/taskRef" }
-      }
+        "task": { "$ref": "#/$defs/taskRef" },
+        "artifact": { "enum": ["proposal", "design", "specs", "tasks"] },
+        "capabilityNames": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "expectedProviderRevision": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "prepare" } }, "required": ["kind"] },
+          "then": { "required": ["artifact"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "archive" } }, "required": ["kind"] },
+          "then": { "required": ["expectedProviderRevision"] }
+        }
+      ]
     },
     "operationInspection": {
       "type": "object",

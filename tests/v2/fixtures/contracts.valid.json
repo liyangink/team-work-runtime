@@ -56,6 +56,7 @@
       "operationId": "spec-op-1",
       "effectDigest": "sha256:spec-effect",
       "kind": "archive",
+      "expectedProviderRevision": "sha256:provider-revision",
       "task": {
         "providerId": "openspec",
         "taskId": "task-1",

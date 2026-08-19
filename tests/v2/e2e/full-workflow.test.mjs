@@ -24,6 +24,7 @@ async function fixture({
   e2eAssessment,
   transformReport,
   store = createInMemoryStore(),
+  specStatus = "missing",
 } = {}) {
   const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
   const teamPolicy = await loadJson("team-work/policies/default.json")
@@ -37,7 +38,7 @@ async function fixture({
   const runtime = createRuntimeFacade({
     store,
     executionAdapter: execution,
-    specProviderAdapter: createFakeSpecProvider(),
+    specProviderAdapter: createFakeSpecProvider({ status: specStatus }),
     artifactRepository: artifacts,
     workflowDefinition,
     teamPolicy,
@@ -80,6 +81,58 @@ test("the platform-neutral harness completes the full workflow with only one pla
   assert.deepEqual([...visited], ["research", "design", "design-review", "implementation", "test", "code-review", "finish"])
   assert.equal(visited.has("spec"), false)
   assert.equal(visited.has("e2e"), false)
+})
+
+test("Fake SPEC routing covers disabled, optional-missing, and available provider paths", async (t) => {
+  const cases = [
+    { name: "disabled", mode: "disabled", status: "missing", visitsSpec: false },
+    { name: "auto-missing", mode: "auto", status: "missing", visitsSpec: false },
+    { name: "auto-ready", mode: "auto", status: "ready", visitsSpec: true },
+    { name: "required-ready", mode: "required", status: "ready", visitsSpec: true },
+  ]
+  for (const entry of cases) await t.test(entry.name, async () => {
+    const { runtime, harness, store } = await fixture({
+      routeConfig: { spec: { mode: entry.mode }, e2e: { mode: "disabled" } },
+      specStatus: entry.status,
+    })
+    const opened = await runtime.leadControl.open({
+      title: `Route SPEC in ${entry.name} mode`,
+      objective: "Design and deliver the requested change",
+      entryStage: "design",
+      completion: { mode: "workflow" },
+      existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+    })
+    const completed = await harness.drive(await runtime.leadControl.plan({
+      objective: "Design and deliver the requested change",
+      preferences: { budget: "quality" },
+    }))
+    const state = await store.loadTask(opened.task.id)
+    assert.equal(completed.card.task.status, "completed")
+    assert.equal(state.stageRuns.some(({ stage }) => stage === "spec"), entry.visitsSpec)
+    assert.equal(state.stageRuns.some(({ stage }) => stage === "spec-review"), entry.visitsSpec)
+  })
+})
+
+test("a missing required Fake SPEC provider blocks at the branch instead of spinning", async () => {
+  const { runtime, harness, store } = await fixture({
+    routeConfig: { spec: { mode: "required" }, e2e: { mode: "disabled" } },
+    specStatus: "missing",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Block a required missing SPEC provider",
+    objective: "Design and specify the requested change",
+    entryStage: "design",
+    completion: { mode: "workflow" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+  })
+  const blocked = await harness.drive(await runtime.leadControl.plan({
+    objective: "Design and specify the requested change",
+    preferences: { budget: "quality" },
+  }), { stopWhen: (card) => card.task?.status === "blocked" })
+  const state = await store.loadTask(opened.task.id)
+  assert.equal(blocked.card.next.kind, "none")
+  assert.equal(state.routeDecisions.at(-1).routeKind, "spec")
+  assert.equal(state.routeDecisions.at(-1).reason, "required-provider-missing")
 })
 
 test("a mid-stage cost boundary becomes an auditable human choice and resumes after approval", async () => {
@@ -351,6 +404,90 @@ test("an applicable and ready E2E route executes its complete internally reviewe
   assert.ok(result.deliveredAssignments.some((assignmentId) => assignmentId.startsWith("owner-execution-")))
   assert.equal(result.deliveredAssignments.filter((assignmentId) => assignmentId.startsWith("owner-e2e-applicability-")).length, 1)
   assert.equal(state.routeDecisions.filter(({ outcome }) => outcome === "selected").length, 1)
+})
+
+test("E2E findings follow artifact, product, and test-strategy recovery edges", async (t) => {
+  const cases = [
+    { outcome: "e2e-defect", target: "e2e" },
+    { outcome: "product-defect", target: "implementation" },
+    { outcome: "test-strategy-gap", target: "test" },
+  ]
+  for (const entry of cases) await t.test(entry.outcome, async () => {
+    let challenged = false
+    const { runtime, harness, store } = await fixture({
+      routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "auto" } },
+      e2eAssessment: { applicable: true, criticalCrossSystemPath: true, environment: "ready" },
+      transformReport({ member, stageId, report: value }) {
+        if (!challenged && stageId === "e2e" && member.assignmentId.startsWith("challenger-path-design-")) {
+          challenged = true
+          return { ...value, recommendation: "rework", workflowOutcome: entry.outcome }
+        }
+        return value
+      },
+    })
+    const opened = await runtime.leadControl.open({
+      title: `Recover E2E through ${entry.outcome}`,
+      objective: "Exercise and recover the critical path",
+      entryStage: "code-review",
+      completion: { mode: "workflow" },
+      existingArtifacts: [
+        { kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } },
+        { kind: "source", locator: { type: "project-path", value: "src/existing.mjs" } },
+        { kind: "test-scope", locator: { type: "project-path", value: "scopes/test.md" } },
+      ],
+    })
+    const completed = await harness.drive(await runtime.leadControl.plan({
+      objective: "Exercise and recover the critical path",
+      preferences: { budget: "quality" },
+    }))
+    const state = await store.loadTask(opened.task.id)
+    assert.equal(completed.card.task.status, "completed")
+    const failedE2E = state.stageRuns.findIndex(({ stage, status }) => stage === "e2e" && status === "rework")
+    assert.ok(failedE2E >= 0)
+    assert.equal(state.stageRuns[failedE2E + 1].stage, entry.target)
+  })
+})
+
+test("three autonomous E2E rework rounds stop for one explicit user extension", async () => {
+  let challengedRounds = 0
+  const { runtime, harness, store } = await fixture({
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "auto" } },
+    e2eAssessment: { applicable: true, criticalCrossSystemPath: true, environment: "ready" },
+    transformReport({ member, stageId, report: value }) {
+      if (
+        challengedRounds < 3
+        && stageId === "e2e"
+        && member.assignmentId.startsWith("challenger-path-design-")
+      ) {
+        challengedRounds += 1
+        return { ...value, recommendation: "rework", workflowOutcome: "e2e-defect" }
+      }
+      return value
+    },
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Bound autonomous E2E convergence",
+    objective: "Stop after three autonomous E2E rework rounds",
+    entryStage: "code-review",
+    completion: { mode: "workflow" },
+    existingArtifacts: [
+      { kind: "source", locator: { type: "project-path", value: "src/existing.mjs" } },
+      { kind: "test-scope", locator: { type: "project-path", value: "scopes/test.md" } },
+    ],
+  })
+  const completed = await harness.drive(await runtime.leadControl.plan({
+    objective: "Bound autonomous E2E convergence",
+    preferences: { budget: "quality" },
+  }), {
+    choose(card) {
+      return card.next.question.includes("自主收敛上限") ? "rework" : "accept"
+    },
+  })
+  const state = await store.loadTask(opened.task.id)
+  assert.equal(completed.card.task.status, "completed")
+  assert.equal(challengedRounds, 3)
+  assert.equal(completed.cards.filter(({ next }) => next.kind === "steer" && next.question.includes("自主收敛上限")).length, 1)
+  assert.equal(state.stageRuns.filter(({ stage, status }) => stage === "e2e" && status === "rework").length, 3)
 })
 
 test("an unavailable required E2E route blocks once and replans after the environment recovers", async () => {

@@ -649,6 +649,9 @@ export function createTaskLifecycle({
     const ready = await ensureReady(state)
     const edge = ready.scope.edges.find(({ from, outcome: candidate }) => from === ready.currentStageRun.stage && candidate === outcome)
     if (!edge) return reopenForRework(ready, reason)
+    if (edge.to === ready.currentStageRun.stage && ready.currentStageRun.round >= (ready.stagePlan?.convergence.maxAutonomousRounds ?? 3)) {
+      return { state: ready, reason: "round-limit" }
+    }
     const returned = await reconciler.commit(ready.taskId, (snapshot) => ({
       fact: {
         type: "stage.returned",
@@ -782,7 +785,12 @@ export function createTaskLifecycle({
     }
     const edge = selectEdge(ready)
     if (!edge) {
-      const routeKind = workflowDefinition.stages.find(({ id }) => id === ready.currentStageRun.stage)?.route
+      const outgoingOutcomes = new Set(ready.scope.edges
+        .filter(({ from }) => from === ready.currentStageRun.stage)
+        .map(({ outcome }) => outcome))
+      const routeKind = outgoingOutcomes.has("use-spec") || outgoingOutcomes.has("skip-spec") ? "spec"
+        : outgoingOutcomes.has("run-e2e") || outgoingOutcomes.has("skip-e2e") ? "e2e"
+          : workflowDefinition.stages.find(({ id }) => id === ready.currentStageRun.stage)?.route
       const route = ready.stagePlan?.routes?.[routeKind]
       if (route?.decision === "block") {
         return { state: await recordRouteOutcome(ready, routeKind, route, "route-blocked"), reason: "route-blocked" }
@@ -938,6 +946,19 @@ export function createTaskLifecycle({
         refs: [resolvedDecision.decisionId],
       }))
       return { state: replanned.state, reason: "needs-plan" }
+    }
+    if (resolvedDecision.decisionId.startsWith("convergence-") && choice === "rework") {
+      const reopened = await reconciler.commit(taskId, (snapshot) => ({
+        fact: {
+          type: "stage.reopened",
+          nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
+          reason: input.note || "人工授权一轮有目标的追加返工",
+          occurredAt: clock(),
+        },
+        refs: [resolvedDecision.decisionId],
+      }))
+      const installed = await planCurrentStage(reopened.state)
+      return installed.reason === "planned" ? runToStable({ taskId, leadBindingRef }) : installed
     }
     const outcome = choice.startsWith("return-") ? choice : "rework"
     const installed = await returnForOutcome(state, outcome, input.note || "人工审核要求返工")

@@ -70,6 +70,10 @@ export function createTaskDriver({
           artifactRefs: [],
           result: observation.result,
           digest: item.digest,
+          assignmentId: item.assignmentId,
+          attemptId: item.attemptId,
+          executionRef: item.executionRef,
+          ...(observation.outputRef ? { outputRef: observation.outputRef, outputDigest: observation.outputDigest } : {}),
           stageRunId: state.currentStageRun.stageRunId,
         }
       }
@@ -122,10 +126,18 @@ export function createTaskDriver({
         contextRef: assignment.execution.contextRef,
         promptRef: assignment.execution.promptRef,
       }
+      const lostAttempt = assignment.status === "lost" ? assignment.attempts.at(-1) : null
+      if (lostAttempt) {
+        effect.recovery = {
+          kind: "execution-lost",
+          priorAttempt: lostAttempt.attempt,
+          unverifiedRefs: [...lostAttempt.unverifiedRefs],
+        }
+      }
       const resumeSource = assignment.execution.resumeAssignmentId
         ? byId.get(assignment.execution.resumeAssignmentId)?.attempts.at(-1)
         : assignment.attempts.at(-1)
-      if (resumeSource?.executionRef) effect.resumeExecutionRef = resumeSource.executionRef
+      if (!lostAttempt && resumeSource?.executionRef) effect.resumeExecutionRef = resumeSource.executionRef
       effect.effectDigest = digestEffect(effect)
       return {
         fact: {
@@ -369,8 +381,15 @@ export function createTaskDriver({
         return { observationId: previous.observationId, sequence: previous.sequence, duplicate: true }
       }
       const assignment = current.workGraph.assignments.find((entry) => entry.assignmentId === observation.assignmentId)
-      const attempt = assignment?.attempts.at(-1)
-      if (!assignment || !attempt || attempt.executionRef !== observation.executionRef) {
+      const attempt = observation.kind === "check"
+        ? assignment?.attempts.find((entry) => entry.attempt === observation.attempt)
+        : assignment?.attempts.at(-1)
+      if (
+        !assignment
+        || !attempt
+        || attempt.executionRef !== observation.executionRef
+        || (observation.kind === "check" && attempt.status !== "running")
+      ) {
         const error = new Error("platform observation does not match the active assignment execution")
         error.code = "OBSERVATION_BINDING_STALE"
         throw error

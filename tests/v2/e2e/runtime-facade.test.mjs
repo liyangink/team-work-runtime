@@ -90,6 +90,7 @@ test("a through-stage delivery closes through LeadControl and bound member deliv
   const owner = members.find(({ role }) => role === "owner")
   assert.ok(owner)
   artifacts.write("src/feature.mjs", "export const feature = true\n", { assignmentId: owner.assignmentId })
+  artifacts.write(".team-work/checks/focused-feature-test.txt", "focused feature test passed\n")
   const check = {
     kind: "check",
     observationId: "check-feature-1",
@@ -97,6 +98,8 @@ test("a through-stage delivery closes through LeadControl and bound member deliv
     toolCallRef: "focused-feature-test",
     commandSummary: "run focused feature test",
     result: "pass",
+    outputRef: ".team-work/checks/focused-feature-test.txt",
+    outputDigest: digestValue("focused feature test passed\n"),
     observedAt: "2026-08-18T10:00:00.000Z",
   }
   assert.equal((await owner.observe(check)).duplicate, false)
@@ -160,6 +163,58 @@ test("a through-stage delivery closes through LeadControl and bound member deliv
   assert.equal((await store.loadTask(cards[0].task.id)).evidence.some(({ kind, sourceRef, result }) => (
     kind === "platform-check" && sourceRef === "check:focused-feature-test" && result === "pass"
   )), true)
+})
+
+test("report verification rejects a changed check output and binds checks to the reporting attempt", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const artifacts = createInMemoryArtifactRepository({ "requirements/check.md": "Implement checked output." })
+  const execution = createFakeExecutionAdapter()
+  const store = createInMemoryStore()
+  const runtime = createRuntimeFacade({
+    store,
+    executionAdapter: execution,
+    artifactRepository: artifacts,
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-19T15:00:00.000Z",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Reject damaged check evidence",
+    objective: "Require stable check output from the reporting member",
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "implementation" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/check.md" } }],
+  })
+  await runtime.leadControl.plan({ objective: "Implement and verify checked output" })
+  const owner = execution.activeMembers().find(({ role }) => role === "owner")
+  artifacts.write("src/checked.mjs", "export const checked = true\n", { assignmentId: owner.assignmentId })
+  artifacts.write(".team-work/checks/checked.txt", "pass\n")
+  await owner.observe({
+    kind: "check",
+    observationId: "check-damaged-1",
+    dedupeKey: "check-damaged-1",
+    toolCallRef: "checked-test",
+    commandSummary: "run checked test",
+    result: "pass",
+    outputRef: ".team-work/checks/checked.txt",
+    outputDigest: digestValue("pass\n"),
+    observedAt: "2026-08-19T15:00:00.000Z",
+  })
+  await runtime.leadControl.run()
+  artifacts.write(".team-work/checks/checked.txt", "corrupt\n")
+  await owner.report(report(
+    "Implemented the output and cited the captured check.",
+    [output("artifact:source", "src/checked.mjs")],
+    ["check:checked-test"],
+  ))
+  await runtime.leadControl.run()
+  const state = await store.loadTask(opened.task.id)
+  const assignment = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === owner.assignmentId)
+  assert.equal(assignment.attempts[0].status, "rework")
+  assert.equal(assignment.attempts.length, 2)
+  assert.equal(state.artifacts.some(({ path: artifactPath }) => artifactPath === "src/checked.mjs"), false)
 })
 
 test("a planning preflight becomes a multi-owner design without exposing orchestration to Lead", async () => {

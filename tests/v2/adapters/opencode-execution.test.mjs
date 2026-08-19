@@ -5,7 +5,7 @@ import path from "node:path"
 import test from "node:test"
 
 import { createOpenCodeExecutionAdapter } from "../../../plugins/opencode/adapter/execution-adapter.mjs"
-import { createExecutionAdapterPort, digestEffect } from "../../../runtime/index.mjs"
+import { createExecutionAdapterPort, createPlatformObservationSink, digestEffect, digestValue } from "../../../runtime/index.mjs"
 
 async function project() {
   const root = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-opencode-"))
@@ -223,7 +223,14 @@ test("inspect finds an orphan session by operation title and retry uses it inste
 test("OpenCode events and check receipts are normalized directly into PlatformObservationSink", async () => {
   const { projectRoot, sdk, adapter, port, capabilities } = await configuredAdapter()
   const observations = []
-  adapter.attachRuntime({ observationSinkFor: () => ({ observe: async (value) => { observations.push(value); return { observationId: "obs", sequence: observations.length, duplicate: false } } }) })
+  adapter.attachRuntime({
+    observationSinkFor: () => createPlatformObservationSink({
+      observe: async (value) => {
+        observations.push(value)
+        return { observationId: "obs", sequence: observations.length, duplicate: false }
+      },
+    }),
+  })
   const receipt = await port.ensureExecution(effect(capabilities))
   assert.equal(await adapter.handleEvent({ type: "session.idle", properties: { sessionID: receipt.executionRef } }), true)
   assert.equal(observations.length, 0, "a stale idle event must not override the current busy status")
@@ -231,15 +238,36 @@ test("OpenCode events and check receipts are normalized directly into PlatformOb
   assert.equal(await adapter.handleEvent({ type: "session.idle", properties: { sessionID: receipt.executionRef } }), true)
   await mkdir(path.join(projectRoot, ".team-work", "checks"), { recursive: true })
   await writeFile(path.join(projectRoot, ".team-work", "checks", "tool-1.txt"), "all tests passed")
+  await adapter.captureCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-1" })
   await adapter.recordCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-1", commandSummary: "npm test", exitCode: 0, outputRef: ".team-work/checks/tool-1.txt" })
   assert.equal(observations[0].kind, "execution")
   assert.equal(observations[0].state, "idle")
   assert.equal(observations[1].kind, "check")
   assert.equal(observations[1].result, "pass")
   assert.equal(observations[1].commandSummary, "npm test")
+  assert.equal(observations[1].outputDigest, digestValue("all tests passed"))
+  await adapter.captureCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-escape" })
   await assert.rejects(
     adapter.recordCheck({ sessionId: receipt.executionRef, toolCallRef: "tool-escape", commandSummary: "bad", exitCode: 0, outputRef: "../outside.txt" }),
     (error) => error.code === "PATH_ESCAPE",
+  )
+})
+
+test("a late check from an earlier attempt cannot bind to a resumed session", async () => {
+  const { adapter, port, capabilities } = await configuredAdapter()
+  adapter.attachRuntime({ observationSinkFor: () => ({ observe: async () => assert.fail("stale check must not reach Runtime") }) })
+  const first = await port.ensureExecution(effect(capabilities))
+  await adapter.captureCheck({ sessionId: first.executionRef, toolCallRef: "late-tool" })
+  const resumedIntent = effect(capabilities, {
+    operationId: "dispatch-owner-attempt-2",
+    attempt: 2,
+    resumeExecutionRef: first.executionRef,
+  })
+  resumedIntent.effectDigest = digestEffect(resumedIntent)
+  await port.ensureExecution(resumedIntent)
+  await assert.rejects(
+    adapter.recordCheck({ sessionId: first.executionRef, toolCallRef: "late-tool", commandSummary: "old test", exitCode: 0 }),
+    (error) => error.code === "CHECK_BINDING_STALE",
   )
 })
 

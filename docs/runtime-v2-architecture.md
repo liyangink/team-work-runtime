@@ -881,7 +881,7 @@ effect-pending
 - 新 Runtime 调用或正在挂起的 run 消费事件并驱动 reducer；
 - 宿主重启后没有 daemon，下一次 open/run 自动恢复。
 
-成员运行期间检测到用户/外部进程修改受管制品时，Runtime 保留外部改动，将受影响 assignment 标为 stale，并在稳定点重新规划或请求用户决定；不得自动覆盖或回滚。成员失联且留下部分文件但没有有效 report 时，这些文件标记为 unverified，由恢复 Owner 检查、接管或重做，不能因为文件存在就视为交付完成。
+成员运行期间检测到用户/外部进程修改受管制品时，Runtime 保留外部改动，将受影响 assignment 标为 stale，并在稳定点重新规划或请求用户决定；不得自动覆盖或回滚。成员失联且留下部分文件但没有有效 report 时，Runtime 隔离该 attempt 的全部声明输出为 unverified，并在预算与轮次允许时新建 session 派发恢复 Owner；恢复上下文必须列出这些输出，要求检查、接管或重做，不能因为文件存在就视为交付完成。轮次耗尽时才转为 blocker。
 
 ### 10.1 Observation Inbox 与唤醒闭环
 
@@ -1198,7 +1198,7 @@ OpenCode Adapter 只负责：
 - 原生 background child session 与 `promptAsync`；
 - 根据 Runtime operationId 创建、查找和恢复 session；
 - 原生事件归一化为 idle/error/lost/report-ready；
-- 在平台能力允许时把关键测试/校验工具结果归一化为 check receipt；只保存命令摘要、退出结果和受控输出引用，不回灌完整敏感日志；
+- 在平台能力允许时把关键测试/校验工具结果归一化为 check receipt；保存命令摘要、退出结果、受控输出引用及内容摘要，并绑定执行该检查的 assignment attempt，不回灌完整敏感日志；
 - 通过 PlatformObservationSink 持久化事件，并由 Runtime SignalHub 唤醒挂起的 `workflow_run`；
 - 用户输入中断等待；
 - 同一 assignment 续派同一 child session；

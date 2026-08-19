@@ -35,7 +35,7 @@ function inputFromEvidence(evidence) {
   }
 }
 
-function reportReferenceExists(state, ref, transientArtifactIds = new Set()) {
+function reportReferenceExists(state, ref, transientArtifactIds = new Set(), binding = {}) {
   if (ref.startsWith("report:")) {
     const accepted = state.acceptedReportRefs.some(({ reportId }) => reportId === ref.slice("report:".length))
     const artifactEvidence = state.evidence.filter(({ sourceRef, kind }) => sourceRef === ref && kind === "artifact-digest")
@@ -49,7 +49,17 @@ function reportReferenceExists(state, ref, transientArtifactIds = new Set()) {
     return state.evidence.some(({ evidenceId, valid }) => evidenceId === ref.slice("evidence:".length) && valid)
   }
   if (ref.startsWith("check:")) {
-    return state.evidence.some(({ sourceRef, kind, valid }) => sourceRef === ref && kind === "platform-check" && valid)
+    return state.evidence.some((evidence) => (
+      evidence.sourceRef === ref
+      && evidence.kind === "platform-check"
+      && evidence.valid
+      && evidence.result === "pass"
+      && evidence.assignmentId === binding.assignmentId
+      && evidence.attemptId === binding.attemptId
+      && evidence.executionRef === binding.executionRef
+      && typeof evidence.outputRef === "string"
+      && typeof evidence.outputDigest === "string"
+    ))
   }
   return false
 }
@@ -402,8 +412,31 @@ export function createTaskLifecycle({
         ...(report.verdict?.evidenceRefs ?? []),
       ]
       if (report.verdict && report.verdict.evidenceRefs.length === 0) throw invalidReport("Expert verdict requires evidence references")
-      const unknown = evidenceRefs.find((ref) => !reportReferenceExists(state, ref, artifactIds))
+      const reportBinding = {
+        assignmentId: assignment.assignmentId,
+        attemptId: attempt.attemptId,
+        executionRef: attempt.executionRef,
+      }
+      const unknown = evidenceRefs.find((ref) => !reportReferenceExists(state, ref, artifactIds, reportBinding))
       if (unknown) throw invalidReport(`report references unknown or stale evidence: ${unknown}`)
+      for (const ref of new Set(evidenceRefs.filter((entry) => entry.startsWith("check:")))) {
+        const check = state.evidence.find((entry) => (
+          entry.sourceRef === ref
+          && entry.kind === "platform-check"
+          && entry.assignmentId === assignment.assignmentId
+          && entry.attemptId === attempt.attemptId
+          && entry.executionRef === attempt.executionRef
+        ))
+        let current
+        try {
+          const snapshots = await artifactRepository.snapshot([check.outputRef])
+          current = snapshots[0]
+        } catch (error) {
+          if (error.code === "ARTIFACT_MISSING") throw invalidReport(`check output is missing: ${check.outputRef}`, error)
+          throw error
+        }
+        if (current.digest !== check.outputDigest) throw invalidReport(`check output changed after capture: ${check.outputRef}`)
+      }
       if (assignment.execution.resumeAssignmentId) {
         const requiredReviewRefs = assignment.dependsOn.flatMap((dependencyId) => {
           const dependency = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === dependencyId)

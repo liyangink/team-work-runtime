@@ -146,6 +146,17 @@ export function assertTaskState(state) {
       attemptIds.add(attempt.attemptId)
       globalAttemptIds.add(attempt.attemptId)
       attemptsById.set(attempt.attemptId, { assignment, attempt })
+      if (
+        attempt.status === "lost"
+        && (
+          !Array.isArray(attempt.unverifiedRefs)
+          || !attempt.unverifiedAt
+          || canonicalStringList(attempt.unverifiedRefs) !== canonicalStringList(assignment.writableRefs)
+        )
+      ) failState(`lost attempt ${attempt.attemptId} must quarantine every declared output ref as unverified`)
+      if (attempt.status !== "lost" && (attempt.unverifiedRefs || attempt.unverifiedAt)) {
+        failState(`only a lost attempt may retain unverified output refs`)
+      }
     })
     if (assignment.attempts.length === 0 && assignment.status !== "planned") {
       failState(`assignment ${assignment.assignmentId} has status without an attempt`)
@@ -202,6 +213,18 @@ export function assertTaskState(state) {
         || operation.intent.effectDigest !== operation.effectDigest
         || digestEffect(operation.intent) !== operation.effectDigest
       ) failState("execution operation must bind exactly one assignment attempt")
+      if (operation.intent.recovery) {
+        const attemptIndex = binding.assignment.attempts.findIndex(({ attemptId }) => attemptId === binding.attempt.attemptId)
+        const previous = binding.assignment.attempts[attemptIndex - 1]
+        if (
+          attemptIndex < 1
+          || previous?.status !== "lost"
+          || operation.intent.resumeExecutionRef
+          || operation.intent.recovery.kind !== "execution-lost"
+          || operation.intent.recovery.priorAttempt !== previous.attempt
+          || canonicalStringList(operation.intent.recovery.unverifiedRefs) !== canonicalStringList(previous.unverifiedRefs)
+        ) failState("execution recovery must bind the immediately preceding lost attempt")
+      }
     } else if (operation.kind === "execution.stop") {
       if (operation.purpose !== "stop") failState("execution stop operation must declare stop purpose")
       try {

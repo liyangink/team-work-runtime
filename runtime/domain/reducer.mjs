@@ -373,6 +373,17 @@ function startAssignmentAttempt(next, fact) {
   if (digestEffect(effect) !== effectDigest) {
     throw new DomainError("DISPATCH_EFFECT_DIGEST_MISMATCH", "dispatch effect digest does not match its immutable intent")
   }
+  const previousAttempt = assignment.attempts.at(-1)
+  if (assignment.status === "lost") {
+    if (
+      effect.resumeExecutionRef
+      || effect.recovery?.kind !== "execution-lost"
+      || effect.recovery.priorAttempt !== previousAttempt?.attempt
+      || digestValue(effect.recovery.unverifiedRefs) !== digestValue(previousAttempt?.unverifiedRefs)
+    ) throw new DomainError("LOST_RECOVERY_INVALID", "lost execution must start a fresh session with its quarantined output refs")
+  } else if (effect.recovery) {
+    throw new DomainError("LOST_RECOVERY_INVALID", "only a lost assignment may carry recovery context")
+  }
   const duplicate = next.workGraph.assignments.some(({ attempts }) => attempts.some((attempt) => attempt.attemptId === attemptId))
   if (duplicate) throw new DomainError("ASSIGNMENT_ATTEMPT_DUPLICATE", `attempt ${attemptId} already exists`)
   if (next.pendingOperations.some((operation) => operation.operationId === operationId)) {
@@ -1152,7 +1163,12 @@ function consumeObservation(next, fact) {
       assignment.status = status
       attempt.status = status
       attempt.completedAt = fact.occurredAt
-      next.status = "blocked"
+      if (item.kind === "execution-lost") {
+        attempt.unverifiedRefs = [...assignment.writableRefs]
+        attempt.unverifiedAt = fact.occurredAt
+      }
+      const maxRounds = next.stagePlan?.convergence.maxAutonomousRounds ?? 3
+      next.status = item.kind === "execution-lost" && attempt.attempt < maxRounds ? "working" : "blocked"
     }
   } else if (item.kind === "execution-idle") {
     const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === item.assignmentId)
@@ -1306,6 +1322,16 @@ function recordEvidence(next, fact) {
     if (!artifact) throw new DomainError("EVIDENCE_ARTIFACT_UNKNOWN", `unknown artifact: ${artifactId}`)
     artifactDigests[artifactId] = artifact.digest
   }
+  if (evidence.kind === "platform-check") {
+    const assignment = next.workGraph.assignments.find(({ assignmentId }) => assignmentId === evidence.assignmentId)
+    const attempt = assignment?.attempts.find(({ attemptId }) => attemptId === evidence.attemptId)
+    if (!assignment || !attempt || attempt.executionRef !== evidence.executionRef) {
+      throw new DomainError("EVIDENCE_BINDING_INVALID", "platform check must bind the assignment attempt that executed it")
+    }
+    if ((evidence.outputRef && !evidence.outputDigest) || (!evidence.outputRef && evidence.outputDigest)) {
+      throw new DomainError("EVIDENCE_INVALID", "platform check output ref and digest must be recorded together")
+    }
+  }
   next.evidence.push({
     evidenceId,
     kind: evidence.kind,
@@ -1314,6 +1340,15 @@ function recordEvidence(next, fact) {
     artifactDigests,
     result: evidence.result,
     ...(evidence.digest ? { digest: assertDigest(evidence.digest, "evidence.digest") } : {}),
+    ...(evidence.assignmentId ? {
+      assignmentId: assertIdentifier(evidence.assignmentId, "evidence.assignmentId"),
+      attemptId: assertIdentifier(evidence.attemptId, "evidence.attemptId"),
+      executionRef: assertNonEmptyString(evidence.executionRef, "evidence.executionRef"),
+    } : {}),
+    ...(evidence.outputRef ? {
+      outputRef: assertProjectPath(evidence.outputRef, "evidence.outputRef"),
+      outputDigest: assertDigest(evidence.outputDigest, "evidence.outputDigest"),
+    } : {}),
     stageRunId: evidence.stageRunId,
     observedAt: fact.occurredAt,
     valid: true,

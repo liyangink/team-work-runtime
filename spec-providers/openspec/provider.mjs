@@ -228,6 +228,20 @@ export function createOpenSpecProvider({
     return digestValue({ status, files })
   }
 
+  async function artifactTreeDigest(relativeRoot, refs) {
+    const base = await roots()
+    const selectedRefs = refs ?? await artifactRefs(relativeRoot)
+    const files = []
+    for (const ref of selectedRefs) {
+      const relative = path.relative(path.join(base.root, relativeRoot), path.join(base.root, ref)).replaceAll(path.sep, "/")
+      if (relative === "" || relative === ".." || relative.startsWith("../")) {
+        throw fail("SPEC_ARCHIVE_BINDING_INVALID", `OpenSpec artifact escaped its change root: ${ref}`)
+      }
+      files.push({ relative, digest: digestValue(await readFile(path.join(base.root, ref), "utf8")) })
+    }
+    return digestValue(files.sort((left, right) => left.relative.localeCompare(right.relative)))
+  }
+
   function writableRefsFor(task, artifact, capabilityNames, instruction) {
     const root = activeRoot(task.taskId)
     if (artifact === "specs") {
@@ -296,17 +310,35 @@ export function createOpenSpecProvider({
     return value
   }
 
-  async function inspectArchive(intent) {
+  async function inspectArchive(intent, operation) {
     const task = assertTask(intent.task)
+    if (
+      !operation
+      || operation.kind !== "archive"
+      || operation.operationId !== intent.operationId
+      || operation.effectDigest !== intent.effectDigest
+      || !Array.isArray(operation.archiveRootsBefore)
+      || typeof operation.sourceArtifactDigest !== "string"
+    ) return null
     const archives = await archivedRoots(task.taskId)
-    if (archives.length === 0) return null
-    const archive = archives.at(-1)
+    const previous = new Set(operation.archiveRootsBefore)
+    const created = archives.filter((entry) => !previous.has(entry))
+    if (created.length === 0) return null
+    if (created.length !== 1) throw fail("SPEC_ARCHIVE_AMBIGUOUS", `OpenSpec archive operation ${intent.operationId} produced ambiguous archive roots`)
+    const archive = created[0]
+    if (await exists(path.join((await roots()).root, activeRoot(task.taskId)))) {
+      throw fail("SPEC_ARCHIVE_BINDING_INVALID", `OpenSpec archive appeared while active change ${task.taskId} still exists`)
+    }
+    const archiveRefs = await artifactRefs(archive)
+    if (await artifactTreeDigest(archive, archiveRefs) !== operation.sourceArtifactDigest) {
+      throw fail("SPEC_ARCHIVE_REVISION_MISMATCH", `OpenSpec archive does not match the validated provider revision for ${task.taskId}`)
+    }
     return {
       operationId: intent.operationId,
       effectDigest: intent.effectDigest,
       task: structuredClone(task),
       status: "confirmed",
-      archiveRefs: await artifactRefs(archive),
+      archiveRefs,
       observedAt: timestamp(clock),
     }
   }
@@ -403,25 +435,66 @@ export function createOpenSpecProvider({
         if (existing) {
           if (existing.kind !== "archive" || existing.effectDigest !== intent.effectDigest) throw fail("OPERATION_DIGEST_CONFLICT", `OpenSpec operation ${intent.operationId} conflicts`)
           if (existing.result) return existing.result
+          const recovered = await inspectArchive(intent, existing)
+          if (recovered) {
+            await saveOperation({ ...existing, phase: "confirmed", result: recovered, updatedAt: timestamp(clock) })
+            return recovered
+          }
         }
-        const recovered = await inspectArchive(intent)
-        if (recovered) {
-          await saveOperation({ schemaVersion: "2.0", kind: "archive", operationId: intent.operationId, effectDigest: intent.effectDigest, intent: structuredClone(intent), phase: "confirmed", result: recovered, createdAt: timestamp(clock), updatedAt: timestamp(clock) })
-          return recovered
+        let started = existing
+        if (!started) {
+          const status = await provider.status(intent.task)
+          if (status.providerRevision !== intent.expectedProviderRevision || status.state !== "complete") {
+            return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: structuredClone(intent.task), status: "blocked", archiveRefs: [], observedAt: timestamp(clock) }
+          }
+          const validation = await provider.validate(intent.task)
+          if (!validation.valid || !validation.complete || validation.providerRevision !== intent.expectedProviderRevision) {
+            return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: structuredClone(intent.task), status: "blocked", archiveRefs: [], observedAt: timestamp(clock) }
+          }
+          const sourceRoot = activeRoot(assertTask(intent.task).taskId)
+          const sourceRefs = await artifactRefs(sourceRoot)
+          const sourceArtifactDigest = await artifactTreeDigest(sourceRoot, sourceRefs)
+          const confirmedStatus = await provider.status(intent.task)
+          if (confirmedStatus.providerRevision !== intent.expectedProviderRevision || confirmedStatus.state !== "complete") {
+            return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: structuredClone(intent.task), status: "blocked", archiveRefs: [], observedAt: timestamp(clock) }
+          }
+          started = {
+            schemaVersion: "2.0",
+            kind: "archive",
+            operationId: intent.operationId,
+            effectDigest: intent.effectDigest,
+            intent: structuredClone(intent),
+            phase: "started",
+            archiveRootsBefore: await archivedRoots(intent.task.taskId),
+            sourceArtifactDigest,
+            createdAt: timestamp(clock),
+            updatedAt: timestamp(clock),
+          }
+          await saveOperation(started)
         }
-        const status = await provider.status(intent.task)
-        if (status.providerRevision !== intent.expectedProviderRevision || status.state !== "complete") {
+        const activeDirectory = path.join((await roots()).root, activeRoot(intent.task.taskId))
+        if (!await exists(activeDirectory)) {
           return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: structuredClone(intent.task), status: "blocked", archiveRefs: [], observedAt: timestamp(clock) }
         }
-        const validation = await provider.validate(intent.task)
-        if (!validation.valid || !validation.complete) {
+        const currentStatus = await provider.status(intent.task)
+        const currentValidation = currentStatus.providerRevision === intent.expectedProviderRevision
+          ? await provider.validate(intent.task)
+          : null
+        const currentRefs = await artifactRefs(activeRoot(intent.task.taskId))
+        const currentTreeDigest = await artifactTreeDigest(activeRoot(intent.task.taskId), currentRefs)
+        if (
+          currentStatus.state !== "complete"
+          || currentStatus.providerRevision !== intent.expectedProviderRevision
+          || !currentValidation?.valid
+          || !currentValidation.complete
+          || currentValidation.providerRevision !== intent.expectedProviderRevision
+          || currentTreeDigest !== started.sourceArtifactDigest
+        ) {
           return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: structuredClone(intent.task), status: "blocked", archiveRefs: [], observedAt: timestamp(clock) }
         }
-        const started = { schemaVersion: "2.0", kind: "archive", operationId: intent.operationId, effectDigest: intent.effectDigest, intent: structuredClone(intent), phase: "started", createdAt: timestamp(clock), updatedAt: timestamp(clock) }
-        await saveOperation(started)
         await run(["archive", intent.task.taskId, "--yes"], 60_000)
         await faultInjector.afterArchive?.({ intent: structuredClone(intent) })
-        const result = await inspectArchive(intent)
+        const result = await inspectArchive(intent, started)
         if (!result) throw fail("SPEC_ARCHIVE_NOT_FOUND", "OpenSpec archive completed without a discoverable archive")
         await saveOperation({ ...started, phase: "confirmed", result, updatedAt: timestamp(clock) })
         return result
@@ -439,7 +512,7 @@ export function createOpenSpecProvider({
           const source = existing?.intent ?? intent
           const result = intent.kind === "prepare"
             ? await composeCapability(source)
-            : await inspectArchive(source)
+            : await inspectArchive(source, existing)
           if (!result) return { operationId: intent.operationId, effectDigest: intent.effectDigest, kind: intent.kind, status: "missing", observedAt: timestamp(clock) }
           await saveOperation({ schemaVersion: "2.0", kind: intent.kind, operationId: intent.operationId, effectDigest: intent.effectDigest, intent: structuredClone(source), phase: "confirmed", result, createdAt: existing?.createdAt ?? timestamp(clock), updatedAt: timestamp(clock) })
           return { operationId: intent.operationId, effectDigest: intent.effectDigest, kind: intent.kind, status: "confirmed", result, observedAt: timestamp(clock) }

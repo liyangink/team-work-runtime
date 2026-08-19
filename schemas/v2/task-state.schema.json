@@ -410,7 +410,13 @@
         "verifiedAt": { "type": "string", "format": "date-time" },
         "acceptedAt": { "type": "string", "format": "date-time" },
         "rejectedAt": { "type": "string", "format": "date-time" },
-        "rejectionReason": { "type": "string", "minLength": 1 }
+        "rejectionReason": { "type": "string", "minLength": 1 },
+        "unverifiedRefs": { "$ref": "#/$defs/uniqueStrings" },
+        "unverifiedAt": { "type": "string", "format": "date-time" }
+      },
+      "dependentRequired": {
+        "unverifiedRefs": ["unverifiedAt"],
+        "unverifiedAt": ["unverifiedRefs"]
       }
     },
     "pendingOperation": {
@@ -675,6 +681,11 @@
         },
         "result": { "enum": ["pass", "fail", "unknown"] },
         "digest": { "$ref": "#/$defs/digest" },
+        "assignmentId": { "$ref": "#/$defs/id" },
+        "attemptId": { "$ref": "#/$defs/id" },
+        "executionRef": { "type": "string", "minLength": 1 },
+        "outputRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "outputDigest": { "$ref": "#/$defs/digest" },
         "stageRunId": { "$ref": "#/$defs/id" },
         "observedAt": { "type": "string", "format": "date-time" },
         "valid": { "type": "boolean" },
@@ -688,6 +699,13 @@
             "invalidatedAt": { "type": "string", "format": "date-time" }
           }
         }
+      },
+      "dependentRequired": {
+        "assignmentId": ["attemptId", "executionRef"],
+        "attemptId": ["assignmentId", "executionRef"],
+        "executionRef": ["assignmentId", "attemptId"],
+        "outputRef": ["outputDigest"],
+        "outputDigest": ["outputRef"]
       }
     },
     "costLedger": {

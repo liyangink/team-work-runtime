@@ -530,25 +530,29 @@ test("platform observations use the same durable sequence and dedupe protocol", 
   )
 })
 
-test("a lost execution becomes an explicit blocker after its observation is acknowledged", async () => {
+test("a lost execution quarantines outputs and starts a fresh recovery Owner", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })
   await createDispatchPendingTask(store, "lost-execution")
   const pending = await store.loadTask("lost-execution")
   const effect = pending.pendingOperations[0].intent
+  const dispatched = []
   const executionAdapter = fakeExecutionAdapter({
-    ensureExecution: async () => ({
-      operationId: effect.operationId,
-      effectDigest: effect.effectDigest,
+    ensureExecution: async (intent) => {
+      dispatched.push(intent)
+      return ({
+      operationId: intent.operationId,
+      effectDigest: intent.effectDigest,
       status: "confirmed",
-      executionRef: "member-session-lost",
-      agentId: effect.agentId,
+      executionRef: dispatched.length === 1 ? "member-session-lost" : "member-session-recovery",
+      agentId: intent.agentId,
       observedAt: "2026-08-18T10:03:00.000Z",
-    }),
+    })},
     inspectExecution: async () => assert.fail("not used"),
   })
-  const driver = createTaskDriver({ store, executionAdapter })
+  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:04:00.000Z" })
   await driver.run({ taskId: "lost-execution", waitBudgetMs: 0 })
+  await writeFile(path.join(projectRoot, "partial-output.txt"), "unreported partial work")
   await driver.observe({
     taskId: "lost-execution",
     observation: {
@@ -563,8 +567,14 @@ test("a lost execution becomes an explicit blocker after its observation is ackn
   })
 
   const outcome = await driver.run({ taskId: "lost-execution", waitBudgetMs: 0 })
-  assert.equal(outcome.reason, "blocked")
-  assert.equal(outcome.state.workGraph.assignments[0].status, "lost")
+  assert.equal(outcome.reason, "waiting-report")
+  assert.equal(outcome.state.workGraph.assignments[0].status, "running")
+  assert.deepEqual(outcome.state.workGraph.assignments[0].attempts[0].unverifiedRefs, ["artifact:implementation"])
+  assert.equal(outcome.state.workGraph.assignments[0].attempts[0].unverifiedAt, "2026-08-18T10:04:00.000Z")
+  assert.equal(outcome.state.workGraph.assignments[0].attempts[1].executionRef, "member-session-recovery")
+  assert.deepEqual(dispatched[1].recovery, { kind: "execution-lost", priorAttempt: 1, unverifiedRefs: ["artifact:implementation"] })
+  assert.equal("resumeExecutionRef" in dispatched[1], false)
+  assert.equal(outcome.state.artifacts.some(({ path: artifactPath }) => artifactPath === "partial-output.txt"), false)
   assert.equal(outcome.state.observationInbox.acknowledgedThrough, 1)
 })
 

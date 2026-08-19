@@ -26,19 +26,25 @@
     "checkObservation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "observationId", "dedupeKey", "executionRef", "assignmentId", "toolCallRef", "commandSummary", "result", "observedAt"],
+      "required": ["kind", "observationId", "dedupeKey", "executionRef", "assignmentId", "attempt", "toolCallRef", "commandSummary", "result", "observedAt"],
       "properties": {
         "kind": { "const": "check" },
         "observationId": { "type": "string", "minLength": 1 },
         "dedupeKey": { "type": "string", "minLength": 1 },
         "executionRef": { "type": "string", "minLength": 1 },
         "assignmentId": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
         "toolCallRef": { "type": "string", "minLength": 1 },
         "commandSummary": { "type": "string", "minLength": 1 },
         "exitCode": { "type": "integer" },
         "result": { "enum": ["pass", "fail", "unknown"] },
-        "outputRef": { "type": "string", "minLength": 1 },
+        "outputRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+        "outputDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "observedAt": { "type": "string", "format": "date-time" }
+      },
+      "dependentRequired": {
+        "outputRef": ["outputDigest"],
+        "outputDigest": ["outputRef"]
       }
     },
     "platformError": {

@@ -181,6 +181,7 @@ export function createOpenCodeExecutionAdapter({
         platform,
         path.join(platform, "operations"),
         path.join(platform, "sessions"),
+        path.join(platform, "checks"),
         path.join(platform, "bindings", "by-task"),
         path.join(platform, "bindings", "by-ref"),
         path.join(platform, "locks"),
@@ -232,6 +233,11 @@ export function createOpenCodeExecutionAdapter({
         updatedAt: record.updatedAt,
       })
     }
+  }
+
+  function checkBindingPath(base, sessionId, toolCallRef) {
+    const key = digestValue({ sessionId, toolCallRef }).slice(0, 40)
+    return path.join(base.platform, "checks", `${key}.json`)
   }
 
   function assertOperation(record, intent, kind) {
@@ -287,7 +293,10 @@ export function createOpenCodeExecutionAdapter({
       readProjectFile(base.root, intent.contextRef, "member context"),
       readProjectFile(base.root, intent.promptRef, "member prompt"),
     ])
-    const text = [operationMarker(intent.operationId), context.trim(), prompt.trim()].filter(Boolean).join("\n\n")
+    const recovery = intent.recovery
+      ? `恢复任务：前一执行会话已失联。以下声明输出均未验证，必须先检查并明确接管、重做或保留依据，不能因文件存在就视为完成：${intent.recovery.unverifiedRefs.join("、") || "（无产品写入）"}`
+      : ""
+    const text = [operationMarker(intent.operationId), context.trim(), recovery, prompt.trim()].filter(Boolean).join("\n\n")
     await callSdk(() => client.session.promptAsync({
       path: { id: sessionId },
       query: { directory: base.root },
@@ -653,6 +662,7 @@ export function createOpenCodeExecutionAdapter({
       const fingerprint = digestValue({ type: event.type, properties: event.properties })
       await observationSinkFor(projection.taskId).observe({
         kind: "execution",
+        observationId: `opencode-event-${fingerprint.slice(0, 24)}`,
         dedupeKey: `opencode:${sessionId}:${fingerprint}`,
         executionRef: sessionId,
         assignmentId: projection.assignmentId,
@@ -663,25 +673,83 @@ export function createOpenCodeExecutionAdapter({
       return true
     },
 
+    async captureCheck({ sessionId, toolCallRef }) {
+      const base = await roots()
+      const safeSessionId = requireIdentifier(sessionId, "sessionId")
+      if (typeof toolCallRef !== "string" || toolCallRef === "") throw fail("CHECK_BINDING_INVALID", "toolCallRef is required")
+      const projection = await readOptional(recordPath(base, "sessions", safeSessionId))
+      if (!projection) throw fail("SESSION_MAPPING_MISSING", "OpenCode session is not managed by Runtime v2")
+      const target = checkBindingPath(base, safeSessionId, toolCallRef)
+      const binding = {
+        schemaVersion: "2.0",
+        sessionId: safeSessionId,
+        toolCallRef,
+        taskId: projection.taskId,
+        assignmentId: projection.assignmentId,
+        attempt: projection.attempt,
+        operationId: projection.operationId,
+        capturedAt: observedAt(clock),
+      }
+      const existing = await readOptional(target)
+      if (existing) {
+        const stableFields = ["sessionId", "toolCallRef", "taskId", "assignmentId", "attempt", "operationId"]
+        if (stableFields.some((field) => existing[field] !== binding[field])) {
+          throw fail("CHECK_BINDING_CONFLICT", `check ${toolCallRef} is already bound to another assignment attempt`)
+        }
+        return existing
+      }
+      await atomicJson(target, binding)
+      return binding
+    },
+
     async recordCheck({ sessionId, toolCallRef, commandSummary, exitCode, outputRef }) {
       if (!observationSinkFor) throw fail("RUNTIME_NOT_ATTACHED", "OpenCode adapter is not attached to Runtime")
       const base = await roots()
-      const projection = await readOptional(recordPath(base, "sessions", requireIdentifier(sessionId, "sessionId")))
+      const safeSessionId = requireIdentifier(sessionId, "sessionId")
+      const projection = await readOptional(recordPath(base, "sessions", safeSessionId))
       if (!projection) throw fail("SESSION_MAPPING_MISSING", "OpenCode session is not managed by Runtime v2")
-      if (outputRef) await readProjectFile(base.root, outputRef, "check output")
-      const result = Number.isInteger(exitCode) ? (exitCode === 0 ? "pass" : "fail") : "unknown"
-      return observationSinkFor(projection.taskId).observe({
-        kind: "check",
-        dedupeKey: `opencode-check:${sessionId}:${toolCallRef}`,
-        executionRef: sessionId,
-        assignmentId: projection.assignmentId,
-        toolCallRef,
-        commandSummary: String(commandSummary).slice(0, 500),
-        ...(Number.isInteger(exitCode) ? { exitCode } : {}),
-        result,
-        ...(outputRef ? { outputRef } : {}),
-        observedAt: observedAt(clock),
-      })
+      const binding = await readOptional(checkBindingPath(base, safeSessionId, toolCallRef))
+      if (!binding) throw fail("CHECK_BINDING_MISSING", `check ${toolCallRef} was not captured before execution`)
+      if (
+        binding.sessionId !== safeSessionId
+        || binding.taskId !== projection.taskId
+        || binding.assignmentId !== projection.assignmentId
+        || binding.attempt !== projection.attempt
+        || binding.operationId !== projection.operationId
+      ) throw fail("CHECK_BINDING_STALE", `check ${toolCallRef} belongs to an earlier assignment attempt`)
+      let observation = binding.observation
+      if (!observation) {
+        const output = outputRef ? await readProjectFile(base.root, outputRef, "check output") : null
+        const result = Number.isInteger(exitCode) ? (exitCode === 0 ? "pass" : "fail") : "unknown"
+        observation = {
+          kind: "check",
+          observationId: `opencode-check-${digestValue({ sessionId, toolCallRef }).slice(0, 24)}`,
+          dedupeKey: `opencode-check:${sessionId}:${toolCallRef}`,
+          executionRef: sessionId,
+          assignmentId: binding.assignmentId,
+          attempt: binding.attempt,
+          toolCallRef,
+          commandSummary: String(commandSummary).slice(0, 500),
+          ...(Number.isInteger(exitCode) ? { exitCode } : {}),
+          result,
+          ...(outputRef ? { outputRef, outputDigest: digestValue(output) } : {}),
+          observedAt: observedAt(clock),
+        }
+        await atomicJson(checkBindingPath(base, safeSessionId, toolCallRef), { ...binding, observation })
+      } else {
+        const expected = {
+          commandSummary: String(commandSummary).slice(0, 500),
+          ...(Number.isInteger(exitCode) ? { exitCode } : {}),
+          ...(outputRef ? { outputRef } : {}),
+        }
+        const recorded = {
+          commandSummary: observation.commandSummary,
+          ...(Number.isInteger(observation.exitCode) ? { exitCode: observation.exitCode } : {}),
+          ...(observation.outputRef ? { outputRef: observation.outputRef } : {}),
+        }
+        if (digestValue(expected) !== digestValue(recorded)) throw fail("CHECK_RECEIPT_CONFLICT", `check ${toolCallRef} was retried with different content`)
+      }
+      return observationSinkFor(binding.taskId).observe(observation)
     },
   }
 

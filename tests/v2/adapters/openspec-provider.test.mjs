@@ -234,6 +234,54 @@ test("archive inspection rebuilds a confirmed receipt after the external archive
   assert.equal(cli.calls.filter(([command]) => command === "archive").length, 1)
 })
 
+test("archive inspection never adopts a historical archive for a new operation", async () => {
+  const projectRoot = await project()
+  const cli = openSpecRunner(projectRoot)
+  const archiveRoot = path.join(projectRoot, "openspec", "changes", "archive", "2026-08-18-task-1")
+  await mkdir(archiveRoot, { recursive: true })
+  await writeFile(path.join(archiveRoot, "tasks.md"), "# Historical tasks")
+  const { port } = await setup({ projectRoot, cli })
+  const intent = effect({
+    operationId: "archive-new-operation",
+    task: taskRef(),
+    expectedProviderRevision: "a".repeat(64),
+  })
+
+  const inspection = await port.inspect({ ...intent, kind: "archive" })
+  assert.equal(inspection.status, "missing")
+  assert.equal(cli.calls.filter(([command]) => command === "archive").length, 0)
+})
+
+test("archive retry revalidates the persisted revision before an irreversible retry", async () => {
+  const projectRoot = await project()
+  const cli = openSpecRunner(projectRoot)
+  let failArchive = true
+  const runner = async (input) => {
+    if (input.args[0] === "archive" && failArchive) {
+      failArchive = false
+      cli.calls.push([...input.args])
+      throw new Error("simulated gateway failure before archive")
+    }
+    return cli.runner(input)
+  }
+  const provider = createSpecProviderAdapterPort(createOpenSpecProvider({ projectRoot, runner }))
+  await provider.prepare(prepareIntent())
+  await writeFile(path.join(cli.active, "proposal.md"), "# Proposal")
+  await writeFile(path.join(cli.active, "design.md"), "# Design")
+  await mkdir(path.join(cli.active, "specs", "mail"), { recursive: true })
+  await writeFile(path.join(cli.active, "specs", "mail", "spec.md"), "# Spec")
+  await writeFile(path.join(cli.active, "tasks.md"), "# Tasks")
+  const status = await provider.status(taskRef())
+  const intent = effect({ operationId: "archive-revalidate", task: taskRef(), expectedProviderRevision: status.providerRevision })
+  await assert.rejects(provider.archive(intent), /simulated gateway failure/)
+  await writeFile(path.join(cli.active, "tasks.md"), "# Mutated after intent")
+
+  const retried = await provider.archive(intent)
+  assert.equal(retried.status, "blocked")
+  assert.equal(cli.calls.filter(([command]) => command === "archive").length, 1)
+  assert.equal(await readFile(path.join(cli.active, "tasks.md"), "utf8"), "# Mutated after intent")
+})
+
 test("OpenSpec operation ids reject content drift instead of adopting another artifact", async () => {
   const { port } = await setup()
   const proposal = prepareIntent()

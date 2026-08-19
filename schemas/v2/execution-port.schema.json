@@ -85,7 +85,17 @@
         "mode": { "const": "background" },
         "contextRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
         "promptRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
-        "resumeExecutionRef": { "type": "string", "minLength": 1 }
+        "resumeExecutionRef": { "type": "string", "minLength": 1 },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "priorAttempt", "unverifiedRefs"],
+          "properties": {
+            "kind": { "const": "execution-lost" },
+            "priorAttempt": { "type": "integer", "minimum": 1 },
+            "unverifiedRefs": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          }
+        }
       }
     },
     "executionReceipt": {

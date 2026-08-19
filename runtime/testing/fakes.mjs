@@ -81,6 +81,7 @@ export function createFakeExecutionAdapter({ agents, clock = () => new Date().to
             ...observation,
             executionRef: binding.executionRef,
             assignmentId: binding.assignmentId,
+            ...(observation.kind === "check" ? { attempt: binding.attempt } : {}),
           })
         },
       }))

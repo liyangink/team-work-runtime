@@ -520,7 +520,7 @@ function requestSpecPrepare(next, fact) {
     || next.pendingOperations.length > 0
     || route?.decision !== "use-provider"
     || intent.task?.taskId !== next.taskId
-    || (!next.specLifecycle.task && intent.task?.stageRunId !== next.currentStageRun.stageRunId)
+    || intent.task?.stageRunId !== next.currentStageRun.stageRunId
     || intent.task?.routeStateDigest !== route.digest
     || intent.task?.configDigest !== route.configDigest
     || digestEffect(intent) !== effectDigest

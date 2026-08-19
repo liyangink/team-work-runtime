@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import { createTaskDriver } from "../../../runtime/application/driver.mjs"
-import { createTaskAggregate, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
+import { createTaskAggregate, digestEffect, digestValue, reduceTask } from "../../../runtime/domain/index.mjs"
 import { createInMemoryStore } from "../../../runtime/persistence/index.mjs"
 import { createFakeExecutionAdapter, createFakeSpecProvider } from "../../../runtime/testing/fakes.mjs"
 import { compiledPlanMetadata, TEST_AGENT_CATALOG_DIGEST, TEST_TASK_INTENT } from "../support/compiled-plan.mjs"
@@ -229,6 +229,20 @@ test("a SPEC stage replan rebinds the provider task without losing prior capabil
     state,
     auditEvents: [{ eventId: "spec-plan-frozen-2", type: "stage-plan.frozen", occurredAt: "2026-08-19T10:05:00.000Z", revision: state.revision, refs: ["spec-plan-2"] }],
   })
+
+  const staleIntent = {
+    operationId: "spec-prepare-stale-stage",
+    effectDigest: "0".repeat(64),
+    task: state.specLifecycle.task,
+    artifact: "design",
+  }
+  staleIntent.effectDigest = digestEffect(staleIntent)
+  assert.throws(() => reduceTask(state, {
+    type: "spec.prepare-requested",
+    expectedRevision: state.revision,
+    intent: staleIntent,
+    occurredAt: "2026-08-19T10:05:30.000Z",
+  }), (error) => error.code === "SPEC_PREPARE_INTENT_INVALID")
 
   const rebound = await driver.prepareSpec({ taskId: "spec-rebind", artifact: "design" })
   assert.equal(rebound.state.specLifecycle.task.stageRunId, "stage-run-2")

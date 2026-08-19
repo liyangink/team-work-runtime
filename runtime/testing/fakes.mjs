@@ -212,7 +212,9 @@ export function createFakeSpecProvider({ status = "missing", clock = () => new D
       return { task, providerRevision: "fake-1", valid: true, complete: true, evidenceRefs: ["fake-spec-validation"], blockers: [] }
     },
     async archive(intent) {
-      return { operationId: intent.operationId, effectDigest: intent.effectDigest, task: intent.task, status: "confirmed", archiveRefs: [], observedAt: timestamp(clock) }
+      const receipt = { operationId: intent.operationId, effectDigest: intent.effectDigest, task: intent.task, status: "confirmed", archiveRefs: [], observedAt: timestamp(clock) }
+      operations.set(intent.operationId, receipt)
+      return receipt
     },
     async inspect(intent) {
       const result = operations.get(intent.operationId)

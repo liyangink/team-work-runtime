@@ -1,4 +1,5 @@
 export { createTaskDriver } from "./driver.mjs"
+export { createSpecEffectCoordinator } from "./spec-effect-coordinator.mjs"
 export { composeActionCard, visibleCodePointLength } from "./action-card.mjs"
 export { composeDecisionPacket, decisionPacketCodePointLength, decisionPacketRef } from "./decision-packet.mjs"
 export { createFileEvidenceVerifier } from "./evidence-verifier.mjs"

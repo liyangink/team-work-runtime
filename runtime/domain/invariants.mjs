@@ -244,6 +244,27 @@ export function assertTaskState(state) {
         || operation.intent.effectDigest !== operation.effectDigest
         || digestEffect(operation.intent) !== operation.effectDigest
       ) failState("quiesce operation must bind exactly one pending human decision")
+    } else if (operation.kind === "spec.prepare" || operation.kind === "spec.archive") {
+      const definition = operation.kind === "spec.prepare" ? "prepareIntent" : "archiveIntent"
+      const purpose = operation.kind === "spec.prepare" ? "spec-prepare" : "spec-archive"
+      if (operation.purpose !== purpose) failState(`${operation.kind} operation has the wrong purpose`)
+      try {
+        validateContract(
+          `https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/${definition}`,
+          operation.intent,
+          `pending ${operation.kind} intent`,
+        )
+      } catch (error) {
+        if (error instanceof ContractError) failState("SPEC operation intent does not match its contract", error.errors)
+        throw error
+      }
+      if (
+        !state.specLifecycle.task
+        || digestValue(operation.intent.task) !== digestValue(state.specLifecycle.task)
+        || operation.intent.operationId !== operation.operationId
+        || operation.intent.effectDigest !== operation.effectDigest
+        || digestEffect(operation.intent) !== operation.effectDigest
+      ) failState("SPEC operation must bind the authoritative provider lifecycle")
     }
   }
   for (const { assignment, attempt } of attemptsById.values()) {
@@ -346,6 +367,43 @@ export function assertTaskState(state) {
         reason: e2eRoute.reason,
       }) !== e2eRoute.digest) failState("compiled E2E route digest is invalid")
     }
+  }
+
+  const spec = state.specLifecycle
+  assertUniqueBy(spec.capabilities, "operationId", "SPEC capability operation ids")
+  assertUniqueBy(spec.capabilities, "capabilityId", "SPEC capability ids")
+  if (spec.task) {
+    try {
+      validateContract("https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/taskRef", spec.task, "SPEC task binding")
+      for (const capability of spec.capabilities) {
+        validateContract("https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/capability", {
+          operationId: capability.operationId,
+          effectDigest: capability.effectDigest,
+          capabilityId: capability.capabilityId,
+          capabilityDigest: capability.capabilityDigest,
+          task: spec.task,
+          instructionsRef: capability.instructionsRef,
+          readableRefs: capability.readableRefs,
+          writableRefs: capability.writableRefs,
+          status: "ready",
+        }, "SPEC capability projection")
+      }
+      if (spec.status) validateContract("https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/status", spec.status, "SPEC status projection")
+      if (spec.validation) validateContract("https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/validation", spec.validation, "SPEC validation projection")
+    } catch (error) {
+      if (error instanceof ContractError) failState("SPEC lifecycle projection does not match its contract", error.errors)
+      throw error
+    }
+    if (spec.task.taskId !== state.taskId) failState("SPEC lifecycle must belong to the current task")
+    if (spec.status && digestValue(spec.status.task) !== digestValue(spec.task)) failState("SPEC status must bind the lifecycle task")
+    if (spec.validation) {
+      if (!spec.status || digestValue(spec.validation.task) !== digestValue(spec.task) || spec.validation.providerRevision !== spec.status.providerRevision) {
+        failState("SPEC validation must bind the latest recorded provider revision")
+      }
+    }
+    if (spec.archive && !spec.validation?.valid) failState("SPEC archive requires a valid provider snapshot")
+  } else if (spec.capabilities.length > 0 || spec.status || spec.validation || spec.archive) {
+    failState("SPEC lifecycle facts require one stable provider task binding")
   }
 
   assertUniqueBy(state.artifacts, "artifactId", "artifact ids")

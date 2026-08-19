@@ -421,6 +421,17 @@ function findPendingOperation(next, fact, expectedKind) {
     }
     return { operation }
   }
+  if (["spec.prepare", "spec.archive"].includes(operation.kind)) {
+    if (
+      !next.specLifecycle.task
+      || digestValue(operation.intent.task) !== digestValue(next.specLifecycle.task)
+      || operation.intent.operationId !== operation.operationId
+      || operation.intent.effectDigest !== operation.effectDigest
+    ) {
+      throw new DomainError("OPERATION_BINDING_INVALID", "SPEC operation has no matching provider lifecycle")
+    }
+    return { operation }
+  }
   const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === operation.assignmentId)
   const attempt = assignment?.attempts.find((entry) => entry.attemptId === operation.attemptId)
   if (
@@ -498,6 +509,79 @@ function requestExecutionContinuation(next, fact) {
   })
 }
 
+function requestSpecPrepare(next, fact) {
+  const intent = structuredClone(fact.intent)
+  const operationId = assertIdentifier(intent?.operationId, "fact.intent.operationId")
+  const effectDigest = assertDigest(intent?.effectDigest, "fact.intent.effectDigest")
+  const route = next.stagePlan?.routes?.spec ?? next.preflight?.plan?.routes?.spec
+  if (
+    !["needs-plan", "working"].includes(next.status)
+    || next.pendingDecision
+    || next.pendingOperations.length > 0
+    || route?.decision !== "use-provider"
+    || intent.task?.taskId !== next.taskId
+    || intent.task?.stageRunId !== next.currentStageRun.stageRunId
+    || intent.task?.routeStateDigest !== route.digest
+    || intent.task?.configDigest !== route.configDigest
+    || digestEffect(intent) !== effectDigest
+  ) {
+    throw new DomainError("SPEC_PREPARE_INTENT_INVALID", "SPEC prepare intent does not match the active provider route")
+  }
+  if (next.specLifecycle.archive) throw new DomainError("SPEC_ALREADY_ARCHIVED", "an archived SPEC lifecycle cannot prepare another capability")
+  if (next.specLifecycle.task && digestValue(next.specLifecycle.task) !== digestValue(intent.task)) {
+    throw new DomainError("SPEC_TASK_CONFLICT", "SPEC provider task binding cannot change after preparation starts")
+  }
+  if (next.specLifecycle.capabilities.some((entry) => entry.operationId === operationId)) {
+    throw new DomainError("OPERATION_DUPLICATE", `operation ${operationId} already completed`)
+  }
+  next.specLifecycle.task ??= structuredClone(intent.task)
+  next.pendingOperations.push({
+    operationId,
+    kind: "spec.prepare",
+    purpose: "spec-prepare",
+    effectDigest,
+    status: "intent-persisted",
+    invocationCount: 0,
+    intent,
+    createdAt: fact.occurredAt,
+  })
+}
+
+function requestSpecArchive(next, fact) {
+  const intent = structuredClone(fact.intent)
+  const operationId = assertIdentifier(intent?.operationId, "fact.intent.operationId")
+  const effectDigest = assertDigest(intent?.effectDigest, "fact.intent.effectDigest")
+  const accepted = next.decisionHistory.some(({ decisionId, choice }) => (
+    choice === "accept"
+    && (decisionId.startsWith("final-acceptance-") || decisionId.startsWith("scoped-final-acceptance-"))
+  ))
+  if (
+    next.status !== "working"
+    || next.pendingDecision
+    || next.pendingOperations.length > 0
+    || !accepted
+    || !next.specLifecycle.task
+    || digestValue(intent.task) !== digestValue(next.specLifecycle.task)
+    || next.specLifecycle.validation?.valid !== true
+    || next.specLifecycle.validation?.complete !== true
+    || intent.expectedProviderRevision !== next.specLifecycle.validation.providerRevision
+    || digestEffect(intent) !== effectDigest
+  ) {
+    throw new DomainError("SPEC_ARCHIVE_INTENT_INVALID", "SPEC archive requires current validation and final human acceptance")
+  }
+  if (next.specLifecycle.archive) throw new DomainError("SPEC_ALREADY_ARCHIVED", "SPEC provider task is already archived")
+  next.pendingOperations.push({
+    operationId,
+    kind: "spec.archive",
+    purpose: "spec-archive",
+    effectDigest,
+    status: "intent-persisted",
+    invocationCount: 0,
+    intent,
+    createdAt: fact.occurredAt,
+  })
+}
+
 function exhaustIdleCorrection(next, fact) {
   const assignment = next.workGraph.assignments.find((entry) => entry.assignmentId === fact.assignmentId)
   const attempt = assignment?.attempts.find((entry) => entry.attemptId === fact.attemptId)
@@ -526,7 +610,7 @@ function startEffectInvocation(next, fact) {
   }
   operation.status = "in-doubt"
   operation.invocationCount += 1
-  next.costLedger.uncertain += executionOperationCost(operation, assignment)
+  next.costLedger.uncertain += assignment ? executionOperationCost(operation, assignment) : 0
   operation.invocationId = assertIdentifier(fact.invocationId, "fact.invocationId")
   operation.leaseExpiresAt = assertTimestamp(fact.leaseExpiresAt, "fact.leaseExpiresAt")
   if (Date.parse(operation.leaseExpiresAt) < Date.parse(fact.occurredAt)) {
@@ -537,6 +621,93 @@ function startEffectInvocation(next, fact) {
     assignment.status = "in-doubt"
     attempt.status = "in-doubt"
   }
+}
+
+function retrySpecEffect(next, fact) {
+  const { operation } = findPendingOperation(next, fact)
+  if (!["spec.prepare", "spec.archive"].includes(operation.kind) || operation.status !== "in-doubt") {
+    throw new DomainError("SPEC_EFFECT_RETRY_INVALID", "only an in-doubt SPEC operation can be retried")
+  }
+  operation.status = "intent-persisted"
+  delete operation.invocationId
+  delete operation.leaseExpiresAt
+  if (fact.blocker) operation.lastError = {
+    code: "SPEC_EFFECT_MISSING",
+    message: assertNonEmptyString(fact.blocker, "fact.blocker"),
+    retryable: true,
+  }
+}
+
+function confirmSpecPrepare(next, fact) {
+  const { operation } = findPendingOperation(next, fact, "spec.prepare")
+  const capability = structuredClone(fact.capability)
+  validateReceipt(operation, capability)
+  if (
+    capability.status !== "ready"
+    || digestValue(capability.task) !== digestValue(next.specLifecycle.task)
+    || capability.operationId !== operation.operationId
+  ) throw new DomainError("SPEC_CAPABILITY_INVALID", "SPEC prepare did not return a ready capability for its persisted intent")
+  next.specLifecycle.capabilities.push({
+    artifact: operation.intent.artifact,
+    ...(operation.intent.capabilityNames ? { capabilityNames: [...operation.intent.capabilityNames] } : {}),
+    operationId: operation.operationId,
+    effectDigest: operation.effectDigest,
+    receiptRef: operation.operationId,
+    capabilityId: capability.capabilityId,
+    capabilityDigest: capability.capabilityDigest,
+    instructionsRef: capability.instructionsRef,
+    readableRefs: [...capability.readableRefs],
+    writableRefs: [...capability.writableRefs],
+    recordedAt: fact.occurredAt,
+  })
+  next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
+}
+
+function recordSpecStatus(next, fact) {
+  const status = structuredClone(fact.status)
+  if (!next.specLifecycle.task || digestValue(status?.task) !== digestValue(next.specLifecycle.task)) {
+    throw new DomainError("SPEC_STATUS_INVALID", "SPEC status does not match the persisted provider task")
+  }
+  if (next.specLifecycle.status?.providerRevision !== status.providerRevision) next.specLifecycle.validation = null
+  next.specLifecycle.status = status
+  if (next.status === "blocked" && status.state !== "blocked") next.status = "working"
+}
+
+function recordSpecValidation(next, fact) {
+  const validation = structuredClone(fact.validation)
+  if (
+    !next.specLifecycle.task
+    || digestValue(validation?.task) !== digestValue(next.specLifecycle.task)
+    || validation.providerRevision !== next.specLifecycle.status?.providerRevision
+  ) throw new DomainError("SPEC_VALIDATION_INVALID", "SPEC validation must bind the latest provider status")
+  next.specLifecycle.validation = validation
+  if (!validation.valid || !validation.complete) next.status = "blocked"
+}
+
+function confirmSpecArchive(next, fact) {
+  const { operation } = findPendingOperation(next, fact, "spec.archive")
+  const receipt = structuredClone(fact.receipt)
+  validateReceipt(operation, receipt)
+  if (receipt.status !== "confirmed" || digestValue(receipt.task) !== digestValue(next.specLifecycle.task)) {
+    throw new DomainError("SPEC_ARCHIVE_RECEIPT_INVALID", "SPEC archive did not return a confirmed receipt")
+  }
+  next.specLifecycle.archive = {
+    operationId: operation.operationId,
+    effectDigest: operation.effectDigest,
+    receiptRef: operation.operationId,
+    archiveRefs: [...receipt.archiveRefs],
+    observedAt: receipt.observedAt,
+  }
+  next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
+}
+
+function blockSpecEffect(next, fact) {
+  const { operation } = findPendingOperation(next, fact)
+  if (!["spec.prepare", "spec.archive"].includes(operation.kind)) {
+    throw new DomainError("SPEC_EFFECT_BLOCK_INVALID", "only a SPEC effect can be blocked by this fact")
+  }
+  next.pendingOperations = next.pendingOperations.filter((entry) => entry.operationId !== operation.operationId)
+  next.status = "blocked"
 }
 
 function prepareHumanWait(next, fact) {
@@ -1314,6 +1485,12 @@ export function reduceTask(state, fact) {
     case "execution.continuation-requested":
       requestExecutionContinuation(next, fact)
       return finish(next, fact)
+    case "spec.prepare-requested":
+      requestSpecPrepare(next, fact)
+      return finish(next, fact)
+    case "spec.archive-requested":
+      requestSpecArchive(next, fact)
+      return finish(next, fact)
     case "execution.idle-exhausted":
       exhaustIdleCorrection(next, fact)
       return finish(next, fact)
@@ -1361,6 +1538,24 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "effect.stop-failed":
       failStop(next, fact)
+      return finish(next, fact)
+    case "spec.effect-retry-scheduled":
+      retrySpecEffect(next, fact)
+      return finish(next, fact)
+    case "spec.prepare-confirmed":
+      confirmSpecPrepare(next, fact)
+      return finish(next, fact)
+    case "spec.status-recorded":
+      recordSpecStatus(next, fact)
+      return finish(next, fact)
+    case "spec.validation-recorded":
+      recordSpecValidation(next, fact)
+      return finish(next, fact)
+    case "spec.archive-confirmed":
+      confirmSpecArchive(next, fact)
+      return finish(next, fact)
+    case "spec.effect-blocked":
+      blockSpecEffect(next, fact)
       return finish(next, fact)
     case "observation.received":
       receiveObservation(next, fact)

@@ -63,6 +63,13 @@ export function createTaskAggregate(input) {
     pendingDecision: null,
     decisionHistory: [],
     pendingOperations: [],
+    specLifecycle: {
+      task: null,
+      capabilities: [],
+      status: null,
+      validation: null,
+      archive: null,
+    },
     createdAt,
     updatedAt: createdAt,
   })

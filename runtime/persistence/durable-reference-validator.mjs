@@ -83,6 +83,33 @@ export async function assertDurableReferences({ state, loadRecord, mode = "commi
     }
   }
 
+  for (const capability of state.specLifecycle?.capabilities ?? []) {
+    const operation = await requiredRecord("operation", capability.receiptRef)
+    if (
+      operation.operationId !== capability.operationId
+      || operation.kind !== "spec.prepare"
+      || operation.intent?.effectDigest !== capability.effectDigest
+      || operation.receipt?.operationId !== capability.operationId
+      || operation.receipt?.effectDigest !== capability.effectDigest
+      || operation.receipt?.capabilityId !== capability.capabilityId
+      || operation.receipt?.capabilityDigest !== capability.capabilityDigest
+      || operation.receipt?.status !== "ready"
+    ) mismatch(`operation:${capability.receiptRef} does not prove its SPEC capability`)
+  }
+  if (state.specLifecycle?.archive) {
+    const archive = state.specLifecycle.archive
+    const operation = await requiredRecord("operation", archive.receiptRef)
+    if (
+      operation.operationId !== archive.operationId
+      || operation.kind !== "spec.archive"
+      || operation.intent?.effectDigest !== archive.effectDigest
+      || operation.receipt?.operationId !== archive.operationId
+      || operation.receipt?.effectDigest !== archive.effectDigest
+      || operation.receipt?.status !== "confirmed"
+      || digestValue(operation.receipt?.archiveRefs) !== digestValue(archive.archiveRefs)
+    ) mismatch(`operation:${archive.receiptRef} does not prove SPEC archival`)
+  }
+
   for (const item of state.observationInbox.items) {
     const kind = item.kind === "member-report" ? "report" : "observation"
     const directory = kind === "report" ? "reports" : "observations"

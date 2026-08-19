@@ -229,6 +229,22 @@ test("OpenCode events and check receipts are normalized directly into PlatformOb
   assert.equal(observations[1].commandSummary, "npm test")
 })
 
+test("a deleted managed child session becomes one durable lost observation without adopting partial output", async () => {
+  const { adapter, port, capabilities } = await configuredAdapter()
+  const observations = []
+  adapter.attachRuntime({ observationSinkFor: () => ({ observe: async (value) => {
+    observations.push(value)
+    return { observationId: "lost-observation", sequence: 1, duplicate: observations.length > 1 }
+  } }) })
+  const receipt = await port.ensureExecution(effect(capabilities))
+  const event = { type: "session.deleted", properties: { info: { id: receipt.executionRef } } }
+  assert.equal(await adapter.handleEvent(event), true)
+  assert.equal(await adapter.handleEvent(event), true)
+  assert.equal(observations[0].state, "lost")
+  assert.equal(observations[0].executionRef, receipt.executionRef)
+  assert.equal(observations[0].dedupeKey, observations[1].dedupeKey)
+})
+
 test("quiesce inspection reconstructs a confirmed static wait after its receipt was lost", async () => {
   const projectRoot = await project()
   const sdk = fakeClient()

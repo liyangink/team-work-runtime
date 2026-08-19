@@ -7,6 +7,8 @@ import { digestEffect, digestValue } from "../domain/digests.mjs"
 import { validateContract } from "../contracts.mjs"
 import { costWeightForTier } from "../../policy/kernel.mjs"
 import { createTaskLifecycle } from "./task-lifecycle.mjs"
+import { createSpecEffectCoordinator } from "./spec-effect-coordinator.mjs"
+import { createSpecProviderAdapterPort } from "../ports/spec-provider.mjs"
 
 const terminalReasons = new Set(["needs-plan", "awaiting-user", "blocked", "completed", "cancelled"])
 
@@ -39,8 +41,18 @@ export function createTaskDriver({
   routeConfig,
 }) {
   const reconciler = createTaskReconciler({ store, clock })
+  const specProvider = specProviderAdapter ? createSpecProviderAdapterPort(specProviderAdapter) : null
   const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
   const humanWait = createHumanWait({ reconciler, executionAdapter, evidenceVerifier, clock, effectLeaseMs, faultInjector })
+  const specEffects = specProvider ? createSpecEffectCoordinator({
+    reconciler,
+    store,
+    specProviderAdapter: specProvider,
+    clock,
+    maxEffectAttempts,
+    effectLeaseMs,
+    faultInjector,
+  }) : null
 
   async function consumeInbox(taskId) {
     return reconciler.commit(taskId, async (state) => {
@@ -213,6 +225,60 @@ export function createTaskDriver({
   }
 
   const driver = {
+    async prepareSpec({ taskId, artifact, capabilityNames }) {
+      if (!specEffects) throw Object.assign(new Error("no SPEC Provider is configured"), { code: "SPEC_PROVIDER_MISSING" })
+      const state = await reconciler.load(taskId)
+      const route = state.stagePlan?.routes?.spec ?? state.preflight?.plan?.routes?.spec
+      if (route?.decision !== "use-provider") throw Object.assign(new Error("current stage has no active SPEC Provider route"), { code: "SPEC_ROUTE_INACTIVE" })
+      const availability = await specProvider.probe()
+      if (availability.status !== "ready") throw Object.assign(new Error("configured SPEC Provider is unavailable"), { code: "SPEC_PROVIDER_MISSING" })
+      const task = state.specLifecycle.task ?? {
+        providerId: availability.providerId,
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        configDigest: route.configDigest,
+        routeStateDigest: route.digest,
+      }
+      const operationId = `spec-prepare-${digestValue({ task, artifact, capabilityNames: capabilityNames ?? [] }).slice(0, 24)}`
+      const intent = {
+        operationId,
+        effectDigest: "0".repeat(64),
+        task,
+        artifact,
+        ...(capabilityNames ? { capabilityNames: [...capabilityNames] } : {}),
+      }
+      intent.effectDigest = digestEffect(intent)
+      const requested = await specEffects.requestPrepare(taskId, intent)
+      if (requested.receipt) return { state: requested.state, capability: requested.receipt, duplicate: true }
+      const outcome = await specEffects.reconcile(taskId, operationId)
+      return { state: outcome.state, capability: outcome.receipt, inDoubt: outcome.inDoubt, blocked: outcome.blocked }
+    },
+
+    async recordSpecStatus({ taskId }) {
+      if (!specEffects) throw Object.assign(new Error("no SPEC Provider is configured"), { code: "SPEC_PROVIDER_MISSING" })
+      return specEffects.recordStatus(taskId)
+    },
+
+    async validateSpec({ taskId }) {
+      if (!specEffects) throw Object.assign(new Error("no SPEC Provider is configured"), { code: "SPEC_PROVIDER_MISSING" })
+      return specEffects.recordValidation(taskId)
+    },
+
+    async archiveSpec({ taskId }) {
+      if (!specEffects) throw Object.assign(new Error("no SPEC Provider is configured"), { code: "SPEC_PROVIDER_MISSING" })
+      const state = await reconciler.load(taskId)
+      const task = state.specLifecycle.task
+      const expectedProviderRevision = state.specLifecycle.validation?.providerRevision
+      if (!task || !expectedProviderRevision) throw Object.assign(new Error("SPEC validation is required before archive"), { code: "SPEC_VALIDATION_MISSING" })
+      const operationId = `spec-archive-${digestValue({ task, expectedProviderRevision }).slice(0, 24)}`
+      const intent = { operationId, effectDigest: "0".repeat(64), task, expectedProviderRevision }
+      intent.effectDigest = digestEffect(intent)
+      const requested = await specEffects.requestArchive(taskId, intent)
+      if (requested.receipt) return { state: requested.state, receipt: requested.receipt, duplicate: true }
+      const outcome = await specEffects.reconcile(taskId, operationId)
+      return { state: outcome.state, receipt: outcome.receipt, inDoubt: outcome.inDoubt, blocked: outcome.blocked }
+    },
+
     async prepareHumanDecision({ taskId, decision }) {
       return humanWait.prepare(taskId, decision)
     },
@@ -402,7 +468,9 @@ export function createTaskDriver({
         }
         const outcome = operation.kind === "execution.quiesce"
           ? await humanWait.reconcile(taskId, operation.operationId)
-          : await effects.reconcile(taskId, operation.operationId)
+          : operation.kind.startsWith("spec.")
+            ? await specEffects.reconcile(taskId, operation.operationId)
+            : await effects.reconcile(taskId, operation.operationId)
         if (outcome.inDoubt && !outcome.changed) return { state: outcome.state, reason: "in-doubt" }
       }
       throw new Error(`Task Driver exceeded ${maxInternalTransitions} internal transitions`)
@@ -414,7 +482,7 @@ export function createTaskDriver({
       reconciler,
       effectDriver: driver,
       executionAdapter,
-      specProviderAdapter,
+      specProviderAdapter: specProvider,
       artifactRepository,
       workflowDefinition,
       workflowPin,

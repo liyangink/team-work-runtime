@@ -7,7 +7,7 @@
     "runtimeMajor", "schemaVersion", "taskId", "revision", "title", "objective", "taskIntent", "taskIntentRevision", "taskIntentHistory",
     "workflow", "scope", "status", "currentStageRun", "stageRuns", "stagePlan", "preflight", "routeDecisions",
     "workGraph", "artifacts", "evidence", "acceptedReportRefs", "costLedger",
-    "observationInbox", "pendingDecision", "decisionHistory", "pendingOperations", "createdAt", "updatedAt"
+    "observationInbox", "pendingDecision", "decisionHistory", "pendingOperations", "specLifecycle", "createdAt", "updatedAt"
   ],
   "properties": {
     "runtimeMajor": { "const": 2 },
@@ -56,6 +56,7 @@
     "pendingDecision": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/pendingDecision" }] },
     "decisionHistory": { "type": "array", "items": { "$ref": "#/$defs/resolvedDecision" } },
     "pendingOperations": { "type": "array", "items": { "$ref": "#/$defs/pendingOperation" } },
+    "specLifecycle": { "$ref": "#/$defs/specLifecycle" },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
@@ -425,11 +426,59 @@
         "status": { "enum": ["intent-persisted", "in-doubt"] },
         "invocationCount": { "type": "integer", "minimum": 0 },
         "intent": { "type": "object" },
-        "purpose": { "enum": ["dispatch", "continuation", "stop", "human-wait"] },
+        "purpose": { "enum": ["dispatch", "continuation", "stop", "human-wait", "spec-prepare", "spec-archive"] },
         "lastError": { "$ref": "https://team-work-runtime.dev/schemas/v2/platform-observation#/$defs/platformError" },
         "invocationId": { "$ref": "#/$defs/id" },
         "leaseExpiresAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "specLifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "capabilities", "status", "validation", "archive"],
+      "properties": {
+        "task": { "anyOf": [{ "type": "null" }, { "$ref": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/taskRef" }] },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["artifact", "operationId", "effectDigest", "receiptRef", "capabilityId", "capabilityDigest", "instructionsRef", "readableRefs", "writableRefs", "recordedAt"],
+            "properties": {
+              "artifact": { "enum": ["proposal", "design", "specs", "tasks"] },
+              "capabilityNames": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "operationId": { "$ref": "#/$defs/id" },
+              "effectDigest": { "$ref": "#/$defs/digest" },
+              "receiptRef": { "$ref": "#/$defs/id" },
+              "capabilityId": { "type": "string", "minLength": 1 },
+              "capabilityDigest": { "type": "string", "minLength": 1 },
+              "instructionsRef": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" },
+              "readableRefs": { "type": "array", "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }, "uniqueItems": true },
+              "writableRefs": { "type": "array", "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }, "uniqueItems": true },
+              "recordedAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "status": { "anyOf": [{ "type": "null" }, { "$ref": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/status" }] },
+        "validation": { "anyOf": [{ "type": "null" }, { "$ref": "https://team-work-runtime.dev/schemas/v2/spec-provider#/$defs/validation" }] },
+        "archive": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["operationId", "effectDigest", "receiptRef", "archiveRefs", "observedAt"],
+              "properties": {
+                "operationId": { "$ref": "#/$defs/id" },
+                "effectDigest": { "$ref": "#/$defs/digest" },
+                "receiptRef": { "$ref": "#/$defs/id" },
+                "archiveRefs": { "type": "array", "items": { "$ref": "https://team-work-runtime.dev/schemas/v2/common#/$defs/projectPath" }, "uniqueItems": true },
+                "observedAt": { "type": "string", "format": "date-time" }
+              }
+            }
+          ]
+        }
       }
     },
     "pendingDecision": {

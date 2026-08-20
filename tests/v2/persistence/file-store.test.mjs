@@ -62,6 +62,16 @@ function createState(taskId = "store-task") {
   })
 }
 
+test("the file store reports an absent task as TASK_NOT_FOUND", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+
+  await assert.rejects(
+    store.loadTask("missing-task"),
+    (error) => error.code === "TASK_NOT_FOUND" && /missing-task/.test(error.message),
+  )
+})
+
 test("the file store creates, commits, and reloads the authoritative task snapshot", async () => {
   const projectRoot = await createProject()
   const store = createFileStore({ projectRoot })

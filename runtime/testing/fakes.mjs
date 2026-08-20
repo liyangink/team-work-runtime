@@ -7,6 +7,7 @@ function timestamp(clock) {
 export function createInMemoryArtifactRepository(seed = {}) {
   const files = new Map(Object.entries(seed))
   const authoredBy = new Map()
+  const snapshots = new Map()
   return Object.freeze({
     write(path, content, { assignmentId } = {}) {
       if (typeof path !== "string" || path === "" || typeof content !== "string") throw new TypeError("artifact path and string content are required")
@@ -37,6 +38,23 @@ export function createInMemoryArtifactRepository(seed = {}) {
         throw error
       }
       return files.get(path)
+    },
+    async persistSnapshot({ taskId, artifactId, digest, content }) {
+      if (digestValue(content) !== digest) {
+        const error = new Error("snapshot content does not match its digest")
+        error.code = "ARTIFACT_SNAPSHOT_INVALID"
+        throw error
+      }
+      snapshots.set(`${taskId}:${artifactId}:${digest}`, content)
+    },
+    async loadSnapshot({ taskId, artifactId, digest }) {
+      return snapshots.get(`${taskId}:${artifactId}:${digest}`) ?? null
+    },
+    async restoreRegisteredArtifact({ taskId, artifact }) {
+      const content = await this.loadSnapshot({ taskId, artifactId: artifact.artifactId, digest: artifact.digest })
+      if (content === null) return false
+      files.set(artifact.path, content)
+      return true
     },
   })
 }

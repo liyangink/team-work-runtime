@@ -52,7 +52,7 @@ OpenSpec 是默认 SPEC Skill，由项目 Workflow Config 路由；它不是 Run
 
 ## 当前基线
 
-- Runtime v2 不兼容重构设计已通过交叉终审和人工确认；V2-0 至 V2-7 均已完成并通过两轴终审，下一里程碑为 V2-8 安装生命周期强化、真实 E2E 与发布。公开控制面只有 `open / plan / run / steer`，不得新增 v2 到 v1 命令族的包装、回退或兼容路径。
+- Runtime v2 不兼容重构设计已通过交叉终审和人工确认；V2-0 至 V2-7 已完成，V2-8 正在真实 E2E 收尾。公开控制面只有 `open / plan / run / steer`，不得新增 v2 到 v1 命令族的包装、回退或兼容路径。
 - 第一版 PlatformPlugin 以 OpenCode 为实现目标，优先验证多模型兼容、subagent/session、上下文注入和 Lead 控制面协作；不得把 Claude Agent Teams 作为 Runtime 或 Workflow 的前置能力。
-- OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。Agent model/effort 由 Plugin 启动时读取用户配置并动态注入。
-- Runtime v2 契约、文件型 CoreRuntime、Workflow 与 Team-work Policy、OpenCode 四动作控制面、原生异步 child session、最小上下文 Hook 和只读 TUI 投影均已落地。V2-8 仍需完成破坏性安装生命周期测试、真实网关正式 Workflow E2E、Senior 挑战者与 Expert 终审及发布验收。
+- OpenCode 下所有受管 Team-work subagent 必须以 background/non-blocking 模式派发；阻塞式 subagent 调用不得用于团队工作，Lead 必须持续掌握 Harness 并在同步点主动收集结果。Agent 目录由用户配置按 role（junior/senior/expert/challenger/assistant）驱动，model/effort 由 Plugin 启动时动态注入；challenger 未配置时回退 senior，assistant 未配置时回退 junior。平台层必须按派单 `writableRefs` 强制成员写边界，任务制品内容随登记快照持久化，越权修改以最后注册内容恢复。
+- Runtime v2 契约、文件型 CoreRuntime、Workflow 与 Team-work Policy、OpenCode 四动作控制面、原生异步 child session、最小上下文 Hook 和只读 TUI 投影均已落地。安装生命周期、无 OMO 正式 code-review 团队与最终人工验收已通过；V2-8 仍待最新门禁修复的新任务复验和发布决策。

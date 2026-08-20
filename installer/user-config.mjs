@@ -43,6 +43,25 @@ function fail(code, message, details) {
   throw new UserConfigError(code, message, details)
 }
 
+async function assertNoConfigSymlink(configRoot, relativePath) {
+  let cursor = configRoot
+  try {
+    if ((await lstat(cursor)).isSymbolicLink()) fail("USER_CONFIG_UNSAFE", "用户配置目录不得是符号链接")
+  } catch (error) {
+    if (error.code === "ENOENT") return
+    throw error
+  }
+  for (const segment of relativePath.split(/[\\/]/).filter((entry) => entry && entry !== ".")) {
+    cursor = path.join(cursor, segment)
+    try {
+      if ((await lstat(cursor)).isSymbolicLink()) fail("USER_CONFIG_UNSAFE", `用户配置路径不得经过符号链接：${relativePath}`)
+    } catch (error) {
+      if (error.code === "ENOENT") return
+      throw error
+    }
+  }
+}
+
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
@@ -115,7 +134,9 @@ async function validator() {
 async function validateConfig(config) {
   const validate = await validator()
   if (validate(config)) return config
-  const details = validate.errors.map(({ instancePath, message }) => `${instancePath || "/"} ${message}`).join("；")
+  const details = validate.errors.map(({ instancePath, message, params }) => (
+    `${instancePath || "/"} ${message}${params?.additionalProperty ? `：${params.additionalProperty}` : ""}`
+  )).join("；")
   fail("USER_CONFIG_INVALID", `用户配置不符合 ${USER_CONFIG_SCHEMA_REF}：${details}`)
 }
 
@@ -131,6 +152,7 @@ async function readConfig(configPath) {
 
 async function ensureLocalSchema(configPath) {
   const localSchemaPath = path.join(path.dirname(configPath), USER_CONFIG_SCHEMA_REF)
+  await assertNoConfigSymlink(path.dirname(configPath), USER_CONFIG_SCHEMA_REF)
   await mkdir(path.dirname(localSchemaPath), { recursive: true })
   const source = await readFile(sourceSchemaPath)
   try {
@@ -168,6 +190,7 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
   if (typeof configRoot !== "string" || !configRoot.trim()) fail("USER_CONFIG_ROOT_INVALID", "用户配置目录不能为空")
   const resolvedRoot = path.resolve(configRoot)
   const configPath = path.join(resolvedRoot, USER_CONFIG_NAME)
+  await assertNoConfigSymlink(resolvedRoot, USER_CONFIG_NAME)
   try {
     if ((await lstat(configPath)).isSymbolicLink()) fail("USER_CONFIG_UNSAFE", `${USER_CONFIG_NAME} 不得是符号链接`)
   } catch (error) {
@@ -184,10 +207,7 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
   await ensureLocalSchema(configPath)
 
   const opencode = config.platforms.opencode
-  const explicitAgents = config.agents === "auto" ? null : config.agents
-  const modelMap = explicitAgents === null
-    ? undefined
-    : Object.fromEntries(Object.entries(explicitAgents).map(([agentId, value]) => [agentId, value.model]))
+  const userAgents = config.agents === "auto" ? undefined : config.agents
   return {
     created,
     path: configPath,
@@ -195,8 +215,7 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
     platform: {
       id: "opencode",
       enabled: opencode.enabled ?? true,
-      ...(config.helper ? { helper: config.helper } : {}),
-      modelMap,
+      userAgents,
       opencodeCommand: opencode.command ?? "opencode",
       openspecCommand: config.spec?.command ?? "openspec",
       specMode: config.spec.mode,
@@ -207,7 +226,9 @@ export async function loadUserConfig({ configRoot, createIfMissing = false }) {
 export async function setOpenCodeEnabled({ configRoot, enabled, io = {} }) {
   if (typeof enabled !== "boolean") fail("USER_CONFIG_ENABLED_INVALID", "OpenCode enabled 必须是 boolean")
   if (typeof configRoot !== "string" || !configRoot.trim()) fail("USER_CONFIG_ROOT_INVALID", "用户配置目录不能为空")
-  const configPath = path.join(path.resolve(configRoot), USER_CONFIG_NAME)
+  const resolvedRoot = path.resolve(configRoot)
+  const configPath = path.join(resolvedRoot, USER_CONFIG_NAME)
+  await assertNoConfigSymlink(resolvedRoot, `${USER_CONFIG_NAME}.lock`)
   const write = io.writeFile ?? writeFile
   const replace = io.rename ?? rename
   return withConfigLock(configPath, async () => {

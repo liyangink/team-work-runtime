@@ -69,6 +69,7 @@ test("npm package contains every installer input and excludes repository-only as
     "plugins/opencode/adapter/runtime-host.mjs",
     "plugins/opencode/context/hooks.mjs",
     "plugins/opencode/tools/index.mjs",
+    "plugins/opencode/config/historical-managed-paths.json",
     "plugins/opencode/config/runtime-package-lock.json",
   ]) assert.ok(names.has(required), `npm package is missing ${required}`)
   for (const removed of ["runtime/core.mjs", "plugins/opencode/src/lead-controller.mjs", "plugins/opencode/src/opencode-adapter.mjs", "schemas/task.schema.json"]) {

@@ -467,6 +467,50 @@ test("quiesce binds a verified user decision to a message newer than the capture
   assert.equal(decision.proof.messageId, "new-user")
 })
 
+test("human decision verification rejects a negated choice instead of guessing consent", async () => {
+  const { sdk, port, binding } = await configuredAdapter()
+  sdk.addUserMessage(binding.hostSessionRef, { id: "old-user", created: Date.parse("2026-08-19T09:59:00.000Z"), text: "start" })
+  const quiet = await port.quiesce({
+    operationId: "quiesce-negated-choice",
+    effectDigest: "n".repeat(64),
+    taskId: "task-1",
+    decisionId: "final-acceptance",
+    leadBindingRef: binding.bindingRef,
+    executionRefs: [],
+    clearHostContinuations: true,
+  })
+  sdk.addUserMessage(binding.hostSessionRef, { id: "negated-user", created: Date.parse("2026-08-19T10:02:00.000Z"), text: "不要 accept，我还需要检查" })
+
+  await assert.rejects(port.verifyHumanDecision({
+    decisionId: "final-acceptance",
+    leadBindingRef: binding.bindingRef,
+    issuedAt: "2026-08-19T10:01:00.000Z",
+    afterHostCursor: quiet.hostCursor,
+    choices: ["accept", "rework"],
+  }), (error) => error.code === "HUMAN_DECISION_MISSING")
+})
+
+test("quiesce actively stops a just-finished member that OpenCode still reports as busy", async () => {
+  const { sdk, port, binding, capabilities } = await configuredAdapter()
+  const execution = await port.ensureExecution(effect(capabilities))
+  assert.equal(sdk.statuses[execution.executionRef].type, "busy")
+
+  const quiet = await port.quiesce({
+    operationId: "quiesce-busy-tail",
+    effectDigest: "b".repeat(64),
+    taskId: "task-1",
+    decisionId: "final-acceptance",
+    leadBindingRef: binding.bindingRef,
+    executionRefs: [execution.executionRef],
+    clearHostContinuations: true,
+  })
+
+  assert.equal(quiet.status, "confirmed")
+  assert.deepEqual(quiet.executions, [{ executionRef: execution.executionRef, state: "idle" }])
+  assert.equal(quiet.hostContinuationsCleared, true)
+  assert.equal(sdk.calls.abort, 1)
+})
+
 test("an awaiting human decision follows the stable task binding to a new Lead session", async () => {
   const { sdk, port, binding } = await configuredAdapter()
   sdk.addUserMessage(binding.hostSessionRef, { id: "old-start", created: Date.parse("2026-08-19T09:59:00.000Z"), text: "start" })

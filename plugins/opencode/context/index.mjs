@@ -25,7 +25,7 @@ function memberContext(binding) {
 
 function helperContext(binding) {
   return [
-    "# Team-work 只读 Helper",
+    "# Team-work 只读 Assistant",
     `父成员：${binding.parentSessionRef}；类型：${binding.helperKind}`,
     "仅完成窄范围探索或资料检索。禁止修改文件、执行命令、继续委托或作最终裁决。",
   ].join("\n")

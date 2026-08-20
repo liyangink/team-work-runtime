@@ -117,6 +117,34 @@ test("missing, traversal, runtime-control, and symlink artifact paths fail close
   assert.deepEqual(result, { valid: false, mismatches: [{ path: ".team-work/project.json", reason: "runtime-control-path" }] })
 })
 
+test("a task may deliver only inside its dedicated Runtime deliverables directory", async () => {
+  const projectRoot = await project()
+  const own = ".team-work/tasks/task-1/deliverables/proposal.json"
+  const other = ".team-work/tasks/task-2/deliverables/proposal.json"
+  await mkdir(path.join(projectRoot, ".team-work", "tasks", "task-1", "deliverables"), { recursive: true })
+  await mkdir(path.join(projectRoot, ".team-work", "tasks", "task-2", "deliverables"), { recursive: true })
+  await writeFile(path.join(projectRoot, own), "{}\n")
+  await writeFile(path.join(projectRoot, other), "{}\n")
+  const repository = createFileArtifactRepository({ projectRoot })
+  const base = {
+    taskId: "task-1",
+    stageRunId: "run-1",
+    assignmentId: "owner-1",
+    attemptId: "attempt-1",
+    executionRef: "session-1",
+    writableRefs: ["artifact:stage-plan-proposal:run-1"],
+  }
+
+  assert.deepEqual(await repository.verifyDeclaredOutputs({
+    ...base,
+    outputs: [{ ref: base.writableRefs[0], path: own }],
+  }), { valid: true, mismatches: [] })
+  assert.deepEqual(await repository.verifyDeclaredOutputs({
+    ...base,
+    outputs: [{ ref: base.writableRefs[0], path: other }],
+  }), { valid: false, mismatches: [{ path: other, reason: "runtime-control-path" }] })
+})
+
 test("nested symbolic-link artifact directories fail closed", async () => {
   const projectRoot = await project()
   const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-outside-"))
@@ -125,4 +153,43 @@ test("nested symbolic-link artifact directories fail closed", async () => {
   const repository = createFileArtifactRepository({ projectRoot })
 
   await assert.rejects(repository.read("src/nested/secret.txt"), (error) => error.code === "ARTIFACT_PATH_ESCAPE")
+})
+
+test("artifact snapshots persist, load, and restore the last registered content", async () => {
+  const projectRoot = await project()
+  const repository = createFileArtifactRepository({ projectRoot })
+  const digest = digestValue("export const result = true\n")
+
+  await repository.persistSnapshot({ taskId: "task-snap", artifactId: "input-source", digest, content: "export const result = true\n" })
+  assert.equal(await repository.loadSnapshot({ taskId: "task-snap", artifactId: "input-source", digest }), "export const result = true\n")
+  assert.equal(await repository.loadSnapshot({ taskId: "task-snap", artifactId: "input-source", digest: digestValue("other") }), null)
+
+  await writeFile(path.join(projectRoot, "src", "result.mjs"), "export const result = tampered\n")
+  const restored = await repository.restoreRegisteredArtifact({
+    taskId: "task-snap",
+    artifact: { artifactId: "input-source", path: "src/result.mjs", digest },
+  })
+  assert.equal(restored, true)
+  assert.equal(await repository.read("src/result.mjs"), "export const result = true\n")
+})
+
+test("restore refuses to guess when no matching snapshot exists", async () => {
+  const projectRoot = await project()
+  const repository = createFileArtifactRepository({ projectRoot })
+  await writeFile(path.join(projectRoot, "src", "result.mjs"), "tampered\n")
+
+  assert.equal(await repository.restoreRegisteredArtifact({
+    taskId: "task-snap",
+    artifact: { artifactId: "input-source", path: "src/result.mjs", digest: digestValue("original\n") },
+  }), false)
+  assert.equal(await repository.read("src/result.mjs"), "tampered\n")
+})
+
+test("persistSnapshot rejects content that does not match its digest", async () => {
+  const projectRoot = await project()
+  const repository = createFileArtifactRepository({ projectRoot })
+  await assert.rejects(
+    repository.persistSnapshot({ taskId: "task-snap", artifactId: "input-source", digest: digestValue("real"), content: "forged" }),
+    (error) => error.code === "ARTIFACT_SNAPSHOT_INVALID",
+  )
 })

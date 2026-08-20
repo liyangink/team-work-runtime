@@ -7,6 +7,7 @@ test("the OpenCode Lead control surface contains only four intent tools", () => 
   assert.deepEqual(LEAD_TOOL_NAMES, ["workflow_open", "workflow_plan", "workflow_run", "workflow_steer"])
   const forbidden = /revision|gate|work[-_ ]?item|session|SPEC command|恢复命令/i
   for (const name of LEAD_TOOL_NAMES) assert.doesNotMatch(TOOL_DESCRIPTIONS[name], forbidden)
+  assert.match(TOOL_DESCRIPTIONS.workflow_open, /mode=create\|resume/)
 })
 
 test("OpenCode tool handlers translate only user intent and bind identity from tool context", async () => {
@@ -21,6 +22,7 @@ test("OpenCode tool handlers translate only user intent and bind identity from t
   const handlers = createOpenCodeToolHandlers({ runtimeHost })
   const abort = new AbortController().signal
   await handlers.workflow_open({
+    mode: "create",
     title: "Task",
     objective: "Implement it",
     entry_stage: "implementation",
@@ -65,13 +67,40 @@ test("workflow_open defaults a new task to the full workflow", async () => {
     },
   })
 
-  await handlers.workflow_open({ title: "Default workflow", objective: "Deliver it", existing_artifacts: [] }, { sessionID: "lead-default" })
+  await handlers.workflow_open({ mode: "create", title: "Default workflow", objective: "Deliver it", existing_artifacts: [] }, { sessionID: "lead-default" })
   assert.deepEqual(calls, [{
     sessionId: "lead-default",
     input: { title: "Default workflow", objective: "Deliver it", completion: { mode: "workflow" }, existingArtifacts: [] },
   }])
   assert.throws(
-    () => handlers.workflow_open({ title: "Partial", objective: "Review it", completion_mode: "through-stage" }, { sessionID: "lead-default" }),
+    () => handlers.workflow_open({ mode: "create", title: "Partial", objective: "Review it", completion_mode: "through-stage" }, { sessionID: "lead-default" }),
     /completion_stage is required/,
+  )
+  await handlers.workflow_open({
+    mode: "create",
+    task_id: "provider-filled-placeholder",
+    title: "Provider-safe creation",
+    objective: "Create despite an irrelevant task id",
+    completion_mode: "workflow",
+    existing_artifacts: [],
+  }, { sessionID: "lead-default" })
+  assert.deepEqual(calls[1], {
+    sessionId: "lead-default",
+    input: {
+      title: "Provider-safe creation",
+      objective: "Create despite an irrelevant task id",
+      completion: { mode: "workflow" },
+      existingArtifacts: [],
+    },
+  })
+  assert.throws(
+    () => handlers.workflow_open({ mode: "create", completion_mode: "workflow", existing_artifacts: [] }, { sessionID: "lead-default" }),
+    (error) => error.code === "OPEN_INPUT_REQUIRED" && /title 和 objective/.test(error.message),
+  )
+  await handlers.workflow_open({ mode: "resume", task_id: "existing-task", title: "ignored", objective: "ignored" }, { sessionID: "lead-default" })
+  assert.deepEqual(calls[2], { sessionId: "lead-default", input: { taskId: "existing-task" } })
+  assert.throws(
+    () => handlers.workflow_open({ mode: "resume" }, { sessionID: "lead-default" }),
+    (error) => error.code === "OPEN_INPUT_REQUIRED" && /task_id/.test(error.message),
   )
 })

@@ -29,7 +29,7 @@ test("first install creates one fixed user-level config with automatic OpenCode 
   assert.deepEqual(loaded.platform, {
     id: "opencode",
     enabled: true,
-    modelMap: undefined,
+    userAgents: undefined,
     opencodeCommand: "opencode",
     openspecCommand: "openspec",
     specMode: "auto",
@@ -43,20 +43,18 @@ test("first install creates one fixed user-level config with automatic OpenCode 
   await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
 })
 
-test("one config supports explicit model bindings and command overrides", async () => {
+test("one config supports explicit role agents and command overrides", async () => {
   const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   const configPath = path.join(configRoot, "config.json")
-  const models = {
-    "junior-flash": "gateway/deepseek-v4-flash",
-    "senior-terra": "gateway/gpt-5.6-terra",
+  const agents = {
+    "junior-flash": { model: "gateway/deepseek-v4-flash", effort: "low" },
+    "senior-terra": { model: "gateway/gpt-5.6-terra", effort: "high" },
+    "challenger-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "challenger" },
+    "assist-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "assistant" },
   }
   await writeFile(configPath, `${JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
-    agents: {
-      "junior-flash": { model: models["junior-flash"], effort: "low" },
-      "senior-terra": { model: models["senior-terra"], effort: "high" },
-    },
+    agents,
     platforms: { opencode: { command: "/opt/bin/opencode" } },
     spec: { provider: "openspec", mode: "required", command: "/opt/bin/openspec" },
   }, null, 2)}\n`)
@@ -65,25 +63,43 @@ test("one config supports explicit model bindings and command overrides", async 
 
   assert.equal(loaded.created, false)
   await assert.doesNotReject(access(path.join(configRoot, "schemas/user-config.v1.schema.json")))
-  assert.deepEqual(loaded.platform.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
   assert.deepEqual(loaded.platform, {
     id: "opencode",
     enabled: true,
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
-    modelMap: models,
+    userAgents: agents,
     opencodeCommand: "/opt/bin/opencode",
     openspecCommand: "/opt/bin/openspec",
     specMode: "required",
   })
 })
 
-test("OpenCode enable state changes atomically without losing user configuration", async () => {
+test("user config rejects the removed top-level helper key", async () => {
   const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
   const configPath = path.join(configRoot, "config.json")
   await writeFile(configPath, `${JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
     helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
     agents: "auto",
+    platforms: { opencode: { enabled: true } },
+    spec: { provider: "openspec", mode: "auto" },
+  }, null, 2)}\n`)
+
+  await assert.rejects(
+    loadUserConfig({ configRoot }),
+    (error) => error.code === "USER_CONFIG_INVALID" && /helper/.test(error.message),
+  )
+})
+
+test("OpenCode enable state changes atomically without losing user configuration", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  const configPath = path.join(configRoot, "config.json")
+  const agents = {
+    "junior-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "junior" },
+    "assist-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "assistant" },
+  }
+  await writeFile(configPath, `${JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents,
     platforms: { opencode: { command: "/opt/bin/opencode" } },
     spec: { provider: "openspec", mode: "disabled" },
   }, null, 2)}\n`)
@@ -100,8 +116,7 @@ test("OpenCode enable state changes atomically without losing user configuration
   })
   assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")), {
     $schema: "./schemas/user-config.v1.schema.json",
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
-    agents: "auto",
+    agents,
     platforms: { opencode: { command: "/opt/bin/opencode", enabled: false } },
     spec: { provider: "openspec", mode: "disabled" },
   })
@@ -198,6 +213,24 @@ test("loading config repairs a stale local schema sidecar", async () => {
 
   const expected = await readFile(path.join(repositoryRoot, "schemas/user-config.v1.schema.json"), "utf8")
   assert.equal(await readFile(path.join(configRoot, "schemas/user-config.v1.schema.json"), "utf8"), expected)
+})
+
+test("loading config refuses a symlinked schema directory without writing outside the config root", async () => {
+  const configRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-"))
+  const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-user-config-outside-"))
+  await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: { enabled: true } },
+    spec: { provider: "openspec", mode: "auto" },
+  }))
+  await symlink(outside, path.join(configRoot, "schemas"))
+
+  await assert.rejects(
+    loadUserConfig({ configRoot }),
+    (error) => error.code === "USER_CONFIG_UNSAFE",
+  )
+  assert.deepEqual(await readdir(outside), [])
 })
 
 test("invalid or unsafe fixed config fails with stable error codes", async () => {

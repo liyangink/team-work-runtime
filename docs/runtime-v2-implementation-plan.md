@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：V2-0 至 V2-7 均已完成并通过两轴终审；V2-7 已按获批的 [`公开切换清单`](runtime-v2-cutover-checklist.md) 完成删除与切换，下一里程碑为 V2-8。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：V2-0 至 V2-7 已完成并通过两轴终审；V2-8 正在收尾，安装生命周期、全量回归和无 OMO 正式 code-review E2E 已通过，最新门禁修复的新任务实测待完成。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实测台账见 [`v2-e2e-findings.md`](v2-e2e-findings.md)。
 
 ## 1. 实施目标
 
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-进入 V2-8：强化安装、更新、软停用、卸载与 doctor 的破坏性测试；随后使用真实 OpenCode/网关完成正式 Workflow、standalone code-review、OpenSpec、人工门禁、宿主重启、网关错误和成员失联 E2E，验收通过后再发布。
+V2-8 复验已完成：门禁复验任务 `task-1ccc2683d4` 一轮收敛、一次 quiesce 进入 `final-acceptance` 并经用户 `accept` 收敛 `completed`；E2E-11/E2E-16 已关闭，E2E-17/E2E-18 已修复并实测（见 `v2-e2e-findings.md`）。剩余唯一事项是发布决策。

@@ -2,7 +2,7 @@ import { digestValue } from "../domain/digests.mjs"
 import { artifactIdentity } from "../domain/artifact-reference.mjs"
 import { createTaskAggregate } from "../domain/task-aggregate.mjs"
 import { compilePolicyPlan } from "./policy-compiler.mjs"
-import { costWeightForTier } from "../../policy/kernel.mjs"
+import { costWeightForTier, agentCatalogDigest } from "../../policy/kernel.mjs"
 import { composeDecisionPacket, decisionPacketRef } from "./decision-packet.mjs"
 import { compileSteeringIntervention } from "./steering-intervention.mjs"
 
@@ -92,14 +92,22 @@ export function createTaskLifecycle({
 }) {
   let capabilities
 
-  async function materializeInputs(references, stageRunId, occurredAt) {
+  async function materializeInputs(references, stageRunId, occurredAt, outputKinds = new Set()) {
     const artifacts = []
     const evidence = []
-    for (const reference of references ?? []) {
+    const inputs = references ?? []
+    const projectKindCounts = inputs.reduce((counts, reference) => {
+      if (reference.locator.type === "project-path") counts.set(reference.kind, (counts.get(reference.kind) ?? 0) + 1)
+      return counts
+    }, new Map())
+    for (const reference of inputs) {
       if (reference.locator.type === "project-path") {
         const [snapshot] = await artifactRepository.snapshot([reference.locator.value])
+        const reusableOutput = outputKinds.has(reference.kind) && projectKindCounts.get(reference.kind) === 1
         artifacts.push({
-          artifactId: `input-${artifactIdentity(`artifact:${reference.kind}`).artifactId}-${digestValue(reference.locator).slice(0, 12)}`,
+          artifactId: reusableOutput
+            ? artifactIdentity(`artifact:${reference.kind}`).artifactId
+            : `input-${artifactIdentity(`artifact:${reference.kind}`).artifactId}-${digestValue(reference.locator).slice(0, 12)}`,
           kind: reference.kind,
           path: snapshot.path,
           digest: snapshot.digest,
@@ -129,7 +137,8 @@ export function createTaskLifecycle({
     const taskId = `${slug(input.title)}-${digestValue({ title: input.title, objective: input.objective }).slice(0, 10)}`
     const createdAt = clock()
     const stageRunId = "stage-run-1"
-    const inputs = await materializeInputs(input.existingArtifacts, stageRunId, createdAt)
+    const entryStage = workflowDefinition.stages.find(({ id }) => id === input.entryStage)
+    const inputs = await materializeInputs(input.existingArtifacts, stageRunId, createdAt, new Set(entryStage?.outputs ?? []))
     const initial = createTaskAggregate({
       taskId,
       title: input.title,
@@ -147,7 +156,14 @@ export function createTaskLifecycle({
       ...inputs,
     })
     try {
-      return { taskId, state: await store.createTask(initial), created: true }
+      const created = await store.createTask(initial)
+      for (const artifact of created.artifacts) {
+        const [snapshot] = await artifactRepository.snapshot([artifact.path]).catch(() => [null])
+        if (snapshot && snapshot.digest === artifact.digest) {
+          await artifactRepository.persistSnapshot({ taskId: created.taskId, artifactId: artifact.artifactId, digest: artifact.digest, content: snapshot.content })
+        }
+      }
+      return { taskId, state: created, created: true }
     } catch (error) {
       if (error.code !== "TASK_EXISTS") throw error
       const existing = await reconciler.load(taskId)
@@ -188,11 +204,12 @@ export function createTaskLifecycle({
   function normalizedCatalog() {
     const agents = capabilities.agents.map((agent) => ({
       agentId: agent.agentId,
+      role: agent.role ?? agent.tier,
       tier: agent.tier,
       modelFamily: agent.model,
       assignmentKinds: agent.capabilities.includes("*") ? ["*"] : [...agent.capabilities],
     }))
-    return { digest: digestValue(agents), agents }
+    return { digest: agentCatalogDigest(agents), agents }
   }
 
   async function availableArtifacts(state) {
@@ -347,9 +364,14 @@ export function createTaskLifecycle({
     const attempt = assignment.attempts.at(-1)
     const record = await store.loadRecord(state.taskId, "report", attempt.reportRef)
     const report = record.report
+    const outputArtifacts = assignment.teamRole === "owner" ? report.artifacts : []
     let snapshots
     try {
-      if (assignment.teamRole !== "owner" && report.artifacts.length > 0) throw invalidReport("review roles cannot modify product artifacts")
+      if (assignment.teamRole !== "owner" && report.artifacts.some((claimed) => {
+        if (!assignment.readableRefs.includes(claimed.ref)) return true
+        const artifactId = artifactIdentity(claimed.ref).artifactId
+        return !state.artifacts.some((artifact) => artifact.artifactId === artifactId && artifact.path === claimed.path)
+      })) throw invalidReport("review roles may only repeat registered readable artifacts as evidence")
       if (assignment.teamRole === "expert" && !report.verdict) throw invalidReport("Expert delivery requires a verdict")
       if (assignment.teamRole === "owner" && report.artifacts.length !== assignment.writableRefs.length) {
         throw invalidReport("Owner delivery must provide every declared artifact exactly once")
@@ -365,14 +387,19 @@ export function createTaskLifecycle({
       if (protectedArtifacts.length > 0) {
         const currentInputs = await artifactRepository.snapshot(protectedArtifacts.map(({ path }) => path))
         const changedInput = protectedArtifacts.find((artifact, index) => artifact.digest !== currentInputs[index].digest)
-        if (changedInput) throw invalidReport(`registered input changed outside the assignment writable scope: ${changedInput.path}`)
+        if (changedInput) {
+          // 越权修改受保护制品时先恢复最后注册内容，避免后续同角色派单永远失败；
+          // 本轮报告仍被拒绝，因为成员的结论可能基于被污染的内容。
+          const restored = await artifactRepository.restoreRegisteredArtifact({ taskId: state.taskId, artifact: changedInput })
+          throw invalidReport(`registered input changed outside the assignment writable scope: ${changedInput.path}${restored ? "（已恢复最后注册内容，重派后重新校验）" : ""}`)
+        }
       }
       const declaredRefs = new Set(assignment.writableRefs)
-      const reportedRefs = new Set(report.artifacts.map(({ ref }) => ref))
-      if (reportedRefs.size !== report.artifacts.length || declaredRefs.size !== reportedRefs.size || [...declaredRefs].some((ref) => !reportedRefs.has(ref))) {
+      const reportedRefs = new Set(outputArtifacts.map(({ ref }) => ref))
+      if (reportedRefs.size !== outputArtifacts.length || declaredRefs.size !== reportedRefs.size || [...declaredRefs].some((ref) => !reportedRefs.has(ref))) {
         throw invalidReport("Owner report artifacts must identify exactly the assignment writable refs")
       }
-      if (report.artifacts.length > 0) {
+      if (outputArtifacts.length > 0) {
         const outputCheck = await artifactRepository.verifyDeclaredOutputs({
           taskId: state.taskId,
           stageRunId: state.currentStageRun.stageRunId,
@@ -380,19 +407,19 @@ export function createTaskLifecycle({
           attemptId: attempt.attemptId,
           executionRef: attempt.executionRef,
           writableRefs: assignment.writableRefs,
-          outputs: report.artifacts,
+          outputs: outputArtifacts,
         })
         if (!outputCheck.valid) throw invalidReport(`report claims an unverified output path: ${outputCheck.mismatches[0]?.path}`)
       }
       try {
-        snapshots = await artifactRepository.snapshot(report.artifacts.map(({ path }) => path))
+        snapshots = await artifactRepository.snapshot(outputArtifacts.map(({ path }) => path))
       } catch (error) {
         if (error.code === "ARTIFACT_MISSING") throw invalidReport(error.message, error)
         throw error
       }
-      const artifactIds = new Set(report.artifacts.map(({ ref }) => artifactIdentity(ref).artifactId))
+      const artifactIds = new Set(outputArtifacts.map(({ ref }) => artifactIdentity(ref).artifactId))
       for (const [index, snapshot] of snapshots.entries()) {
-        const identity = artifactIdentity(report.artifacts[index].ref)
+        const identity = artifactIdentity(outputArtifacts[index].ref)
         const conflicting = state.artifacts.find(({ artifactId, path }) => path === snapshot.path && artifactId !== identity.artifactId)
         if (conflicting) throw invalidReport(`artifact path is already bound to ${conflicting.artifactId}`)
       }
@@ -442,6 +469,7 @@ export function createTaskLifecycle({
         let parsed
         try {
           parsed = JSON.parse(await artifactRepository.read(report.artifacts[0].path))
+          parsed = enrichPlanningProposal(state, parsed)
         } catch (error) {
           if (error.code === "ARTIFACT_MISSING" || error instanceof SyntaxError) throw invalidReport(`planning proposal is not readable structured JSON: ${error.message}`, error)
           throw error
@@ -478,11 +506,14 @@ export function createTaskLifecycle({
     }
 
     const artifacts = snapshots.map((snapshot, index) => ({
-      ...artifactIdentity(report.artifacts[index].ref),
+      ...artifactIdentity(outputArtifacts[index].ref),
       path: snapshot.path,
       digest: snapshot.digest,
       stageRunId: state.currentStageRun.stageRunId,
     }))
+    for (let index = 0; index < artifacts.length; index += 1) {
+      await artifactRepository.persistSnapshot({ taskId: state.taskId, artifactId: artifacts[index].artifactId, digest: artifacts[index].digest, content: snapshots[index].content })
+    }
     const evidence = artifacts.map((artifact) => ({
       evidenceId: `artifact-${digestValue({ reportId: attempt.reportRef, artifactId: artifact.artifactId }).slice(0, 24)}`,
       kind: "artifact-digest",
@@ -597,6 +628,23 @@ export function createTaskLifecycle({
     return { ...body, digest: digestValue(body) }
   }
 
+  function enrichPlanningProposal(state, parsed) {
+    if (state.preflight?.kind !== "planning-bootstrap" || typeof parsed !== "object" || parsed === null) return parsed
+    const body = {
+      proposalId: `proposal-${digestValue({
+        taskId: state.taskId,
+        stageRunId: state.currentStageRun.stageRunId,
+        integrationRequired: parsed.integrationRequired,
+        workPackages: parsed.workPackages,
+      }).slice(0, 20)}`,
+      stageRunId: state.currentStageRun.stageRunId,
+      stage: state.currentStageRun.stage,
+      integrationRequired: parsed.integrationRequired,
+      workPackages: parsed.workPackages,
+    }
+    return { ...body, digest: digestValue(body) }
+  }
+
   async function reportsAgree(state) {
     const reports = await acceptedReports(state)
     const currentArtifacts = state.artifacts.filter(({ stageRunId }) => stageRunId === state.currentStageRun.stageRunId)
@@ -610,11 +658,13 @@ export function createTaskLifecycle({
       }
       if (snapshots.some((snapshot, index) => snapshot.digest !== currentArtifacts[index].digest)) return false
     }
-    return state.evidence.every(({ kind, valid, stageRunId }) => stageRunId !== state.currentStageRun.stageRunId || kind !== "artifact-digest" || valid) && reports.every(({ assignment, report }) => (
-      report.outcome === "delivered"
-      && report.recommendation === "accept"
-      && (assignment.teamRole !== "expert" || report.verdict?.outcome === "accept")
-    ))
+    if (!state.evidence.every(({ kind, valid, stageRunId }) => stageRunId !== state.currentStageRun.stageRunId || kind !== "artifact-digest" || valid)) return false
+    if (!reports.every(({ report }) => report.outcome === "delivered")) return false
+    const owners = reports.filter(({ assignment }) => assignment.teamRole === "owner")
+    const experts = reports.filter(({ assignment }) => assignment.teamRole === "expert")
+    if (owners.some(({ report }) => report.recommendation !== "accept")) return false
+    if (experts.length === 0) return reports.every(({ report }) => report.recommendation === "accept")
+    return experts.every(({ report }) => report.recommendation === "accept" && report.verdict?.outcome === "accept")
   }
 
   async function replanAfterPreflightFailure(state, reason) {
@@ -643,6 +693,7 @@ export function createTaskLifecycle({
     let parsed
     try {
       parsed = JSON.parse(await artifactRepository.read(outputPath))
+      parsed = enrichPlanningProposal(state, parsed)
       parsed = enrichE2EAssessment(state, parsed, reports)
     } catch (error) {
       return replanAfterPreflightFailure(state, `preflight result is not readable structured JSON: ${error.message}`)
@@ -678,6 +729,7 @@ export function createTaskLifecycle({
     let parsed
     try {
       parsed = JSON.parse(await artifactRepository.read(state.preflight.result.ref))
+      parsed = enrichPlanningProposal(state, parsed)
       parsed = enrichE2EAssessment(state, parsed, await acceptedReports(state))
     } catch (error) {
       return replanAfterPreflightFailure(state, `satisfied preflight result is invalid JSON: ${error.message}`)
@@ -911,6 +963,14 @@ export function createTaskLifecycle({
   async function runToStable({ taskId, leadBindingRef, waitBudgetMs = 0, signal }) {
     const deadline = Date.now() + Math.max(0, waitBudgetMs)
     for (let step = 0; step < 64; step += 1) {
+      // An issued human decision is a hard semantic barrier. In particular, a
+      // restart under newer policy code must not reinterpret accepted reports
+      // and partially advance preflight while the user is reviewing the old
+      // evidence snapshot. Only `steer` may consume this state.
+      const persisted = await reconciler.load(taskId)
+      if (persisted.status === "awaiting-user" && persisted.pendingDecision?.phase === "awaiting-user") {
+        return { state: persisted, reason: "awaiting-user" }
+      }
       const remaining = Math.max(0, deadline - Date.now())
       const outcome = await effectDriver.run({
         taskId,
@@ -918,6 +978,7 @@ export function createTaskLifecycle({
         ...(signal ? { signal } : {}),
       })
       const state = outcome.state
+      if (["completed", "cancelled"].includes(state.status)) return outcome
       if (outcome.reason === "budget-decision") return prepareBudgetDecision(state, leadBindingRef)
       if (state.preflight?.status === "satisfied") {
         const result = await compileSatisfiedPreflight(state)
@@ -1147,9 +1208,10 @@ export function createTaskLifecycle({
       return { state: replanned.state, reason: "needs-plan" }
     }
     if (resolvedDecision.decisionId.startsWith("convergence-") && choice === "rework") {
+      const preflightRework = state.stagePlan === null && state.preflight !== null
       const reopened = await reconciler.commit(taskId, (snapshot) => ({
         fact: {
-          type: "stage.reopened",
+          type: preflightRework ? "stage.replanned" : "stage.reopened",
           nextStageRunId: `stage-run-${snapshot.currentStageRun.sequence + 1}`,
           reason: input.note || "人工授权一轮有目标的追加返工",
           occurredAt: clock(),

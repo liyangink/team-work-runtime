@@ -38,7 +38,14 @@ export async function resolveStorePaths(projectRoot) {
 
 export async function resolveExistingTaskRoot(paths, taskId) {
   assertIdentifier(taskId, "taskId")
-  return resolveDirectoryWithin(paths.tasksRoot, path.join(paths.tasksRoot, taskId), `task ${taskId}`)
+  const candidate = path.join(paths.tasksRoot, taskId)
+  try {
+    await lstat(candidate)
+  } catch (error) {
+    if (error.code === "ENOENT") throw new StoreError("TASK_NOT_FOUND", `task does not exist: ${taskId}`)
+    throw error
+  }
+  return resolveDirectoryWithin(paths.tasksRoot, candidate, `task ${taskId}`)
 }
 
 export function newTaskRoot(paths, taskId) {

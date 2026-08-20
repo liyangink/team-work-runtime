@@ -21,6 +21,8 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
 
+import { resolveConfiguredAgents, staticRole } from "./agent-config.mjs"
+
 const execFile = promisify(execFileCallback)
 export const MINIMUM_OPENCODE_VERSION = "1.18.0"
 const MANIFEST_PATH = "team-work/install.json"
@@ -29,6 +31,7 @@ const PLATFORM_ROOT = "team-work"
 const LIFECYCLE_LOCK = `${PLATFORM_ROOT}/.lifecycle.lock`
 const TUI_CONFIG_PATH = "tui.json"
 const TUI_PLUGIN_SPEC = "./plugins/team-work-tui.tsx"
+const HISTORICAL_MANAGED_PATHS_FILE = "plugins/opencode/config/historical-managed-paths.json"
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 const MANAGED_SOURCE_TREES = [
   ["runtime", "team-work/lib/runtime"],
@@ -251,6 +254,25 @@ async function allowedManagedPaths(sourceRoot) {
   for (const [source, destination] of MANAGED_SOURCE_TREES) {
     for (const relativePath of await walkFiles(path.join(sourceRoot, source))) allowed.add(`${destination}/${relativePath}`)
   }
+  let historical
+  try {
+    historical = JSON.parse(await readFile(path.join(sourceRoot, HISTORICAL_MANAGED_PATHS_FILE), "utf8"))
+  } catch (error) {
+    if (error instanceof SyntaxError) fail("HISTORICAL_PATHS_INVALID", `${HISTORICAL_MANAGED_PATHS_FILE} 不是合法 JSON`)
+    throw error
+  }
+  if (!historical || historical.schemaVersion !== "1.0" || !Array.isArray(historical.paths)
+    || Object.keys(historical).some((key) => !["schemaVersion", "paths"].includes(key))) {
+    fail("HISTORICAL_PATHS_INVALID", `${HISTORICAL_MANAGED_PATHS_FILE} 格式无效`)
+  }
+  const managedRoots = MANAGED_SOURCE_TREES.map(([, destination]) => destination)
+  for (const entry of historical.paths) {
+    const relativePath = normalizeRelative(entry)
+    if (!managedRoots.some((root) => relativePath.startsWith(`${root}/`))) {
+      fail("HISTORICAL_PATHS_INVALID", `历史受管路径不属于可安装目录：${relativePath}`)
+    }
+    allowed.add(relativePath)
+  }
   return allowed
 }
 
@@ -385,51 +407,65 @@ async function probeConfiguredModels(opencodeCommand, models) {
   return results
 }
 
-function resolveModels(agentConfig, explicitMap, availableModels) {
+function resolveAgentProfile(agentConfig, userAgents, availableModels) {
   const warnings = []
-  const resolved = new Map()
-  const knownAgents = new Set(agentConfig.agents.map(({ id }) => id))
-  const unknownAgents = Object.keys(explicitMap ?? {}).filter((id) => !knownAgents.has(id))
-  if (unknownAgents.length) fail("INVALID_MODEL_MAP", `模型映射包含未知 Agent：${unknownAgents.join(", ")}`)
-  for (const agent of agentConfig.agents) {
-    if (explicitMap && !Object.hasOwn(explicitMap, agent.id)) continue
-    const explicit = explicitMap?.[agent.id]
-    if (explicit !== undefined) {
-      if (typeof explicit !== "string" || !/^[^\s/]+\/.+/.test(explicit)) {
-        fail("INVALID_MODEL_MAP", `${agent.id} 必须映射为 provider/model`)
-      }
-      resolved.set(agent.id, explicit)
-      continue
+  if (userAgents === undefined || userAgents === "auto") {
+    const resolved = new Map()
+    for (const agent of agentConfig.agents) {
+      const matches = availableModels.filter((model) => model === agent.requestedModel || model.endsWith(`/${agent.requestedModel}`))
+      if (matches.length === 1) resolved.set(agent.id, matches[0])
+      else warnings.push(matches.length > 1
+        ? `${agent.id} 的模型别名 ${agent.requestedModel} 匹配多个 provider，未自动选择`
+        : `${agent.id} 的模型 ${agent.requestedModel} 不可用，自动模式不会启用该 Agent`)
     }
-    const matches = availableModels.filter((model) => model === agent.requestedModel || model.endsWith(`/${agent.requestedModel}`))
-    if (matches.length === 1) resolved.set(agent.id, matches[0])
-    else warnings.push(matches.length > 1
-      ? `${agent.id} 的模型别名 ${agent.requestedModel} 匹配多个 provider，未自动选择`
-      : `${agent.id} 的模型 ${agent.requestedModel} 不可用，自动模式不会启用该 Agent`)
+    const members = agentConfig.agents.map((agent) => ({ ...agent, resolvedModel: resolved.get(agent.id) ?? null }))
+    const junior = members
+      .filter((agent) => agent.resolvedModel && staticRole(agent) === "junior")
+      .sort((left, right) => left.id.localeCompare(right.id))[0]
+    return { members, assistantBinding: junior ? { model: junior.resolvedModel } : null, warnings }
   }
-  return { resolved, warnings }
+  let configured
+  try {
+    configured = resolveConfiguredAgents(agentConfig.agents, userAgents)
+  } catch (error) {
+    if (error.code === "AGENT_CONFIG_INVALID") fail("INVALID_MODEL_MAP", error.message)
+    throw error
+  }
+  return {
+    members: configured.members.map((member) => ({
+      id: member.id,
+      role: member.role,
+      tier: member.tier,
+      requestedModel: member.requestedModel,
+      costWeight: member.costWeight,
+      resolvedModel: member.binding.model,
+    })),
+    assistantBinding: configured.assistant?.binding ?? null,
+    warnings,
+  }
 }
 
-function platformProfile(agentConfig, resolved, helper, generatedAt) {
-  if (helper && (typeof helper.model !== "string" || !/^[^\s/]+\/.+/.test(helper.model))) {
-    fail("INVALID_HELPER_CONFIG", "helper.model 必须是 provider/model")
-  }
+function platformProfile(members, assistantBinding, generatedAt) {
   const helpers = [
     { id: "team-work-explore", kind: "explore", capability: "code-search" },
     { id: "team-work-librarian", kind: "librarian", capability: "web-research" },
   ].map(({ capability, ...entry }) => ({
     ...entry,
-    resolvedModel: helper?.model ?? null,
-    capabilities: helper ? ["read-only", capability] : ["unavailable"],
+    resolvedModel: assistantBinding?.model ?? null,
+    capabilities: assistantBinding ? ["read-only", capability] : ["unavailable"],
   }))
   return {
     schemaVersion: "2.0",
     platform: "opencode",
     generatedAt,
-    agents: agentConfig.agents.map((agent) => ({
-      ...agent,
-      resolvedModel: resolved.get(agent.id) ?? null,
-      capabilities: resolved.has(agent.id) ? ["general"] : ["unavailable"],
+    agents: members.map((agent) => ({
+      id: agent.id,
+      role: staticRole(agent),
+      tier: agent.tier,
+      requestedModel: agent.requestedModel,
+      resolvedModel: agent.resolvedModel ?? null,
+      costWeight: agent.costWeight,
+      capabilities: agent.resolvedModel ? ["general"] : ["unavailable"],
     })),
     helpers,
     dispatch: { managedMode: "background", blockingPolicy: "reject" },
@@ -440,9 +476,9 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
       steer: { supported: true, tool: "workflow_steer" },
       report: { supported: true, tool: "team_work_report" },
       stop: { supported: false, tool: null },
-      assist: { supported: Boolean(helper), tool: helper ? "team_work_assist" : null },
-      assistStatus: { supported: Boolean(helper), tool: helper ? "team_work_assist_status" : null },
-      assistCollect: { supported: Boolean(helper), tool: helper ? "team_work_assist_collect" : null },
+      assist: { supported: Boolean(assistantBinding), tool: assistantBinding ? "team_work_assist" : null },
+      assistStatus: { supported: Boolean(assistantBinding), tool: assistantBinding ? "team_work_assist_status" : null },
+      assistCollect: { supported: Boolean(assistantBinding), tool: assistantBinding ? "team_work_assist_collect" : null },
     },
     limits: { maxConcurrent: null },
     session: { childSessions: true, resume: true, crossSessionProcessRecovery: false },
@@ -458,7 +494,7 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
   }
 }
 
-async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
+async function buildDesiredFiles({ sourceRoot, userAgents, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
   const files = new Map()
   for (const [source, destination] of MANAGED_SOURCE_TREES) {
     await addTree(files, path.join(sourceRoot, source), destination)
@@ -507,17 +543,17 @@ async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels
   const agentConfig = JSON.parse(await readFile(path.join(sourceRoot, "plugins/opencode/config/agents.json"), "utf8"))
   const scan = availableModels !== undefined
     ? { models: availableModels, error: null }
-    : modelMap
+    : userAgents
       ? { models: [], error: null }
-      : await scanModels(opencodeCommand)
-  const { resolved, warnings } = resolveModels(agentConfig, modelMap, scan.models)
+    : await scanModels(opencodeCommand)
+  const { members, assistantBinding, warnings } = resolveAgentProfile(agentConfig, userAgents, scan.models)
   if (scan.error) warnings.unshift(`无法读取 OpenCode 模型列表：${scan.error}`)
   return {
     files,
     warnings,
     packageVersion: packageConfig.version,
-    agentIds: [...resolved.keys(), ...(helper ? ["team-work-explore", "team-work-librarian"] : [])],
-    profile: platformProfile(agentConfig, resolved, helper, ""),
+    agentIds: [...members.filter((agent) => agent.resolvedModel).map(({ id }) => id), ...(assistantBinding ? ["team-work-explore", "team-work-librarian"] : [])],
+    profile: platformProfile(members, assistantBinding, ""),
   }
 }
 
@@ -591,19 +627,33 @@ async function writeManifest(installRoot, manifest) {
 async function smokeCheck(installRoot, opencodeCommand, expectedAgents) {
   let lastFailure = null
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const capturePath = path.join(os.tmpdir(), `team-work-smoke-${randomUUID()}.json`)
     try {
-      const { stdout, stderr } = await execFile(opencodeCommand, ["agent", "list"], {
+      // `agent list` streams each Agent's expanded permission table and can expose a
+      // partially populated list while plugins are still settling. `debug config`
+      // waits for config hooks and gives us a machine-readable authoritative view.
+      // 该 OpenCode 可执行文件被 Node 直接 spawn 时，无论 stdout 是管道还是文件
+      // 都会在约 64KB 处截断输出（上游缺陷）；经由平台 shell 中转并重定向到
+      // 文件才能取得完整配置，因此这里必须用 shell 包一层。
+      const shell = process.platform === "win32" ? { file: "cmd.exe", args: ["/d", "/s", "/c"] } : { file: "sh", args: ["-c"] }
+      const quotedCommand = process.platform === "win32"
+        ? `"${opencodeCommand}" debug config > "${capturePath}"`
+        : `'${opencodeCommand.replaceAll("'", `'\\''`)}' debug config > '${capturePath}'`
+      await execFile(shell.file, [...shell.args, quotedCommand], {
         cwd: installRoot,
         encoding: "utf8",
-        maxBuffer: 8 * 1024 * 1024,
         timeout: 30_000,
       })
-      const missing = expectedAgents.filter((agent) => !stdout.includes(agent))
+      const stdout = await readFile(capturePath, "utf8")
+      const config = JSON.parse(stdout)
+      const registeredAgents = config?.agent && typeof config.agent === "object" && !Array.isArray(config.agent)
+        ? new Set(Object.keys(config.agent))
+        : new Set()
+      const missing = expectedAgents.filter((agent) => !registeredAgents.has(agent))
       if (!missing.length) return
       lastFailure = {
         missing,
         stdout: stdout.trim().slice(-1200),
-        stderr: stderr.trim().slice(-1200),
       }
     } catch (error) {
       lastFailure = {
@@ -611,6 +661,8 @@ async function smokeCheck(installRoot, opencodeCommand, expectedAgents) {
         stdout: String(error.stdout || "").trim().slice(-1200),
         stderr: String(error.stderr || "").trim().slice(-1200),
       }
+    } finally {
+      await rm(capturePath, { force: true })
     }
   }
   const missing = lastFailure?.missing
@@ -663,7 +715,7 @@ async function applyInstall({ installRoot, desired, prior, force, now, hostVersi
     : [...collisions, ...(tuiState.existed && tuiNeedsPatch ? [TUI_CONFIG_PATH] : [])]
   const backupPath = await createBackup(installRoot, backupCandidates, now)
   const createdPaths = desiredEntries
-    .filter(({ path: relativePath }) => !priorByPath.has(relativePath) && !preexistingDesired.has(relativePath))
+    .filter(({ path: relativePath }) => !preexistingDesired.has(relativePath))
     .map(({ path: relativePath }) => relativePath)
   if (!tuiState.existed && tuiNeedsPatch) createdPaths.push(TUI_CONFIG_PATH)
   try {
@@ -755,11 +807,12 @@ async function pruneEmptyManagedDirectories(installRoot, removedFiles) {
   }
 }
 
-async function doctor({ installRoot, prior, hostVersion, modelMap, helper, availableModels, opencodeCommand, probeModels }) {
+async function doctor({ installRoot, prior, hostVersion, userAgents, availableModels, opencodeCommand, probeModels }) {
   const issues = []
   const modelChecks = []
   if (!prior || !["installed", "partial"].includes(prior.status)) issues.push({ code: "NOT_INSTALLED", message: "OpenCode PlatformPlugin 未安装" })
   for (const entry of prior?.managedFiles ?? []) {
+    await assertNoSymlink(installRoot, entry.path)
     const digest = await currentDigest(installRoot, entry.path)
     if (digest === null) issues.push({ code: "MANAGED_FILE_MISSING", path: entry.path })
     else if (digest !== entry.sha256) issues.push({ code: "MANAGED_FILE_MODIFIED", path: entry.path })
@@ -773,23 +826,28 @@ async function doctor({ installRoot, prior, hostVersion, modelMap, helper, avail
     else throw error
   }
   const profile = await readJson(targetPath(installRoot, `${PLATFORM_ROOT}/profile.json`), "PROFILE_CORRUPT")
-  const known = new Set((profile?.agents ?? []).map(({ id }) => id))
   const configuredAgents = []
-  if (modelMap === undefined) {
+  let assistantModel = null
+  if (userAgents === undefined) {
     for (const agent of profile?.agents ?? []) {
       if (!agent.resolvedModel) issues.push({ code: "MODEL_UNRESOLVED", agent: agent.id, requestedModel: agent.requestedModel })
       else configuredAgents.push([agent.id, agent.resolvedModel])
     }
+    assistantModel = profile?.helpers?.[0]?.resolvedModel ?? null
   } else {
-    for (const [agent, model] of Object.entries(modelMap)) {
-      if (!known.has(agent)) issues.push({ code: "AGENT_UNKNOWN", agent })
-      else configuredAgents.push([agent, model])
+    try {
+      const { members, assistant } = resolveConfiguredAgents(profile?.agents ?? [], userAgents)
+      for (const member of members) configuredAgents.push([member.id, member.binding.model])
+      assistantModel = assistant?.binding.model ?? null
+    } catch (error) {
+      if (error.code !== "AGENT_CONFIG_INVALID") throw error
+      issues.push({ code: "AGENT_CONFIG_INVALID", message: error.message })
     }
   }
 
   const consumers = new Map()
   for (const [agent, model] of configuredAgents) consumers.set(model, [...(consumers.get(model) ?? []), agent])
-  if (helper) consumers.set(helper.model, [...(consumers.get(helper.model) ?? []), "helper"])
+  if (assistantModel) consumers.set(assistantModel, [...(consumers.get(assistantModel) ?? []), "assistant"])
   if (consumers.size) {
     const discovery = availableModels !== undefined
       ? { models: availableModels, error: null }
@@ -799,10 +857,10 @@ async function doctor({ installRoot, prior, hostVersion, modelMap, helper, avail
     if (!discovery.error) {
       for (const [model, agents] of consumers) {
         if (visibleModels.has(model)) continue
-        const helperOnly = agents.length === 1 && agents[0] === "helper"
-        const teamAgents = agents.filter((agent) => agent !== "helper")
-        issues.push(helperOnly
-          ? { code: "HELPER_MODEL_UNAVAILABLE", model }
+        const assistantOnly = agents.length === 1 && agents[0] === "assistant"
+        const teamAgents = agents.filter((agent) => agent !== "assistant")
+        issues.push(assistantOnly
+          ? { code: "ASSISTANT_MODEL_UNAVAILABLE", model }
           : { code: "MODEL_UNAVAILABLE", ...(teamAgents.length === 1 ? { agent: teamAgents[0] } : { agents: teamAgents }), model })
       }
     }
@@ -840,8 +898,7 @@ async function manageUnlocked(command, options) {
     installRoot,
     prior,
     hostVersion,
-    modelMap: options.modelMap,
-    helper: options.helper,
+    userAgents: options.userAgents,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
     probeModels: Boolean(options.probeModels),
@@ -855,8 +912,7 @@ async function manageUnlocked(command, options) {
 
   const desired = await buildDesiredFiles({
     sourceRoot,
-    modelMap: options.modelMap,
-    helper: options.helper,
+    userAgents: options.userAgents,
     availableModels: options.availableModels,
     opencodeCommand: options.opencodeCommand ?? "opencode",
     openspecCommand: options.openspecCommand ?? "openspec",

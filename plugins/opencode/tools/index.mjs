@@ -1,7 +1,7 @@
 export const LEAD_TOOL_NAMES = Object.freeze(["workflow_open", "workflow_plan", "workflow_run", "workflow_steer"])
 
 export const TOOL_DESCRIPTIONS = Object.freeze({
-  workflow_open: "打开已有研发任务，或从任意阶段创建一个新任务；返回当前进展和唯一下一步。",
+  workflow_open: "打开任务并返回当前进展和唯一下一步。必须明确 mode=create|resume；create 提供 title/objective，resume 提供 task_id。",
   workflow_plan: "提交目标、约束和成本偏好，由 Harness 生成并启动当前阶段计划。",
   workflow_run: "按已持久化事实继续推进；成员工作未完成时在平台内等待事件，不需要轮询。",
   workflow_steer: "响应当前决策，或请求解释、返工、补证据、追加挑战、Expert 意见、更换 Owner、重规划或升级用户。只提交意图。",
@@ -16,8 +16,31 @@ function compact(value) {
   return value
 }
 
+function artifactKind(value) {
+  return ({
+    code: "source",
+    "source-code": "source",
+    source_code: "source",
+    test: "tests",
+    "test-code": "tests",
+    test_code: "tests",
+  })[value] ?? value
+}
+
 function openIntent(args) {
-  if (args.task_id) return { taskId: args.task_id }
+  if (args.mode === "resume") {
+    if (!args.task_id) throw Object.assign(new TypeError("恢复任务必须提供 task_id"), { code: "OPEN_INPUT_REQUIRED" })
+    return { taskId: args.task_id }
+  }
+  if (args.mode !== "create") throw Object.assign(new TypeError("workflow_open 必须明确选择 create 或 resume"), { code: "OPEN_MODE_REQUIRED" })
+  const hasTitle = typeof args.title === "string" && args.title !== ""
+  const hasObjective = typeof args.objective === "string" && args.objective !== ""
+  if (hasTitle !== hasObjective) {
+    throw Object.assign(new TypeError("创建新任务必须同时提供 title 和 objective"), { code: "OPEN_INPUT_REQUIRED" })
+  }
+  if (!args.title || !args.objective) {
+    throw Object.assign(new TypeError("创建新任务需要 title 和 objective"), { code: "OPEN_INPUT_REQUIRED" })
+  }
   if (args.completion_mode === "through-stage" && !args.completion_stage) {
     throw new TypeError("completion_stage is required when completion_mode is through-stage")
   }
@@ -29,7 +52,7 @@ function openIntent(args) {
       ? { mode: "through-stage", stage: args.completion_stage }
       : { mode: "workflow" },
     existingArtifacts: (args.existing_artifacts ?? []).map(({ kind, path }) => ({
-      kind,
+      kind: artifactKind(kind),
       locator: { type: "project-path", value: path },
     })),
   })

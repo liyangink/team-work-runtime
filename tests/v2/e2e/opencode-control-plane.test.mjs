@@ -84,6 +84,7 @@ test("the assembled OpenCode control plane wakes on report and survives a Lead s
   const { projectRoot, sdk, createPlane } = await fixture()
   const first = await createPlane()
   const opened = await first.handlers.workflow_open({
+    mode: "create",
     title: "Control plane",
     objective: "Implement the requested change",
     entry_stage: "implementation",
@@ -123,7 +124,7 @@ test("the assembled OpenCode control plane wakes on report and survives a Lead s
   assert.equal(progressed.workGraph.assignments.find(({ assignmentId }) => assignmentId === binding.assignmentId).status, "accepted")
 
   const restarted = await createPlane()
-  await restarted.handlers.workflow_open({ task_id: opened.task.id, existing_artifacts: [] }, { sessionID: "lead-two" })
+  await restarted.handlers.workflow_open({ mode: "resume", task_id: opened.task.id, existing_artifacts: [] }, { sessionID: "lead-two" })
   const stopped = new AbortController()
   stopped.abort()
   assert.equal((await restarted.handlers.workflow_run({}, { sessionID: "lead-two", abort: stopped.signal })).task.id, opened.task.id)

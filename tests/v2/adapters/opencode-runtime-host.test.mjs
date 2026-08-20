@@ -4,7 +4,11 @@ import os from "node:os"
 import path from "node:path"
 import test from "node:test"
 
-import { createOpenCodeRuntimeHost } from "../../../plugins/opencode/adapter/runtime-host.mjs"
+import {
+  createOpenCodeRuntimeHost,
+  normalizeOpenCodeMemberReport,
+  normalizeOpenCodeSteerInput,
+} from "../../../plugins/opencode/adapter/runtime-host.mjs"
 import { createFakeExecutionAdapter } from "../../../runtime/testing/fakes.mjs"
 
 const root = path.resolve(import.meta.dirname, "../../..")
@@ -77,6 +81,80 @@ function openIntent(title) {
   }
 }
 
+test("OpenCode steering trims an exact choice without guessing from prose", () => {
+  const state = { pendingDecision: { choices: ["rework"] } }
+  assert.deepEqual(normalizeOpenCodeSteerInput(state, {
+    action: "choose",
+    directive: "  rework  ",
+  }), { action: "choose", directive: "rework" })
+  assert.equal(normalizeOpenCodeSteerInput(state, {
+    action: "choose",
+    directive: "用户确认 rework，请继续",
+  }).directive, "用户确认 rework，请继续")
+  assert.equal(normalizeOpenCodeSteerInput({ pendingDecision: { choices: ["accept", "rework"] } }, {
+    action: "choose",
+    directive: "accept 或 rework 均可",
+  }).directive, "accept 或 rework 均可")
+})
+
+test("OpenCode normalizes only known bare report ids in member evidence", () => {
+  const known = "report-1234abcd"
+  const unknown = "report-deadbeef"
+  const normalized = normalizeOpenCodeMemberReport("/project", {
+    artifacts: [],
+    evidenceRefs: [known, unknown, "artifact:source"],
+    checks: [
+      { name: "known", result: "pass", evidenceRef: known },
+      { name: "unknown", result: "pass", evidenceRef: unknown },
+    ],
+    findings: [{ severity: "risk", statement: "review", evidenceRefs: [known, unknown] }],
+    verdict: { evidenceRefs: [known, unknown] },
+  }, { role: "expert", acceptedReportRefs: [{ reportId: known }] })
+
+  assert.deepEqual(normalized.evidenceRefs, [`report:${known}`, unknown, "artifact:source"])
+  assert.deepEqual(normalized.checks, [
+    { name: "known", result: "pass", evidenceRef: `report:${known}` },
+    { name: "unknown", result: "pass", evidenceRef: unknown },
+  ])
+  assert.deepEqual(normalized.findings[0].evidenceRefs, [`report:${known}`, unknown])
+  assert.deepEqual(normalized.verdict.evidenceRefs, [`report:${known}`, unknown])
+
+  const inherited = normalizeOpenCodeMemberReport("/project", {
+    artifacts: [{ ref: "artifact:proposal", path: "/project/plan.json" }],
+    evidenceRefs: ["artifact:proposal"],
+    verdict: { outcome: "accept", evidenceRefs: [] },
+  }, { role: "expert" })
+  assert.deepEqual(inherited.artifacts, [])
+  assert.deepEqual(inherited.verdict.evidenceRefs, ["artifact:proposal"])
+
+  const promoted = normalizeOpenCodeMemberReport("/project", {
+    artifacts: [],
+    evidenceRefs: [],
+    findings: [{ severity: "risk", statement: "review", evidenceRefs: ["artifact:source"] }],
+    verdict: { outcome: "accept", evidenceRefs: ["artifact:review"] },
+  }, { role: "expert" })
+  assert.deepEqual(promoted.evidenceRefs, ["artifact:review", "artifact:source"])
+  assert.deepEqual(promoted.verdict.evidenceRefs, ["artifact:review"])
+
+  const response = normalizeOpenCodeMemberReport("/project", {
+    artifacts: [{ ref: "artifact:review", path: "/project/review.md" }],
+    evidenceRefs: ["artifact:review"],
+  }, { role: "owner", allowArtifacts: false })
+  assert.deepEqual(response.artifacts, [])
+
+  const bareArtifact = normalizeOpenCodeMemberReport("/project", {
+    artifacts: [{ ref: "code-review", path: "/project/review.md" }],
+    evidenceRefs: ["source", "code-review"],
+    checks: [{ name: "review", result: "pass", evidenceRef: "code-review" }],
+  }, {
+    role: "owner",
+    knownArtifactRefs: ["artifact:source", "artifact:code-review"],
+  })
+  assert.deepEqual(bareArtifact.artifacts, [{ ref: "artifact:code-review", path: "review.md" }])
+  assert.deepEqual(bareArtifact.evidenceRefs, ["artifact:source", "artifact:code-review"])
+  assert.equal(bareArtifact.checks[0].evidenceRef, "artifact:code-review")
+})
+
 test("the OpenCode Runtime host isolates active tasks by Lead session", async () => {
   const projectRoot = await project()
   const executionAdapter = durableFake()
@@ -102,6 +180,52 @@ test("workflow_open lazily initializes a clean project", async () => {
   const opened = await runtimeHost.open("lead-clean", openIntent("Clean task"))
   assert.equal(opened.task.title, "Clean task")
   assert.equal(JSON.parse(await readFile(path.join(projectRoot, ".team-work", "project.json"), "utf8")).runtimeMajor, 2)
+})
+
+test("workflow_open normalizes model-supplied absolute artifact paths inside the project", async () => {
+  const projectRoot = await project()
+  const runtimeHost = await host(projectRoot, durableFake())
+  const intent = openIntent("Absolute input task")
+  intent.existingArtifacts[0].locator.value = path.join(projectRoot, "requirements", "task.md")
+
+  const opened = await runtimeHost.open("lead-absolute", intent)
+  const state = JSON.parse(await readFile(path.join(projectRoot, ".team-work", "tasks", opened.task.id, "state.json"), "utf8"))
+
+  assert.equal(state.artifacts[0].path, "requirements/task.md")
+  await assert.rejects(
+    runtimeHost.open("lead-outside", {
+      ...openIntent("Outside input task"),
+      existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: path.join(os.tmpdir(), "outside.md") } }],
+    }),
+    (error) => error.code === "OPEN_ARTIFACT_PATH_ESCAPE",
+  )
+})
+
+test("workflow_open prioritizes task id and never guesses creation from an unknown id", async () => {
+  const projectRoot = await project()
+  const runtimeHost = await host(projectRoot, durableFake())
+  const missing = await runtimeHost.open("lead-create", { taskId: "new", ...openIntent("Provider-filled id task") })
+  assert.equal(missing.code, "TASK_NOT_FOUND")
+  const created = await runtimeHost.open("lead-create", openIntent("Provider-filled id task"))
+
+  const restored = await runtimeHost.open("lead-restore", {
+    taskId: created.task.id,
+    ...openIntent("Fields the provider should have omitted"),
+  })
+
+  assert.equal(restored.task.id, created.task.id)
+  assert.equal(restored.task.title, "Provider-filled id task")
+})
+
+test("workflow_open explains how to recover when a requested task does not exist", async () => {
+  const projectRoot = await project()
+  const runtimeHost = await host(projectRoot, durableFake())
+
+  const problem = await runtimeHost.open("lead-missing", { taskId: "missing-task" })
+
+  assert.equal(problem.code, "TASK_NOT_FOUND")
+  assert.match(problem.message, /只有 task_id 表示恢复已有任务/)
+  assert.match(problem.next.reason, /mode=create/)
 })
 
 test("a restarted OpenCode Runtime host restores the task from the durable Lead binding", async () => {
@@ -172,12 +296,25 @@ test("a member report is bound by its child session without Lead orchestration f
   const receipt = await runtimeHost.report(member.executionRef, {
     outcome: "delivered",
     summary: "Implemented the requested source change.",
-    artifacts: [{ ref: assignment.writableRefs[0], path: "src/result.mjs" }],
+    artifacts: [{ ref: assignment.writableRefs[0], path: path.join(projectRoot, "src", "result.mjs") }],
     evidenceRefs: [],
+    checks: [{ name: "focused test", result: "pass", evidenceRef: "plain-language evidence is not a durable ref" }],
     recommendation: "accept",
+    verdict: {
+      outcome: "accept",
+      rationale: "A non-Expert model filled this field.",
+      evidenceRefs: [],
+      affectedScope: [],
+      risks: [],
+      confidence: "low",
+      recommendedAction: "ignore",
+    },
   })
   assert.equal(receipt.accepted, true)
   assert.equal(receipt.assignmentId, member.assignmentId)
+  const record = JSON.parse(await readFile(path.join(projectRoot, ".team-work", "tasks", member.taskId, "reports", `${receipt.reportId}.json`), "utf8"))
+  assert.deepEqual(record.report.checks, [{ name: "focused test", result: "pass" }])
+  assert.equal(record.report.verdict, undefined)
 })
 
 test("workflow_run waits for a member report and consumes it without Lead polling", async () => {

@@ -34,6 +34,15 @@ function chooseAgent(catalog, tier, kind, { preferred, excluded = [] } = {}) {
   return selected
 }
 
+// challenger 干预优先显式 challenger role；未配置时回退 senior→expert。
+function chooseChallenger(catalog, kind, { preferred, excluded = [] } = {}) {
+  const byRole = catalog.agents.filter((agent) => (agent.role ?? agent.tier) === "challenger" && supports(agent, kind) && !excluded.includes(agent.agentId))
+  const preferredMatch = byRole.find(({ agentId }) => agentId === preferred)
+  if (preferredMatch) return preferredMatch
+  if (byRole.length > 0) return byRole.sort((left, right) => left.agentId.localeCompare(right.agentId))[0]
+  return chooseAgent(catalog, "senior", kind, { preferred, excluded })
+}
+
 function execution(taskId, assignmentId, agent, catalogDigest, resumeAssignmentId) {
   return {
     agentId: agent.agentId,
@@ -146,7 +155,7 @@ function compileAssignments({ state, input, packet, catalog, nextStageRunId }) {
       ? target
       : state.workGraph.assignments.find(({ teamRole }) => teamRole === "owner")
     if (!prior || !owner) fail("STEERING_TARGET_STALE", "challenge-again requires the current Challenger and Owner")
-    const challengerAgent = chooseAgent(catalog, "senior", "review", { preferred: prior.execution.agentId, excluded: [owner.execution.agentId] })
+    const challengerAgent = chooseChallenger(catalog, "review", { preferred: prior.execution.agentId, excluded: [owner.execution.agentId] })
     const challenger = assignment({
       taskId: state.taskId,
       stageRunId: nextStageRunId,

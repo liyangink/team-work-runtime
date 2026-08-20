@@ -159,6 +159,9 @@ test("a through-stage delivery closes through LeadControl and bound member deliv
   cards.push(await runtime.leadControl.steer({ action: "choose", directive: "accept" }))
   assert.equal(cards.at(-1).task.status, "completed")
   assert.equal(cards.at(-1).next.kind, "none")
+  const repeated = await runtime.leadControl.run()
+  assert.equal(repeated.task.status, "completed")
+  assert.equal(repeated.next.kind, "none")
   assert.equal(cards.length, 7)
   assert.equal((await store.loadTask(cards[0].task.id)).evidence.some(({ kind, sourceRef, result }) => (
     kind === "platform-check" && sourceRef === "check:focused-feature-test" && result === "pass"
@@ -248,6 +251,7 @@ test("a planning preflight becomes a multi-owner design without exposing orchest
     preferences: { execution: "team", budget: "quality", risk: "normal" },
   }))
   assert.equal(cards.at(-1).next.kind, "wait")
+  assert.equal(cards.at(-1).report.team.mode, "team")
 
   const reported = new Set()
   let latestEvidenceRef
@@ -260,9 +264,6 @@ test("a planning preflight becomes a multi-owner design without exposing orchest
         memberReport = report("Owner verified the independent review and accepts its conclusion.", [], [...reviewEvidenceRefs])
       } else if (member.assignmentKind === "planning" && member.role === "owner") {
         const body = {
-          proposalId: "proposal-storage-migration",
-          stageRunId: "stage-run-1",
-          stage: "design",
           integrationRequired: true,
           workPackages: [
             {
@@ -283,8 +284,7 @@ test("a planning preflight becomes a multi-owner design without exposing orchest
             },
           ],
         }
-        const proposal = { ...body, digest: digestValue(body) }
-        artifacts.write("plans/storage-proposal.json", JSON.stringify(proposal), { assignmentId: member.assignmentId })
+        artifacts.write("plans/storage-proposal.json", JSON.stringify(body), { assignmentId: member.assignmentId })
         memberReport = report("Prepared an executable two-owner plan.", [output("artifact:stage-plan-proposal:stage-run-1", "plans/storage-proposal.json")])
       } else if (member.role === "owner") {
         const artifactPath = member.assignmentId.startsWith("owner-storage-") ? "docs/storage-design.md"
@@ -309,7 +309,10 @@ test("a planning preflight becomes a multi-owner design without exposing orchest
           },
         }
       } else {
-        memberReport = report("Independent challenge found no unresolved blocker.", [], [latestEvidenceRef])
+        memberReport = {
+          ...report("Independent challenge identified a non-blocking concern for Expert and Owner adjudication.", [], [latestEvidenceRef]),
+          recommendation: "rework",
+        }
       }
       const receipt = await member.report(memberReport)
       latestEvidenceRef = `report:${receipt.reportId}`
@@ -478,6 +481,47 @@ test("task creation registers every initial input atomically", async () => {
   const state = await store.loadTask(opened.task.id)
   assert.equal(state.revision, 0)
   assert.equal(state.artifacts.length, 2)
+})
+
+test("a singleton existing stage output keeps its canonical writable identity", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const artifacts = createInMemoryArtifactRepository({
+    "src/existing.mjs": "export const existing = true\n",
+    "reviews/existing.md": "Old review\n",
+  })
+  const execution = createFakeExecutionAdapter()
+  const store = createInMemoryStore()
+  const runtime = createRuntimeFacade({
+    store,
+    executionAdapter: execution,
+    artifactRepository: artifacts,
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-20T08:00:00.000Z",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Revise an existing review",
+    objective: "Update the existing code-review artifact",
+    entryStage: "code-review",
+    completion: { mode: "through-stage", stage: "code-review" },
+    existingArtifacts: [
+      { kind: "source", locator: { type: "project-path", value: "src/existing.mjs" } },
+      { kind: "code-review", locator: { type: "project-path", value: "reviews/existing.md" } },
+    ],
+  })
+  await runtime.leadControl.plan({ objective: "Update the existing code-review artifact", preferences: { execution: "solo", budget: "quality" } })
+  const owner = execution.activeMembers().find(({ role }) => role === "owner")
+  artifacts.write("reviews/existing.md", "Updated review\n", { assignmentId: owner.assignmentId })
+  await owner.report(report("Updated the existing review.", [output("artifact:code-review", "reviews/existing.md")]))
+  await runtime.leadControl.run()
+
+  const state = await store.loadTask(opened.task.id)
+  const review = state.artifacts.find(({ artifactId }) => artifactId === "code-review")
+  assert.equal(review.path, "reviews/existing.md")
+  assert.equal(review.digest, digestValue("Updated review\n"))
+  assert.equal(state.workGraph.assignments.find(({ assignmentId }) => assignmentId === owner.assignmentId).status, "accepted")
 })
 
 test("report verification enforces assignment attribution and does not punish Runtime failures", async () => {
@@ -703,4 +747,55 @@ test("invalid planning output is rejected atomically and stops for a user after 
   assert.equal(state.artifacts.some(({ path }) => path === "plans/invalid.json"), false)
   assert.equal(owner.attempts.length, 3)
   assert.equal(owner.attempts.every(({ status }) => status === "rework"), true)
+})
+
+test("an out-of-scope artifact modification is rejected and restored to the registered content", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const artifacts = createInMemoryArtifactRepository({
+    "src/existing.mjs": "export const existing = true\n",
+    "reviews/existing.md": "Old review\n",
+  })
+  const execution = createFakeExecutionAdapter()
+  const store = createInMemoryStore()
+  const runtime = createRuntimeFacade({
+    store,
+    executionAdapter: execution,
+    artifactRepository: artifacts,
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-20T09:00:00.000Z",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Guard protected artifacts",
+    objective: "Keep the registered review content authoritative",
+    entryStage: "code-review",
+    completion: { mode: "through-stage", stage: "code-review" },
+    existingArtifacts: [
+      { kind: "source", locator: { type: "project-path", value: "src/existing.mjs" } },
+      { kind: "code-review", locator: { type: "project-path", value: "reviews/existing.md" } },
+    ],
+  })
+  await runtime.leadControl.plan({ objective: "Keep the registered review content authoritative", preferences: { execution: "solo", budget: "quality" } })
+  const owner = execution.activeMembers().find(({ role }) => role === "owner")
+  artifacts.write("reviews/existing.md", "Authoritative review\n", { assignmentId: owner.assignmentId })
+  const ownerReceipt = await owner.report(report("Delivered the authoritative review.", [output("artifact:code-review", "reviews/existing.md")]))
+  await runtime.leadControl.run()
+  const stateAfterOwner = await store.loadTask(opened.task.id)
+  const registered = stateAfterOwner.artifacts.find(({ artifactId }) => artifactId === "code-review").digest
+
+  // 模拟 Challenger 越权修改受保护制品
+  artifacts.write("reviews/existing.md", "Tampered by a read-only member\n")
+  const challenger = execution.activeMembers().find(({ role }) => role === "challenger")
+  const tamperedReport = report("Reviewed against the tampered content.", [], [`report:${ownerReceipt.reportId}`])
+  tamperedReport.recommendation = "accept"
+  await challenger.report(tamperedReport)
+  await runtime.leadControl.run()
+
+  const state = await store.loadTask(opened.task.id)
+  const challengerAssignment = state.workGraph.assignments.find(({ teamRole }) => teamRole === "challenger")
+  assert.ok(challengerAssignment.attempts.some(({ status }) => status === "rework"))
+  assert.equal(await artifacts.read("reviews/existing.md"), "Authoritative review\n")
+  assert.equal(digestValue(await artifacts.read("reviews/existing.md")), registered)
 })

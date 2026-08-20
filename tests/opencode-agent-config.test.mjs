@@ -45,19 +45,21 @@ test("explicit user agents become restart-time OpenCode subagent configuration",
     },
   })
 
-  assert.deepEqual(configured, ["junior-flash", "expert-opus"])
+  // assistant 未显式配置时回退 junior，junior-flash 同时绑定两个只读助手；
+  // 静态同名成员保持 profile 顺序（junior-flash 在 expert-opus 前），保证能力快照 digest 可复现
+  assert.deepEqual(configured, ["junior-flash", "expert-opus", "team-work-explore", "team-work-librarian"])
   assert.equal(config.agent.build.mode, "primary")
   assert.deepEqual(config.agent["expert-opus"], {
     description: "Team-work Expert 通用成员；成本档位 50，具体分工由团队场景决定。",
     mode: "subagent",
     model: "official/claude-opus-5",
     reasoningEffort: "high",
-    prompt: "你是 Team-work 的 Expert 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，完成后必须调用 team_work_report。不要自行组建下级团队。",
+    prompt: "你是 Team-work 的 Expert 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，完成后必须调用 team_work_report。不得自行组建下级团队；仅在并行检索确有价值时，使用 team_work_assist 调用只读 explore 或 librarian 助手，并自行核验与整合结果。",
     permission: {
       task: "deny",
-      team_work_assist: "deny",
-      team_work_assist_status: "deny",
-      team_work_assist_collect: "deny",
+      team_work_assist: "allow",
+      team_work_assist_status: "allow",
+      team_work_assist_collect: "allow",
       team_work_report: "allow",
       workflow_open: "deny",
       workflow_plan: "deny",
@@ -71,7 +73,7 @@ test("automatic user config exposes only models resolved in the installed profil
   const config = {}
   const configured = applyOpenCodeAgentConfig(config, { profile, userConfig: { agents: "auto" } })
 
-  assert.deepEqual(configured, ["junior-flash", "senior-terra"])
+  assert.deepEqual(configured, ["junior-flash", "senior-terra", "team-work-explore", "team-work-librarian"])
   assert.equal(config.agent["junior-flash"].model, "gateway/deepseek-v4-flash")
   assert.equal(config.agent["expert-opus"], undefined)
 })
@@ -110,19 +112,21 @@ test("merged OpenCode permissions keep every Lead on the four-tool control plane
   assertPermissions(effectivePermission(config, "junior-flash"), {
     ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
     team_work_report: "allow",
-    team_work_assist: "deny",
-    team_work_assist_status: "deny",
-    team_work_assist_collect: "deny",
+    team_work_assist: "allow",
+    team_work_assist_status: "allow",
+    team_work_assist_collect: "allow",
   })
 })
 
-test("one independent helper binding creates two hidden read-only assistants", () => {
+test("one assistant role entry creates two hidden read-only assistants", () => {
   const config = {}
   const configured = applyOpenCodeAgentConfig(config, {
     profile,
     userConfig: {
-      agents: "auto",
-      helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
+      agents: {
+        "junior-flash": { model: "gateway/deepseek-v4-flash" },
+        "assist-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "assistant" },
+      },
     },
   })
 
@@ -158,11 +162,17 @@ test("one independent helper binding creates two hidden read-only assistants", (
   }
 })
 
-test("dynamic agent configuration rejects names outside the installed catalog", () => {
+test("dynamic agent configuration requires a role for names outside the installed catalog", () => {
   assert.throws(
     () => applyOpenCodeAgentConfig({}, { profile, userConfig: { agents: { rogue: { model: "gateway/rogue" } } } }),
-    (error) => error.code === "AGENT_CONFIG_INVALID" && /rogue/.test(error.message),
+    (error) => error.code === "AGENT_CONFIG_INVALID" && /rogue/.test(error.message) && /role/.test(error.message),
   )
+  const configured = applyOpenCodeAgentConfig({}, {
+    profile,
+    userConfig: { agents: { "senior-ds": { model: "gateway/deepseek-v4-flash", role: "senior" } } },
+  })
+  // 没有 junior 成员且未显式配置 assistant 时，不注册只读助手
+  assert.deepEqual(configured, ["senior-ds"])
 })
 
 test("explicit restart-time bindings replace stale installed model availability in the effective profile", () => {
@@ -170,28 +180,47 @@ test("explicit restart-time bindings replace stale installed model availability 
     agents: { "expert-opus": { model: "official/claude-opus-5", effort: "high" } },
   })
 
-  assert.equal(effective.agents.find(({ id }) => id === "expert-opus").resolvedModel, "official/claude-opus-5")
-  assert.deepEqual(effective.agents.find(({ id }) => id === "expert-opus").capabilities, ["general"])
-  assert.equal(effective.agents.find(({ id }) => id === "junior-flash").resolvedModel, null)
+  assert.equal(effective.agents.length, 1)
+  assert.equal(effective.agents[0].id, "expert-opus")
+  assert.equal(effective.agents[0].role, "expert")
+  assert.equal(effective.agents[0].resolvedModel, "official/claude-opus-5")
+  assert.deepEqual(effective.agents[0].capabilities, ["general"])
 })
 
-test("effective profile advertises the independently configured helper model", () => {
+test("challenger role entries join the member catalog with senior cost tier", () => {
   const effective = resolveEffectivePlatformProfile(profile, {
-    agents: "auto",
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
+    agents: {
+      "junior-flash": { model: "gateway/deepseek-v4-flash" },
+      "challenger-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "challenger" },
+    },
+  })
+  const challenger = effective.agents.find(({ id }) => id === "challenger-ds")
+  assert.equal(challenger.role, "challenger")
+  assert.equal(challenger.tier, "senior")
+  assert.equal(challenger.costWeight, 10)
+  // assistant 无显式配置时回退 junior，helpers 解析为 junior 的模型
+  assert.equal(effective.helpers[0].resolvedModel, "gateway/deepseek-v4-flash")
+})
+
+test("effective profile advertises the assistant role binding for read-only helpers", () => {
+  const effective = resolveEffectivePlatformProfile(profile, {
+    agents: {
+      "junior-flash": { model: "gateway/deepseek-v4-flash" },
+      "assist-ds": { model: "aigw/glm-5.3", effort: "low", role: "assistant" },
+    },
   })
 
   assert.deepEqual(effective.helpers, [
     {
       id: "team-work-explore",
       kind: "explore",
-      resolvedModel: "gateway/deepseek-v4-flash",
+      resolvedModel: "aigw/glm-5.3",
       capabilities: ["read-only", "code-search"],
     },
     {
       id: "team-work-librarian",
       kind: "librarian",
-      resolvedModel: "gateway/deepseek-v4-flash",
+      resolvedModel: "aigw/glm-5.3",
       capabilities: ["read-only", "web-research"],
     },
   ])

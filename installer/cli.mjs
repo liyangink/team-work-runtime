@@ -55,7 +55,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       return 0
     }
     let platform = {
-      modelMap: undefined,
+      userAgents: undefined,
       opencodeCommand: "opencode",
       openspecCommand: "openspec",
       specMode: "auto",
@@ -71,8 +71,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       installRoot: opencodeRoot,
       sourceRoot,
       platformEnabled: platform.enabled,
-      modelMap: platform.modelMap,
-      helper: platform.helper,
+      userAgents: platform.userAgents,
       opencodeCommand: platform.opencodeCommand,
       openspecCommand: platform.openspecCommand,
       specMode: platform.specMode,
@@ -87,6 +86,7 @@ export async function runInstallerCli(argv, dependencies = {}) {
       code: error.code ?? "INSTALLER_ERROR",
       message: error.message,
       files: error.files,
+      diagnostics: error.diagnostics,
     }, null, 2)}\n`)
     return 1
   }

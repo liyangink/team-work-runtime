@@ -10,6 +10,7 @@ import { compilePolicyPlan } from "../../../runtime/application/policy-compiler.
 import { normalizeStagePlan } from "../../../runtime/domain/stage-plan.mjs"
 import { compileE2ERoute, compileSpecRoute } from "../../../workflow/compiler.mjs"
 import { compileSteeringAction, createSteeringAuthority, evaluateConvergence, projectCostLedger } from "../../../team-work/compiler.mjs"
+import { agentCatalogDigest } from "../../../policy/kernel.mjs"
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
 
@@ -176,6 +177,8 @@ test("a complex design uses a planning bootstrap before freezing a multi-owner g
   assert.equal(bootstrap.plan, null)
   assert.equal(bootstrap.preflight.preflightKind, "planning-bootstrap")
   assert.equal(bootstrap.summary.planningBootstrap, true)
+  assert.ok(bootstrap.preflight.assignments.find(({ assignmentKind, teamRole }) => assignmentKind === "planning" && teamRole === "owner")
+    .completionCriteria.includes("set integrationRequired only when a final integration Owner is required"))
   assert.deepEqual(bootstrap.preflight.assignments.map(({ teamRole, assignmentKind, costTier }) => ({ teamRole, assignmentKind, costTier })), [
     { teamRole: "owner", assignmentKind: "planning", costTier: "junior" },
     { teamRole: "challenger", assignmentKind: "review", costTier: "senior" },
@@ -186,6 +189,16 @@ test("a complex design uses a planning bootstrap before freezing a multi-owner g
     () => normalizeStagePlan(bootstrap.preflight, "stage-run-1"),
     (error) => error.code === "STAGE_PLAN_PREFLIGHT",
   )
+
+  const teamBootstrap = compilePolicyPlan({
+    ...base,
+    taskIntent: {
+      ...base.taskIntent,
+      preferences: { ...base.taskIntent.preferences, execution: "team" },
+    },
+  })
+  assert.ok(teamBootstrap.preflight.assignments.find(({ assignmentKind, teamRole }) => assignmentKind === "planning" && teamRole === "owner")
+    .completionCriteria.includes("define at least two independent work packages"))
 
   const proposalBody = {
     proposalId: "proposal-design-migration",
@@ -299,7 +312,7 @@ test("E2E routing requires independent evidence and never guesses environment re
   )
 })
 
-test("code review keeps all required perspectives independent from cost tiers", async () => {
+test("code review keeps all required perspectives in the cross-package challenge gate", async () => {
   const workflow = await loadJson("workflow/definitions/engineering.json")
   const teamPolicy = await loadJson("team-work/policies/default.json")
   const result = compilePolicyPlan({
@@ -326,7 +339,9 @@ test("code review keeps all required perspectives independent from cost tiers", 
     },
   })
   const owner = result.plan.assignments.find(({ teamRole }) => teamRole === "owner")
-  const perspectives = owner.completionCriteria.filter((entry) => entry.startsWith("cover review perspective:"))
+  const challenger = result.plan.assignments.find(({ teamRole }) => teamRole === "challenger")
+  const perspectives = challenger.completionCriteria.filter((entry) => entry.startsWith("verify delivered review coverage:"))
+  assert.equal(owner.completionCriteria.some((entry) => entry.includes("review perspective:")), false)
   assert.equal(perspectives.length, 8)
   assert.deepEqual(result.plan.assignments.map(({ teamRole, costTier }) => ({ teamRole, costTier })), [
     { teamRole: "owner", costTier: "junior" },
@@ -817,4 +832,112 @@ test("completion cost follows Workflow team scenes instead of hard-coded stage i
 
   assert.equal(result.costLedger.forecastMin, 24)
   assert.equal(result.plan.costProjection.branchPathCount, 1)
+})
+
+test("challenger role agents are preferred over senior for review assignments", async () => {
+  const workflow = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const agents = [
+    ...agentCatalog().agents,
+    { agentId: "challenger-ds", role: "challenger", tier: "senior", modelFamily: "deepseek", assignmentKinds: ["*"] },
+  ]
+  const result = compilePolicyPlan({
+    task: {
+      taskId: "review-with-role",
+      currentStageRun: { stageRunId: "stage-run-1", stage: "implementation", round: 1 },
+      scope: { stages: ["implementation"], edges: [], completionStages: ["implementation"] },
+      costLedger: { accrued: 0, uncertain: 0 },
+    },
+    taskIntent: {
+      objective: "Implement the approved change",
+      constraints: [], exclusions: [],
+      preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+    },
+    availableArtifacts: [artifact("requirement")],
+    workflowDefinition: workflow,
+    teamPolicy,
+    agentCatalog: { digest: agentCatalogDigest(agents), agents },
+    routeInputs: {
+      humanDecisionCapability: "verified-event",
+      spec: { mode: "disabled", configDigest: digestValue({ mode: "disabled" }) },
+      e2e: { mode: "auto", userRequired: false },
+    },
+  })
+
+  const challenger = result.plan.assignments.find(({ teamRole }) => teamRole === "challenger")
+  assert.equal(challenger.execution.agentId, "challenger-ds")
+  assert.equal(challenger.costTier, "senior")
+})
+
+test("challenger without a dedicated role agent falls back to senior", async () => {
+  const workflow = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const catalog = agentCatalog()
+  const result = compilePolicyPlan({
+    task: {
+      taskId: "review-without-role",
+      currentStageRun: { stageRunId: "stage-run-1", stage: "implementation", round: 1 },
+      scope: { stages: ["implementation"], edges: [], completionStages: ["implementation"] },
+      costLedger: { accrued: 0, uncertain: 0 },
+    },
+    taskIntent: {
+      objective: "Implement the approved change",
+      constraints: [], exclusions: [],
+      preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+    },
+    availableArtifacts: [artifact("requirement")],
+    workflowDefinition: workflow,
+    teamPolicy,
+    agentCatalog: catalog,
+    routeInputs: {
+      humanDecisionCapability: "verified-event",
+      spec: { mode: "disabled", configDigest: digestValue({ mode: "disabled" }) },
+      e2e: { mode: "auto", userRequired: false },
+    },
+  })
+
+  const challenger = result.plan.assignments.find(({ teamRole }) => teamRole === "challenger")
+  assert.equal(challenger.execution.agentId, "senior-terra")
+})
+
+test("assistant role agents cannot enter the member catalog", async () => {
+  const workflow = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const agents = [
+    ...agentCatalog().agents,
+    { agentId: "assist-ds", role: "assistant", tier: "junior", modelFamily: "deepseek", assignmentKinds: ["*"] },
+  ]
+  assert.throws(
+    () => compilePolicyPlan({
+      task: {
+        taskId: "assistant-leak",
+        currentStageRun: { stageRunId: "stage-run-1", stage: "implementation", round: 1 },
+        scope: { stages: ["implementation"], edges: [], completionStages: ["implementation"] },
+        costLedger: { accrued: 0, uncertain: 0 },
+      },
+      taskIntent: {
+        objective: "Implement the approved change",
+        constraints: [], exclusions: [],
+        preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+      },
+      availableArtifacts: [artifact("requirement")],
+      workflowDefinition: workflow,
+      teamPolicy,
+      agentCatalog: { digest: agentCatalogDigest(agents), agents },
+      routeInputs: {
+        humanDecisionCapability: "verified-event",
+        spec: { mode: "disabled", configDigest: digestValue({ mode: "disabled" }) },
+        e2e: { mode: "auto", userRequired: false },
+      },
+    }),
+    // schema 先于编译器拒绝 assistant 进入成员目录，编译器侧的同名校验作为语义兜底
+    (error) => error.code === "CONTRACT_INVALID"
+      && error.errors.some(({ instancePath }) => instancePath.endsWith("/role")),
+  )
+})
+
+test("capability snapshot digest stays stable when only role metadata is added", () => {
+  const base = agentCatalog().agents
+  const withRoles = base.map((agent) => ({ ...agent, role: agent.tier }))
+  assert.equal(agentCatalogDigest(withRoles), agentCatalogDigest(base))
 })

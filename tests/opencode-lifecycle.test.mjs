@@ -21,14 +21,14 @@ const modelMap = {
   "expert-opus": "official/claude-opus-5",
   "expert-k3": "gateway/kimi-k3",
 }
+const userAgents = Object.fromEntries(Object.entries(modelMap).map(([id, model]) => [id, { model }]))
 
 function options(projectRoot, overrides = {}) {
   return {
     installRoot: projectRoot,
     sourceRoot,
     hostVersion: "1.18.15",
-    modelMap,
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
+    userAgents,
     availableModels: Object.values(modelMap),
     skipDependencies: true,
     now: () => new Date("2026-08-11T08:00:00.000Z"),
@@ -214,6 +214,22 @@ test("doctor reports a missing TUI registration and update repairs it", async ()
   assert.deepEqual(JSON.parse(await readFile(path.join(projectRoot, "tui.json"), "utf8")).plugin, ["./plugins/team-work-tui.tsx"])
 })
 
+test("doctor fails closed when a managed install path is replaced by a symlink", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const managed = path.join(projectRoot, "plugins/team-work.js")
+  const outside = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-outside-")), "external.js")
+  await writeFile(outside, "// outside\n")
+  await rm(managed)
+  await symlink(outside, managed)
+
+  await assert.rejects(
+    manageOpenCodePlugin("doctor", options(projectRoot)),
+    (error) => error.code === "UNSAFE_PATH",
+  )
+  assert.equal(await readFile(outside, "utf8"), "// outside\n")
+})
+
 test("uninstall removes only the Team-work TUI registration", async () => {
   const projectRoot = await tempProject()
   const tuiPath = path.join(projectRoot, "tui.json")
@@ -255,7 +271,7 @@ test("update repairs missing managed files and doctor reports drift", async () =
 
 test("unresolved model aliases remain visible and dynamic config can omit them", async () => {
   const projectRoot = await tempProject()
-  const result = await manageOpenCodePlugin("install", options(projectRoot, { modelMap: undefined, availableModels: ["gateway/gpt-5.6-terra"] }))
+  const result = await manageOpenCodePlugin("install", options(projectRoot, { userAgents: undefined, availableModels: ["gateway/gpt-5.6-terra"] }))
   assert.ok(result.warnings.length >= 6)
   assert.equal(await exists(path.join(projectRoot, "agents/senior-terra.md")), false)
   assert.equal(await exists(path.join(projectRoot, "agents/expert-opus.md")), false)
@@ -266,12 +282,12 @@ test("unresolved model aliases remain visible and dynamic config can omit them",
 test("doctor does not report stale unresolved Agents outside the current explicit config", async () => {
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot, {
-    modelMap: undefined,
+    userAgents: undefined,
     availableModels: ["gateway/gpt-5.6-terra"],
   }))
 
   const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
-    modelMap: { "expert-opus": "official/claude-opus-5" },
+    userAgents: { "expert-opus": { model: "official/claude-opus-5" } },
   }))
 
   assert.equal(diagnosis.issues.some(({ code }) => code === "MODEL_UNRESOLVED"), false)
@@ -280,7 +296,7 @@ test("doctor does not report stale unresolved Agents outside the current explici
 test("an explicit reduced Agent config does not warn about intentionally omitted candidates", async () => {
   const projectRoot = await tempProject()
   const result = await manageOpenCodePlugin("install", options(projectRoot, {
-    modelMap: { "junior-flash": "gateway/deepseek-v4-flash" },
+    userAgents: { "junior-flash": { model: "gateway/deepseek-v4-flash" } },
     availableModels: ["gateway/deepseek-v4-flash"],
   }))
 
@@ -292,7 +308,7 @@ test("doctor reports an explicit Agent model that OpenCode cannot resolve", asyn
   await manageOpenCodePlugin("install", options(projectRoot))
 
   const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
-    modelMap: { "junior-flash": "gateway/missing-model" },
+    userAgents: { "junior-flash": { model: "gateway/missing-model" } },
   }))
 
   assert.ok(diagnosis.issues.some(({ code, agent, model }) => (
@@ -300,16 +316,16 @@ test("doctor reports an explicit Agent model that OpenCode cannot resolve", asyn
   )))
 })
 
-test("doctor reports an independently configured helper model that OpenCode cannot resolve", async () => {
+test("doctor reports an assistant role model that OpenCode cannot resolve", async () => {
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot))
 
   const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
-    helper: { model: "gateway/missing-helper", effort: "low" },
+    userAgents: { "assist-ds": { model: "gateway/missing-assistant", role: "assistant" } },
   }))
 
   assert.ok(diagnosis.issues.some(({ code, model }) => (
-    code === "HELPER_MODEL_UNAVAILABLE" && model === "gateway/missing-helper"
+    code === "ASSISTANT_MODEL_UNAVAILABLE" && model === "gateway/missing-assistant"
   )))
 })
 
@@ -346,17 +362,17 @@ esac
 `)
   await chmod(fakeOpenCode, 0o755)
   const configured = {
-    "junior-flash": "gateway/model-a",
-    "junior-luna": "gateway/model-a",
-    "senior-terra": "gateway/model-b",
+    "junior-flash": { model: "gateway/model-a" },
+    "junior-luna": { model: "gateway/model-a" },
+    "senior-terra": { model: "gateway/model-b" },
   }
   await manageOpenCodePlugin("install", options(projectRoot, {
-    modelMap: configured,
-    availableModels: Object.values(configured),
+    userAgents: configured,
+    availableModels: Object.values(modelMap),
   }))
 
   const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
-    modelMap: configured,
+    userAgents: configured,
     availableModels: undefined,
     opencodeCommand: fakeOpenCode,
     probeModels: true,
@@ -376,13 +392,12 @@ echo '{"type":"text","part":{"type":"text","text":"OK"}}'
 `)
   await chmod(fakeOpenCode, 0o755)
   await manageOpenCodePlugin("install", options(projectRoot, {
-    modelMap: undefined,
+    userAgents: undefined,
     availableModels: ["gateway/gpt-5.6-terra"],
   }))
 
   const diagnosis = await manageOpenCodePlugin("doctor", options(projectRoot, {
-    modelMap: undefined,
-    helper: undefined,
+    userAgents: undefined,
     availableModels: ["gateway/gpt-5.6-terra"],
     opencodeCommand: fakeOpenCode,
     probeModels: true,
@@ -408,6 +423,148 @@ test("failed OpenCode smoke test rolls back all managed files", async () => {
   assert.equal(await readFile(fakeOpenCode, "utf8"), "#!/bin/sh\nexit 23\n")
 })
 
+test("a failed update keeps a previously missing managed file missing", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const managed = path.join(projectRoot, "plugins/team-work.js")
+  const manifestPath = path.join(projectRoot, "team-work/install.json")
+  const tuiPath = path.join(projectRoot, "tui.json")
+  const manifestBefore = await readFile(manifestPath, "utf8")
+  const tuiBefore = await readFile(tuiPath, "utf8")
+  await rm(managed)
+  const failingOpenCode = path.join(projectRoot, "failing-opencode")
+  await writeFile(failingOpenCode, "#!/bin/sh\nexit 23\n")
+  await chmod(failingOpenCode, 0o755)
+
+  await assert.rejects(
+    manageOpenCodePlugin("update", options(projectRoot, {
+      opencodeCommand: failingOpenCode,
+      skipSmoke: false,
+    })),
+    (error) => error.code === "SMOKE_TEST_FAILED",
+  )
+
+  assert.equal(await exists(managed), false)
+  assert.equal(await readFile(manifestPath, "utf8"), manifestBefore)
+  assert.equal(await readFile(tuiPath, "utf8"), tuiBefore)
+})
+
+test("a failed update restores changed, obsolete, new, manifest, and TUI files as one snapshot", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const manifestPath = path.join(projectRoot, "team-work/install.json")
+  const pluginPath = path.join(projectRoot, "plugins/team-work.js")
+  const recoveryPath = path.join(projectRoot, "team-work/guides/recovery.md")
+  const tuiPath = path.join(projectRoot, "tui.json")
+  const before = {
+    manifest: await readFile(manifestPath, "utf8"),
+    plugin: await readFile(pluginPath, "utf8"),
+    recovery: await readFile(recoveryPath, "utf8"),
+    tui: '{\n  "theme": "keep-me"\n}\n',
+  }
+  await writeFile(tuiPath, before.tui)
+
+  const updatedSource = await mkdtemp(path.join(os.tmpdir(), "team-work-source-"))
+  await copySourceFixture(sourceRoot, updatedSource)
+  await writeFile(path.join(updatedSource, "plugins/opencode/assets/team-work.js"), "// replacement\n")
+  await writeFile(path.join(updatedSource, "skills/team-work/references/new-guide.md"), "new guide\n")
+  await rm(path.join(updatedSource, "plugins/opencode/guides/recovery.md"))
+  await writeFile(path.join(updatedSource, "plugins/opencode/config/historical-managed-paths.json"), `${JSON.stringify({
+    schemaVersion: "1.0",
+    paths: ["team-work/guides/recovery.md"],
+  }, null, 2)}\n`)
+  const failingOpenCode = path.join(projectRoot, "failing-opencode")
+  await writeFile(failingOpenCode, "#!/bin/sh\nexit 23\n")
+  await chmod(failingOpenCode, 0o755)
+
+  await assert.rejects(
+    manageOpenCodePlugin("update", options(projectRoot, {
+      sourceRoot: updatedSource,
+      opencodeCommand: failingOpenCode,
+      skipSmoke: false,
+    })),
+    (error) => error.code === "SMOKE_TEST_FAILED",
+  )
+
+  assert.equal(await readFile(manifestPath, "utf8"), before.manifest)
+  assert.equal(await readFile(pluginPath, "utf8"), before.plugin)
+  assert.equal(await readFile(recoveryPath, "utf8"), before.recovery)
+  assert.equal(await readFile(tuiPath, "utf8"), before.tui)
+  assert.equal(await exists(path.join(projectRoot, "skills/team-work/references/new-guide.md")), false)
+})
+
+test("a retired managed file is backed up before a forced update removes it", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const recoveryPath = path.join(projectRoot, "team-work/guides/recovery.md")
+  await writeFile(recoveryPath, "local recovery notes\n")
+  const updatedSource = await mkdtemp(path.join(os.tmpdir(), "team-work-source-"))
+  await copySourceFixture(sourceRoot, updatedSource)
+  await rm(path.join(updatedSource, "plugins/opencode/guides/recovery.md"))
+  await writeFile(path.join(updatedSource, "plugins/opencode/config/historical-managed-paths.json"), `${JSON.stringify({
+    schemaVersion: "1.0",
+    paths: ["team-work/guides/recovery.md"],
+  }, null, 2)}\n`)
+
+  await assert.rejects(
+    manageOpenCodePlugin("update", options(projectRoot, { sourceRoot: updatedSource })),
+    (error) => error.code === "MANAGED_FILE_MODIFIED",
+  )
+  const result = await manageOpenCodePlugin("update", options(projectRoot, { sourceRoot: updatedSource, force: true }))
+
+  assert.equal(result.status, "updated")
+  assert.equal(await exists(recoveryPath), false)
+  assert.equal(await readFile(path.join(result.backupPath, "team-work/guides/recovery.md"), "utf8"), "local recovery notes\n")
+})
+
+test("a failed uninstall restores managed files, TUI registration, and the prior manifest", async () => {
+  const projectRoot = await tempProject()
+  await manageOpenCodePlugin("install", options(projectRoot))
+  const pluginPath = path.join(projectRoot, "plugins/team-work.js")
+  const tuiPath = path.join(projectRoot, "tui.json")
+  const manifestPath = path.join(projectRoot, "team-work/install.json")
+  const before = {
+    plugin: await readFile(pluginPath, "utf8"),
+    tui: await readFile(tuiPath, "utf8"),
+    manifest: await readFile(manifestPath, "utf8"),
+  }
+  let clockReads = 0
+
+  await assert.rejects(
+    manageOpenCodePlugin("uninstall", options(projectRoot, {
+      now: () => {
+        clockReads += 1
+        if (clockReads === 3) throw new Error("clock failed after file removal")
+        return new Date("2026-08-11T08:00:00.000Z")
+      },
+    })),
+    /clock failed after file removal/,
+  )
+
+  assert.equal(await readFile(pluginPath, "utf8"), before.plugin)
+  assert.equal(await readFile(tuiPath, "utf8"), before.tui)
+  assert.equal(await readFile(manifestPath, "utf8"), before.manifest)
+})
+
+test("every lifecycle command rejects a legacy install manifest without mutation", async (t) => {
+  for (const command of ["install", "update", "doctor", "uninstall"]) {
+    await t.test(command, async () => {
+      const projectRoot = await tempProject()
+      const manifestPath = path.join(projectRoot, "team-work/install.json")
+      const legacy = `${JSON.stringify({ schemaVersion: "1.0", platform: "opencode", status: "installed", managedFiles: [] })}\n`
+      await mkdir(path.dirname(manifestPath), { recursive: true })
+      await writeFile(manifestPath, legacy)
+
+      await assert.rejects(
+        manageOpenCodePlugin(command, options(projectRoot)),
+        (error) => error.code === "INSTALL_MANIFEST_INVALID",
+      )
+      assert.equal(await readFile(manifestPath, "utf8"), legacy)
+      assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), false)
+    })
+  }
+})
+
 test("OpenCode smoke retries one transient Agent discovery miss", async () => {
   const projectRoot = await tempProject()
   const attempts = path.join(projectRoot, "smoke-attempts")
@@ -417,8 +574,9 @@ count=0
 if [ -f "${attempts}" ]; then count=$(cat "${attempts}"); fi
 count=$((count + 1))
 printf '%s' "$count" > "${attempts}"
-if [ "$count" -eq 1 ]; then exit 0; fi
-printf '%s\\n' junior-flash junior-luna senior-terra senior-glm senior-qwen expert-opus expert-k3 team-work-explore team-work-librarian
+if [ "$1 $2" != "debug config" ]; then exit 44; fi
+if [ "$count" -eq 1 ]; then printf '%s\\n' '{"agent":{}}'; exit 0; fi
+printf '%s\\n' '{"agent":{"junior-flash":{},"junior-luna":{},"senior-terra":{},"senior-glm":{},"senior-qwen":{},"expert-opus":{},"expert-k3":{},"team-work-explore":{},"team-work-librarian":{}}}'
 `)
   await chmod(fakeOpenCode, 0o755)
 
@@ -431,10 +589,30 @@ printf '%s\\n' junior-flash junior-luna senior-terra senior-glm senior-qwen expe
   assert.equal(await readFile(attempts, "utf8"), "2")
 })
 
+test("OpenCode smoke reads exact Agent keys from resolved config", async () => {
+  const projectRoot = await tempProject()
+  const fakeOpenCode = path.join(projectRoot, "fake-opencode")
+  await writeFile(fakeOpenCode, `#!/bin/sh
+if [ "$1 $2" != "debug config" ]; then exit 44; fi
+printf '%s\\n' '{"description":"junior-flash junior-luna senior-terra senior-glm senior-qwen expert-opus expert-k3","agent":{"expert-opus":{}}}'
+`)
+  await chmod(fakeOpenCode, 0o755)
+
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(projectRoot, {
+      opencodeCommand: fakeOpenCode,
+      skipSmoke: false,
+    })),
+    (error) => error.code === "SMOKE_TEST_FAILED"
+      && error.diagnostics?.missing?.includes("junior-flash")
+      && !error.diagnostics?.missing?.includes("expert-opus"),
+  )
+})
+
 test("disabled OpenCode platform keeps host smoke and update repair without requiring Agent registration", async () => {
   const projectRoot = await tempProject()
   const fakeOpenCode = path.join(projectRoot, "fake-opencode")
-  await writeFile(fakeOpenCode, "#!/bin/sh\nexit 0\n")
+  await writeFile(fakeOpenCode, "#!/bin/sh\nprintf '%s\\n' '{\"agent\":{}}'\n")
   await chmod(fakeOpenCode, 0o755)
 
   const result = await manageOpenCodePlugin("install", options(projectRoot, {
@@ -729,3 +907,39 @@ async function copySourceFixture(from, to) {
     await cp(path.join(from, relativePath), path.join(to, relativePath), { recursive: true })
   }
 }
+
+test("role entries build the installed profile and register assistant helpers", async () => {
+  const projectRoot = await tempProject()
+  const result = await manageOpenCodePlugin("install", options(projectRoot, {
+    userAgents: {
+      "junior-ds": { model: "gateway/deepseek-v4-flash", effort: "max", role: "junior" },
+      "challenger-ds": { model: "gateway/deepseek-v4-flash", effort: "max", role: "challenger" },
+      "expert-luna": { model: "gateway/gpt-5.6-luna", effort: "high", role: "expert" },
+      "assist-glm": { model: "gateway/glm-5.2", effort: "low", role: "assistant" },
+    },
+    availableModels: ["gateway/deepseek-v4-flash", "gateway/gpt-5.6-luna", "gateway/glm-5.2"],
+  }))
+
+  assert.equal(result.status, "installed")
+  assert.equal(result.warnings.length, 0)
+  const profile = JSON.parse(await readFile(path.join(projectRoot, "team-work/profile.json"), "utf8"))
+  assert.deepEqual(profile.agents.map(({ id }) => id), ["challenger-ds", "expert-luna", "junior-ds"])
+  const byId = Object.fromEntries(profile.agents.map((agent) => [agent.id, agent]))
+  assert.equal(byId["challenger-ds"].role, "challenger")
+  assert.equal(byId["challenger-ds"].tier, "senior")
+  assert.equal(byId["challenger-ds"].costWeight, 10)
+  assert.equal(byId["expert-luna"].tier, "expert")
+  assert.ok(profile.helpers.every(({ resolvedModel }) => resolvedModel === "gateway/glm-5.2"))
+  assert.equal(profile.operations.assist.tool, "team_work_assist")
+})
+
+test("unknown agents without a role fail install with explicit guidance", async () => {
+  const projectRoot = await tempProject()
+  await assert.rejects(
+    manageOpenCodePlugin("install", options(projectRoot, {
+      userAgents: { "senior-ds": { model: "gateway/deepseek-v4-flash" } },
+    })),
+    (error) => error.code === "INVALID_MODEL_MAP" && /senior-ds/.test(error.message) && /role/.test(error.message),
+  )
+  assert.equal(await exists(path.join(projectRoot, "plugins/team-work.js")), false)
+})

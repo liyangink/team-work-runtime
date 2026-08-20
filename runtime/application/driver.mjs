@@ -397,6 +397,8 @@ export function createTaskDriver({
       }
       const kind = observation.kind === "check"
         ? "check-result"
+        : observation.state === "error" && observation.error?.retryable === true
+          ? "execution-lost"
         : `execution-${observation.state}`
       const result = await receive(taskId, {
         observationId,

@@ -1,6 +1,6 @@
 # team-work-runtime Roadmap
 
-状态：Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-7 均已完成并通过两轴终审，下一里程碑为 V2-8 安装生命周期强化、真实 E2E 与发布。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
+状态：Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-7 均已完成并通过两轴终审，V2-8 正在进行真实 E2E 收尾。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，真实问题跟踪见 [`v2-e2e-findings.md`](v2-e2e-findings.md)。
 
 下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v2 里程碑为准。
 
@@ -9,7 +9,7 @@
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 至 V2-7 均已完成并通过两轴终审。OpenCode 已切换到四动作 Lead 控制面、成员报告工具、最小角色上下文、文件型 ArtifactRepository、持久绑定、事件唤醒、重启对账和完整 steering；v1 控制面、schema、fixture 与兼容路径已删除。完整仓库测试为 321/321，最终 Standards/Spec 审查均无 P0/P1。
+- v2 实现：V2-0 至 V2-7 已完成；V2-8 已通过 363/363 完整仓库测试和 npm 打包清单验证。用户配置的 Agent 目录改为 role 驱动（junior/senior/expert/challenger/assistant，challenger 回退 senior、assistant 回退 junior），能力快照 digest 保持兼容，挂起任务可跨升级续跑；平台层强制派单写边界、任务制品内容快照与越权自动恢复已落地并经真实任务复验。无 OMO 的 DeepSeek/Luna 正式 code-review 场景已完成 Owner、Senior Challenger、Expert、多轮收敛、重启恢复和最终人工验收；最新修复后的新人工门禁复验仍待完成。
 
 | v2 里程碑 | 状态 |
 | --- | --- |
@@ -21,7 +21,7 @@
 | V2-5 平台无关 in-memory E2E | 完成 |
 | V2-6 OpenCode/OpenSpec Adapter | 完成 |
 | V2-7 OpenCode 控制面切换 | 完成 |
-| V2-8 安装生命周期、真实 E2E 与发布 | 待开始 |
+| V2-8 安装生命周期、真实 E2E 与发布 | 实现与复验收敛：待发布决策 |
 
 ## v1 Phase 0：规则冻结
 
@@ -92,7 +92,7 @@
 
 已完成：最低版本校验、模型唯一解析、启动时动态 Agent model/effort 注入、独立 helper 模型与只读 explore/librarian 后台辅助链路、跨平台用户配置路径、版本化配置 Schema、用户级 Skill/Plugin 装配、可配置软启停、npm 安装器、项目懒初始化、安装清单、更新备份与回滚、安全卸载、doctor、原生 `promptAsync` child session、稳定 task/work-item 映射、事件驱动挂起与派发轮次级持久提示、深 Runtime `continue` 控制面、阶段重开轮次隔离、人工等待静止协议、最小上下文 Hook、OpenSpec 自动重探测与受管生命周期（活动 change、instructions、路径门禁、完成校验和最终归档）、平台事件审计、右侧 Team 会话与原生 session 跳转，以及网关失败—续派—成员失联的故障注入。侧栏只依赖 OpenCode 官方响应式 session state 重算同步文件快照，不自行创建定时器或订阅事件。
 
-真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发和跨进程续派。待完成：在无 OMO 配置中从实际研发阶段完成 Workflow 路由、Owner、挑战者、核心 Expert 裁决、Lead 控制面验收和最终制品的正式场景 E2E。
+真实网关已完成 DeepSeek/Luna 文本、检索、修改、双 Junior 后台派发、跨进程续派，以及无 OMO 正式 code-review 团队闭环和最终人工验收。完整 Workflow、OpenSpec、网关错误与成员失联由平台无关 E2E、Adapter 集成和故障矩阵覆盖；当前待完成最新修复后新任务的人工门禁实测，详见问题台账。
 
 ## v1 Phase 5：Claude Code 与 OMO PlatformPlugin
 

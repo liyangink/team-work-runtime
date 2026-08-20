@@ -7,7 +7,6 @@
   "required": ["$schema", "agents", "platforms", "spec"],
   "properties": {
     "$schema": { "const": "./schemas/user-config.v1.schema.json" },
-    "helper": { "$ref": "#/$defs/agent" },
     "agents": {
       "oneOf": [
         { "const": "auto" },
@@ -52,7 +51,8 @@
       "required": ["model"],
       "properties": {
         "model": { "type": "string", "pattern": "^[^\\s/]+/.+$" },
-        "effort": { "type": "string", "minLength": 1 }
+        "effort": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["junior", "senior", "expert", "challenger", "assistant"] }
       }
     }
   }

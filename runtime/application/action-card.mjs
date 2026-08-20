@@ -135,7 +135,8 @@ function reportFor(state, stage, reason, decision) {
   const deliveryOwners = assignments.filter(({ teamRole, writableRefs }) => teamRole === "owner" && writableRefs.length > 0)
   const challengers = assignments.filter(({ teamRole }) => teamRole === "challenger")
   const team = assignments.length === 0 ? undefined : {
-    mode: state.stagePlan?.teamMode ?? (deliveryOwners.length > 1 ? "team" : "solo"),
+    mode: state.stagePlan?.teamMode
+      ?? (state.taskIntent?.preferences?.execution === "team" ? "team" : deliveryOwners.length > 1 ? "team" : "solo"),
     owners: deliveryOwners.length,
     challengerTier: challengers.some(({ costTier }) => costTier === "expert") ? "expert" : "senior",
     expert: assignments.some(({ teamRole }) => teamRole === "expert"),

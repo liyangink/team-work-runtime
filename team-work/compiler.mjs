@@ -1,4 +1,6 @@
-import { assertCompiledWorkGraph, digestValue, PolicyError } from "../policy/kernel.mjs"
+import { assertCompiledWorkGraph, agentCatalogDigest, digestValue, PolicyError } from "../policy/kernel.mjs"
+
+const MEMBER_ROLES = new Set(["junior", "senior", "expert", "challenger"])
 
 function fail(code, message, details = []) {
   throw new PolicyError(code, message, details)
@@ -19,17 +21,31 @@ function validateCatalog(catalog) {
   if (!catalog || typeof catalog.digest !== "string" || !Array.isArray(catalog.agents) || catalog.agents.length === 0) {
     fail("AGENT_CATALOG_INVALID", "a normalized agent catalog is required")
   }
-  if (!/^[a-f0-9]{64}$/.test(catalog.digest) || catalog.digest !== digestValue(catalog.agents)) {
+  if (!/^[a-f0-9]{64}$/.test(catalog.digest) || catalog.digest !== agentCatalogDigest(catalog.agents)) {
     fail("AGENT_CATALOG_INVALID", "agent catalog digest does not match its entries")
   }
   if (new Set(catalog.agents.map(({ agentId }) => agentId)).size !== catalog.agents.length) {
     fail("AGENT_CATALOG_INVALID", "agent ids must be unique")
+  }
+  for (const agent of catalog.agents) {
+    const role = agent.role ?? agent.tier
+    if (!MEMBER_ROLES.has(role)) {
+      fail("AGENT_CATALOG_INVALID", `agent ${agent.agentId} has non-member role ${role}; assistants must not enter the member catalog`)
+    }
   }
   return catalog
 }
 
 function supports(agent, assignmentKind) {
   return Array.isArray(agent.assignmentKinds) && (agent.assignmentKinds.includes("*") || agent.assignmentKinds.includes(assignmentKind))
+}
+
+function pickDiverse(candidates, usedFamilies) {
+  return [...candidates].sort((left, right) => {
+    const leftDiverse = usedFamilies.includes(left.modelFamily) ? 1 : 0
+    const rightDiverse = usedFamilies.includes(right.modelFamily) ? 1 : 0
+    return leftDiverse - rightDiverse || left.agentId.localeCompare(right.agentId)
+  })[0]
 }
 
 function chooseAgent(catalog, requestedTier, assignmentKind, usedFamilies = [], forbiddenAgentIds = []) {
@@ -43,13 +59,22 @@ function chooseAgent(catalog, requestedTier, assignmentKind, usedFamilies = [], 
       && !forbiddenAgentIds.includes(agent.agentId)
     ))
     if (candidates.length === 0) continue
-    return [...candidates].sort((left, right) => {
-      const leftDiverse = usedFamilies.includes(left.modelFamily) ? 1 : 0
-      const rightDiverse = usedFamilies.includes(right.modelFamily) ? 1 : 0
-      return leftDiverse - rightDiverse || left.agentId.localeCompare(right.agentId)
-    })[0]
+    return pickDiverse(candidates, usedFamilies)
   }
-  fail("AGENT_TIER_UNAVAILABLE", `no agent can satisfy ${requestedTier}/${assignmentKind}`)
+  const roles = [...new Set(catalog.agents.map((agent) => agent.role ?? agent.tier))].join(", ") || "none"
+  fail("AGENT_TIER_UNAVAILABLE", `no agent can satisfy ${requestedTier}/${assignmentKind}; configured member roles: ${roles}`)
+}
+
+// challenger 优先使用显式 challenger role 的 Agent；未配置时回退 senior（并沿用 senior→expert 梯子）。
+function chooseChallenger(catalog, assignmentKind, usedFamilies = [], forbiddenAgentIds = []) {
+  const byRole = catalog.agents.filter((agent) => (
+    (agent.role ?? agent.tier) === "challenger"
+    && agent.available !== false
+    && supports(agent, assignmentKind)
+    && !forbiddenAgentIds.includes(agent.agentId)
+  ))
+  if (byRole.length > 0) return pickDiverse(byRole, usedFamilies)
+  return chooseAgent(catalog, "senior", assignmentKind, usedFamilies, forbiddenAgentIds)
 }
 
 function assignmentId(seed, label) {
@@ -272,7 +297,12 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
         assignmentKind: "planning",
         inputRefs: workflowDraft.inputRefs,
         outputRefs: [`artifact:stage-plan-proposal:${stageRunId}`],
-        completionCriteria: ["define work packages, outputs, dependencies, and acceptance criteria", "identify integration and unresolved decisions"],
+        completionCriteria: [
+          "define work packages, outputs, dependencies, and acceptance criteria",
+          "identify integration and unresolved decisions",
+          ...(workflowDraft.intent.preferences.execution === "team" ? ["define at least two independent work packages"] : []),
+          "set integrationRequired only when a final integration Owner is required",
+        ],
         dependsOn: [],
       }]
     : workflowDraft.work.packages
@@ -321,7 +351,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
       })
       assignments.push(owner)
       deliveredRefs.push(...workPackage.outputRefs)
-      const reviewAgent = chooseAgent(catalog, scene.challengerTier, "review", usedFamilies)
+      const reviewAgent = chooseChallenger(catalog, "review", usedFamilies)
       usedFamilies.push(reviewAgent.modelFamily)
       challenger = createAssignment({
         taskId: task.taskId,
@@ -364,7 +394,9 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
         writableRefs: workPackage.outputRefs,
         criteria: [
           ...workPackage.completionCriteria,
-          ...(stageScene.requiredPerspectives ?? []).map((perspective) => `cover review perspective: ${perspective}`),
+          ...(workflowDraft.planningRequired ? (stageScene.requiredPerspectives ?? []).map((perspective) => (
+            `ensure planned packages cover review perspective: ${perspective}`
+          )) : []),
         ],
         agent: owner,
         catalogDigest: catalog.digest,
@@ -397,7 +429,7 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
       deliveredRefs = workflowDraft.outputRefs
     }
 
-    const challengerAgent = chooseAgent(catalog, scene.challengerTier, "review", usedFamilies)
+    const challengerAgent = chooseChallenger(catalog, "review", usedFamilies)
     usedFamilies.push(challengerAgent.modelFamily)
     challenger = createAssignment({
       taskId: task.taskId,
@@ -409,7 +441,13 @@ export function compileTeamPlan({ task, workflowDraft, teamPolicy, agentCatalog 
       dependsOn: deliveryIds,
       readableRefs: [...workflowDraft.inputRefs, ...deliveredRefs],
       writableRefs: [],
-      criteria: ["challenge requirements, facts, reasoning, boundaries, cost, and failure paths", "report evidence-backed findings and minimal corrections"],
+      criteria: [
+        "challenge requirements, facts, reasoning, boundaries, cost, and failure paths",
+        "report evidence-backed findings and minimal corrections",
+        ...(!workflowDraft.planningRequired ? (stageScene.requiredPerspectives ?? []).map((perspective) => (
+          `verify delivered review coverage: ${perspective}`
+        )) : []),
+      ],
       agent: challengerAgent,
       catalogDigest: catalog.digest,
     })

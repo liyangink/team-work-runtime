@@ -19,6 +19,20 @@ async function loadJson(relativePath) {
   return JSON.parse(await readFile(path.join(repositoryRoot, relativePath), "utf8"))
 }
 
+function expertRework(report, outcome, stageId) {
+  return {
+    ...report,
+    recommendation: "rework",
+    workflowOutcome: outcome,
+    verdict: {
+      ...report.verdict,
+      outcome: "rework",
+      rationale: `The challenged ${stageId} finding requires workflow rework.`,
+      recommendedAction: outcome,
+    },
+  }
+}
+
 async function fixture({
   routeConfig = { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
   e2eAssessment,
@@ -334,6 +348,7 @@ test("final acceptance can return the task to the user-selected responsible stag
 
 test("a code-review defect follows the member-selected implementation edge", async () => {
   let challenged = false
+  let awaitingExpert = false
   const { runtime, harness, store } = await fixture({
     transformReport({ member, stageId, report: value }) {
       if (
@@ -343,7 +358,12 @@ test("a code-review defect follows the member-selected implementation edge", asy
         && !member.assignmentId.startsWith("preflight-")
       ) {
         challenged = true
-        return { ...value, recommendation: "rework", workflowOutcome: "implementation-defect" }
+        awaitingExpert = true
+        return { ...value, workflowOutcome: "implementation-defect" }
+      }
+      if (awaitingExpert && stageId === "code-review" && member.role === "expert") {
+        awaitingExpert = false
+        return expertRework(value, "implementation-defect", stageId)
       }
       return value
     },
@@ -417,13 +437,19 @@ test("E2E findings follow artifact, product, and test-strategy recovery edges", 
   ]
   for (const entry of cases) await t.test(entry.outcome, async () => {
     let challenged = false
+    let awaitingExpert = false
     const { runtime, harness, store } = await fixture({
       routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "auto" } },
       e2eAssessment: { applicable: true, criticalCrossSystemPath: true, environment: "ready" },
       transformReport({ member, stageId, report: value }) {
         if (!challenged && stageId === "e2e" && member.assignmentId.startsWith("challenger-path-design-")) {
           challenged = true
-          return { ...value, recommendation: "rework", workflowOutcome: entry.outcome }
+          awaitingExpert = true
+          return { ...value, workflowOutcome: entry.outcome }
+        }
+        if (awaitingExpert && stageId === "e2e" && member.role === "expert") {
+          awaitingExpert = false
+          return expertRework(value, entry.outcome, stageId)
         }
         return value
       },
@@ -453,6 +479,7 @@ test("E2E findings follow artifact, product, and test-strategy recovery edges", 
 
 test("three autonomous E2E rework rounds stop for one explicit user extension", async () => {
   let challengedRounds = 0
+  let awaitingExpert = false
   const { runtime, harness, store } = await fixture({
     routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "auto" } },
     e2eAssessment: { applicable: true, criticalCrossSystemPath: true, environment: "ready" },
@@ -463,7 +490,12 @@ test("three autonomous E2E rework rounds stop for one explicit user extension", 
         && member.assignmentId.startsWith("challenger-path-design-")
       ) {
         challengedRounds += 1
-        return { ...value, recommendation: "rework", workflowOutcome: "e2e-defect" }
+        awaitingExpert = true
+        return { ...value, workflowOutcome: "e2e-defect" }
+      }
+      if (awaitingExpert && stageId === "e2e" && member.role === "expert") {
+        awaitingExpert = false
+        return expertRework(value, "e2e-defect", stageId)
       }
       return value
     },

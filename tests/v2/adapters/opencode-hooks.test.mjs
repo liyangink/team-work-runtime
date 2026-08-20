@@ -52,3 +52,36 @@ test("OpenCode hooks inject bounded context and suppress synthetic continuation 
   await hooks["experimental.compaction.autocontinue"]({ sessionID: "lead" }, continuation)
   assert.equal(continuation.enabled, false)
 })
+
+test("member file writes are rejected outside the assignment writable scope", async () => {
+  const executionAdapter = {
+    resolveMemberBinding: async (id) => id === "member" ? { taskId: "task-1" } : null,
+  }
+  const contextHooks = { contextForSession: async () => null }
+  const scopes = new Map([
+    ["writer", ["docs/report.md"]],
+    ["reviewer", []],
+  ])
+  const runtimeHost = { describeSession: async (id) => (scopes.has(id) ? { kind: "member", writablePaths: scopes.get(id) } : { kind: "member" }) }
+  const bindingAdapter = {
+    resolveMemberBinding: async (id) => (scopes.has(id) ? { taskId: "task-1" } : null),
+  }
+  const hooks = createOpenCodeHooks({ executionAdapter: bindingAdapter, contextHooks, runtimeHost, projectRoot: "/project" })
+
+  await hooks["tool.execute.before"]({ tool: "edit", sessionID: "writer", callID: "w1", args: { filePath: "docs/report.md" } }, { args: { filePath: "docs/report.md" } })
+  // 成员常用项目内绝对路径，必须归一化到项目相对后再比对
+  await hooks["tool.execute.before"]({ tool: "edit", sessionID: "writer", callID: "w1b", args: { filePath: "/project/docs/report.md" } }, { args: {} })
+  await hooks["tool.execute.before"]({ tool: "write", sessionID: "writer", callID: "w2", args: { filePath: "./docs/report.md" } }, { args: {} })
+  await assert.rejects(
+    hooks["tool.execute.before"]({ tool: "edit", sessionID: "writer", callID: "w3", args: { filePath: "src/main.mjs" } }, { args: {} }),
+    /TEAM_WORK_MEMBER_WRITE_OUT_OF_SCOPE/,
+  )
+  await assert.rejects(
+    hooks["tool.execute.before"]({ tool: "apply_patch", sessionID: "reviewer", callID: "r1", args: { patch: "*** Begin Patch\n*** Update File: docs/report.md\n@@\n-x\n+y\n*** End Patch" } }, { args: {} }),
+    /只读派单/,
+  )
+  await assert.rejects(
+    hooks["tool.execute.before"]({ tool: "write", sessionID: "reviewer", callID: "r2", args: { filePath: "docs/report.md" } }, { args: {} }),
+    /TEAM_WORK_MEMBER_WRITE_OUT_OF_SCOPE/,
+  )
+})

@@ -5,6 +5,7 @@ import path from "node:path"
 import test from "node:test"
 
 import { createTaskDriver } from "../../../runtime/application/driver.mjs"
+import { createTaskLifecycle } from "../../../runtime/application/task-lifecycle.mjs"
 import { createTaskAggregate, digestEffect, reduceTask } from "../../../runtime/domain/index.mjs"
 import { createMemberDelivery } from "../../../runtime/member-delivery.mjs"
 import { createPlatformObservationSink } from "../../../runtime/platform-observation.mjs"
@@ -19,6 +20,34 @@ const workflow = {
   edges: [],
   terminalStages: ["implementation"],
 }
+
+test("an issued human decision is a hard run boundary after restart", async () => {
+  const state = {
+    taskId: "awaiting-human",
+    status: "awaiting-user",
+    pendingDecision: { phase: "awaiting-user" },
+  }
+  let driverCalls = 0
+  const lifecycle = createTaskLifecycle({
+    reconciler: {
+      async load(taskId) {
+        assert.equal(taskId, state.taskId)
+        return structuredClone(state)
+      },
+    },
+    effectDriver: {
+      async run() {
+        driverCalls += 1
+        throw new Error("the driver must stay idle while awaiting the user")
+      },
+    },
+  })
+
+  const outcome = await lifecycle.runToStable({ taskId: state.taskId, leadBindingRef: "lead-binding" })
+  assert.equal(outcome.reason, "awaiting-user")
+  assert.deepEqual(outcome.state, state)
+  assert.equal(driverCalls, 0)
+})
 
 async function createProject() {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-driver-"))
@@ -576,6 +605,49 @@ test("a lost execution quarantines outputs and starts a fresh recovery Owner", a
   assert.equal("resumeExecutionRef" in dispatched[1], false)
   assert.equal(outcome.state.artifacts.some(({ path: artifactPath }) => artifactPath === "partial-output.txt"), false)
   assert.equal(outcome.state.observationInbox.acknowledgedThrough, 1)
+})
+
+test("a retryable running-session error uses the same lost-execution recovery path", async () => {
+  const projectRoot = await createProject()
+  const store = createFileStore({ projectRoot })
+  await createDispatchPendingTask(store, "retryable-session-error")
+  const dispatched = []
+  const executionAdapter = fakeExecutionAdapter({
+    ensureExecution: async (intent) => {
+      dispatched.push(intent)
+      return {
+        operationId: intent.operationId,
+        effectDigest: intent.effectDigest,
+        status: "confirmed",
+        executionRef: dispatched.length === 1 ? "member-session-error" : "member-session-recovered",
+        agentId: intent.agentId,
+        observedAt: "2026-08-18T10:03:00.000Z",
+      }
+    },
+    inspectExecution: async () => assert.fail("not used"),
+  })
+  const driver = createTaskDriver({ store, executionAdapter, clock: () => "2026-08-18T10:04:00.000Z" })
+  await driver.run({ taskId: "retryable-session-error", waitBudgetMs: 0 })
+  await driver.observe({
+    taskId: "retryable-session-error",
+    observation: {
+      kind: "execution",
+      observationId: "host-event-error-1",
+      dedupeKey: "member-session-error:error:1",
+      executionRef: "member-session-error",
+      assignmentId: "implementation-owner",
+      state: "error",
+      error: { code: "gateway-capacity", message: "temporary capacity failure", retryable: true },
+      observedAt: "2026-08-18T10:04:00.000Z",
+    },
+  })
+
+  const outcome = await driver.run({ taskId: "retryable-session-error", waitBudgetMs: 0 })
+  assert.equal(outcome.reason, "waiting-report")
+  assert.equal(outcome.state.status, "working")
+  assert.equal(outcome.state.workGraph.assignments[0].attempts[0].status, "lost")
+  assert.equal(outcome.state.workGraph.assignments[0].attempts[1].executionRef, "member-session-recovered")
+  assert.deepEqual(dispatched[1].recovery, { kind: "execution-lost", priorAttempt: 1, unverifiedRefs: ["artifact:implementation"] })
 })
 
 test("idle waits for a settle window, resumes the same execution once, then blocks if idle repeats", async () => {

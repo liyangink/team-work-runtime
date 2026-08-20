@@ -73,25 +73,21 @@ function messageCursor(message) {
   return `${String(created).padStart(16, "0")}:${message?.info?.id ?? "unknown"}`
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 function choiceFrom(content, choices) {
-  const normalized = content.toLowerCase()
-  const exact = choices.filter((choice) => normalized.includes(choice.toLowerCase()))
-  if (exact.length === 1) return exact[0]
-  const patterns = {
-    accept: /(?:\baccept\b|\bapprove\b|\byes\b|同意|批准|确认|通过|继续)/i,
-    rework: /(?:\brework\b|\brevise\b|返工|修改|调整|重做)/i,
-    replan: /(?:\breplan\b|重新规划|调整方案|重做计划)/i,
-    stop: /(?:\bstop\b|\bcancel\b|停止|终止|取消)/i,
-  }
-  const matched = choices.filter((choice) => {
-    if (patterns[choice]?.test(content)) return true
-    if (choice.startsWith("return-")) {
-      const target = choice.slice("return-".length).replaceAll("-", " ")
-      return normalized.includes(target) || normalized.includes(choice.slice("return-".length))
-    }
-    return false
-  })
-  return matched.length === 1 ? matched[0] : null
+  const normalized = content.trim().toLowerCase()
+  const direct = normalized.replace(/^\/+/, "").replace(/[.!。！]+$/, "").trim()
+  const exact = choices.find((choice) => direct === choice.toLowerCase())
+  if (exact) return exact
+  if (/(?:不要|不接受|不同意|不批准|不确认|不选择|不通过|不是|拒绝|否决|\bdo\s+not\b|\bdon't\b|\bnot\b|\bno\b|\breject\b|\bdecline\b)/i.test(content)) return null
+  const mentioned = choices.filter((choice) => new RegExp(`(^|[^a-z0-9_-])${escapeRegExp(choice.toLowerCase())}(?=$|[^a-z0-9_-])`, "i").test(normalized))
+  if (mentioned.length !== 1) return null
+  return /(?:选择|选定|确认|同意|批准|通过|决定|\bchoose\b|\bselect\b|\bconfirm\b|\bapprove\b|\bdecision\b)/i.test(content)
+    ? mentioned[0]
+    : null
 }
 
 async function projectRootOf(projectRoot) {
@@ -149,6 +145,7 @@ async function readProjectFile(root, relativePath, label) {
 function normalizeAgents(profile) {
   const agents = (profile?.agents ?? []).flatMap((agent) => agent.resolvedModel ? [{
     agentId: agent.id,
+    role: agent.role ?? agent.tier,
     tier: agent.tier,
     model: agent.resolvedModel,
     ...(agent.effort ? { effort: agent.effort } : {}),
@@ -363,7 +360,15 @@ export function createOpenCodeExecutionAdapter({
           hostSessionRef: binding.hostSessionRef,
         })
       }
-      const statuses = await sessionStatuses()
+      let statuses = await sessionStatuses()
+      if (clear) {
+        for (const executionRef of intent.executionRefs) {
+          const status = statuses?.[executionRef]
+          if (status?.type !== "busy" && status?.type !== "retry") continue
+          await callSdk(async () => client.session.abort({ path: { id: executionRef }, query: { directory: (await roots()).root } }))
+        }
+        statuses = await sessionStatuses()
+      }
       const executions = []
       for (const executionRef of intent.executionRefs) {
         const status = statuses?.[executionRef]

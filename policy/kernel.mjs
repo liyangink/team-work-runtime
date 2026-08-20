@@ -13,6 +13,18 @@ export function digestValue(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
+// 能力快照 digest 只覆盖派发身份（Agent、成本档、模型、能力）；
+// role 是编译期选人元数据，参与 plan 种子而不进入该 digest，
+// 以保证目录引入 role 字段前后对同一批 Agent 的快照 digest 稳定。
+export function agentCatalogDigest(agents) {
+  return digestValue(agents.map(({ agentId, tier, modelFamily, assignmentKinds }) => ({
+    agentId,
+    tier,
+    modelFamily,
+    assignmentKinds,
+  })))
+}
+
 export class PolicyError extends Error {
   constructor(code, message, details = []) {
     super(message)

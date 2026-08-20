@@ -27,6 +27,7 @@
     "plugins/opencode/adapter/runtime-host.mjs",
     "plugins/opencode/assets/",
     "plugins/opencode/config/",
+    "plugins/opencode/config/historical-managed-paths.json",
     "plugins/opencode/context/",
     "plugins/opencode/guides/",
     "plugins/opencode/scripts/",
@@ -57,6 +58,7 @@
     "docs/runtime-v2-cutover-checklist.md",
     "docs/runtime-v2-implementation-plan.md",
     "docs/runtime-v2-workflow-simulation.md",
+    "docs/v2-e2e-findings.md",
     "docs/validation/opencode-real-gateway-2026-08-11.md",
     "docs/validation/opencode-real-gateway-2026-08-11.json"
   ],

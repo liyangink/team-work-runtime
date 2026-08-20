@@ -1,12 +1,54 @@
 {
   "schemaVersion": "1.0",
   "agents": [
-    { "id": "junior-flash", "tier": "junior", "requestedModel": "deepseek-v4-flash", "costWeight": 1 },
-    { "id": "junior-luna", "tier": "junior", "requestedModel": "gpt-5.6-luna", "costWeight": 1 },
-    { "id": "senior-terra", "tier": "senior", "requestedModel": "gpt-5.6-terra", "costWeight": 10 },
-    { "id": "senior-glm", "tier": "senior", "requestedModel": "glm-5.2", "costWeight": 10 },
-    { "id": "senior-qwen", "tier": "senior", "requestedModel": "qwen3.8-max", "costWeight": 10 },
-    { "id": "expert-opus", "tier": "expert", "requestedModel": "claude-opus-5", "costWeight": 50 },
-    { "id": "expert-k3", "tier": "expert", "requestedModel": "kimi-k3", "costWeight": 50 }
+    {
+      "role": "junior",
+      "id": "junior-flash",
+      "tier": "junior",
+      "requestedModel": "deepseek-v4-flash",
+      "costWeight": 1
+    },
+    {
+      "role": "junior",
+      "id": "junior-luna",
+      "tier": "junior",
+      "requestedModel": "gpt-5.6-luna",
+      "costWeight": 1
+    },
+    {
+      "role": "senior",
+      "id": "senior-terra",
+      "tier": "senior",
+      "requestedModel": "gpt-5.6-terra",
+      "costWeight": 10
+    },
+    {
+      "role": "senior",
+      "id": "senior-glm",
+      "tier": "senior",
+      "requestedModel": "glm-5.2",
+      "costWeight": 10
+    },
+    {
+      "role": "senior",
+      "id": "senior-qwen",
+      "tier": "senior",
+      "requestedModel": "qwen3.8-max",
+      "costWeight": 10
+    },
+    {
+      "role": "expert",
+      "id": "expert-opus",
+      "tier": "expert",
+      "requestedModel": "claude-opus-5",
+      "costWeight": 50
+    },
+    {
+      "role": "expert",
+      "id": "expert-k3",
+      "tier": "expert",
+      "requestedModel": "kimi-k3",
+      "costWeight": 50
+    }
   ]
 }

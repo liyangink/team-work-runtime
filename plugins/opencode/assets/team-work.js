@@ -34,9 +34,19 @@ async function roleGuides() {
 
 function toolSchemas() {
   const stage = tool.schema.enum(["research", "design", "design-review", "spec", "spec-review", "implementation", "test", "code-review", "e2e", "finish"])
-  const artifact = tool.schema.object({ kind: tool.schema.string().min(1), path: tool.schema.string().min(1) })
-  const reportArtifact = tool.schema.object({ ref: tool.schema.string().min(1), path: tool.schema.string().min(1) })
-  const check = tool.schema.object({ name: tool.schema.string().min(1), result: tool.schema.enum(["pass", "fail", "not-run"]), evidence_ref: tool.schema.string().min(1).optional() })
+  const artifact = tool.schema.object({
+    kind: tool.schema.string().min(1).describe("制品类型；代码使用 source，测试使用 tests，需求使用 requirement"),
+    path: tool.schema.string().min(1).describe("项目内文件路径；相对路径优先，项目内绝对路径会自动归一化"),
+  })
+  const reportArtifact = tool.schema.object({
+    ref: tool.schema.string().min(1).describe("必须使用派单中给出的完整 artifact: 引用，例如 artifact:code-review；不要用此工具试探格式"),
+    path: tool.schema.string().min(1),
+  })
+  const check = tool.schema.object({
+    name: tool.schema.string().min(1),
+    result: tool.schema.enum(["pass", "fail", "not-run"]),
+    evidence_ref: tool.schema.string().min(1).optional().describe("只能填写已登记的 artifact:/report:/check: 引用；没有稳定引用时省略，禁止填写说明文字"),
+  })
   const finding = tool.schema.object({ severity: tool.schema.enum(["info", "risk", "blocker"]), statement: tool.schema.string().min(1), evidence_refs: tool.schema.array(tool.schema.string().min(1)).default([]) })
   const verdict = tool.schema.object({
     outcome: tool.schema.enum(["accept", "rework", "choose-option", "need-more-evidence", "escalate-to-user"]),
@@ -70,7 +80,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
     routeConfig: { spec: { mode: loaded.platform.specMode }, e2e: { mode: "auto" } },
   })
   const contextHooks = createOpenCodeContextHooks({ runtimeHost })
-  const hooks = createOpenCodeHooks({ executionAdapter, contextHooks, runtimeHost })
+  const hooks = createOpenCodeHooks({ executionAdapter, contextHooks, runtimeHost, projectRoot: root })
   const handlers = createOpenCodeToolHandlers({ runtimeHost })
   const schema = toolSchemas()
 
@@ -86,7 +96,10 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
       workflow_open: tool({
         description: TOOL_DESCRIPTIONS.workflow_open,
         args: {
-          task_id: tool.schema.string().min(1).optional(), title: tool.schema.string().min(1).optional(), objective: tool.schema.string().min(1).optional(),
+          mode: tool.schema.enum(["create", "resume"]).describe("必填：create 创建新任务，resume 恢复已有任务"),
+          task_id: tool.schema.string().min(1).optional().describe("仅 mode=resume 时有效；create 模式下即使供应商自动填充也会安全忽略"),
+          title: tool.schema.string().min(1).optional().describe("与 objective 同时提供时创建新任务"),
+          objective: tool.schema.string().min(1).optional().describe("与 title 同时提供时创建新任务"),
           entry_stage: schema.stage.optional(), completion_mode: tool.schema.enum(["workflow", "through-stage"]).default("workflow"), completion_stage: schema.stage.optional(),
           existing_artifacts: tool.schema.array(schema.artifact).default([]),
         },
@@ -107,7 +120,7 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
           action: tool.schema.enum([
             "choose", "owner-explain", "owner-rework", "collect-evidence", "challenge-again",
             "expert-arbitrate", "second-expert-opinion", "replace-owner", "replan", "escalate-to-user",
-          ]), directive: tool.schema.string().min(1),
+          ]), directive: tool.schema.string().min(1).describe("choose 时填写当前 ActionCard choice 的精确值；其他动作填写简明指令"),
           target_ref: tool.schema.string().min(1).optional(), reference_refs: tool.schema.array(tool.schema.string().min(1)).optional(), note: tool.schema.string().optional(),
         },
         execute: async (args, context) => json(await handlers.workflow_steer(args, context)),
@@ -117,14 +130,15 @@ export const TeamWorkPlugin = async ({ client, directory, worktree }) => {
         args: {
           outcome: tool.schema.enum(["delivered", "rework", "blocked", "needs-user"]), summary: tool.schema.string().min(1),
           artifacts: tool.schema.array(schema.reportArtifact).default([]), evidence_refs: tool.schema.array(tool.schema.string().min(1)).default([]), unresolved: tool.schema.array(tool.schema.string().min(1)).optional(),
-          checks: tool.schema.array(schema.check).optional(), findings: tool.schema.array(schema.finding).optional(), recommendation: tool.schema.enum(["accept", "rework", "escalate"]),
+          checks: tool.schema.array(schema.check).optional(), findings: tool.schema.array(schema.finding).optional(),
+          recommendation: tool.schema.enum(["accept", "rework", "escalate"]).describe("只评价当前派单交付：交付合格用 accept；只有本轮制品或结论必须重做时用 rework；产品缺陷本身写入 findings/unresolved"),
           workflow_outcome: tool.schema.string().regex(/^[a-z][a-z0-9-]*$/).optional(), verdict: schema.verdict.optional(),
         },
         execute: async (args, context) => json(await handlers.team_work_report(args, context)),
       }),
-      ...(loaded.config.helper ? {
+      ...(effectiveProfile.helpers?.some(({ resolvedModel }) => resolvedModel) ? {
         team_work_assist: tool({
-          description: "受管成员非阻塞创建临时只读 explore/librarian Helper。",
+          description: "受管成员非阻塞创建临时只读 explore/librarian 助手。",
           args: { kind: tool.schema.enum(["explore", "librarian"]), prompt: tool.schema.string().min(1), title: tool.schema.string().optional() },
           execute: async (args, context) => json(await executionAdapter.assist({ parentSessionId: context.sessionID, ...args })),
         }),

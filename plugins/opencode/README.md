@@ -30,7 +30,7 @@ OpenCode 会自动发现全局 `plugins/` 下的 Server 入口；TUI 入口按�
 
 显式 Agent 必须使用 OpenCode 可识别的完整 `provider/model`。Plugin 启动时动态注入 Agent，`effort` 映射为 Agent 级 `reasoningEffort`。修改后重启 OpenCode 即可。
 
-可选的顶层 `helper` 使用独立模型和 effort，同时生成隐藏的 `team-work-explore` 与 `team-work-librarian`。它不继承 Junior；未配置时不注入只读助手。
+显式条目通过 `role`（`junior | senior | expert | challenger | assistant`）声明职责，ID 可自由命名；`challenger` 未配置时回退 `senior`，`assistant` 绑定 `team-work-explore` 与 `team-work-librarian` 两个只读助手并在未配置时回退第一个 `junior` 成员。与内置目录同名且省略 `role` 的条目保持“只改模型”语义；未知 ID 缺少 `role` 会被安装器拒绝并提示补齐。
 
 ## OpenSpec
 

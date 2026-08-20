@@ -47,11 +47,13 @@ test("update CLI takes all model and command configuration from the fixed file",
   const configRoot = path.join(userRoot, ".config", "team-work")
   const opencodeRoot = path.join(userRoot, ".config", "opencode")
   await mkdir(configRoot, { recursive: true })
-  const models = { "junior-luna": "gateway/gpt-5.6-luna" }
+  const agents = {
+    "junior-luna": { model: "gateway/gpt-5.6-luna", effort: "medium" },
+    "assist-ds": { model: "gateway/deepseek-v4-flash", effort: "low", role: "assistant" },
+  }
   await writeFile(path.join(configRoot, "config.json"), JSON.stringify({
     $schema: "./schemas/user-config.v1.schema.json",
-    helper: { model: "gateway/deepseek-v4-flash", effort: "low" },
-    agents: { "junior-luna": { model: models["junior-luna"], effort: "medium" } },
+    agents,
     platforms: { opencode: { enabled: false, command: "opencode-next" } },
     spec: { provider: "openspec", mode: "required", command: "openspec-next" },
   }))
@@ -70,8 +72,7 @@ test("update CLI takes all model and command configuration from the fixed file",
   assert.equal(exitCode, 0)
   assert.equal(received.command, "update")
   assert.equal(received.options.platformEnabled, false)
-  assert.deepEqual(received.options.modelMap, models)
-  assert.deepEqual(received.options.helper, { model: "gateway/deepseek-v4-flash", effort: "low" })
+  assert.deepEqual(received.options.userAgents, agents)
   assert.equal(received.options.opencodeCommand, "opencode-next")
   assert.equal(received.options.openspecCommand, "openspec-next")
   assert.equal(received.options.specMode, "required")
@@ -173,6 +174,35 @@ test("installer CLI reports stable JSON errors and uninstall remains recoverable
   })
   assert.equal(uninstallExit, 0)
   assert.equal(uninstallCommand, "uninstall")
+})
+
+test("installer CLI preserves bounded lifecycle diagnostics", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "team-work-installer-cli-"))
+  const configRoot = path.join(root, "team-work")
+  await mkdir(configRoot, { recursive: true })
+  await writeFile(path.join(configRoot, "config.json"), `${JSON.stringify({
+    $schema: "./schemas/user-config.v1.schema.json",
+    agents: "auto",
+    platforms: { opencode: { enabled: true } },
+    spec: { provider: "openspec", mode: "auto" },
+  })}\n`)
+  let errorOutput = ""
+
+  const exitCode = await runInstallerCli(["doctor"], {
+    configRoot,
+    opencodeRoot: path.join(root, "opencode"),
+    manage: async () => {
+      throw Object.assign(new Error("smoke failed"), {
+        code: "SMOKE_TEST_FAILED",
+        diagnostics: { stderr: "plugin import failed" },
+      })
+    },
+    writeOut: () => {},
+    writeError: (text) => { errorOutput += text },
+  })
+
+  assert.equal(exitCode, 1)
+  assert.deepEqual(JSON.parse(errorOutput).diagnostics, { stderr: "plugin import failed" })
 })
 
 test("installer CLI rejects the removed project-scoped option", async () => {

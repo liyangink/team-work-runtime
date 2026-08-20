@@ -1,3 +1,5 @@
+import path from "node:path"
+
 import { createRuntimeFacade } from "../../../runtime/application/runtime-facade.mjs"
 import { createFileContextComposer } from "../../../runtime/application/context-composer.mjs"
 import { createSignalHub } from "../../../runtime/application/signal-hub.mjs"
@@ -12,9 +14,106 @@ function taskSelectionProblem() {
   }
 }
 
+function taskNotFoundProblem(taskId) {
+  return {
+    code: "TASK_NOT_FOUND",
+    message: `任务 ${taskId} 不存在。只有 task_id 表示恢复已有任务。`,
+    impact: "任务状态未改变。",
+    next: { kind: "none", reason: "如需创建新任务，请使用 mode=create 并提供 title 与 objective。" },
+  }
+}
+
 function requireSession(value) {
   if (typeof value !== "string" || value === "") throw new TypeError("OpenCode session id is required")
   return value
+}
+
+function normalizeProjectPath(projectRoot, value, code) {
+  const root = path.resolve(projectRoot)
+  if (!path.isAbsolute(value ?? "")) return value
+  const relative = path.relative(root, path.resolve(value))
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw Object.assign(new Error(`制品不在当前项目内：${value}`), { code })
+  }
+  return relative.split(path.sep).join("/")
+}
+
+function normalizeOpenInput(projectRoot, input) {
+  if (!Array.isArray(input?.existingArtifacts)) return input
+  return {
+    ...input,
+    existingArtifacts: input.existingArtifacts.map((artifact) => {
+      const value = artifact?.locator?.value
+      if (artifact?.locator?.type !== "project-path" || !path.isAbsolute(value ?? "")) return artifact
+      return { ...artifact, locator: { ...artifact.locator, value: normalizeProjectPath(projectRoot, value, "OPEN_ARTIFACT_PATH_ESCAPE") } }
+    }),
+  }
+}
+
+function normalizeReference(ref, acceptedReportIds, knownArtifactIds) {
+  if (acceptedReportIds.has(ref)) return `report:${ref}`
+  if (knownArtifactIds.has(ref)) return `artifact:${ref}`
+  return ref
+}
+
+export function normalizeOpenCodeMemberReport(projectRoot, report, {
+  role,
+  allowArtifacts = role === "owner",
+  acceptedReportRefs = [],
+  knownArtifactRefs = [],
+} = {}) {
+  if (!Array.isArray(report?.artifacts)) return report
+  const acceptedReportIds = new Set(acceptedReportRefs.map((entry) => entry.reportId ?? entry))
+  const knownArtifactIds = new Set(knownArtifactRefs
+    .filter((ref) => typeof ref === "string" && ref.startsWith("artifact:"))
+    .map((ref) => ref.slice("artifact:".length)))
+  const normalizeRefs = (refs = []) => refs.map((ref) => normalizeReference(ref, acceptedReportIds, knownArtifactIds))
+  const findingEvidenceRefs = (report.findings ?? []).flatMap((finding) => normalizeRefs(finding.evidenceRefs))
+  const verdictEvidenceRefs = normalizeRefs(report.verdict?.evidenceRefs)
+  const directEvidenceRefs = normalizeRefs(report.evidenceRefs)
+  const evidenceRefs = directEvidenceRefs.length > 0
+    ? directEvidenceRefs
+    : [...new Set([...verdictEvidenceRefs, ...findingEvidenceRefs])]
+  const stableEvidence = new Set([
+    ...evidenceRefs,
+    ...report.artifacts.map(({ ref }) => normalizeReference(ref, acceptedReportIds, knownArtifactIds)),
+  ])
+  const normalized = {
+    ...report,
+    evidenceRefs,
+    artifacts: allowArtifacts ? report.artifacts.map((artifact) => ({
+      ...artifact,
+      ref: normalizeReference(artifact.ref, acceptedReportIds, knownArtifactIds),
+      path: normalizeProjectPath(projectRoot, artifact.path, "REPORT_ARTIFACT_PATH_ESCAPE"),
+    })) : [],
+    ...(Array.isArray(report.checks) ? {
+      checks: report.checks.map((check) => {
+        const evidenceRef = check.evidenceRef && normalizeReference(check.evidenceRef, acceptedReportIds, knownArtifactIds)
+        return evidenceRef && stableEvidence.has(evidenceRef)
+          ? { ...check, evidenceRef }
+          : Object.fromEntries(Object.entries(check).filter(([key]) => key !== "evidenceRef"))
+      }),
+    } : {}),
+    ...(Array.isArray(report.findings) ? {
+      findings: report.findings.map((finding) => ({
+        ...finding,
+        evidenceRefs: normalizeRefs(finding.evidenceRefs),
+      })),
+    } : {}),
+    ...(report.verdict ? {
+      verdict: {
+        ...report.verdict,
+        evidenceRefs: verdictEvidenceRefs.length > 0 ? verdictEvidenceRefs : evidenceRefs,
+      },
+    } : {}),
+  }
+  if (role !== "expert") delete normalized.verdict
+  return normalized
+}
+
+export function normalizeOpenCodeSteerInput(state, input) {
+  if (input?.action !== "choose" || typeof input.directive !== "string") return input
+  return { ...input, directive: input.directive.trim() }
 }
 
 export function createOpenCodeRuntimeHost({
@@ -93,9 +192,19 @@ export function createOpenCodeRuntimeHost({
     async open(hostSessionRef, input) {
       await ready()
       const sessionId = requireSession(hostSessionRef)
+      const normalizedInput = normalizeOpenInput(projectRoot, input)
       const current = sessions.get(sessionId)
-      const runtime = input?.taskId && current?.taskId === input.taskId ? current.runtime : facade(sessionId)
-      const card = await runtime.leadControl.open(input)
+      let runtime = normalizedInput?.taskId && current?.taskId === normalizedInput.taskId ? current.runtime : facade(sessionId)
+      let card
+      try {
+        card = await runtime.leadControl.open(normalizedInput?.taskId ? { taskId: normalizedInput.taskId } : normalizedInput)
+      } catch (error) {
+        if (normalizedInput?.taskId && error?.code === "TASK_NOT_FOUND") {
+          return taskNotFoundProblem(normalizedInput.taskId)
+        } else {
+          throw error
+        }
+      }
       if (card.task?.id) sessions.set(sessionId, { runtime, taskId: card.task.id })
       if (!card.task?.id) return card
       await reconcilePlatform(card.task.id)
@@ -116,7 +225,9 @@ export function createOpenCodeRuntimeHost({
 
     async steer(hostSessionRef, input) {
       const selected = await restore(hostSessionRef)
-      return selected ? selected.runtime.leadControl.steer(input) : taskSelectionProblem()
+      if (!selected) return taskSelectionProblem()
+      const state = await store.loadTask(selected.taskId)
+      return selected.runtime.leadControl.steer(normalizeOpenCodeSteerInput(state, input))
     },
 
     async report(memberSessionRef, report) {
@@ -130,6 +241,13 @@ export function createOpenCodeRuntimeHost({
         error.code = "MEMBER_BINDING_REQUIRED"
         throw error
       }
+      const state = await store.loadTask(binding.taskId)
+      const assignment = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === binding.assignmentId)
+      if (!assignment) {
+        const error = new Error("当前成员派单不存在。")
+        error.code = "MEMBER_ASSIGNMENT_REQUIRED"
+        throw error
+      }
       const runtime = sessions.get(binding.hostSessionRef)?.runtime ?? facade(binding.hostSessionRef)
       return runtime.memberDeliveryFor({
         taskId: binding.taskId,
@@ -137,7 +255,12 @@ export function createOpenCodeRuntimeHost({
         attemptId: binding.attemptId,
         executionRef: binding.executionRef,
         operationKey: binding.operationKey,
-      }).report(report)
+      }).report(normalizeOpenCodeMemberReport(projectRoot, report, {
+        role: assignment.teamRole,
+        allowArtifacts: assignment.teamRole === "owner" && assignment.writableRefs.length > 0,
+        acceptedReportRefs: state.acceptedReportRefs,
+        knownArtifactRefs: [...assignment.readableRefs, ...assignment.writableRefs],
+      }))
     },
 
     async describeSession(sessionRef) {
@@ -152,6 +275,7 @@ export function createOpenCodeRuntimeHost({
           const state = await store.loadTask(member.taskId)
           const assignment = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === member.assignmentId)
           if (!assignment) return null
+          const artifactById = new Map(state.artifacts.map((artifact) => [`artifact:${artifact.artifactId}`, artifact.path]))
           return {
             kind: "member",
             taskId: member.taskId,
@@ -160,6 +284,9 @@ export function createOpenCodeRuntimeHost({
             stage: state.currentStageRun.stage,
             contextRef: assignment.execution.contextRef,
             promptRef: assignment.execution.promptRef,
+            writablePaths: assignment.writableRefs
+              .filter((ref) => artifactById.has(ref))
+              .map((ref) => artifactById.get(ref)),
           }
         }
       }

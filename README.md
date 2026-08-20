@@ -132,7 +132,7 @@ opencode
 
 同档多成员优先选择不同模型。挑战者通常由 Senior 或 Expert 兼任；Expert 既可把关，也可亲自承担复杂核心工作，但不能裁决本人制品。
 
-成员需要并行检索时，可调用两个临时只读助手：`team-work-explore` 负责代码探索，`team-work-librarian` 负责外部资料。它们共用一个独立 `helper` 模型，不占 Junior/Senior/Expert 席位，也不承担制品、挑战或裁决责任；调用成员负责核验并整合结果。
+成员需要并行检索时，可调用两个临时只读助手：`team-work-explore` 负责代码探索，`team-work-librarian` 负责外部资料。它们共用一个 `assistant` 角色绑定（未配置时回退 junior 成员），不占 Junior/Senior/Expert 席位，也不承担制品、挑战或裁决责任；调用成员负责核验并整合结果。
 
 活跃成员软上限为 3–5 人，不含 Lead。第二位 Expert 只用于不可逆决策、关键证据冲突、重复验证失败、领域盲区，或用户明确要求的场景。
 
@@ -285,31 +285,36 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 }
 ```
 
-安装器会在配置目录生成对应的本地 JSON Schema。需要指定模型和 effort 时，将 `agents` 改为对象：
+安装器会在配置目录生成对应的本地 JSON Schema。需要指定模型和 effort 时，将 `agents` 改为对象；Agent ID 可自由命名，条目通过 `role` 声明职责，`role` 取值 `junior | senior | expert | challenger | assistant`：
 
 ```json
 {
   "$schema": "./schemas/user-config.v1.schema.json",
-  "helper": {
-    "model": "aigw/deepseek-v4-flash",
-    "effort": "low"
-  },
   "agents": {
-    "junior-flash": {
+    "junior-ds": {
       "model": "aigw/deepseek-v4-flash",
-      "effort": "low"
-    },
-    "junior-luna": {
-      "model": "aigw/gpt-5.6-luna",
-      "effort": "medium"
+      "effort": "low",
+      "role": "junior"
     },
     "senior-terra": {
       "model": "aigw/gpt-5.6-terra",
-      "effort": "high"
+      "effort": "high",
+      "role": "senior"
+    },
+    "challenger-ds": {
+      "model": "aigw/deepseek-v4-flash",
+      "effort": "low",
+      "role": "challenger"
     },
     "expert-opus": {
       "model": "official/claude-opus-5",
-      "effort": "high"
+      "effort": "high",
+      "role": "expert"
+    },
+    "assist-glm": {
+      "model": "aigw/glm-5.2",
+      "effort": "low",
+      "role": "assistant"
     }
   },
   "platforms": {
@@ -326,7 +331,14 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 `model` 必须是 OpenCode 可见的完整 `provider/model`。`effort` 会映射为 Agent 级 `reasoningEffort`；可用值取决于模型、Provider 和网关。
 
-顶层 `helper` 可选且不继承 Junior。配置后，Plugin 用同一绑定生成职责不同的 `team-work-explore` 与 `team-work-librarian`；未配置时不注入这两个助手。
+`role` 语义：
+
+- `junior | senior | expert` 是成员基础角色，成本档位按 1:10:50 计；
+- `challenger` 是显式挑战者角色，成本档位同 senior；未配置任何 `challenger` 时回退 `senior`；
+- `assistant` 绑定两个只读助手 `team-work-explore` 与 `team-work-librarian`，不占成员席位、不承担制品或裁决；未配置时回退第一个 `junior` 成员，仍无 junior 则不注入助手；
+- 与内置目录同名（如 `senior-terra`）且省略 `role` 的条目保持“只改模型”的兼容语义；`agents: "auto"` 行为不变；未知 ID 必须声明 `role`，否则安装器给出明确报错。
+
+推荐用模型名作为 ID 前缀（如 `challenger-ds`），便于在派单、事件和 Team 侧栏直接观察每个成员使用的模型。同一任务进行中改配置不会影响已钉住的工作图；能力快照按 Agent 身份钉住，派发时校验。
 
 `platforms.opencode.enabled` 控制 PlatformPlugin 是否注册 Agent、工具、Hook 和 Team 侧栏。修改配置后只需重启 OpenCode。停用期间 `update` 仍会检查并修复安装资产，方便恢复或升级，但不会要求 Agent 已注册。自定义命令可设置 `platforms.opencode.command` 或 `spec.command`。
 

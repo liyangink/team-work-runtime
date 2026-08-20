@@ -1442,6 +1442,65 @@ function openSteeringIntervention(next, fact) {
   freezeStagePlan(next, fact)
 }
 
+function replanFromSteering(next, fact) {
+  const pending = next.pendingDecision
+  if (
+    next.status !== "awaiting-user"
+    || pending?.phase !== "awaiting-user"
+    || !["reviewing", "ready-to-advance"].includes(next.currentStageRun.status)
+    || next.pendingOperations.length > 0
+    || next.observationInbox.items.length > 0
+  ) throw new DomainError("STEERING_REPLAN_INVALID", "steering replan requires a quiescent reviewed human-wait state")
+  if (
+    fact.sourceDecisionId !== pending.decisionId
+    || fact.sourcePacketRef !== pending.packetRef
+    || fact.sourcePacketDigest !== pending.packetDigest
+  ) throw new DomainError("STEERING_AUTHORITY_STALE", "steering replan no longer matches the issued DecisionPacket")
+  const nextStageRunId = assertIdentifier(fact.nextStageRunId, "fact.nextStageRunId")
+  const reason = assertNonEmptyString(fact.reason, "fact.reason")
+  if (next.stageRuns.some((run) => run.stageRunId === nextStageRunId) || next.currentStageRun.stageRunId === nextStageRunId) {
+    throw new DomainError("STAGE_RUN_DUPLICATE", `stage run ${nextStageRunId} already exists`)
+  }
+  const previous = next.currentStageRun
+  next.stageRuns.push({ ...previous, status: "rework", reason, completedAt: fact.occurredAt })
+  next.currentStageRun = {
+    stageRunId: nextStageRunId,
+    sequence: previous.sequence + 1,
+    round: previous.round + 1,
+    stage: previous.stage,
+    status: "planned",
+  }
+  next.stagePlan = null
+  next.preflight = null
+  next.workGraph = { assignments: [] }
+  next.pendingDecision = null
+  next.status = "needs-plan"
+  next.costLedger = {
+    ...next.costLedger,
+    forecastMin: next.costLedger.accrued,
+    forecastMax: next.costLedger.accrued,
+    uncertain: 0,
+    nextWave: 0,
+  }
+}
+
+function escalateFromSteering(next, fact) {
+  const pending = next.pendingDecision
+  if (
+    next.status !== "awaiting-user"
+    || pending?.phase !== "awaiting-user"
+    || next.pendingOperations.length > 0
+    || next.observationInbox.items.length > 0
+  ) throw new DomainError("STEERING_ESCALATION_INVALID", "steering escalation requires a quiescent human-wait state")
+  if (
+    fact.sourceDecisionId !== pending.decisionId
+    || fact.sourcePacketRef !== pending.packetRef
+    || fact.sourcePacketDigest !== pending.packetDigest
+  ) throw new DomainError("STEERING_AUTHORITY_STALE", "steering escalation no longer matches the issued DecisionPacket")
+  pending.question = assertNonEmptyString(fact.question, "fact.question")
+  pending.issuedAt = fact.occurredAt
+}
+
 function replanStage(next, fact) {
   if (["completed", "cancelled", "awaiting-user"].includes(next.status)) {
     throw new DomainError("STAGE_REPLAN_INVALID", `cannot replan a ${next.status} task`)
@@ -1640,6 +1699,12 @@ export function reduceTask(state, fact) {
       return finish(next, fact)
     case "steering.intervention-opened":
       openSteeringIntervention(next, fact)
+      return finish(next, fact)
+    case "steering.replan-requested":
+      replanFromSteering(next, fact)
+      return finish(next, fact)
+    case "steering.user-escalated":
+      escalateFromSteering(next, fact)
       return finish(next, fact)
     case "stage.replanned":
       replanStage(next, fact)

@@ -11,7 +11,6 @@ const read = (relativePath) => readFile(path.join(projectRoot, relativePath), "u
 const requiredSkillFiles = [
   "skills/workflow/SKILL.md",
   "skills/workflow/agents/openai.yaml",
-  "skills/workflow/references/runtime-commands.md",
   "skills/workflow/references/stages-and-artifacts.md",
   "skills/workflow/references/team-and-spec-routing.md",
   "skills/workflow/references/recovery-and-handoff.md",
@@ -51,13 +50,12 @@ test("Workflow preserves platform-neutral task, gate, team, and SPEC policy", as
   const skill = await read("skills/workflow/SKILL.md")
   const stages = await read("skills/workflow/references/stages-and-artifacts.md")
   const routing = await read("skills/workflow/references/team-and-spec-routing.md")
-  const commands = await read("skills/workflow/references/runtime-commands.md")
 
   assert.match(skill, /任意阶段/)
   assert.match(skill, /当前阶段.*最低/)
   assert.match(skill, /用户明确要求.*团队/)
   assert.match(skill, /CoreRuntime|Runtime/)
-  assert.match(skill, /Platform Profile/)
+  assert.match(skill, /PlatformPlugin/)
   assert.match(routing, /并行价值/)
   assert.match(routing, /独立挑战[^。\n]*不是[^。\n]*team/)
   assert.match(routing, /两种模式[^。\n]*team-work/)
@@ -65,13 +63,11 @@ test("Workflow preserves platform-neutral task, gate, team, and SPEC policy", as
   assert.match(routing, /auto.*跳过|跳过.*auto/s)
   assert.match(routing, /required.*阻塞|阻塞.*required/s)
   assert.match(routing, /disabled.*跳过|跳过.*disabled/s)
-  assert.match(commands, /team-work task create/)
-  assert.match(commands, /--entry-stage/)
   for (const stage of ["research", "design", "design-review", "spec", "spec-review", "implementation", "test", "code-review", "e2e", "finish"]) {
     assert.match(stages, new RegExp(`\\b${stage}\\b`))
   }
   assert.match(stages, /code-review[^]*代码[^]*审查范围/)
-  assert.doesNotMatch([skill, stages, routing, commands].join("\n"), /\.opencode|\.claude|team_create|team_send/)
+  assert.doesNotMatch([skill, stages, routing].join("\n"), /\.opencode|\.claude|team_create|team_send|--expected-revision|team-work task/)
 })
 
 test("Workflow requires plain-language design approval and final human acceptance", async () => {
@@ -115,7 +111,7 @@ test("Team-work preserves cost topology, convergence, ownership, and standalone 
   assert.match(evaluation, /不.*流程|不进入.*循环/)
   assert.match(skill, /没有活动任务/)
   assert.match(skill, /实际研发阶段|适配.*阶段/)
-  assert.match(skill, /创建后立即[^。]*Runtime[^。]*team/)
+  assert.match(skill, /只要求该阶段最低输入/)
   assert.match(skill, /只读助手/)
   assert.match(skill, /不[^。]*(?:团队成员|work item)/)
   assert.match(skill, /调用成员[^。]*(?:核验|整合)|(?:核验|整合)[^。]*调用成员/)

@@ -16,9 +16,10 @@ export {
   createFileEvidenceVerifier,
   createHumanWait,
   createRuntimeFacade,
+  createFileContextComposer,
   createTaskDriver,
   evaluateHumanGate,
   visibleCodePointLength,
 } from "./application/index.mjs"
 export { DomainError, assertTaskState, createTaskAggregate, digestEffect, digestValue, projectStageScope, reduceTask } from "./domain/index.mjs"
-export { createFileStore, createInMemoryStore, StoreError } from "./persistence/index.mjs"
+export { createFileArtifactRepository, createFileStore, createInMemoryStore, initializeProjectRuntime, StoreError } from "./persistence/index.mjs"

@@ -1,11 +1,13 @@
-import { lstat, mkdir, readFile, readdir, realpath } from "node:fs/promises"
+import { lstat, mkdir, readFile, readdir, realpath, rm } from "node:fs/promises"
 import path from "node:path"
 
 import { digestValue } from "../../../runtime/domain/digests.mjs"
 import { atomicJson, withOwnerLock } from "../../../runtime/persistence/transactions.mjs"
+import { assertProjectRuntimeMajor } from "../../../runtime/version.mjs"
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const OPERATION_TITLE = "[team-work-runtime:"
+const HELPER_AGENT = { explore: "team-work-explore", librarian: "team-work-librarian" }
 
 function platformError(code, message, retryable) {
   return { code, message: String(message).slice(0, 1000), retryable }
@@ -99,6 +101,7 @@ async function projectRootOf(projectRoot) {
     throw fail("RUNTIME_ROOT_MISSING", `Runtime control root is unavailable: ${error.message}`)
   })
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw fail("PATH_ESCAPE", "Runtime control root must be a real directory")
+  await assertProjectRuntimeMajor(root)
   return { root, control }
 }
 
@@ -174,21 +177,37 @@ export function createOpenCodeExecutionAdapter({
   let observationSinkFor
 
   async function roots() {
-    if (!rootsPromise) rootsPromise = (async () => {
-      const base = await projectRootOf(projectRoot)
-      const platform = path.join(base.control, "platform", "opencode", "v2")
-      for (const directory of [
-        platform,
-        path.join(platform, "operations"),
-        path.join(platform, "sessions"),
-        path.join(platform, "checks"),
-        path.join(platform, "bindings", "by-task"),
-        path.join(platform, "bindings", "by-ref"),
-        path.join(platform, "locks"),
-      ]) await ensureDirectoryTree(base.control, directory, "OpenCode adapter state")
-      return { ...base, platform }
-    })()
+    if (!rootsPromise) {
+      rootsPromise = (async () => {
+        const base = await projectRootOf(projectRoot)
+        const platform = path.join(base.control, "platform", "opencode", "v2")
+        for (const directory of [
+          platform,
+          path.join(platform, "operations"),
+          path.join(platform, "sessions"),
+          path.join(platform, "helpers"),
+          path.join(platform, "checks"),
+          path.join(platform, "bindings", "by-task"),
+          path.join(platform, "bindings", "by-ref"),
+          path.join(platform, "bindings", "by-session"),
+          path.join(platform, "locks"),
+        ]) await ensureDirectoryTree(base.control, directory, "OpenCode adapter state")
+        return { ...base, platform }
+      })().catch((error) => {
+        rootsPromise = undefined
+        throw error
+      })
+    }
     return rootsPromise
+  }
+
+  async function optionalRoots() {
+    try {
+      return await roots()
+    } catch (error) {
+      if (error.code === "RUNTIME_ROOT_MISSING") return null
+      throw error
+    }
   }
 
   function recordPath(base, kind, id) {
@@ -211,6 +230,11 @@ export function createOpenCodeExecutionAdapter({
     return withOwnerLock(recordPath(base, "locks", operationId).replace(/\.json$/, ".lock"), action)
   }
 
+  async function withLeadBindingLock(action) {
+    const base = await roots()
+    return withOwnerLock(path.join(base.platform, "locks", "lead-bindings.lock"), () => action(base))
+  }
+
   async function loadOperation(operationId) {
     const base = await roots()
     return readOptional(recordPath(base, "operations", operationId))
@@ -220,6 +244,7 @@ export function createOpenCodeExecutionAdapter({
     const base = await roots()
     await atomicJson(recordPath(base, "operations", record.operationId), record)
     if (record.executionRef) {
+      const leadBinding = await bindingForTask(record.taskId)
       await atomicJson(recordPath(base, "sessions", record.executionRef), {
         schemaVersion: "2.0",
         platform: "opencode",
@@ -230,9 +255,17 @@ export function createOpenCodeExecutionAdapter({
         agentId: record.agentId,
         executionRef: record.executionRef,
         operationId: record.operationId,
+        hostSessionRef: leadBinding.hostSessionRef,
         updatedAt: record.updatedAt,
       })
     }
+  }
+
+  function configuredHelper(kind) {
+    const agentId = HELPER_AGENT[kind]
+    const helper = (platformProfile?.helpers ?? []).find((entry) => entry.kind === kind && entry.id === agentId)
+    if (!helper?.resolvedModel) throw fail("HELPER_UNAVAILABLE", `read-only helper ${kind} is not configured`)
+    return { ...helper, agentId }
   }
 
   function checkBindingPath(base, sessionId, toolCallRef) {
@@ -247,18 +280,31 @@ export function createOpenCodeExecutionAdapter({
   }
 
   async function bindingForTask(taskId) {
-    const base = await roots()
-    const binding = await readOptional(recordPath({ ...base, platform: path.join(base.platform, "bindings", "by-task") }, ".", taskId))
-    if (!binding) throw fail("LEAD_BINDING_MISSING", `task ${taskId} has no OpenCode Lead binding`)
-    return binding
+    return withLeadBindingLock(async (base) => {
+      const binding = await readOptional(path.join(base.platform, "bindings", "by-task", `${requireIdentifier(taskId, "taskId")}.json`))
+      if (!binding) throw fail("LEAD_BINDING_MISSING", `task ${taskId} has no OpenCode Lead binding`)
+      const session = await readOptional(path.join(base.platform, "bindings", "by-session", `${requireIdentifier(binding.hostSessionRef, "hostSessionRef")}.json`))
+      if (!session || session.taskId !== taskId || session.bindingRef !== binding.bindingRef) {
+        throw fail("PLATFORM_STATE_CORRUPT", `task ${taskId} has no reciprocal OpenCode Lead session binding`)
+      }
+      return binding
+    })
   }
 
   async function bindingForRef(bindingRef) {
-    const base = await roots()
-    const key = digestValue(bindingRef).slice(0, 32)
-    const binding = await readOptional(path.join(base.platform, "bindings", "by-ref", `${key}.json`))
-    if (!binding || binding.bindingRef !== bindingRef) throw fail("LEAD_BINDING_MISSING", "OpenCode Lead binding is unavailable")
-    return binding
+    return withLeadBindingLock(async (base) => {
+      const key = digestValue(bindingRef).slice(0, 32)
+      const binding = await readOptional(path.join(base.platform, "bindings", "by-ref", `${key}.json`))
+      if (!binding || binding.bindingRef !== bindingRef) throw fail("LEAD_BINDING_MISSING", "OpenCode Lead binding is unavailable")
+      const [task, session] = await Promise.all([
+        readOptional(path.join(base.platform, "bindings", "by-task", `${requireIdentifier(binding.taskId, "taskId")}.json`)),
+        readOptional(path.join(base.platform, "bindings", "by-session", `${requireIdentifier(binding.hostSessionRef, "hostSessionRef")}.json`)),
+      ])
+      if (task?.bindingRef !== bindingRef || session?.bindingRef !== bindingRef) {
+        throw fail("PLATFORM_STATE_CORRUPT", "OpenCode Lead binding indexes are inconsistent")
+      }
+      return binding
+    })
   }
 
   async function sessionGet(sessionId) {
@@ -436,25 +482,156 @@ export function createOpenCodeExecutionAdapter({
           checkReceipts: true,
         },
       }
-      const digest = digestValue(body)
-      return { snapshotId: `opencode-${digest.slice(0, 24)}`, digest, capturedAt: observedAt(clock), ...body }
+      const catalog = agents.map((agent) => ({
+        agentId: agent.agentId,
+        tier: agent.tier,
+        modelFamily: agent.model,
+        assignmentKinds: agent.capabilities.includes("*") ? ["*"] : [...agent.capabilities],
+      }))
+      const digest = digestValue(catalog)
+      const snapshotId = `opencode-${digestValue(body).slice(0, 24)}`
+      return { snapshotId, digest, capturedAt: observedAt(clock), ...body }
     },
 
     async bindLead(input) {
       requireIdentifier(input.taskId, "taskId")
       requireIdentifier(input.hostSessionRef, "hostSessionRef")
       if (input.platform !== "opencode") throw fail("PLATFORM_MISMATCH", "OpenCode adapter only accepts platform=opencode")
-      const base = await roots()
-      const bindingRef = `opencode-${digestValue(input).slice(0, 32)}`
+      const bindingRef = `opencode-${digestValue({ taskId: input.taskId, platform: input.platform }).slice(0, 32)}`
       const receipt = { bindingRef, ...input }
-      await withOwnerLock(path.join(base.platform, "locks", `binding-${input.taskId}.lock`), async () => {
+      await withLeadBindingLock(async (base) => {
         const taskPath = path.join(base.platform, "bindings", "by-task", `${input.taskId}.json`)
-        const existing = await readOptional(taskPath)
-        if (existing && digestValue(existing) !== digestValue(receipt)) throw fail("LEAD_BINDING_CONFLICT", `task ${input.taskId} is already bound to another OpenCode session`)
+        const sessionPath = path.join(base.platform, "bindings", "by-session", `${input.hostSessionRef}.json`)
+        const [existingTask, existingSession] = await Promise.all([readOptional(taskPath), readOptional(sessionPath)])
+        if (existingTask?.hostSessionRef && existingTask.hostSessionRef !== input.hostSessionRef) {
+          const oldSessionPath = path.join(base.platform, "bindings", "by-session", `${existingTask.hostSessionRef}.json`)
+          const oldSession = await readOptional(oldSessionPath)
+          if (oldSession?.taskId === input.taskId && oldSession.bindingRef === existingTask.bindingRef) {
+            await rm(oldSessionPath, { force: true })
+          }
+        }
+        if (existingSession?.taskId && existingSession.taskId !== input.taskId) {
+          const oldTaskPath = path.join(base.platform, "bindings", "by-task", `${existingSession.taskId}.json`)
+          const oldTask = await readOptional(oldTaskPath)
+          if (oldTask?.hostSessionRef === input.hostSessionRef && oldTask.bindingRef === existingSession.bindingRef) {
+            await rm(oldTaskPath, { force: true })
+          }
+          const oldRefPath = path.join(base.platform, "bindings", "by-ref", `${digestValue(existingSession.bindingRef).slice(0, 32)}.json`)
+          const oldRef = await readOptional(oldRefPath)
+          if (oldRef?.taskId === existingSession.taskId && oldRef.hostSessionRef === input.hostSessionRef) {
+            await rm(oldRefPath, { force: true })
+          }
+        }
         await atomicJson(taskPath, receipt)
         await atomicJson(path.join(base.platform, "bindings", "by-ref", `${digestValue(bindingRef).slice(0, 32)}.json`), receipt)
+        await atomicJson(sessionPath, receipt)
       })
       return receipt
+    },
+
+    async resolveLeadBindingForSession(hostSessionRef) {
+      requireIdentifier(hostSessionRef, "hostSessionRef")
+      const base = await optionalRoots()
+      if (!base) return null
+      return withOwnerLock(path.join(base.platform, "locks", "lead-bindings.lock"), async () => {
+        const binding = await readOptional(path.join(base.platform, "bindings", "by-session", `${hostSessionRef}.json`))
+        if (!binding) return null
+        if (binding.hostSessionRef !== hostSessionRef || binding.platform !== "opencode") {
+          throw fail("PLATFORM_STATE_CORRUPT", `OpenCode lead binding is invalid for session ${hostSessionRef}`)
+        }
+        const task = await readOptional(path.join(base.platform, "bindings", "by-task", `${requireIdentifier(binding.taskId, "taskId")}.json`))
+        if (!task || task.hostSessionRef !== hostSessionRef || task.bindingRef !== binding.bindingRef) {
+          throw fail("PLATFORM_STATE_CORRUPT", `OpenCode lead binding is not reciprocal for session ${hostSessionRef}`)
+        }
+        return binding
+      })
+    },
+
+    async resolveMemberBinding(sessionId) {
+      requireIdentifier(sessionId, "sessionId")
+      const base = await optionalRoots()
+      if (!base) return null
+      const projection = await readOptional(recordPath(base, "sessions", sessionId))
+      if (!projection) return null
+      if (projection.executionRef !== sessionId || !Number.isInteger(projection.attempt) || projection.attempt < 1) {
+        throw fail("PLATFORM_STATE_CORRUPT", `OpenCode member binding is invalid for session ${sessionId}`)
+      }
+      return {
+        taskId: projection.taskId,
+        stageRunId: projection.stageRunId,
+        assignmentId: projection.assignmentId,
+        attemptId: `${projection.assignmentId}-attempt-${projection.attempt}`,
+        executionRef: projection.executionRef,
+        operationKey: `report:${projection.operationId}`,
+        agentId: projection.agentId,
+        hostSessionRef: projection.hostSessionRef ?? (await bindingForTask(projection.taskId)).hostSessionRef,
+      }
+    },
+
+    async resolveHelperBinding(sessionId) {
+      requireIdentifier(sessionId, "sessionId")
+      const base = await optionalRoots()
+      if (!base) return null
+      const helper = await readOptional(recordPath(base, "helpers", sessionId))
+      if (!helper) return null
+      if (helper.sessionId !== sessionId || !HELPER_AGENT[helper.helperKind]) {
+        throw fail("PLATFORM_STATE_CORRUPT", `OpenCode helper binding is invalid for session ${sessionId}`)
+      }
+      return helper
+    },
+
+    async assist({ parentSessionId, kind, prompt, title }) {
+      requireIdentifier(parentSessionId, "parentSessionId")
+      if (typeof prompt !== "string" || prompt.trim() === "") throw fail("HELPER_PROMPT_INVALID", "helper prompt is required")
+      const parent = await adapter.resolveMemberBinding(parentSessionId)
+      if (!parent) throw fail("MEMBER_BINDING_REQUIRED", "only a managed member can create a helper")
+      const helper = configuredHelper(kind)
+      const base = await roots()
+      const created = await callSdk(() => client.session.create({
+        query: { directory: base.root },
+        body: { parentID: parentSessionId, title: String(title ?? `Team-work ${kind}`).slice(0, 120) },
+      }))
+      if (!created?.id) throw fail("SESSION_CREATE_FAILED", "OpenCode did not return a helper session id")
+      requireIdentifier(created.id, "helperSessionId")
+      const record = {
+        schemaVersion: "2.0",
+        sessionId: created.id,
+        parentSessionRef: parentSessionId,
+        helperKind: kind,
+        agentId: helper.agentId,
+        taskId: parent.taskId,
+        assignmentId: parent.assignmentId,
+        createdAt: observedAt(clock),
+      }
+      await atomicJson(recordPath(base, "helpers", created.id), record)
+      try {
+        await callSdk(() => client.session.promptAsync({
+          path: { id: created.id },
+          query: { directory: base.root },
+          body: {
+            agent: helper.agentId,
+            parts: [{ type: "text", text: `只读辅助任务：${prompt.trim()}\n\n返回事实、路径/来源和不确定项；禁止修改、命令执行、继续委托或技术裁决。` }],
+          },
+        }))
+      } catch (error) {
+        await callSdk(() => client.session.abort({ path: { id: created.id }, query: { directory: base.root } })).catch(() => {})
+        throw error
+      }
+      return record
+    },
+
+    async assistStatus({ parentSessionId, sessionId }) {
+      const helper = await adapter.resolveHelperBinding(sessionId)
+      if (!helper || helper.parentSessionRef !== parentSessionId) throw fail("HELPER_SESSION_NOT_FOUND", "helper does not belong to the current member")
+      const statuses = await sessionStatuses()
+      return { ...helper, status: statuses?.[sessionId] ?? { type: "idle" } }
+    },
+
+    async assistMessages({ parentSessionId, sessionId, limit = 50 }) {
+      const helper = await adapter.resolveHelperBinding(sessionId)
+      if (!helper || helper.parentSessionRef !== parentSessionId) throw fail("HELPER_SESSION_NOT_FOUND", "helper does not belong to the current member")
+      const messages = await sessionMessages(sessionId)
+      return { ...helper, messages: (messages ?? []).slice(-Math.max(1, Math.min(Number(limit) || 50, 200))) }
     },
 
     async ensureExecution(intent) {
@@ -671,6 +848,60 @@ export function createOpenCodeExecutionAdapter({
         ...(error ? { error } : {}),
       })
       return true
+    },
+
+    async reconcileTaskExecutions(taskId) {
+      requireIdentifier(taskId, "taskId")
+      if (!observationSinkFor) return { observations: 0, inDoubt: false }
+      const base = await roots()
+      let statuses
+      try {
+        statuses = await sessionStatuses()
+      } catch {
+        return { observations: 0, inDoubt: true }
+      }
+      const files = (await readdir(path.join(base.platform, "sessions"))).filter((name) => name.endsWith(".json"))
+      let observations = 0
+      let inDoubt = false
+      for (const file of files) {
+        const projection = await readOptional(path.join(base.platform, "sessions", file))
+        if (!projection || projection.taskId !== taskId) continue
+        const status = statuses?.[projection.executionRef]
+        if (status?.type === "busy" || status?.type === "retry") continue
+        let state = "idle"
+        let error
+        try {
+          await sessionGet(projection.executionRef)
+        } catch (sdkError) {
+          if (sdkError.statusCode !== 404) {
+            inDoubt = true
+            continue
+          }
+          state = "lost"
+          error = platformError("SESSION_LOST", "OpenCode child session is missing during restart reconciliation", false)
+        }
+        const fingerprint = digestValue({
+          operationId: projection.operationId,
+          executionRef: projection.executionRef,
+          state,
+        })
+        try {
+          await observationSinkFor(taskId).observe({
+            kind: "execution",
+            observationId: `opencode-reconcile-${fingerprint.slice(0, 24)}`,
+            dedupeKey: `opencode:reconcile:${fingerprint}`,
+            executionRef: projection.executionRef,
+            assignmentId: projection.assignmentId,
+            state,
+            observedAt: projection.updatedAt,
+            ...(error ? { error } : {}),
+          })
+          observations += 1
+        } catch (observationError) {
+          if (observationError.code !== "OBSERVATION_BINDING_STALE") throw observationError
+        }
+      }
+      return { observations, inDoubt }
     },
 
     async captureCheck({ sessionId, toolCallRef }) {

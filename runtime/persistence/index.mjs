@@ -1,3 +1,5 @@
 export { createFileStore } from "./file-store.mjs"
+export { createFileArtifactRepository } from "./file-artifact-repository.mjs"
 export { createInMemoryStore } from "./in-memory-store.mjs"
+export { initializeProjectRuntime } from "./project-runtime.mjs"
 export { StoreError } from "./store-error.mjs"

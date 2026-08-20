@@ -54,6 +54,8 @@ export function createRuntimeFacade({
   routeConfig = {},
   platform = "in-memory",
   hostSessionRef = "lead-session",
+  signalHub,
+  executionPreparer,
   clock = () => new Date().toISOString(),
 }) {
   if (
@@ -89,6 +91,8 @@ export function createRuntimeFacade({
     routeConfig,
     clock,
     evidenceVerifier,
+    ...(signalHub ? { signalHub } : {}),
+    ...(executionPreparer ? { executionPreparer } : {}),
   })
   let activeTaskId
   let leadBinding
@@ -132,6 +136,9 @@ export function createRuntimeFacade({
         const result = await driver.steer({ taskId: state.taskId, input, leadBindingRef: leadBinding.bindingRef })
         return compactCard(result.state, workflowDefinition, result.reason)
       } catch (error) {
+        if (error.code === "STEERING_BUDGET_REQUIRED") {
+          return problem("BUDGET_DECISION_REQUIRED", error.message, "当前任务保持静止；请扩大预算、缩小范围或放弃第二位 Expert。")
+        }
         if (error.code === "ACTION_STALE" || error.code?.startsWith("STEERING_")) {
           return problem("ACTION_STALE", error.message, "请读取最新决策包，并只引用其中仍可见的对象。")
         }
@@ -144,5 +151,18 @@ export function createRuntimeFacade({
   const observationSinkFor = (taskId) => createPlatformObservationSink({ observe: (observation) => driver.observe({ taskId, observation }) })
   rawExecutionAdapter.attachRuntime?.({ memberDeliveryFor, observationSinkFor })
 
-  return Object.freeze({ leadControl, memberDeliveryFor, observationSinkFor })
+  const hostControl = Object.freeze({
+    async run({ waitBudgetMs = 0, signal } = {}) {
+      const state = await current()
+      const result = await driver.runToStable({
+        taskId: state.taskId,
+        leadBindingRef: leadBinding.bindingRef,
+        waitBudgetMs,
+        ...(signal ? { signal } : {}),
+      })
+      return compactCard(result.state, workflowDefinition, result.reason)
+    },
+  })
+
+  return Object.freeze({ leadControl, hostControl, memberDeliveryFor, observationSinkFor })
 }

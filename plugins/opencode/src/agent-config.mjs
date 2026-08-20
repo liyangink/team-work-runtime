@@ -21,6 +21,60 @@ const helperAgents = {
   },
 }
 
+const leadPermissions = Object.freeze({
+  workflow_open: "allow",
+  workflow_plan: "allow",
+  workflow_run: "allow",
+  workflow_steer: "allow",
+  team_work_report: "deny",
+  team_work_assist: "deny",
+  team_work_assist_status: "deny",
+  team_work_assist_collect: "deny",
+})
+
+const globalTeamWorkPermissions = Object.freeze(Object.fromEntries(
+  Object.keys(leadPermissions).map((tool) => [tool, "deny"]),
+))
+
+const managedMemberPermissions = Object.freeze({
+  workflow_open: "deny",
+  workflow_plan: "deny",
+  workflow_run: "deny",
+  workflow_steer: "deny",
+  team_work_report: "allow",
+})
+
+const helperTeamWorkPermissions = Object.freeze(Object.fromEntries(
+  Object.keys(leadPermissions).map((tool) => [tool, "deny"]),
+))
+
+function permissionMap(permission) {
+  if (typeof permission === "string") return { "*": permission }
+  return permission && typeof permission === "object" && !Array.isArray(permission) ? permission : {}
+}
+
+function mergePermissions(permission, overrides) {
+  return { ...permissionMap(permission), ...overrides }
+}
+
+function configureLeads(config) {
+  config.permission = mergePermissions(config.permission, globalTeamWorkPermissions)
+  config.agent ??= {}
+
+  const leadIds = new Set(["build", "plan"])
+  if (typeof config.default_agent === "string" && config.default_agent) leadIds.add(config.default_agent)
+  for (const [id, agent] of Object.entries(config.agent)) {
+    if (agent?.mode === "primary") leadIds.add(id)
+  }
+  for (const id of leadIds) {
+    const agent = config.agent[id]
+    config.agent[id] = {
+      ...(agent && typeof agent === "object" ? agent : {}),
+      permission: mergePermissions(agent?.permission, leadPermissions),
+    }
+  }
+}
+
 function definition(agent, binding, helperEnabled) {
   const tier = tierName[agent.tier] ?? agent.tier
   return {
@@ -28,20 +82,13 @@ function definition(agent, binding, helperEnabled) {
     mode: "subagent",
     model: binding.model,
     ...(binding.effort === undefined ? {} : { reasoningEffort: binding.effort }),
-    prompt: `你是 Team-work 的 ${tier} 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，发现缺口及时报告。${helperEnabled ? "不得自行组建下级团队；仅在并行检索确有价值时，使用 team_work_assist 调用只读 explore 或 librarian 助手，并自行核验与整合结果。" : "不要自行组建下级团队。"}`,
+    prompt: `你是 Team-work 的 ${tier} 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，完成后必须调用 team_work_report。${helperEnabled ? "不得自行组建下级团队；仅在并行检索确有价值时，使用 team_work_assist 调用只读 explore 或 librarian 助手，并自行核验与整合结果。" : "不要自行组建下级团队。"}`,
     permission: {
       task: "deny",
       team_work_assist: helperEnabled ? "allow" : "deny",
       team_work_assist_status: helperEnabled ? "allow" : "deny",
       team_work_assist_collect: helperEnabled ? "allow" : "deny",
-      team_work_overview: "deny",
-      team_work_begin: "deny",
-      team_work_register: "deny",
-      team_work_dispatch: "deny",
-      team_work_assess: "deny",
-      team_work_continue: "deny",
-      team_work_review_gate: "deny",
-      team_work_sync: "deny",
+      ...managedMemberPermissions,
     },
   }
 }
@@ -54,9 +101,11 @@ function helperDefinition(helper, binding) {
     model: binding.model,
     ...(binding.effort === undefined ? {} : { reasoningEffort: binding.effort }),
     prompt: helper.prompt,
-    tools: { edit: false, write: false, patch: false, bash: false, task: false },
+    tools: { edit: false, write: false, apply_patch: false, shell: false, patch: false, bash: false, task: false },
     permission: {
       edit: "deny",
+      apply_patch: "deny",
+      shell: "deny",
       bash: "deny",
       task: "deny",
       external_directory: "deny",
@@ -65,17 +114,7 @@ function helperDefinition(helper, binding) {
       skill: "deny",
       webfetch: helper.web,
       websearch: helper.web,
-      team_work_overview: "deny",
-      team_work_begin: "deny",
-      team_work_register: "deny",
-      team_work_dispatch: "deny",
-      team_work_assess: "deny",
-      team_work_continue: "deny",
-      team_work_review_gate: "deny",
-      team_work_sync: "deny",
-      team_work_assist: "deny",
-      team_work_assist_status: "deny",
-      team_work_assist_collect: "deny",
+      ...helperTeamWorkPermissions,
     },
   }
 }
@@ -133,7 +172,7 @@ export function applyOpenCodeAgentConfig(config, { profile, userConfig }) {
   const { bindings, catalog } = resolveBindings(profile, userConfig)
   const helperBinding = userConfig.helper
 
-  config.agent ??= {}
+  configureLeads(config)
   for (const [id, binding] of bindings) config.agent[id] = definition(catalog.get(id), binding, Boolean(helperBinding))
   if (helperBinding) {
     for (const [id, helper] of Object.entries(helperAgents)) config.agent[id] = helperDefinition(helper, helperBinding)

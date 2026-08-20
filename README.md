@@ -19,7 +19,7 @@ flowchart TB
   end
 
   subgraph Runtime["确定性运行层"]
-    Core["CoreRuntime<br/>task · context · flow · work-item · event"]
+    Core["CoreRuntime<br/>任务状态 · 工作图 · 上下文 · 门禁 · 恢复"]
   end
 
   subgraph Platform["平台适配层"]
@@ -43,7 +43,7 @@ flowchart TB
   Core --> Files
 ```
 
-Workflow 和 Team-work 只调用 CoreRuntime 的稳定接口。CoreRuntime 只依赖项目文件系统；PlatformPlugin 接入不同 CLI 的模型、工具和 multiagent 能力。首版支持 OpenCode。
+Workflow 和 Team-work 提供研发与协作策略；CoreRuntime 通过稳定接口固化状态、工作图、门禁与恢复，只依赖项目文件系统和平台执行接口。PlatformPlugin 接入不同 CLI 的模型、工具和 multiagent 能力。首版支持 OpenCode。
 
 ## QuickStart
 
@@ -109,7 +109,7 @@ opencode
 ### 查看或继续任务
 
 ```text
-/workflow 汇报当前任务的阶段、成员、work item、制品、阻塞和下一同步点，不要启动新成员。
+/workflow 汇报当前任务的阶段、成员、制品、阻塞和下一步，不要启动新成员。
 ```
 
 跨会话时优先提供 task ID。不知道时由 Workflow 解析会话绑定或项目唯一活动任务。状态与制品索引保存在项目 `.team-work/` 中。
@@ -334,15 +334,15 @@ Lead 只接收控制面索引，不注入整个任务目录。Owner、挑战者�
 
 Plugin 在 OpenCode 启动时读取用户配置，动态注入 Team-work subagent，并把当前有效 Agent Profile 写入项目上下文。
 
-Lead 使用意图级工具控制 Harness：`team_work_overview` 只返回当前阶段、工作项数量、阻塞和下一步，`team_work_dispatch` 统一创建与后台派发，`team_work_sync` 挂起等待成员事件，`team_work_assess` 登记交付与独立审查，`team_work_continue` 统一处理阶段推进、人工审核和受管 SPEC 生命周期。门禁标识、底层 Runtime command、revision、session ID、SPEC 命令及路径选择都不暴露给模型。
+Lead 只使用四个意图级动作控制 Harness：`workflow_open` 打开或创建任务，`workflow_plan` 提交当前阶段目标、执行偏好、预算和风险，`workflow_run` 按持久状态继续，`workflow_steer` 提交选项、解释、返工、补证据、追加挑战、Expert 意见、更换 Owner、重规划或升级用户等受控意图。成员用独立的 `team_work_report` 交付。工作图、派发、续派、等待、门禁、revision、session ID、SPEC 命令及路径选择都留在 Runtime 内部。
 
-进入已绑定的团队任务后，OpenCode 右侧栏会显示 `Team` 区域：载入当前任务的受管成员、Agent、work item 及状态。点击成员可直接进入对应 child session；进入成员会话后列表仍保留，并可一键返回 Lead。成员创建或官方 session 状态变化时，侧栏从同步映射快照重算；“状态未载入”不表示成员不存在或失联。该视图不维护第二份团队状态，也不在 TUI 内运行后台轮询或私有事件监听。
+进入已绑定的团队任务后，OpenCode 右侧栏会显示 `Team` 区域：载入当前任务的受管成员、Agent、职责及状态。点击成员可直接进入对应 child session；进入成员会话后列表仍保留，并可一键返回 Lead。成员创建或官方 session 状态变化时，侧栏从 Runtime 工作图与平台映射重算；“状态未载入”不表示成员不存在或失联。该视图不维护第二份团队状态，也不在 TUI 内运行后台轮询或私有事件监听。
 
-所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一 work item 由 `team_work_dispatch` 自动复用 child session。`team_work_sync` 默认挂起 5 分钟、最长 30 分钟，由 OpenCode session 事件直接唤醒；开始挂起时只做一次恢复快照，等待期间不轮询模型或平台状态。成员空闲、自报完成或平台显示完成都不等于验收通过。
+所有受管成员使用原生 child session 和非阻塞派发；`solo` 和 `team` 都能派发成员。同一工作项的多轮协作自动复用 child session。等待由 Runtime 的事件信号唤醒，不使用模型轮询或定时检查；进程重启后依据持久状态恢复。成员空闲、自报完成或平台显示完成都不等于验收通过。
 
 Lead 面向用户只汇报完成内容、当前研发阶段、关键制品、未决分歧或风险和下一步；除非在诊断故障，不应把工具名、门禁字段、revision、session 或 Runtime 命令写进工作汇报。
 
-受管成员的只读辅助同样使用非阻塞 child session。助手只做代码探索或资料检索，不创建 Runtime work item；成员在同步点收集结果后自行核验和整合。
+受管成员的只读辅助同样使用非阻塞 child session。助手只做代码探索或资料检索，不承担团队工作项；成员收集结果后自行核验和整合。
 
 在 OpenCode 中向用户展示文件时，使用 `[label](file:///absolute/path)` 形式的标准 Markdown 可点击链接，不只输出裸路径。
 

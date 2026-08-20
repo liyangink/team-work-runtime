@@ -22,7 +22,7 @@ npx team-work-runtime@latest install
 
 OpenCode 会自动发现全局 `plugins/` 下的 Server 入口；TUI 入口按官方机制显式注册到 `tui.json`。`enable/disable` 只切换用户配置中的 `platforms.opencode.enabled`；禁用时入口仍可被发现，但 Server 不注册 Agent、工具或 Hook，TUI 不注册侧栏。修改后重启 OpenCode 生效。
 
-首次在项目内调用 Team-work Runtime Tool 时，Plugin 才初始化项目 `.team-work/`，并物化当前 Platform Profile 与增量指南。安装、更新和卸载都不扫描或删除各项目任务数据。
+首次在项目内调用 `workflow_open` 时，Plugin 才初始化项目 `.team-work/`。安装、更新和卸载都不扫描或删除各项目任务数据。
 
 ## 模型与 effort
 
@@ -34,7 +34,7 @@ OpenCode 会自动发现全局 `plugins/` 下的 Server 入口；TUI 入口按�
 
 ## OpenSpec
 
-Plugin 启动时读取 `spec.command` 和 `spec.mode`。项目首次初始化时用 `--version` 与只读的 `list --json` 检查 OpenSpec；只有返回 `{ "changes": [...] }` 才标为 `ready`。
+Plugin 启动时读取 `spec.command` 和 `spec.mode`。Runtime 进入相关路由时只读检查 OpenSpec 的可用性与 provider 状态。
 
 `auto` 在 missing 时跳过 SPEC，`required` 会阻塞，`disabled` 始终跳过。Plugin 不会静默安装工具。进入 SPEC 后，Plugin 会以 task-id 创建或恢复活动 change，读取 `status/instructions` 约束派单，完成时登记制品；最终人工验收通过后才执行严格校验和 archive。Agent 不能直接修改 canonical specs、archive 或其他任务 change。
 
@@ -53,10 +53,10 @@ npx team-work-runtime@latest uninstall
 
 OpenCode PlatformPlugin 内部分为 Server、TUI 和 Installer 子模块，不增加新的产品级 Module。Server 负责工具、Hook、session 映射和事件；TUI 在原生 `sidebar_content` 插槽中同步读取当前任务成员快照并调用原生 session route 跳转，不注册后台轮询或异步状态订阅；Installer 统一装配和更新 Server/TUI 两类入口，并提供软启停与安全卸载。
 
-Server 为 Lead 提供少量意图级工具：`team_work_dispatch` 收敛创建—启动—派发，`team_work_assess` 收敛提交—审查—验收，`team_work_continue` 收敛人工审核与阶段推进。Runtime command、gate、revision、session ID、SPEC 探测和合法边选择都留在实现内。领域失败保留稳定错误和可执行 `remediation`，但不会中止 OpenCode 主会话；普通成员无权调用 Runtime 或 Lead 控制面工具。
+Server 为 Lead 只提供 `workflow_open`、`workflow_plan`、`workflow_run`、`workflow_steer` 四个意图级工具；成员只用 `team_work_report` 提交结构化交付。工作图、后台派发、等待、门禁、revision、session ID、SPEC 探测和合法边选择都留在 Runtime 内；普通成员无权调用 Lead 控制面。
 
-`solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。Lead 通过稳定 task/work-item ID 查询、收集和续派；同一 work item 默认复用 child session，失联或停止后才受控替换并保留历史。禁止用阻塞式 `task` 工具替代受管派发。
+`solo` 与 `team` 的受管成员都使用 OpenCode 原生 `session.create + promptAsync` 后台派发。同一工作项默认复用 child session，失联或停止后才受控替换并保留历史。Lead 不管理 session，也不能用阻塞式 `task` 工具替代受管派发。
 
-受管成员可通过 `team_work_assist` 创建临时只读 helper child session。该链路同样使用 `promptAsync`，只允许代码探索或资料检索；助手不能继续委托或成为 Runtime work item Owner。
+受管成员可通过 `team_work_assist` 创建临时只读 helper child session。该链路同样使用 `promptAsync`，只允许代码探索或资料检索；助手不能继续委托或承担团队工作项。
 
-网关错误、重试、续派、停止和 child session 失联会记录为 `platform.*` 事件。事件审计失败不改变 work item 验收状态，也不会把成功派发改成失败。
+网关错误、重试、续派、停止和 child session 失联会转为持久平台观察。平台状态不直接决定工作验收，也不会把已确认派发改成失败。

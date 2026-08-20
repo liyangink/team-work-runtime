@@ -18,8 +18,8 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "prepublishOnly": "npm test",
-    "test:contract": "node --test tests/runtime-contract.test.mjs",
-    "test:runtime": "node --test tests/core-runtime.test.mjs",
+    "test:contract": "node --test tests/runtime-v2-contract.test.mjs",
+    "test:runtime": "node --test tests/runtime-v2-*.test.mjs",
     "test:policy": "node --test tests/policy-skills.test.mjs",
     "test:opencode": "node --test tests/opencode-*.test.mjs"
   },
@@ -43,9 +43,11 @@
     "skills/team-work/",
     "plugins/opencode/assets/",
     "plugins/opencode/adapter/",
+    "plugins/opencode/context/",
     "plugins/opencode/config/",
     "plugins/opencode/guides/",
     "plugins/opencode/src/",
+    "plugins/opencode/tools/",
     "plugins/opencode/tui/"
   ],
   "keywords": [

@@ -1,80 +1,60 @@
 #!/usr/bin/env node
 
-import { executeRuntime } from "./core.mjs"
 import { pathToFileURL } from "node:url"
 
+import { createFileStore } from "./persistence/file-store.mjs"
+import { assertProjectRuntimeMajor, RUNTIME_MAJOR } from "./version.mjs"
+
+function fail(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
 export function parseRuntimeArgs(argv) {
-  const positionals = []
-  const options = {}
-  for (let index = 0; index < argv.length; index += 1) {
+  const command = argv[0]
+  if (!["version", "inspect"].includes(command)) throw fail("INVALID_COMMAND", `未知 Runtime 诊断命令：${command ?? "<empty>"}`)
+  const options = { projectRoot: process.cwd() }
+  for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]
-    if (!token.startsWith("--")) {
-      positionals.push(token)
-      continue
-    }
-    const name = token.slice(2)
-    if (["json", "dry-run", "must-read", "repair", "force"].includes(name)) options[name] = true
-    else options[name] = argv[++index]
+    if (token === "--project") options.projectRoot = argv[++index]
+    else if (token === "--task") options.taskId = argv[++index]
+    else throw fail("INVALID_ARGUMENT", `未知参数：${token}`)
   }
-  const [resource, action] = positionals
-  const command = ["init", "doctor", "version", "migrate"].includes(resource) ? resource : `${resource}.${action}`
+  if (command === "inspect" && !options.taskId) throw fail("TASK_SELECTION_REQUIRED", "inspect 需要 --task <task-id>")
+  return { command, ...options }
+}
+
+function projection(state) {
   return {
-    command,
-    projectRoot: options.project ?? process.cwd(),
-    dryRun: Boolean(options["dry-run"]),
-    input: {
-      taskId: options.task,
-      platform: options.platform,
-      sessionKey: options.session,
-      title: options.title,
-      entryStage: options["entry-stage"],
-      mode: options.mode,
-      contextId: options.context,
-      kind: options.kind,
-      path: options.path,
-      profiles: options.profiles?.split(",").filter(Boolean),
-      profile: options.profile,
-      priority: options.priority,
-      mustRead: Boolean(options["must-read"]),
-      summary: options.summary,
-      expectedRevision: options["expected-revision"],
-      gateId: options.gate,
-      status: options.status,
-      reason: options.reason,
-      actor: options.actor,
-      blocker: options.blocker,
-      evidenceId: options.evidence,
-      evidenceRefs: options.evidence?.split(",").filter(Boolean),
-      evidencePath: options["evidence-path"],
-      outcome: options.outcome,
-      to: options.to,
-      workItemId: options.work,
-      owner: options.owner,
-      stage: options.stage,
-      scope: options.scope,
-      doneWhen: options["done-when"]?.split(",").filter(Boolean),
-      artifactPaths: options.artifacts?.split(",").filter(Boolean),
-      dependencies: options.dependencies?.split(",").filter(Boolean),
-      scenario: options.scenario,
-      scopeRefs: options["scope-refs"]?.split(",").filter(Boolean),
-      summary: options.summary,
-      question: options.question,
-      requiredDecision: options["required-decision"],
-      repair: Boolean(options.repair),
-      force: Boolean(options.force),
-      eventType: options.type,
-      errorCode: options["error-code"],
-      refs: options.refs?.split(",").filter(Boolean),
-    },
+    taskId: state.taskId,
+    title: state.title,
+    status: state.status,
+    stage: state.currentStageRun.stage,
+    revision: state.revision,
+    artifacts: state.artifacts.map(({ kind, path, digest }) => ({ kind, path, digest })),
+    team: state.workGraph.assignments.map(({ assignmentId, teamRole, costTier, status }) => ({ assignmentId, teamRole, costTier, status })),
   }
 }
 
 export async function runRuntimeCli(argv, dependencies = {}) {
-  const execute = dependencies.execute ?? executeRuntime
   const writeOut = dependencies.writeOut ?? ((text) => process.stdout.write(text))
-  const result = await execute(parseRuntimeArgs(argv))
-  writeOut(`${JSON.stringify(result.envelope)}\n`)
-  return result.exitCode
+  const writeError = dependencies.writeError ?? ((text) => process.stderr.write(text))
+  try {
+    const input = parseRuntimeArgs(argv)
+    let data
+    if (input.command === "version") {
+      data = { runtimeMajor: RUNTIME_MAJOR, schemaVersion: "2.0" }
+    } else {
+      await assertProjectRuntimeMajor(input.projectRoot)
+      data = projection(await (dependencies.store ?? createFileStore({ projectRoot: input.projectRoot })).loadTask(input.taskId))
+    }
+    writeOut(`${JSON.stringify({ ok: true, data }, null, 2)}\n`)
+    return 0
+  } catch (error) {
+    writeError(`${JSON.stringify({ ok: false, code: error.code ?? "RUNTIME_ERROR", message: error.message })}\n`)
+    return 1
+  }
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {

@@ -22,6 +22,7 @@ export function createEffectCoordinator({
   maxEffectAttempts = 2,
   effectLeaseMs = 120_000,
   faultInjector = {},
+  executionPreparer,
 }) {
   const execution = createExecutionAdapterPort(executionAdapter)
 
@@ -67,6 +68,14 @@ export function createEffectCoordinator({
       let receipt
       let fresh = operation.status === "intent-persisted"
       if (fresh) {
+        if (operation.kind === "execution.ensure" && executionPreparer) {
+          await executionPreparer.prepare({
+            taskId,
+            assignmentId: operation.assignmentId,
+            attemptId: operation.attemptId,
+            effect: structuredClone(operation.intent),
+          })
+        }
         await faultInjector.beforeInvocationClaim?.({ taskId, operation: structuredClone(operation) })
         const invocationStartedAt = clock()
         const started = await reconciler.commit(taskId, (current) => {

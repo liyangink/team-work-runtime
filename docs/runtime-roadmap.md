@@ -1,15 +1,15 @@
 # team-work-runtime Roadmap
 
-状态：Runtime 1.0、文件型 MVP、Workflow 与 Team-work Policy 已实现，但实际使用暴露出 Lead 控制面过重、流程状态分散和平台层重复编排问题，已停止继续为 v1 叠加补丁。Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-6 均已完成并通过两轴终审，下一步进入 V2-7 OpenCode 控制面切换。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
+状态：Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-7 均已完成并通过两轴终审，下一里程碑为 V2-8 安装生命周期强化、真实 E2E 与发布。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，十阶段状态机演化审查见 [`runtime-v2-workflow-simulation.md`](runtime-v2-workflow-simulation.md)。
 
-下列 Phase 0–3 记录 v1 已完成基线，Phase 4 记录已落地但尚未完成正式 E2E 的部分实现；它们用于识别可复用的不变量，不再代表下一版目标结构。v2 通过人工设计审核后，以其实施切割替换后续 v1 验收计划；在此之前不得把 v2 能力描述为已经可用。
+下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v2 里程碑为准。
 
 ## v2 重构进度
 
 - 产品边界与不变约束：以 [`AGENTS.md`](../AGENTS.md) 为唯一事实源；
 - 目标架构与 Interface：设计已完成并通过交叉终审和人工确认；
 - 工作流分支、角色、成本与恢复演化：已完成非规范性验证；
-- v2 实现：V2-0 至 V2-6 均已完成并通过两轴终审。V2-6 已提供独立 OpenCode Execution Adapter 与 OpenSpec Provider，接入 background `promptAsync`、同 assignment 续派、lost/error/check 归一化、人工静止与真实用户凭证；SPEC prepare/archive 由 Runtime 先持久化 intent，再通过 Provider inspect 恢复，支持活动 change 隔离、重规划重新绑定、最终验收后验证与归档。23 项架构故障矩阵均已绑定可执行测试，平台状态不参与 accept/rework/advance 决策。
+- v2 实现：V2-0 至 V2-7 均已完成并通过两轴终审。OpenCode 已切换到四动作 Lead 控制面、成员报告工具、最小角色上下文、文件型 ArtifactRepository、持久绑定、事件唤醒、重启对账和完整 steering；v1 控制面、schema、fixture 与兼容路径已删除。完整仓库测试为 321/321，最终 Standards/Spec 审查均无 P0/P1。
 
 | v2 里程碑 | 状态 |
 | --- | --- |
@@ -20,7 +20,7 @@
 | V2-4 Workflow/Team-work Compiler | 完成 |
 | V2-5 平台无关 in-memory E2E | 完成 |
 | V2-6 OpenCode/OpenSpec Adapter | 完成 |
-| V2-7 OpenCode 控制面切换 | 切换清单待人工确认 |
+| V2-7 OpenCode 控制面切换 | 完成 |
 | V2-8 安装生命周期、真实 E2E 与发布 | 待开始 |
 
 ## v1 Phase 0：规则冻结

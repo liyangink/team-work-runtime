@@ -30,9 +30,21 @@ const LIFECYCLE_LOCK = `${PLATFORM_ROOT}/.lifecycle.lock`
 const TUI_CONFIG_PATH = "tui.json"
 const TUI_PLUGIN_SPEC = "./plugins/team-work-tui.tsx"
 const DEFAULT_SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..")
-const MANAGED_AGENT_PATHS = new Set([
-  "junior-flash", "junior-luna", "senior-terra", "senior-glm", "senior-qwen", "expert-opus", "expert-k3",
-].map((id) => `agents/${id}.md`))
+const MANAGED_SOURCE_TREES = [
+  ["runtime", "team-work/lib/runtime"],
+  ["schemas/v2", "team-work/lib/schemas/v2"],
+  ["policy", "team-work/lib/policy"],
+  ["workflow", "team-work/lib/workflow"],
+  ["team-work", "team-work/lib/team-work"],
+  ["spec-providers", "team-work/lib/spec-providers"],
+  ["plugins/opencode/adapter", "team-work/lib/plugins/opencode/adapter"],
+  ["plugins/opencode/context", "team-work/lib/plugins/opencode/context"],
+  ["plugins/opencode/tools", "team-work/lib/plugins/opencode/tools"],
+  ["skills/workflow", "skills/workflow"],
+  ["skills/team-work", "skills/team-work"],
+  ["plugins/opencode/guides", "team-work/guides"],
+  ["plugins/opencode/tui", "team-work/tui"],
+]
 
 class LifecycleError extends Error {
   constructor(code, message, details = {}) {
@@ -228,21 +240,22 @@ async function allowedManagedPaths(sourceRoot) {
     "plugins/team-work.js",
     "plugins/team-work-tui.tsx",
     `${PLATFORM_ROOT}/profile.json`,
-    `${PLATFORM_ROOT}/lead-controller.mjs`,
-    ...MANAGED_AGENT_PATHS,
+    `${PLATFORM_ROOT}/opencode-activation.mjs`,
+    `${PLATFORM_ROOT}/opencode-agent-config.mjs`,
+    `${PLATFORM_ROOT}/installer/user-config.mjs`,
+    `${PLATFORM_ROOT}/schemas/user-config.v1.schema.json`,
+    `${PLATFORM_ROOT}/package.json`,
+    `${PLATFORM_ROOT}/package-lock.json`,
+    `${PLATFORM_ROOT}/settings.json`,
   ])
-  for (const [source, destination] of [
-    ["skills/workflow", "skills/workflow"],
-    ["skills/team-work", "skills/team-work"],
-    ["plugins/opencode/guides", `${PLATFORM_ROOT}/guides`],
-  ]) {
+  for (const [source, destination] of MANAGED_SOURCE_TREES) {
     for (const relativePath of await walkFiles(path.join(sourceRoot, source))) allowed.add(`${destination}/${relativePath}`)
   }
   return allowed
 }
 
 function validateManifest(manifest, allowedPaths) {
-  if (!manifest || manifest.schemaVersion !== "1.0" || manifest.platform !== "opencode") {
+  if (!manifest || manifest.schemaVersion !== "2.0" || manifest.platform !== "opencode") {
     fail("INSTALL_MANIFEST_INVALID", "安装清单版本或平台无效")
   }
   if (!["installed", "partial", "uninstalled"].includes(manifest.status) || !Array.isArray(manifest.managedFiles)) {
@@ -254,7 +267,7 @@ function validateManifest(manifest, allowedPaths) {
       fail("INSTALL_MANIFEST_INVALID", "安装清单包含未知文件字段")
     }
     const relativePath = normalizeRelative(entry.path)
-    if (!relativePath.startsWith("team-work/") && !allowedPaths.has(relativePath)) {
+    if (!allowedPaths.has(relativePath) && !relativePath.startsWith(`${PLATFORM_ROOT}/node_modules/`)) {
       fail("INSTALL_MANIFEST_UNSAFE", `清单包含当前安装源未物化的路径：${relativePath}`)
     }
     if (!/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")) fail("INSTALL_MANIFEST_INVALID", `清单 digest 无效：${relativePath}`)
@@ -410,7 +423,7 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
     capabilities: helper ? ["read-only", capability] : ["unavailable"],
   }))
   return {
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
     platform: "opencode",
     generatedAt,
     agents: agentConfig.agents.map((agent) => ({
@@ -421,13 +434,12 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
     helpers,
     dispatch: { managedMode: "background", blockingPolicy: "reject" },
     operations: {
-      spawn: { supported: true, tool: "team_work_dispatch" },
-      assign: { supported: true, tool: "team_work_dispatch" },
-      resume: { supported: true, tool: "team_work_dispatch" },
-      status: { supported: true, tool: "team_work_sync" },
-      wait: { supported: true, tool: "team_work_sync" },
+      open: { supported: true, tool: "workflow_open" },
+      plan: { supported: true, tool: "workflow_plan" },
+      run: { supported: true, tool: "workflow_run" },
+      steer: { supported: true, tool: "workflow_steer" },
+      report: { supported: true, tool: "team_work_report" },
       stop: { supported: false, tool: null },
-      message: { supported: false, tool: null },
       assist: { supported: Boolean(helper), tool: helper ? "team_work_assist" : null },
       assistStatus: { supported: Boolean(helper), tool: helper ? "team_work_assist_status" : null },
       assistCollect: { supported: Boolean(helper), tool: helper ? "team_work_assist_collect" : null },
@@ -448,17 +460,13 @@ function platformProfile(agentConfig, resolved, helper, generatedAt) {
 
 async function buildDesiredFiles({ sourceRoot, modelMap, helper, availableModels, opencodeCommand, openspecCommand, specMode, skipDependencies }) {
   const files = new Map()
-  await addTree(files, path.join(sourceRoot, "runtime"), "team-work/runtime")
-  await addTree(files, path.join(sourceRoot, "schemas"), "team-work/schemas")
-  await addTree(files, path.join(sourceRoot, "skills/workflow"), "skills/workflow")
-  await addTree(files, path.join(sourceRoot, "skills/team-work"), "skills/team-work")
-  await addTree(files, path.join(sourceRoot, "plugins/opencode/guides"), "team-work/guides")
-  await addTree(files, path.join(sourceRoot, "plugins/opencode/tui"), "team-work/tui")
-  files.set("team-work/opencode-adapter.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/opencode-adapter.mjs")))
-  files.set("team-work/lead-controller.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/lead-controller.mjs")))
+  for (const [source, destination] of MANAGED_SOURCE_TREES) {
+    await addTree(files, path.join(sourceRoot, source), destination)
+  }
   files.set("team-work/opencode-activation.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/activation.mjs")))
   files.set("team-work/opencode-agent-config.mjs", await readFile(path.join(sourceRoot, "plugins/opencode/src/agent-config.mjs")))
   files.set("team-work/installer/user-config.mjs", await readFile(path.join(sourceRoot, "installer/user-config.mjs")))
+  files.set("team-work/schemas/user-config.v1.schema.json", await readFile(path.join(sourceRoot, "schemas/user-config.v1.schema.json")))
   files.set("plugins/team-work.js", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work.js")))
   files.set("plugins/team-work-tui.tsx", await readFile(path.join(sourceRoot, "plugins/opencode/assets/team-work-tui.tsx")))
 
@@ -665,7 +673,7 @@ async function applyInstall({ installRoot, desired, prior, force, now, hostVersi
     if (!skipSmoke) await smokeCheck(installRoot, opencodeCommand, agentIds)
     const timestamp = now().toISOString()
     const manifest = {
-      schemaVersion: "1.0",
+      schemaVersion: "2.0",
       platform: "opencode",
       status: "installed",
       manifestId: prior?.manifestId ?? randomUUID(),

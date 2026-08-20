@@ -338,6 +338,103 @@ test("a controlled replan atomically revises TaskIntent and preserves its prior 
   assert.equal(replanned.stageRuns[0].status, "rework")
 })
 
+test("steering replan atomically closes an issued DecisionPacket without creating a phantom intervention run", () => {
+  const initial = createTaskAggregate({
+    taskId: "steering-replan-review",
+    title: "Replan an issued review decision",
+    objective: "Replace the reviewed plan after new user direction",
+    workflow,
+    entryStage: "code-review",
+    completion: { mode: "through-stage", stage: "code-review" },
+    stageRunId: "stage-run-1",
+    createdAt: "2026-08-18T10:00:00.000Z",
+    artifacts: [{
+      artifactId: "review-document",
+      kind: "review",
+      path: "docs/review.md",
+      digest: "b".repeat(64),
+      stageRunId: "stage-run-1",
+      recordedAt: "2026-08-18T10:00:00.000Z",
+    }],
+  })
+  const planned = reduceTask(initial, {
+    type: "stage-plan.frozen",
+    taskIntent: TEST_TASK_INTENT,
+    expectedRevision: 0,
+    occurredAt: "2026-08-18T10:01:00.000Z",
+    plan: {
+      ...compiledPlanMetadata({ workflow, scopeStages: initial.scope.stages }),
+      planId: "plan-steering-replan",
+      stageRunId: "stage-run-1",
+      objective: "Review the current implementation",
+      inputRefs: ["artifact:source"],
+      outputRefs: ["artifact:review"],
+      assignments: [{
+        assignmentId: "review-owner",
+        teamRole: "owner",
+        assignmentKind: "review",
+        costTier: "junior",
+        dependsOn: [],
+        readableRefs: ["artifact:source"],
+        writableRefs: ["artifact:review"],
+        completionCriteria: ["submit the review"],
+        execution,
+      }],
+    },
+    costLedger: { forecastMin: 1, forecastMax: 3, accrued: 0, uncertain: 0, nextWave: 1, automaticLimit: 20 },
+  }).state
+  const awaiting = structuredClone(planned)
+  const evidence = [{ artifactId: "review-document", path: "docs/review.md", digest: "b".repeat(64) }]
+  awaiting.status = "awaiting-user"
+  awaiting.currentStageRun.status = "ready-to-advance"
+  awaiting.pendingDecision = {
+    decisionId: "final-acceptance-stage-run-1",
+    stageRunId: "stage-run-1",
+    phase: "awaiting-user",
+    requirement: "required",
+    proofMode: "trusted-caller",
+    capabilitySnapshotDigest: "capabilities-1",
+    leadBindingRef: "binding:lead-1",
+    question: "Can this review be accepted?",
+    choices: ["accept", "rework"],
+    evidence,
+    evidenceDigest: digestValue({ stageRunId: "stage-run-1", evidence }),
+    executionRefs: [],
+    quiesceOperationId: "quiesce-steering-replan",
+    quiesceAttempt: 1,
+    observationsAfterPrepare: 0,
+    quiesceReceiptRef: "quiesce-steering-replan",
+    packetRef: ".team-work/tasks/steering-replan-review/packets/decision-steering-replan.json",
+    packetDigest: "c".repeat(64),
+    createdAt: "2026-08-18T10:02:00.000Z",
+    quiescedAt: "2026-08-18T10:02:00.000Z",
+    issuedAt: "2026-08-18T10:02:00.000Z",
+  }
+  assertTaskState(awaiting)
+
+  const replanned = reduceTask(awaiting, {
+    type: "steering.replan-requested",
+    expectedRevision: awaiting.revision,
+    sourceDecisionId: awaiting.pendingDecision.decisionId,
+    sourcePacketRef: awaiting.pendingDecision.packetRef,
+    sourcePacketDigest: awaiting.pendingDecision.packetDigest,
+    nextStageRunId: "stage-run-2",
+    reason: "User confirmed a narrower review objective",
+    occurredAt: "2026-08-18T10:03:00.000Z",
+  }).state
+
+  assert.equal(replanned.status, "needs-plan")
+  assert.equal(replanned.currentStageRun.stageRunId, "stage-run-2")
+  assert.equal(replanned.currentStageRun.round, 2)
+  assert.equal(replanned.stageRuns.length, 1)
+  assert.equal(replanned.stageRuns[0].stageRunId, "stage-run-1")
+  assert.equal(replanned.stageRuns[0].status, "rework")
+  assert.equal(replanned.pendingDecision, null)
+  assert.equal(replanned.stagePlan, null)
+  assert.deepEqual(replanned.workGraph.assignments, [])
+  assert.deepEqual(replanned.decisionHistory, awaiting.decisionHistory)
+})
+
 test("an assignment attempt is monotonic and belongs to the current stage run", () => {
   const initial = createTaskAggregate({
     taskId: "attempt-invariants",

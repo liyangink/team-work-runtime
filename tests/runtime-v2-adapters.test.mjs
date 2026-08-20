@@ -1,2 +1,6 @@
 import "./v2/adapters/opencode-execution.test.mjs"
+import "./v2/adapters/opencode-context.test.mjs"
+import "./v2/adapters/opencode-hooks.test.mjs"
+import "./v2/adapters/opencode-runtime-host.test.mjs"
+import "./v2/adapters/opencode-tools.test.mjs"
 import "./v2/adapters/openspec-provider.test.mjs"

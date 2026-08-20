@@ -64,7 +64,10 @@
       "required": ["action", "directive"],
       "properties": {
         "action": {
-          "enum": ["choose", "owner-rework", "collect-evidence", "expert-arbitrate"]
+          "enum": [
+            "choose", "owner-explain", "owner-rework", "collect-evidence", "challenge-again",
+            "expert-arbitrate", "second-expert-opinion", "replace-owner", "replan", "escalate-to-user"
+          ]
         },
         "directive": { "type": "string", "minLength": 1 },
         "targetRef": { "type": "string", "minLength": 1 },

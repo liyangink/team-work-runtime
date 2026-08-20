@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "platform", "generatedAt", "agents", "dispatch", "operations", "limits", "session", "ui", "degradations", "guides"],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "2.0" },
     "platform": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
     "generatedAt": { "type": "string", "format": "date-time" },
     "agents": {
@@ -53,15 +53,14 @@
     "operations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["spawn", "assign", "resume", "status", "stop", "message"],
+      "required": ["open", "plan", "run", "steer", "report", "stop"],
       "properties": {
-        "spawn": { "$ref": "#/$defs/operation" },
-        "assign": { "$ref": "#/$defs/operation" },
-        "resume": { "$ref": "#/$defs/operation" },
-        "status": { "$ref": "#/$defs/operation" },
-        "wait": { "$ref": "#/$defs/operation" },
+        "open": { "$ref": "#/$defs/operation" },
+        "plan": { "$ref": "#/$defs/operation" },
+        "run": { "$ref": "#/$defs/operation" },
+        "steer": { "$ref": "#/$defs/operation" },
+        "report": { "$ref": "#/$defs/operation" },
         "stop": { "$ref": "#/$defs/operation" },
-        "message": { "$ref": "#/$defs/operation" },
         "assist": { "$ref": "#/$defs/operation" },
         "assistStatus": { "$ref": "#/$defs/operation" },
         "assistCollect": { "$ref": "#/$defs/operation" }

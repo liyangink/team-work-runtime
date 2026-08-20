@@ -31,53 +31,53 @@ test("OpenCode guide preserves child sessions and emits clickable file reference
   const recovery = await read("plugins/opencode/guides/recovery.md")
   const combined = `${guide}\n${recovery}`
 
-  assert.match(combined, /同一 work item[^。\n]*(?:team_work_resume|同一 child session)/i)
+  assert.match(combined, /同一工作项[^。\n]*同一 child session/i)
   assert.match(combined, /Expert[^。\n]*同一阶段[^。\n]*(?:session|会话)/i)
   assert.match(combined, /\[.+\]\(file:\/\/\/<absolute-path>\)/)
   assert.match(combined, /用户[^。\n]*(?:文件|制品|代码)[^。\n]*(?:Markdown|可点击)/i)
 })
 
-test("OpenCode dispatch owns background and session continuation details", async () => {
+test("OpenCode Runtime owns background dispatch and session continuation details", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
   const recovery = await read("plugins/opencode/guides/recovery.md")
   const combined = `${plugin}\n${guide}\n${recovery}`
 
-  assert.match(plugin, /team_work_dispatch[^]*Lead 不传 revision、session_id 或 background 参数/)
-  assert.match(combined, /不要传[^。\n]*session_id[^。\n]*run_in_background[^。\n]*background/)
-  assert.match(guide, /team_work_dispatch[^。\n]*自身[^。\n]*非阻塞/)
-  assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不代表|不是)[^。\n]*(?:session|网关)/i)
-  assert.match(guide, /参数[^。\n]*(?:错误|误用)[^。\n]*(?:不得|不要)[^。\n]*(?:降级|容灾|重建)/)
-  assert.match(recovery, /team_work_dispatch[^。\n]*网关/i)
-  assert.match(recovery, /恢复[^。\n]*session/i)
+  assert.match(plugin, /workflow_open:\s*tool\(/)
+  assert.match(combined, /Lead 不传[^。\n]*session[^。\n]*background[^。\n]*revision/)
+  assert.match(guide, /非阻塞 child session/)
+  assert.match(recovery, /参数错误[^。\n]*不代表[^。\n]*(?:会话|网关)/)
+  assert.match(recovery, /不启动[^。\n]*(?:降级|容灾|重复调度)/)
+  assert.match(recovery, /网关[^。\n]*不会[^。\n]*任务状态/)
+  assert.match(recovery, /恢复原 child session/)
 })
 
-test("OpenCode bounded wait remains a synchronization hint rather than a completion signal", async () => {
+test("OpenCode event wait is Runtime-owned and never treated as acceptance", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
+  const recovery = await read("plugins/opencode/guides/recovery.md")
 
-  assert.match(plugin, /team_work_sync/)
-  assert.match(plugin, /最长 30 分钟/)
-  assert.match(guide, /ready[^。\n]*不表示[^。\n]*验收/)
-  assert.match(guide, /待同步[^]*不复制成员正文/)
-  assert.match(guide, /不会[^。\n]*第二套调度队列|不会[^。\n]*自动推进 Workflow/)
+  assert.match(plugin, /workflow_run/)
+  assert.match(guide, /不需要定时轮询/)
+  assert.match(guide, /会话空闲[^。\n]*不等于[^。\n]*(?:交付|验收)/)
+  assert.match(recovery, /人工等待期间[^。\n]*不启动后台任务、定时检查或状态轮询/)
 })
 
 test("OpenCode exposes a small intent-level Lead tool surface", async () => {
   const plugin = await read("plugins/opencode/assets/team-work.js")
   const guide = await read("plugins/opencode/guides/team-work.md")
-  for (const name of ["overview", "begin", "register", "dispatch", "assess", "continue", "review_gate", "sync"]) {
-    assert.match(plugin, new RegExp(`team_work_${name}:\\s*tool\\(`))
+  const recovery = await read("plugins/opencode/guides/recovery.md")
+  for (const name of ["open", "plan", "run", "steer"]) {
+    assert.match(plugin, new RegExp(`workflow_${name}:\\s*tool\\(`))
   }
-  assert.doesNotMatch(plugin, /team_work_(?:progress|user_review):\s*tool\(/)
+  assert.match(plugin, /team_work_report:\s*tool\(/)
+  assert.doesNotMatch(plugin, /team_work_(?:overview|begin|register|dispatch|assess|continue|review_gate|sync):\s*tool\(/)
   assert.doesNotMatch(plugin, /team_work_runtime:\s*tool\(/)
   assert.doesNotMatch(plugin, /team_work_work_(?:create|start|submit|accept|rework):\s*tool\(/)
   assert.doesNotMatch(plugin, /team_work_(?:spawn|resume|status|wait|collect|stop):\s*tool\(/)
-  assert.match(plugin, /workItemId:\s*args\.work_item_id/)
-  assert.match(plugin, /artifactPaths:\s*args\.artifact_paths/)
-  assert.match(plugin, /doneWhen:\s*args\.done_when/)
-  assert.match(guide, /team_work_dispatch.*team_work_assess.*team_work_continue/s)
-  assert.match(guide, /不可重试[^。\n]*(?:不要|不得)[^。\n]*重复/)
+  assert.doesNotMatch(plugin, /expected_revision|gate_id|work_item_id|run_in_background/)
+  assert.match(guide, /workflow_open.*workflow_plan.*workflow_run.*workflow_steer/s)
+  assert.match(recovery, /修正一次/)
 })
 
 test("new implementation documents have valid local links", async () => {

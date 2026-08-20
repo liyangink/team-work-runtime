@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rename, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -10,38 +10,42 @@ import { createTeamWorkTui } from "../plugins/opencode/tui/team-tui-plugin.mjs"
 async function fixture() {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-"))
   const taskId = "task-ui"
-  const mappingRoot = path.join(projectRoot, ".team-work/platform/opencode/sessions", taskId)
-  const bindingRoot = path.join(projectRoot, ".team-work/bindings/opencode")
-  await mkdir(mappingRoot, { recursive: true })
-  await mkdir(bindingRoot, { recursive: true })
-  await writeFile(path.join(bindingRoot, "lead-1.json"), `${JSON.stringify({
-    schemaVersion: "1.0",
-    platform: "opencode",
-    sessionKey: "lead-1",
-    taskId,
-    revision: 0,
-    boundAt: "2026-08-13T08:00:00.000Z",
-    updatedAt: "2026-08-13T08:00:00.000Z",
+  const platform = path.join(projectRoot, ".team-work/platform/opencode/v2")
+  await mkdir(path.join(platform, "bindings/by-session"), { recursive: true })
+  await mkdir(path.join(platform, "bindings/by-task"), { recursive: true })
+  await mkdir(path.join(platform, "sessions"), { recursive: true })
+  await mkdir(path.join(projectRoot, ".team-work/tasks", taskId), { recursive: true })
+  const binding = { bindingRef: "binding-1", taskId, platform: "opencode", hostSessionRef: "lead-1" }
+  await writeFile(path.join(platform, "bindings/by-session/lead-1.json"), `${JSON.stringify(binding)}\n`)
+  await writeFile(path.join(platform, `bindings/by-task/${taskId}.json`), `${JSON.stringify(binding)}\n`)
+  const assignments = [
+    {
+      assignmentId: "owner-1", teamRole: "owner", assignmentKind: "implementation", status: "running",
+      attempts: [{ executionRef: "child-busy" }],
+    },
+    {
+      assignmentId: "review-1", teamRole: "challenger", assignmentKind: "review", status: "accepted",
+      attempts: [{ executionRef: "child-idle" }],
+    },
+  ]
+  await writeFile(path.join(projectRoot, `.team-work/tasks/${taskId}/state.json`), `${JSON.stringify({
+    schemaVersion: "2.0", taskId, workGraph: { assignments },
   })}\n`)
-  for (const mapping of [
-    {
-      schemaVersion: "1.0", platform: "opencode", taskId, workItemId: "owner-1",
-      parentSessionId: "lead-1", sessionId: "child-busy", agent: "junior-flash",
-      title: "实现消息重试",
-      contextProfile: "implement", dispatchMode: "background",
-      createdAt: "2026-08-13T08:01:00.000Z", updatedAt: "2026-08-13T08:03:00.000Z",
-    },
-    {
-      schemaVersion: "1.0", platform: "opencode", taskId, workItemId: "review-1",
-      parentSessionId: "lead-1", sessionId: "child-idle", agent: "senior-terra",
-      title: "挑战实现方案",
-      contextProfile: "check", dispatchMode: "background",
-      createdAt: "2026-08-13T08:02:00.000Z", updatedAt: "2026-08-13T08:02:00.000Z",
-    },
+  for (const projection of [
+    { executionRef: "child-busy", assignmentId: "owner-1", agentId: "junior-flash", updatedAt: "2026-08-13T08:03:00.000Z" },
+    { executionRef: "child-idle", assignmentId: "review-1", agentId: "senior-terra", updatedAt: "2026-08-13T08:02:00.000Z" },
   ]) {
-    await writeFile(path.join(mappingRoot, `${mapping.workItemId}.json`), `${JSON.stringify(mapping)}\n`)
+    await writeFile(path.join(platform, `sessions/${projection.executionRef}.json`), `${JSON.stringify({ taskId, ...projection })}\n`)
   }
-  return { projectRoot, taskId }
+  return { projectRoot, taskId, platform }
+}
+
+async function replaceDirectoryWithExternalSymlink(projectRoot, relativePath) {
+  const source = path.join(projectRoot, relativePath)
+  const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-outside-"))
+  const relocated = path.join(outside, "directory")
+  await rename(source, relocated)
+  await symlink(relocated, source)
 }
 
 test("Team sidebar uses the current directory for a non-VCS filesystem-root worktree", () => {
@@ -49,7 +53,7 @@ test("Team sidebar uses the current directory for a non-VCS filesystem-root work
   assert.equal(resolvePanelProjectRoot({ directory: "/repo/subdir", worktree: "/repo" }), path.resolve("/repo"))
 })
 
-test("Team sidebar resolves the bound task and presents managed session snapshot", async () => {
+test("Team sidebar resolves the V2 Lead binding and authoritative work graph", async () => {
   const { projectRoot, taskId } = await fixture()
   const panel = await loadTeamPanel({
     projectRoot,
@@ -59,9 +63,9 @@ test("Team sidebar resolves the bound task and presents managed session snapshot
 
   assert.equal(panel.taskId, taskId)
   assert.equal(panel.leadSessionId, "lead-1")
-  assert.deepEqual(panel.members.map(({ workItemId, status, title, navigable }) => ({ workItemId, status, title, navigable })), [
-    { workItemId: "owner-1", status: "busy", title: "实现消息重试", navigable: true },
-    { workItemId: "review-1", status: "idle", title: "挑战实现方案", navigable: true },
+  assert.deepEqual(panel.members.map(({ assignmentId, status, title, navigable }) => ({ assignmentId, status, title, navigable })), [
+    { assignmentId: "owner-1", status: "busy", title: "owner · implementation", navigable: true },
+    { assignmentId: "review-1", status: "idle", title: "challenger · review", navigable: true },
   ])
 })
 
@@ -72,73 +76,43 @@ test("Team sidebar synchronous snapshot matches the validated async projection",
     currentSessionId: "lead-1",
     statusFor: (sessionId) => sessionId === "child-busy" ? { type: "busy" } : { type: "idle" },
   }
-
   assert.deepEqual(loadTeamPanelSync(input), await loadTeamPanel(input))
 })
 
-test("Team sidebar keeps the same task visible after navigating into a child session", async () => {
+test("Team sidebar keeps the same task visible after navigating into a member session", async () => {
   const { projectRoot, taskId } = await fixture()
-  const panel = await loadTeamPanel({
-    projectRoot,
-    currentSessionId: "child-idle",
-    statusFor: () => ({ type: "idle" }),
-    sessionFor: (sessionId) => ({ id: sessionId }),
-  })
-
+  const panel = await loadTeamPanel({ projectRoot, currentSessionId: "child-idle", statusFor: () => ({ type: "idle" }) })
   assert.equal(panel.taskId, taskId)
   assert.equal(panel.leadSessionId, "lead-1")
   assert.equal(panel.members.find(({ sessionId }) => sessionId === "child-idle").focused, true)
 })
 
-test("Team sidebar preserves stopped and lost mappings without inventing live status", async () => {
-  const { projectRoot } = await fixture()
-  const mappingRoot = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-ui")
-  const stopped = JSON.parse(await readFile(path.join(mappingRoot, "review-1.json"), "utf8"))
-  await writeFile(path.join(mappingRoot, "review-1.json"), `${JSON.stringify({ ...stopped, stoppedAt: "2026-08-13T08:04:00.000Z" })}\n`)
-  const lost = { ...stopped, workItemId: "expert-1", sessionId: "child-lost", agent: "expert-opus", lostRecordedAt: "2026-08-13T08:05:00.000Z" }
-  await writeFile(path.join(mappingRoot, "expert-1.json"), `${JSON.stringify(lost)}\n`)
-
-  const panel = await loadTeamPanel({
-    projectRoot,
-    currentSessionId: "lead-1",
-    statusFor: () => ({ type: "busy" }),
-    sessionFor: () => undefined,
+test("Team sidebar preserves stopped and lost assignments without inventing live status", async () => {
+  const { projectRoot, taskId, platform } = await fixture()
+  const statePath = path.join(projectRoot, `.team-work/tasks/${taskId}/state.json`)
+  const state = JSON.parse(await readFile(statePath, "utf8"))
+  state.workGraph.assignments[1].status = "blocked"
+  state.workGraph.assignments.push({
+    assignmentId: "expert-1", teamRole: "expert", assignmentKind: "review", status: "lost",
+    attempts: [{ executionRef: "child-lost" }],
   })
-
-  assert.equal(panel.members.find(({ workItemId }) => workItemId === "review-1").status, "stopped")
-  assert.equal(panel.members.find(({ workItemId }) => workItemId === "review-1").navigable, true)
-  assert.equal(panel.members.find(({ workItemId }) => workItemId === "expert-1").status, "lost")
-  assert.equal(panel.members.find(({ workItemId }) => workItemId === "expert-1").navigable, false)
-})
-
-test("Team sidebar refuses ambiguous parent mappings and ignores malformed files", async () => {
-  const parent = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-"))
-  for (const [taskId, workItemId] of [["task-a", "owner-a"], ["task-b", "owner-b"]]) {
-    const root = path.join(parent, ".team-work/platform/opencode/sessions", taskId)
-    await mkdir(root, { recursive: true })
-    await writeFile(path.join(root, `${workItemId}.json`), `${JSON.stringify({
-      schemaVersion: "1.0", platform: "opencode", taskId, workItemId,
-      parentSessionId: "lead-shared", sessionId: `child-${taskId}`, agent: "junior-flash",
-      contextProfile: "implement", dispatchMode: "background",
-      createdAt: "2026-08-13T08:00:00.000Z", updatedAt: "2026-08-13T08:00:00.000Z",
-    })}\n`)
-    await writeFile(path.join(root, "broken.json"), "{not-json\n")
-  }
-
-  assert.equal(await loadTeamPanel({ projectRoot: parent, currentSessionId: "lead-shared" }), null)
-})
-
-test("Team sidebar refuses a stale binding that conflicts with the current child mapping", async () => {
-  const { projectRoot } = await fixture()
-  const otherRoot = path.join(projectRoot, ".team-work/platform/opencode/sessions/task-other")
-  await mkdir(otherRoot, { recursive: true })
-  await writeFile(path.join(otherRoot, "owner-other.json"), `${JSON.stringify({
-    schemaVersion: "1.0", platform: "opencode", taskId: "task-other", workItemId: "owner-other",
-    parentSessionId: "lead-other", sessionId: "lead-1", agent: "junior-flash",
-    contextProfile: "implement", dispatchMode: "background",
-    createdAt: "2026-08-13T08:00:00.000Z", updatedAt: "2026-08-13T08:00:00.000Z",
+  await writeFile(statePath, `${JSON.stringify(state)}\n`)
+  await writeFile(path.join(platform, "sessions/child-lost.json"), `${JSON.stringify({
+    taskId, assignmentId: "expert-1", executionRef: "child-lost", agentId: "expert-opus", updatedAt: "2026-08-13T08:05:00.000Z",
   })}\n`)
 
+  const panel = await loadTeamPanel({ projectRoot, currentSessionId: "lead-1", statusFor: () => ({ type: "busy" }) })
+  assert.equal(panel.members.find(({ assignmentId }) => assignmentId === "review-1").status, "stopped")
+  assert.equal(panel.members.find(({ assignmentId }) => assignmentId === "review-1").navigable, true)
+  assert.equal(panel.members.find(({ assignmentId }) => assignmentId === "expert-1").status, "lost")
+  assert.equal(panel.members.find(({ assignmentId }) => assignmentId === "expert-1").navigable, false)
+})
+
+test("Team sidebar rejects conflicting Lead and member task bindings", async () => {
+  const { projectRoot, platform } = await fixture()
+  await writeFile(path.join(platform, "sessions/lead-1.json"), `${JSON.stringify({
+    taskId: "task-other", assignmentId: "owner-other", executionRef: "lead-1", agentId: "junior-flash",
+  })}\n`)
   assert.equal(await loadTeamPanel({ projectRoot, currentSessionId: "lead-1" }), null)
 })
 
@@ -171,28 +145,31 @@ test("Team sidebar follows official reactive session state without timers or eve
 
 test("disabled OpenCode platform does not register the Team sidebar", async () => {
   let registrations = 0
-  const tui = createTeamWorkTui(() => "team-sidebar", {
-    isEnabled: async () => false,
-  })
-
+  const tui = createTeamWorkTui(() => "team-sidebar", { isEnabled: async () => false })
   await tui({ slots: { register: () => { registrations += 1 } } })
-
   assert.equal(registrations, 0)
 })
 
-test("Team sidebar never follows task mapping or binding roots outside the project", async () => {
+test("Team sidebar never follows V2 platform roots outside the project", async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-"))
   const outside = await mkdtemp(path.join(os.tmpdir(), "team-work-tui-outside-"))
-  const outsideTask = path.join(outside, "task-outside")
-  await mkdir(outsideTask, { recursive: true })
-  await writeFile(path.join(outsideTask, "owner-1.json"), `${JSON.stringify({
-    schemaVersion: "1.0", platform: "opencode", taskId: "task-outside", workItemId: "owner-1",
-    parentSessionId: "lead-1", sessionId: "child-1", agent: "junior-flash",
-    contextProfile: "implement", dispatchMode: "background",
-    createdAt: "2026-08-13T08:00:00.000Z", updatedAt: "2026-08-13T08:00:00.000Z",
-  })}\n`)
   await mkdir(path.join(projectRoot, ".team-work/platform/opencode"), { recursive: true })
-  await symlink(outside, path.join(projectRoot, ".team-work/platform/opencode/sessions"))
-
+  await symlink(outside, path.join(projectRoot, ".team-work/platform/opencode/v2"))
   assert.equal(await loadTeamPanel({ projectRoot, currentSessionId: "lead-1" }), null)
+})
+
+test("Team sidebar rejects every symlinked binding, session, and task directory", async () => {
+  for (const relativePath of [
+    ".team-work/platform/opencode/v2/bindings",
+    ".team-work/platform/opencode/v2/bindings/by-session",
+    ".team-work/platform/opencode/v2/bindings/by-task",
+    ".team-work/platform/opencode/v2/sessions",
+    ".team-work/tasks",
+    ".team-work/tasks/task-ui",
+  ]) {
+    const { projectRoot } = await fixture()
+    await replaceDirectoryWithExternalSymlink(projectRoot, relativePath)
+    assert.equal(await loadTeamPanel({ projectRoot, currentSessionId: "lead-1" }), null, relativePath)
+    assert.equal(loadTeamPanelSync({ projectRoot, currentSessionId: "lead-1" }), null, relativePath)
+  }
 })

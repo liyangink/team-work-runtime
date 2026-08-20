@@ -15,6 +15,24 @@ const profile = {
   ],
 }
 
+const leadTools = ["workflow_open", "workflow_plan", "workflow_run", "workflow_steer"]
+const memberTools = ["team_work_report", "team_work_assist", "team_work_assist_status", "team_work_assist_collect"]
+
+function permissionMap(permission) {
+  return typeof permission === "string" ? { "*": permission } : permission ?? {}
+}
+
+function effectivePermission(config, agentId) {
+  return {
+    ...permissionMap(config.permission),
+    ...permissionMap(config.agent?.[agentId]?.permission),
+  }
+}
+
+function assertPermissions(permission, entries) {
+  for (const [tool, expected] of Object.entries(entries)) assert.equal(permission[tool], expected, tool)
+}
+
 test("explicit user agents become restart-time OpenCode subagent configuration", () => {
   const config = { agent: { build: { mode: "primary" } } }
   const configured = applyOpenCodeAgentConfig(config, {
@@ -34,20 +52,17 @@ test("explicit user agents become restart-time OpenCode subagent configuration",
     mode: "subagent",
     model: "official/claude-opus-5",
     reasoningEffort: "high",
-    prompt: "你是 Team-work 的 Expert 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，发现缺口及时报告。不要自行组建下级团队。",
+    prompt: "你是 Team-work 的 Expert 通用成员。只执行派单中明确的范围、完成条件、制品路径和验证要求；事实与证据优先，完成后必须调用 team_work_report。不要自行组建下级团队。",
     permission: {
       task: "deny",
       team_work_assist: "deny",
       team_work_assist_status: "deny",
       team_work_assist_collect: "deny",
-      team_work_overview: "deny",
-      team_work_begin: "deny",
-      team_work_register: "deny",
-      team_work_dispatch: "deny",
-      team_work_assess: "deny",
-      team_work_continue: "deny",
-      team_work_review_gate: "deny",
-      team_work_sync: "deny",
+      team_work_report: "allow",
+      workflow_open: "deny",
+      workflow_plan: "deny",
+      workflow_run: "deny",
+      workflow_steer: "deny",
     },
   })
 })
@@ -59,6 +74,46 @@ test("automatic user config exposes only models resolved in the installed profil
   assert.deepEqual(configured, ["junior-flash", "senior-terra"])
   assert.equal(config.agent["junior-flash"].model, "gateway/deepseek-v4-flash")
   assert.equal(config.agent["expert-opus"], undefined)
+})
+
+test("merged OpenCode permissions keep every Lead on the four-tool control plane", () => {
+  const config = {
+    permission: "allow",
+    default_agent: "default-lead",
+    agent: {
+      build: { mode: "primary", permission: { bash: "ask", team_work_report: "allow" } },
+      plan: { mode: "primary", permission: { team_work_assist: "allow" } },
+      "default-lead": { permission: "allow" },
+      "custom-lead": { mode: "primary", permission: { workflow_open: "deny", team_work_assist_collect: "allow" } },
+      "custom-subagent": { mode: "subagent", permission: { read: "allow" } },
+    },
+  }
+
+  applyOpenCodeAgentConfig(config, { profile, userConfig: { agents: "auto" } })
+
+  assert.equal(config.permission["*"], "allow")
+  assertPermissions(config.permission, {
+    ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
+    ...Object.fromEntries(memberTools.map((tool) => [tool, "deny"])),
+  })
+  for (const id of ["build", "plan", "default-lead", "custom-lead"]) {
+    assertPermissions(effectivePermission(config, id), {
+      ...Object.fromEntries(leadTools.map((tool) => [tool, "allow"])),
+      ...Object.fromEntries(memberTools.map((tool) => [tool, "deny"])),
+    })
+  }
+  assert.equal(effectivePermission(config, "build").bash, "ask")
+  assertPermissions(effectivePermission(config, "custom-subagent"), {
+    ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
+    ...Object.fromEntries(memberTools.map((tool) => [tool, "deny"])),
+  })
+  assertPermissions(effectivePermission(config, "junior-flash"), {
+    ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
+    team_work_report: "allow",
+    team_work_assist: "deny",
+    team_work_assist_status: "deny",
+    team_work_assist_collect: "deny",
+  })
 })
 
 test("one independent helper binding creates two hidden read-only assistants", () => {
@@ -78,16 +133,29 @@ test("one independent helper binding creates two hidden read-only assistants", (
     assert.equal(config.agent[id].mode, "subagent")
     assert.equal(config.agent[id].hidden, true)
     assert.equal(config.agent[id].permission.edit, "deny")
+    assert.equal(config.agent[id].permission.apply_patch, "deny")
+    assert.equal(config.agent[id].permission.shell, "deny")
     assert.equal(config.agent[id].permission.bash, "deny")
     assert.equal(config.agent[id].permission.task, "deny")
     assert.equal(config.agent[id].permission.team_work_assist, "deny")
-    assert.equal(config.agent[id].permission.team_work_sync, "deny")
+    assert.equal(config.agent[id].permission.team_work_report, "deny")
+    assert.equal(config.agent[id].permission.workflow_run, "deny")
   }
   assert.notEqual(config.agent["team-work-explore"].prompt, config.agent["team-work-librarian"].prompt)
   assert.equal(config.agent["team-work-explore"].permission.webfetch, "deny")
   assert.equal(config.agent["team-work-librarian"].permission.webfetch, "allow")
   assert.equal(config.agent["junior-flash"].permission.team_work_assist, "allow")
-  assert.equal(config.agent["junior-flash"].permission.team_work_sync, "deny")
+  assert.equal(config.agent["junior-flash"].permission.team_work_report, "allow")
+  assertPermissions(effectivePermission(config, "junior-flash"), {
+    ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
+    ...Object.fromEntries(memberTools.map((tool) => [tool, "allow"])),
+  })
+  for (const id of ["team-work-explore", "team-work-librarian"]) {
+    assertPermissions(effectivePermission(config, id), {
+      ...Object.fromEntries(leadTools.map((tool) => [tool, "deny"])),
+      ...Object.fromEntries(memberTools.map((tool) => [tool, "deny"])),
+    })
+  }
 })
 
 test("dynamic agent configuration rejects names outside the installed catalog", () => {

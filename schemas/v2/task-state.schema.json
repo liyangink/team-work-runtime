@@ -280,7 +280,12 @@
         "sourcePacketDigest", "resumeDecisionId", "resumeQuestion", "resumeChoices", "requirement", "proofMode", "artifactIds"
       ],
       "properties": {
-        "action": { "enum": ["owner-rework", "collect-evidence", "expert-arbitrate"] },
+        "action": {
+          "enum": [
+            "owner-explain", "owner-rework", "collect-evidence", "challenge-again",
+            "expert-arbitrate", "second-expert-opinion", "replace-owner"
+          ]
+        },
         "directive": { "type": "string", "minLength": 1 },
         "targetRef": { "type": "string", "minLength": 1 },
         "referenceRefs": { "$ref": "#/$defs/uniqueStrings" },

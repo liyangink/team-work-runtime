@@ -23,6 +23,7 @@ async function fixture({
   routeConfig = { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
   e2eAssessment,
   transformReport,
+  agents,
   store = createInMemoryStore(),
   specStatus = "missing",
 } = {}) {
@@ -34,7 +35,7 @@ async function fixture({
     "scopes/test.md": "Exercise the critical user path.",
     "src/existing.mjs": "export const existing = true\n",
   })
-  const execution = createFakeExecutionAdapter({ clock: () => "2026-08-19T09:00:00.000Z" })
+  const execution = createFakeExecutionAdapter({ agents, clock: () => "2026-08-19T09:00:00.000Z" })
   const runtime = createRuntimeFacade({
     store,
     executionAdapter: execution,
@@ -493,7 +494,7 @@ test("three autonomous E2E rework rounds stop for one explicit user extension", 
 })
 
 test("Lead steering opens one durable member-owned intervention round from the DecisionPacket", async (t) => {
-  for (const action of ["owner-rework", "collect-evidence", "expert-arbitrate"]) await t.test(action, async () => {
+  for (const action of ["owner-explain", "owner-rework", "collect-evidence", "challenge-again", "expert-arbitrate", "replace-owner"]) await t.test(action, async () => {
     const { runtime, harness, store } = await fixture()
     const opened = await runtime.leadControl.open({
       title: `Exercise ${action} steering`,
@@ -514,11 +515,14 @@ test("Lead steering opens one durable member-owned intervention round from the D
 
     const interventionCard = await runtime.leadControl.steer({
       action,
-      directive: action === "owner-rework"
-        ? "修订当前实现并复核受影响边界"
-        : action === "collect-evidence"
-          ? "补充失败路径的可验证证据"
-          : "独立裁决当前实现是否满足核心约束",
+      directive: {
+        "owner-explain": "解释当前实现如何满足关键约束",
+        "owner-rework": "修订当前实现并复核受影响边界",
+        "collect-evidence": "补充失败路径的可验证证据",
+        "challenge-again": "重新挑战当前实现的边界与失败路径",
+        "expert-arbitrate": "独立裁决当前实现是否满足核心约束",
+        "replace-owner": "由新的 Owner 接管并重新核验交付",
+      }[action],
       targetRef,
     })
     const interventionState = await store.loadTask(opened.task.id)
@@ -536,6 +540,84 @@ test("Lead steering opens one durable member-owned intervention round from the D
       decisionId === interventionState.stagePlan.intervention.resumeDecisionId && choice === "accept"
     )))
   })
+})
+
+test("replan and user escalation remain quiescent controlled steering paths", async (t) => {
+  for (const action of ["replan", "escalate-to-user"]) await t.test(action, async () => {
+    const { runtime, harness, store } = await fixture()
+    const opened = await runtime.leadControl.open({
+      title: `Exercise ${action}`,
+      objective: "Implement and review the requested change",
+      entryStage: "implementation",
+      completion: { mode: "through-stage", stage: "implementation" },
+      existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+    })
+    await harness.drive(await runtime.leadControl.plan({
+      objective: "Implement and review the requested change",
+      preferences: { budget: "quality" },
+    }), { stopWhen: (card) => card.task?.status === "awaiting-user" })
+    const before = await store.loadTask(opened.task.id)
+    const directive = action === "replan" ? "重新规划范围并保留已有证据" : "请用户决定是否接受当前风险"
+    const card = await runtime.leadControl.steer({ action, directive })
+    const after = await store.loadTask(opened.task.id)
+    if (action === "replan") {
+      assert.equal(card.next.kind, "plan")
+      assert.equal(after.status, "needs-plan")
+      assert.equal(after.stagePlan, null)
+      assert.equal(after.pendingDecision, null)
+      assert.equal(after.currentStageRun.sequence, before.currentStageRun.sequence + 1)
+    } else {
+      assert.equal(card.task.status, "awaiting-user")
+      assert.equal(after.pendingDecision.question, directive)
+      assert.equal(after.currentStageRun.stageRunId, before.currentStageRun.stageRunId)
+      assert.deepEqual(after.workGraph, before.workGraph)
+    }
+  })
+})
+
+test("a second Expert opinion must use a different configured Expert", async () => {
+  const agents = [
+    { agentId: "junior-luna", tier: "junior", model: "luna", costWeight: 1, capabilities: ["*"] },
+    { agentId: "senior-terra", tier: "senior", model: "terra", costWeight: 10, capabilities: ["*"] },
+    { agentId: "expert-opus", tier: "expert", model: "opus", costWeight: 50, capabilities: ["*"] },
+    { agentId: "expert-k3", tier: "expert", model: "k3", costWeight: 50, capabilities: ["*"] },
+  ]
+  const { runtime, harness, store } = await fixture({ agents })
+  const opened = await runtime.leadControl.open({
+    title: "Request an independent second Expert",
+    objective: "Implement and critically review the requested change",
+    entryStage: "implementation",
+    completion: { mode: "through-stage", stage: "implementation" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/full.md" } }],
+  })
+  const waiting = await harness.drive(await runtime.leadControl.plan({
+    objective: "Implement and critically review the requested change",
+    preferences: { budget: "quality", risk: "normal" },
+  }), { stopWhen: (card) => card.task?.status === "awaiting-user" })
+  const packetId = waiting.card.decision.packetRef.split("/").at(-1).replace(/\.json$/, "")
+  const packet = await store.loadRecord(opened.task.id, "packet", packetId)
+  const ownerRef = packet.roster.find(({ role }) => role === "owner")?.memberRef
+  assert.ok(ownerRef)
+  const firstOpinion = await runtime.leadControl.steer({
+    action: "expert-arbitrate",
+    directive: "先由一位 Expert 独立裁决核心判断",
+    targetRef: ownerRef,
+  })
+  const secondWaiting = await harness.drive(firstOpinion, { stopWhen: (card) => card.task?.status === "awaiting-user" })
+  const secondPacketId = secondWaiting.card.decision.packetRef.split("/").at(-1).replace(/\.json$/, "")
+  const secondPacket = await store.loadRecord(opened.task.id, "packet", secondPacketId)
+  const targetRef = secondPacket.roster.find(({ role }) => role === "expert")?.memberRef
+  const previousExpert = (await store.loadTask(opened.task.id)).workGraph.assignments.find(({ teamRole }) => teamRole === "expert").execution.agentId
+  assert.ok(targetRef)
+
+  await runtime.leadControl.steer({
+    action: "second-expert-opinion",
+    directive: "独立复核现有 Expert 的核心判断",
+    targetRef,
+  })
+  const state = await store.loadTask(opened.task.id)
+  const nextExpert = state.workGraph.assignments.find(({ teamRole }) => teamRole === "expert").execution.agentId
+  assert.notEqual(nextExpert, previousExpert)
 })
 
 test("stale or concurrent DecisionPacket steering cannot open two intervention rounds", async () => {

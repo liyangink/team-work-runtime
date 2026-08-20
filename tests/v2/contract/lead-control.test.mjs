@@ -122,3 +122,19 @@ test("LeadControl accepts a flat controlled intervention without orchestration f
     referenceRefs: ["report:owner"],
   })
 })
+
+test("LeadControl exposes the complete flat steering action vocabulary", async () => {
+  const received = []
+  const control = createLeadControl({
+    open: async () => actionCard,
+    plan: async () => actionCard,
+    run: async () => actionCard,
+    steer: async (input) => { received.push(input.action); return actionCard },
+  })
+  const actions = [
+    "choose", "owner-explain", "owner-rework", "collect-evidence", "challenge-again",
+    "expert-arbitrate", "second-expert-opinion", "replace-owner", "replan", "escalate-to-user",
+  ]
+  for (const action of actions) await control.steer({ action, directive: action === "choose" ? "accept" : "Handle the current issue" })
+  assert.deepEqual(received, actions)
+})

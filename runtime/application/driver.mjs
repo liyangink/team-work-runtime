@@ -39,10 +39,11 @@ export function createTaskDriver({
   workflowPin,
   teamPolicy,
   routeConfig,
+  executionPreparer,
 }) {
   const reconciler = createTaskReconciler({ store, clock })
   const specProvider = specProviderAdapter ? createSpecProviderAdapterPort(specProviderAdapter) : null
-  const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector })
+  const effects = createEffectCoordinator({ reconciler, executionAdapter, clock, maxEffectAttempts, effectLeaseMs, faultInjector, executionPreparer })
   const humanWait = createHumanWait({ reconciler, executionAdapter, evidenceVerifier, clock, effectLeaseMs, faultInjector })
   const specEffects = specProvider ? createSpecEffectCoordinator({
     reconciler,

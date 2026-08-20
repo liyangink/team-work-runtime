@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -10,6 +10,7 @@ import { createExecutionAdapterPort, createPlatformObservationSink, digestEffect
 async function project() {
   const root = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-opencode-"))
   await mkdir(path.join(root, ".team-work"), { recursive: true })
+  await writeFile(path.join(root, ".team-work", "project.json"), `${JSON.stringify({ runtimeMajor: 2, schemaVersion: "2.0" })}\n`)
   await mkdir(path.join(root, "generated"), { recursive: true })
   await writeFile(path.join(root, "generated", "context.md"), "Owner context")
   await writeFile(path.join(root, "generated", "prompt.md"), "Implement the assigned work")
@@ -132,6 +133,26 @@ function effect(capabilities, overrides = {}) {
   return value
 }
 
+test("read-only session probes do not initialize standalone projects", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-standalone-"))
+  const sdk = fakeClient()
+  const adapter = createOpenCodeExecutionAdapter({ client: sdk.client, projectRoot, platformProfile: profile() })
+
+  assert.equal(await adapter.resolveLeadBindingForSession("lead-standalone"), null)
+  assert.equal(await adapter.resolveMemberBinding("member-standalone"), null)
+  assert.equal(await adapter.resolveHelperBinding("helper-standalone"), null)
+  await assert.rejects(access(path.join(projectRoot, ".team-work")), { code: "ENOENT" })
+})
+
+test("session probes fail closed on an unmarked control directory", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-unmarked-"))
+  await mkdir(path.join(projectRoot, ".team-work"))
+  const adapter = createOpenCodeExecutionAdapter({ client: fakeClient().client, projectRoot, platformProfile: profile() })
+
+  await assert.rejects(adapter.resolveLeadBindingForSession("lead-unmarked"), { code: "STATE_CORRUPT" })
+  await assert.rejects(access(path.join(projectRoot, ".team-work", "platform")), { code: "ENOENT" })
+})
+
 test("OpenCode Execution Adapter exposes the pinned Agent catalog and dispatches only promptAsync child sessions", async () => {
   const { sdk, port, capabilities } = await configuredAdapter()
   assert.deepEqual(capabilities.agents.map(({ agentId, costWeight }) => [agentId, costWeight]), [
@@ -150,6 +171,80 @@ test("OpenCode Execution Adapter exposes the pinned Agent catalog and dispatches
   assert.equal(sdk.calls.create, 1)
   assert.equal(sdk.calls.prompt, 1)
   assert.match(sdk.messages.get(first.executionRef)[0].parts[0].text, /Owner context[\s\S]*Implement the assigned work/)
+})
+
+test("OpenCode host and member sessions resolve to durable Runtime bindings after restart", async () => {
+  const setup = await configuredAdapter()
+  const execution = await setup.port.ensureExecution(effect(setup.capabilities))
+  const restarted = createOpenCodeExecutionAdapter({
+    client: setup.sdk.client,
+    projectRoot: setup.projectRoot,
+    platformProfile: profile(),
+  })
+
+  assert.deepEqual(await restarted.resolveLeadBindingForSession(setup.binding.hostSessionRef), setup.binding)
+  assert.deepEqual(await restarted.resolveMemberBinding(execution.executionRef), {
+    taskId: "task-1",
+    stageRunId: "stage-run-1",
+    assignmentId: "owner-1",
+    attemptId: "owner-1-attempt-1",
+    executionRef: execution.executionRef,
+    operationKey: "report:dispatch-1",
+    agentId: "junior-luna",
+    hostSessionRef: setup.binding.hostSessionRef,
+  })
+})
+
+test("an explicit cross-session open atomically transfers the Lead binding", async () => {
+  const setup = await configuredAdapter()
+  setup.sdk.addHostSession("lead-next")
+  const next = await setup.port.bindLead({ taskId: "task-1", platform: "opencode", hostSessionRef: "lead-next" })
+
+  assert.equal(next.bindingRef, setup.binding.bindingRef)
+  assert.equal(await setup.adapter.resolveLeadBindingForSession(setup.binding.hostSessionRef), null)
+  assert.deepEqual(await setup.adapter.resolveLeadBindingForSession("lead-next"), next)
+})
+
+test("one Lead session cannot remain the durable controller for two tasks", async () => {
+  const setup = await configuredAdapter()
+  await setup.port.bindLead({ taskId: "task-2", platform: "opencode", hostSessionRef: setup.binding.hostSessionRef })
+  const byTask = path.join(setup.projectRoot, ".team-work", "platform", "opencode", "v2", "bindings", "by-task")
+
+  await assert.rejects(access(path.join(byTask, "task-1.json")), { code: "ENOENT" })
+  assert.equal(JSON.parse(await readFile(path.join(byTask, "task-2.json"), "utf8")).hostSessionRef, setup.binding.hostSessionRef)
+  await assert.rejects(
+    setup.port.verifyHumanDecision({
+      decisionId: "stale-decision",
+      leadBindingRef: setup.binding.bindingRef,
+      issuedAt: "2026-08-19T10:01:00.000Z",
+      choices: ["accept", "rework"],
+    }),
+    (error) => error.code === "LEAD_BINDING_MISSING",
+  )
+})
+
+test("configured members can create a durable read-only helper child session", async () => {
+  const projectRoot = await project()
+  const sdk = fakeClient()
+  const hostSessionRef = sdk.addHostSession()
+  const adapter = createOpenCodeExecutionAdapter({
+    client: sdk.client,
+    projectRoot,
+    platformProfile: {
+      ...profile(),
+      helpers: [{ id: "team-work-explore", kind: "explore", resolvedModel: "gateway/luna", capabilities: ["read-only", "code-search"] }],
+    },
+  })
+  const port = createExecutionAdapterPort(adapter)
+  await port.bindLead({ taskId: "task-1", platform: "opencode", hostSessionRef })
+  const capabilities = await port.capabilities()
+  const execution = await port.ensureExecution(effect(capabilities))
+
+  const helper = await adapter.assist({ parentSessionId: execution.executionRef, kind: "explore", prompt: "Locate the parser entry point." })
+  assert.equal(helper.parentSessionRef, execution.executionRef)
+  assert.equal(helper.helperKind, "explore")
+  assert.deepEqual(await adapter.resolveHelperBinding(helper.sessionId), helper)
+  assert.equal((await adapter.assistStatus({ parentSessionId: execution.executionRef, sessionId: helper.sessionId })).status.type, "busy")
 })
 
 test("OpenCode adapter state refuses a nested symlink before creating operation files", async () => {
@@ -253,6 +348,32 @@ test("OpenCode events and check receipts are normalized directly into PlatformOb
   )
 })
 
+test("restart reconciliation projects idle and lost managed sessions with stable dedupe keys", async () => {
+  const { sdk, adapter, port, capabilities } = await configuredAdapter()
+  const observations = []
+  adapter.attachRuntime({
+    observationSinkFor: () => createPlatformObservationSink({
+      observe: async (value) => {
+        observations.push(value)
+        return { observationId: value.observationId, sequence: observations.length, duplicate: false }
+      },
+    }),
+  })
+  const receipt = await port.ensureExecution(effect(capabilities))
+  sdk.statuses[receipt.executionRef] = { type: "idle" }
+
+  assert.deepEqual(await adapter.reconcileTaskExecutions("task-1"), { observations: 1, inDoubt: false })
+  assert.deepEqual(await adapter.reconcileTaskExecutions("task-1"), { observations: 1, inDoubt: false })
+  assert.equal(observations[0].state, "idle")
+  assert.equal(observations[1].dedupeKey, observations[0].dedupeKey)
+
+  sdk.sessions.delete(receipt.executionRef)
+  delete sdk.statuses[receipt.executionRef]
+  await adapter.reconcileTaskExecutions("task-1")
+  assert.equal(observations.at(-1).state, "lost")
+  assert.notEqual(observations.at(-1).dedupeKey, observations[0].dedupeKey)
+})
+
 test("a late check from an earlier attempt cannot bind to a resumed session", async () => {
   const { adapter, port, capabilities } = await configuredAdapter()
   adapter.attachRuntime({ observationSinkFor: () => ({ observe: async () => assert.fail("stale check must not reach Runtime") }) })
@@ -344,6 +465,34 @@ test("quiesce binds a verified user decision to a message newer than the capture
   assert.equal(decision.choice, "accept")
   assert.equal(decision.proof.mode, "verified-event")
   assert.equal(decision.proof.messageId, "new-user")
+})
+
+test("an awaiting human decision follows the stable task binding to a new Lead session", async () => {
+  const { sdk, port, binding } = await configuredAdapter()
+  sdk.addUserMessage(binding.hostSessionRef, { id: "old-start", created: Date.parse("2026-08-19T09:59:00.000Z"), text: "start" })
+  const quiet = await port.quiesce({
+    operationId: "quiesce-transfer",
+    effectDigest: "t".repeat(64),
+    taskId: "task-1",
+    decisionId: "design-approval",
+    leadBindingRef: binding.bindingRef,
+    executionRefs: [],
+    clearHostContinuations: true,
+  })
+  sdk.addHostSession("lead-decision-next")
+  const transferred = await port.bindLead({ taskId: "task-1", platform: "opencode", hostSessionRef: "lead-decision-next" })
+  sdk.addUserMessage("lead-decision-next", { id: "new-approval", created: Date.parse("2026-08-19T10:03:00.000Z"), text: "同意，accept" })
+
+  assert.equal(transferred.bindingRef, binding.bindingRef)
+  const decision = await port.verifyHumanDecision({
+    decisionId: "design-approval",
+    leadBindingRef: binding.bindingRef,
+    issuedAt: "2026-08-19T10:01:00.000Z",
+    afterHostCursor: quiet.hostCursor,
+    choices: ["accept", "rework"],
+  })
+  assert.equal(decision.choice, "accept")
+  assert.equal(decision.proof.messageId, "new-approval")
 })
 
 test("quiesce clears host continuations through the platform controller before issuing a human wait", async () => {

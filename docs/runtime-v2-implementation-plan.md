@@ -1,6 +1,6 @@
 # Runtime v2 实施与验收计划
 
-状态：规划已建立；V2-0 至 V2-6 均已完成并通过两轴终审，V2-7 的 [`公开切换清单`](runtime-v2-cutover-checklist.md) 已生成，等待人工确认后实施删除与切换。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
+状态：V2-0 至 V2-7 均已完成并通过两轴终审；V2-7 已按获批的 [`公开切换清单`](runtime-v2-cutover-checklist.md) 完成删除与切换，下一里程碑为 V2-8。规范性架构见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，产品边界见 [`AGENTS.md`](../AGENTS.md)。
 
 ## 1. 实施目标
 
@@ -210,13 +210,13 @@
 - 旧 `.team-work` 根稳定返回 major mismatch，不自动迁移；
 - 全量仓库测试在删除 v1 测试后仍全绿，没有 v2→v1 import。
 
-### V2-8：安装生命周期、真实 E2E 与发布
+### V2-8：安装生命周期强化、真实 E2E 与发布
 
 目标：证明新架构在真实 OpenCode/网关下可用，并能安全更新、卸载和诊断。
 
 实施：
 
-- 更新 installer manifest、package files、config schema、doctor 和旧版检测；
+- 对 V2-7 已切换的 installer manifest、package files、config schema、doctor 和旧版检测做破坏性强化；
 - 安装/更新先备份受管文件，失败回滚，卸载不删项目任务数据；
 - 使用 DeepSeek/Luna 完成低成本真实链路；
 - 覆盖完整 Workflow、standalone code-review、OpenSpec、用户人工门禁、宿主重启、网关错误和成员失联；
@@ -287,4 +287,4 @@ skills/workflow/references/runtime-commands.md
 
 ## 8. 立即下一步
 
-进入 V2-7：把 OpenCode 的公开 Lead 工具、最小上下文、Skill 和只读 TUI 投影切到 v2，并删除 v1 控制命令、状态兼容层和重复编排；切换前保留一次可回退提交。
+进入 V2-8：强化安装、更新、软停用、卸载与 doctor 的破坏性测试；随后使用真实 OpenCode/网关完成正式 Workflow、standalone code-review、OpenSpec、人工门禁、宿主重启、网关错误和成员失联 E2E，验收通过后再发布。

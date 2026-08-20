@@ -55,7 +55,7 @@ export function TeamSidebar(props: { api: any, context: any, sessionId: string }
                   {member.title}
                 </text>
                 <text fg={colors().textMuted} wrapMode="none" truncate={true}>
-                  {member.agent} · {member.workItemId} · {status().label}
+                  {member.agent} · {member.assignmentId} · {status().label}
                 </text>
               </box>
             </box>

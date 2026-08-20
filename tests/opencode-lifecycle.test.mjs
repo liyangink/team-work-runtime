@@ -36,6 +36,22 @@ function options(projectRoot, overrides = {}) {
   }
 }
 
+async function assertLocalModuleGraph(entry) {
+  const visited = new Set()
+  async function visit(target) {
+    const absolute = path.resolve(target)
+    if (visited.has(absolute)) return
+    visited.add(absolute)
+    const source = await readFile(absolute, "utf8")
+    for (const match of source.matchAll(/(?:from\s+|import\s*\()["'](\.[^"']+)["']/g)) {
+      const dependency = path.resolve(path.dirname(absolute), match[1])
+      await assert.doesNotReject(access(dependency), `${path.relative(path.dirname(entry), dependency)} imported by ${path.basename(absolute)}`)
+      if (/\.(?:mjs|js)$/.test(dependency)) await visit(dependency)
+    }
+  }
+  await visit(entry)
+}
+
 test("install enforces only a minimum OpenCode version", async () => {
   const tooOld = await tempProject()
   await assert.rejects(
@@ -72,15 +88,18 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
     "skills/team-work/SKILL.md",
     "plugins/team-work.js",
     "plugins/team-work-tui.tsx",
-    "team-work/runtime/cli.mjs",
-    "team-work/opencode-adapter.mjs",
-    "team-work/lead-controller.mjs",
+    "team-work/lib/runtime/cli.mjs",
+    "team-work/lib/runtime/application/runtime-facade.mjs",
+    "team-work/lib/plugins/opencode/adapter/runtime-host.mjs",
+    "team-work/lib/plugins/opencode/context/hooks.mjs",
+    "team-work/lib/plugins/opencode/tools/index.mjs",
     "team-work/opencode-activation.mjs",
     "team-work/opencode-agent-config.mjs",
     "team-work/tui/team-work-tui.tsx",
     "team-work/tui/team-sidebar.tsx",
     "team-work/tui/team-sessions.mjs",
     "team-work/installer/user-config.mjs",
+    "team-work/schemas/user-config.v1.schema.json",
     "team-work/settings.json",
     "team-work/profile.json",
     "team-work/guides/team-work.md",
@@ -97,8 +116,12 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   assert.equal(profile.agents.find(({ id }) => id === "senior-terra").costWeight, 10)
   assert.deepEqual(profile.helpers.map(({ id }) => id), ["team-work-explore", "team-work-librarian"])
   assert.ok(profile.helpers.every(({ resolvedModel }) => resolvedModel === "gateway/deepseek-v4-flash"))
-  assert.equal(profile.operations.spawn.tool, "team_work_dispatch")
-  assert.equal(profile.operations.wait.tool, "team_work_sync")
+  assert.equal(profile.schemaVersion, "2.0")
+  assert.equal(profile.operations.open.tool, "workflow_open")
+  assert.equal(profile.operations.plan.tool, "workflow_plan")
+  assert.equal(profile.operations.run.tool, "workflow_run")
+  assert.equal(profile.operations.steer.tool, "workflow_steer")
+  assert.equal(profile.operations.report.tool, "team_work_report")
   assert.equal(profile.operations.assist.tool, "team_work_assist")
   const profileSchema = JSON.parse(await readFile(path.join(sourceRoot, "schemas/platform-profile.schema.json"), "utf8"))
   assert.deepEqual(createContractValidator([profileSchema])(profileSchema.$id, profile), [])
@@ -107,6 +130,7 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   })
 
   const manifest = JSON.parse(await readFile(path.join(projectRoot, "team-work/install.json"), "utf8"))
+  assert.equal(manifest.schemaVersion, "2.0")
   assert.equal(manifest.status, "installed")
   assert.ok(manifest.managedFiles.length > 20)
   assert.ok(manifest.managedFiles.every(({ path: relativePath, sha256 }) => relativePath && /^[a-f0-9]{64}$/.test(sha256)))
@@ -114,6 +138,7 @@ test("install materializes runtime, skills, dynamic Agent config, plugin, profil
   const tuiConfig = JSON.parse(await readFile(path.join(projectRoot, "tui.json"), "utf8"))
   assert.equal(tuiConfig.$schema, "https://opencode.ai/tui.json")
   assert.deepEqual(tuiConfig.plugin, ["./plugins/team-work-tui.tsx"])
+  await assertLocalModuleGraph(path.join(projectRoot, "plugins/team-work.js"))
 })
 
 test("install and update preserve an existing JSONC TUI config and register the sidebar idempotently", async () => {
@@ -440,7 +465,7 @@ test("tampered manifest cannot claim and delete arbitrary project files", async 
   const manifest = path.join(projectRoot, "team-work/install.json")
   await mkdir(path.dirname(manifest), { recursive: true })
   await writeFile(manifest, `${JSON.stringify({
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
     platform: "opencode",
     status: "installed",
     managedFiles: [{ path: "README.md", sha256: createHash("sha256").update(content).digest("hex") }],
@@ -462,10 +487,31 @@ test("tampered manifest cannot claim user files added inside installed skill dir
   const manifest = path.join(projectRoot, "team-work/install.json")
   await mkdir(path.dirname(manifest), { recursive: true })
   await writeFile(manifest, `${JSON.stringify({
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
     platform: "opencode",
     status: "installed",
     managedFiles: [{ path: "skills/team-work/user-notes.md", sha256: createHash("sha256").update(content).digest("hex") }],
+  })}\n`)
+
+  await assert.rejects(
+    manageOpenCodePlugin("uninstall", options(projectRoot)),
+    (error) => error.code === "INSTALL_MANIFEST_UNSAFE",
+  )
+  assert.equal(await readFile(note, "utf8"), content)
+})
+
+test("schema 2.0 manifests cannot claim arbitrary files under the Team-work install root", async () => {
+  const projectRoot = await tempProject()
+  const note = path.join(projectRoot, "team-work/private-user-note.md")
+  const content = "keep this private note\n"
+  await mkdir(path.dirname(note), { recursive: true })
+  await writeFile(note, content)
+  const manifest = path.join(projectRoot, "team-work/install.json")
+  await writeFile(manifest, `${JSON.stringify({
+    schemaVersion: "2.0",
+    platform: "opencode",
+    status: "installed",
+    managedFiles: [{ path: "team-work/private-user-note.md", sha256: createHash("sha256").update(content).digest("hex") }],
   })}\n`)
 
   await assert.rejects(
@@ -492,25 +538,17 @@ test("backup creation rejects symlinked backup roots", async () => {
   assert.deepEqual(await readdir(outside), [])
 })
 
-test("update rejects symlinked obsolete managed files before backup or deletion", async () => {
+test("uninstall rejects symlinked current managed files before backup or deletion", async () => {
   const projectRoot = await tempProject()
   await manageOpenCodePlugin("install", options(projectRoot))
-  const managed = path.join(projectRoot, "agents/expert-k3.md")
-  await mkdir(path.dirname(managed), { recursive: true })
-  await writeFile(managed, "legacy managed agent\n")
-  const manifestPath = path.join(projectRoot, "team-work/install.json")
-  const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
-  manifest.managedFiles.push({ path: "agents/expert-k3.md", sha256: createHash("sha256").update("legacy managed agent\n").digest("hex") })
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  const managed = path.join(projectRoot, "team-work/lib/runtime/cli.mjs")
   const outside = path.join(await mkdtemp(path.join(os.tmpdir(), "team-work-outside-")), "external.md")
   await writeFile(outside, "outside\n")
   await rm(managed)
   await symlink(outside, managed)
-  const reducedMap = { ...modelMap }
-  delete reducedMap["expert-k3"]
 
   await assert.rejects(
-    manageOpenCodePlugin("update", options(projectRoot, { modelMap: reducedMap, force: true })),
+    manageOpenCodePlugin("uninstall", options(projectRoot, { force: true })),
     (error) => error.code === "UNSAFE_PATH",
   )
   assert.equal(await readFile(outside, "utf8"), "outside\n")
@@ -687,7 +725,7 @@ test("uninstall retains modified managed files by default and force backs them u
 
 async function copySourceFixture(from, to) {
   const { cp } = await import("node:fs/promises")
-  for (const relativePath of ["runtime", "schemas", "skills", "installer", "plugins/opencode/assets", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "plugins/opencode/tui", "package.json"]) {
+  for (const relativePath of ["runtime", "schemas", "policy", "workflow", "team-work", "spec-providers", "skills", "installer", "plugins/opencode/assets", "plugins/opencode/adapter", "plugins/opencode/context", "plugins/opencode/config", "plugins/opencode/guides", "plugins/opencode/src", "plugins/opencode/tools", "plugins/opencode/tui", "package.json"]) {
     await cp(path.join(from, relativePath), path.join(to, relativePath), { recursive: true })
   }
 }

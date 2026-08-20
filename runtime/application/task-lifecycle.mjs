@@ -1,4 +1,5 @@
 import { digestValue } from "../domain/digests.mjs"
+import { artifactIdentity } from "../domain/artifact-reference.mjs"
 import { createTaskAggregate } from "../domain/task-aggregate.mjs"
 import { compilePolicyPlan } from "./policy-compiler.mjs"
 import { costWeightForTier } from "../../policy/kernel.mjs"
@@ -8,16 +9,6 @@ import { compileSteeringIntervention } from "./steering-intervention.mjs"
 function slug(value) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70)
   return normalized || "task"
-}
-
-function artifactIdentity(ref) {
-  const raw = ref.replace(/^artifact:/, "")
-  const kind = raw.split(":")[0]
-  const base = raw.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-|-$/g, "")
-  return {
-    artifactId: base.length <= 100 ? base : `${base.slice(0, 70)}-${digestValue(raw).slice(0, 20)}`,
-    kind,
-  }
 }
 
 function inputEvidenceSource(reference) {
@@ -917,9 +908,15 @@ export function createTaskLifecycle({
     return planCurrentStage(advanced.state)
   }
 
-  async function runToStable({ taskId, leadBindingRef }) {
+  async function runToStable({ taskId, leadBindingRef, waitBudgetMs = 0, signal }) {
+    const deadline = Date.now() + Math.max(0, waitBudgetMs)
     for (let step = 0; step < 64; step += 1) {
-      const outcome = await effectDriver.run({ taskId, waitBudgetMs: 0 })
+      const remaining = Math.max(0, deadline - Date.now())
+      const outcome = await effectDriver.run({
+        taskId,
+        waitBudgetMs: waitBudgetMs > 0 ? remaining : 0,
+        ...(signal ? { signal } : {}),
+      })
       const state = outcome.state
       if (outcome.reason === "budget-decision") return prepareBudgetDecision(state, leadBindingRef)
       if (state.preflight?.status === "satisfied") {
@@ -1013,6 +1010,58 @@ export function createTaskLifecycle({
         teamPolicy,
         agentCatalog: normalizedCatalog(),
       })
+      if (compiled.kind === "replan") {
+        const replanned = await reconciler.commit(taskId, (current) => {
+          if (
+            current.revision !== state.revision
+            || current.pendingDecision?.packetRef !== state.pendingDecision?.packetRef
+            || current.pendingDecision?.packetDigest !== state.pendingDecision?.packetDigest
+          ) {
+            const error = new Error("the DecisionPacket changed before the replan was committed")
+            error.code = "ACTION_STALE"
+            throw error
+          }
+          return {
+            fact: {
+              type: "steering.replan-requested",
+              nextStageRunId: compiled.nextStageRunId,
+              sourceDecisionId: compiled.sourceDecisionId,
+              sourcePacketRef: compiled.sourcePacketRef,
+              sourcePacketDigest: compiled.sourcePacketDigest,
+              reason: compiled.reason,
+              occurredAt: clock(),
+            },
+            refs: [compiled.sourceDecisionId, compiled.sourcePacketRef],
+          }
+        })
+        return { state: replanned.state, reason: "needs-plan" }
+      }
+      if (compiled.kind === "escalate") {
+        const escalated = await reconciler.commit(taskId, (current) => {
+          if (
+            current.revision !== state.revision
+            || current.pendingDecision?.packetRef !== state.pendingDecision?.packetRef
+            || current.pendingDecision?.packetDigest !== state.pendingDecision?.packetDigest
+          ) {
+            const error = new Error("the DecisionPacket changed before the escalation was committed")
+            error.code = "ACTION_STALE"
+            throw error
+          }
+          return {
+            fact: {
+              type: "steering.user-escalated",
+              sourceDecisionId: compiled.sourceDecisionId,
+              sourcePacketRef: compiled.sourcePacketRef,
+              sourcePacketDigest: compiled.sourcePacketDigest,
+              question: compiled.question,
+              reason: compiled.reason,
+              occurredAt: clock(),
+            },
+            refs: [compiled.sourceDecisionId, compiled.sourcePacketRef],
+          }
+        })
+        return { state: escalated.state, reason: "awaiting-user" }
+      }
       const opened = await reconciler.commit(taskId, (current) => {
         if (
           current.revision !== state.revision

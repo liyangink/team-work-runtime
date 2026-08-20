@@ -29,6 +29,14 @@ export async function assertProjectRuntimeMajor(projectRoot) {
     }
   } catch (error) {
     if (error instanceof ContractError) throw error
+    if (error.code === "ENOENT") {
+      // 标记缺失（v1 遗留目录或未初始化项目）与真实损坏分开上报：被动探测据此容忍，显式入口据此自愈。
+      throw new ContractError(
+        `Runtime project marker is missing at ${path.join(path.resolve(projectRoot), ".team-work", "project.json")}`,
+        [],
+        "PROJECT_MARKER_MISSING",
+      )
+    }
     throw new ContractError(
       "Cannot resolve Runtime project marker safely",
       [{ message: error.message }],

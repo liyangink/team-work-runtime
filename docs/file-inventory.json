@@ -50,6 +50,7 @@
     "tests/policy-skills.test.mjs",
     "tests/repository-contract.test.mjs",
     "tests/installer-cli.test.mjs",
+    "tests/runtime-cli.test.mjs",
     "tests/user-config.test.mjs",
     "tests/support/contract-validator.mjs",
     "docs/file-inventory.json",

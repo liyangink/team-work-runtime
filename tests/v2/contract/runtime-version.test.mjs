@@ -51,3 +51,18 @@ test("Runtime v2 refuses a project marker reached through an escaping symlink", 
     (error) => error instanceof ContractError && error.code === "STATE_CORRUPT",
   )
 })
+
+test("a missing project marker is reported as uninitialized, not corrupted", async () => {
+  const withoutControl = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-markerless-"))
+  await assert.rejects(
+    assertProjectRuntimeMajor(withoutControl),
+    (error) => error instanceof ContractError && error.code === "PROJECT_MARKER_MISSING",
+  )
+
+  const legacyControl = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-legacy-"))
+  await mkdir(path.join(legacyControl, ".team-work", "tasks"), { recursive: true })
+  await assert.rejects(
+    assertProjectRuntimeMajor(legacyControl),
+    (error) => error instanceof ContractError && error.code === "PROJECT_MARKER_MISSING",
+  )
+})

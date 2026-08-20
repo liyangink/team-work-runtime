@@ -9,6 +9,7 @@ import {
   normalizeOpenCodeMemberReport,
   normalizeOpenCodeSteerInput,
 } from "../../../plugins/opencode/adapter/runtime-host.mjs"
+import { ContractError } from "../../../runtime/index.mjs"
 import { createFakeExecutionAdapter } from "../../../runtime/testing/fakes.mjs"
 
 const root = path.resolve(import.meta.dirname, "../../..")
@@ -180,6 +181,53 @@ test("workflow_open lazily initializes a clean project", async () => {
   const opened = await runtimeHost.open("lead-clean", openIntent("Clean task"))
   assert.equal(opened.task.title, "Clean task")
   assert.equal(JSON.parse(await readFile(path.join(projectRoot, ".team-work", "project.json"), "utf8")).runtimeMajor, 2)
+})
+
+test("workflow_open asks for marker repair instead of crashing on a broken project marker", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-host-marker-"))
+  await mkdir(path.join(projectRoot, ".team-work"), { recursive: true })
+  await writeFile(path.join(projectRoot, ".team-work", "project.json"), "{ not json")
+  const runtimeHost = await host(projectRoot, durableFake())
+
+  const problem = await runtimeHost.open("lead-marker", openIntent("Marker repair task"))
+  assert.equal(problem.code, "STATE_CORRUPT")
+  assert.match(problem.message, /project\.json/)
+  assert.equal(problem.next.kind, "none")
+  assert.match(problem.next.reason, /workflow_open/)
+})
+
+test("workflow_open asks for marker repair when the marker belongs to another runtime major", async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-host-v1-marker-"))
+  await mkdir(path.join(projectRoot, ".team-work"), { recursive: true })
+  await writeFile(path.join(projectRoot, ".team-work", "project.json"), `${JSON.stringify({ runtimeMajor: 1, schemaVersion: "1.0" })}\n`)
+  const runtimeHost = await host(projectRoot, durableFake())
+
+  const problem = await runtimeHost.open("lead-v1-marker", openIntent("Foreign marker task"))
+  assert.equal(problem.code, "RUNTIME_MAJOR_MISMATCH")
+  assert.equal(problem.next.kind, "none")
+})
+
+test("lead steering tools surface marker repair problems without throwing", async () => {
+  const projectRoot = await project()
+  const broken = durableFake()
+  const markerFailure = new ContractError("Cannot read Runtime project marker at .team-work/project.json", [], "STATE_CORRUPT")
+  const failing = Object.freeze({
+    ...broken,
+    async resolveLeadBindingForSession() {
+      throw markerFailure
+    },
+  })
+  const runtimeHost = await host(projectRoot, failing)
+
+  for (const [operation, invoke] of [
+    ["plan", () => runtimeHost.plan("lead-broken", { objective: "Continue" })],
+    ["run", () => runtimeHost.run("lead-broken")],
+    ["steer", () => runtimeHost.steer("lead-broken", { action: "replan", directive: "Replan the stage" })],
+  ]) {
+    const problem = await invoke()
+    assert.equal(problem.code, "STATE_CORRUPT", operation)
+    assert.equal(problem.impact.includes("未执行"), true, operation)
+  }
 })
 
 test("workflow_open normalizes model-supplied absolute artifact paths inside the project", async () => {

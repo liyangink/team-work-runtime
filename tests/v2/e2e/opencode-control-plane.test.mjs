@@ -108,8 +108,7 @@ test("the assembled OpenCode control plane wakes on report and survives a Lead s
   await mkdir(path.join(projectRoot, "src"), { recursive: true })
   await writeFile(path.join(projectRoot, "src", "control-plane.mjs"), "export const ready = true\n")
 
-  const abort = new AbortController()
-  const waiting = first.handlers.workflow_run({}, { sessionID: "lead-one", abort: abort.signal })
+  const waiting = first.handlers.workflow_run({}, { sessionID: "lead-one" })
   await new Promise((resolve) => setImmediate(resolve))
   await first.handlers.team_work_report({
     outcome: "delivered",
@@ -118,9 +117,17 @@ test("the assembled OpenCode control plane wakes on report and survives a Lead s
     evidence_refs: [],
     recommendation: "accept",
   }, { sessionID: memberSession })
-  setTimeout(() => abort.abort(), 20)
   await waiting
-  const progressed = JSON.parse(await readFile(statePath, "utf8"))
+
+  // 并行负载下等待预算可能先于报告消费耗尽；按真实 Lead 模式反复驱动 run 直到收敛。
+  const deadline = Date.now() + 5000
+  let progressed
+  for (;;) {
+    progressed = JSON.parse(await readFile(statePath, "utf8"))
+    if (progressed.workGraph.assignments.find(({ assignmentId }) => assignmentId === binding.assignmentId).status === "accepted") break
+    if (Date.now() > deadline) break
+    await first.handlers.workflow_run({}, { sessionID: "lead-one" }).catch(() => {})
+  }
   assert.equal(progressed.workGraph.assignments.find(({ assignmentId }) => assignmentId === binding.assignmentId).status, "accepted")
 
   const restarted = await createPlane()

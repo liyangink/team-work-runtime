@@ -24,6 +24,7 @@
 | E2E-16 | 从 code-review 介入并把已有 `CODE_REVIEW.md` 同时作为本轮输出时，Owner 连续三次被拒绝为“注册输入在可写范围外变化” | 已有制品总是分配 `input-*` ID，而阶段输出使用 canonical `artifact:code-review`，同一路径被错认为两个制品 | 当入口阶段某输出类型只有一个项目文件时，直接注册为 canonical 可写制品；Runtime Facade 覆盖原地修订；`task-2498bfb5ac` 与 `task-1ccc2683d4` 两个真实任务 Owner 原地修订一次通过 | 已修复、已实测 |
 | E2E-17 | Challenger（Luna）对无写权限派单越权 `apply_patch` 修改 Owner 制品 `CODE_REVIEW.md`；Runtime 能检测并拒绝后续报告，但没有内容快照可恢复，导致同角色重派永远失败 | 平台层未强制派单写边界；任务只持久化制品 digest，不保留内容 | 三层修复：Plugin Hook 按 `writableRefs` 拦截成员 `edit/write/apply_patch`（含项目内绝对路径归一化）；任务创建与报告接受时把制品内容快照落盘 `.team-work/artifacts/`；检测到受保护制品被改时自动恢复最后注册内容并拒绝本轮报告。Facade 恢复回归、Hook 写边界、仓库快照测试覆盖；新任务实测全程无越权写、Owner 正常编辑可写制品 | 已修复、已实测 |
 | E2E-18 | `install --force` 冒烟检查报 `SMOKE_TEST_FAILED`（`debug config` 空输出）并回滚；此前 `agent list` 时代记录的“plugins settling 部分列表”也是同一根因的误诊 | OpenCode 可执行文件被 Node 直接 spawn 时，stdout 无论管道还是文件都会在约 64KB 处截断（上游缺陷）；team Agent 恰好排在截断点之后 | smoke 经平台 shell（`sh`/`cmd.exe`）包裹并重定向到临时文件再解析；本机正式安装与 E2E 隔离安装、doctor 全部实测通过 | 已修复、已实测 |
+| E2E-19 | 在含 v1 遗留 `.team-work/`（`config.yaml`/`task.json`，无 v2 `project.json` 标记）的项目里打开 OpenCode，每次会话注入都报 `Cannot resolve Runtime project marker safely`，阻塞 standalone 使用（违反契约第 14 条） | 标记解析把 ENOENT（未初始化/遗留）与真实损坏一律包装为 `STATE_CORRUPT` 抛出；被动 Hook（上下文注入、工具前置、事件）没有容忍层 | 分层容错：标记缺失上报独立错误码 `PROJECT_MARKER_MISSING`；被动探测对整个标记错误族返回 null 且零写入；显式工作流入口（open/plan/run/steer）把标记族失败转成修复询问卡片（缺失仍由 `initializeProjectRuntime` 自愈，v1 数据不动）；CLI 错误输出附修复提示。版本契约、适配器探测、Host 修复卡片、CLI 提示测试覆盖；真实 v1 遗留项目（Hmail）只读实测被动链零报错零写入，副本实测 `workflow_open` 自愈建标记且 v1 文件逐字节不变 | 已修复、已实测 |
 
 ## 本轮终验结果
 

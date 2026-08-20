@@ -37,6 +37,12 @@ function projection(state) {
   }
 }
 
+const MARKER_REPAIR_HINTS = {
+  PROJECT_MARKER_MISSING: "inspect 是只读命令，不会自动修复；通过工作流入口（workflow_open）打开任务时项目标记会自动初始化。",
+  RUNTIME_MAJOR_MISMATCH: ".team-work/project.json 属于其他 Runtime 主版本；确认来源后备份并移除，v2 才能重建标记。",
+  PATH_ESCAPE: ".team-work 必须是真实目录；移除占位的符号链接或文件后再触发工作流。",
+}
+
 export async function runRuntimeCli(argv, dependencies = {}) {
   const writeOut = dependencies.writeOut ?? ((text) => process.stdout.write(text))
   const writeError = dependencies.writeError ?? ((text) => process.stderr.write(text))
@@ -52,7 +58,8 @@ export async function runRuntimeCli(argv, dependencies = {}) {
     writeOut(`${JSON.stringify({ ok: true, data }, null, 2)}\n`)
     return 0
   } catch (error) {
-    writeError(`${JSON.stringify({ ok: false, code: error.code ?? "RUNTIME_ERROR", message: error.message })}\n`)
+    const repair = MARKER_REPAIR_HINTS[error.code]
+    writeError(`${JSON.stringify({ ok: false, code: error.code ?? "RUNTIME_ERROR", message: error.message, ...(repair ? { repair } : {}) }, null, 2)}\n`)
     return 1
   }
 }

@@ -144,13 +144,32 @@ test("read-only session probes do not initialize standalone projects", async () 
   await assert.rejects(access(path.join(projectRoot, ".team-work")), { code: "ENOENT" })
 })
 
-test("session probes fail closed on an unmarked control directory", async () => {
+test("session probes tolerate an unmarked control directory without initializing it", async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-unmarked-"))
   await mkdir(path.join(projectRoot, ".team-work"))
   const adapter = createOpenCodeExecutionAdapter({ client: fakeClient().client, projectRoot, platformProfile: profile() })
 
-  await assert.rejects(adapter.resolveLeadBindingForSession("lead-unmarked"), { code: "STATE_CORRUPT" })
+  assert.equal(await adapter.resolveLeadBindingForSession("lead-unmarked"), null)
+  assert.equal(await adapter.resolveMemberBinding("member-unmarked"), null)
+  assert.equal(await adapter.resolveHelperBinding("helper-unmarked"), null)
   await assert.rejects(access(path.join(projectRoot, ".team-work", "platform")), { code: "ENOENT" })
+})
+
+test("session probes ignore the whole project marker failure family but never initialize state", async () => {
+  const unreadable = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-corrupt-marker-"))
+  await mkdir(path.join(unreadable, ".team-work"))
+  await writeFile(path.join(unreadable, ".team-work", "project.json"), "{ not json")
+  const unreadableAdapter = createOpenCodeExecutionAdapter({ client: fakeClient().client, projectRoot: unreadable, platformProfile: profile() })
+  assert.equal(await unreadableAdapter.resolveLeadBindingForSession("lead-corrupt"), null)
+  await assert.rejects(access(path.join(unreadable, ".team-work", "platform")), { code: "ENOENT" })
+
+  const foreign = await mkdtemp(path.join(os.tmpdir(), "team-work-v2-foreign-marker-"))
+  await mkdir(path.join(foreign, ".team-work"))
+  await writeFile(path.join(foreign, ".team-work", "project.json"), `${JSON.stringify({ runtimeMajor: 1, schemaVersion: "1.0" })}\n`)
+  const foreignAdapter = createOpenCodeExecutionAdapter({ client: fakeClient().client, projectRoot: foreign, platformProfile: profile() })
+  assert.equal(await foreignAdapter.resolveMemberBinding("member-foreign"), null)
+  assert.equal(await foreignAdapter.resolveHelperBinding("helper-foreign"), null)
+  await assert.rejects(access(path.join(foreign, ".team-work", "platform")), { code: "ENOENT" })
 })
 
 test("OpenCode Execution Adapter exposes the pinned Agent catalog and dispatches only promptAsync child sessions", async () => {

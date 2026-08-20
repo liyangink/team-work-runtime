@@ -198,11 +198,22 @@ export function createOpenCodeExecutionAdapter({
     return rootsPromise
   }
 
+  // 被动探测（上下文注入、工具前置钩子、事件投影）对整个标记错误族返回 null：
+  // standalone 项目与 v1 遗留目录不得阻塞平台 Hook；权威路径（派发、Store）仍严格校验，
+  // 并由 Lead 入口把可修复的标记问题转成修复询问。
+  const PROBE_TOLERANT_ERROR_CODES = new Set([
+    "RUNTIME_ROOT_MISSING",
+    "PROJECT_MARKER_MISSING",
+    "PATH_ESCAPE",
+    "STATE_CORRUPT",
+    "RUNTIME_MAJOR_MISMATCH",
+  ])
+
   async function optionalRoots() {
     try {
       return await roots()
     } catch (error) {
-      if (error.code === "RUNTIME_ROOT_MISSING") return null
+      if (PROBE_TOLERANT_ERROR_CODES.has(error.code)) return null
       throw error
     }
   }
@@ -826,7 +837,8 @@ export function createOpenCodeExecutionAdapter({
     async handleEvent(event) {
       const sessionId = event?.properties?.sessionID ?? event?.properties?.info?.id
       if (typeof sessionId !== "string" || !IDENTIFIER.test(sessionId) || !observationSinkFor) return false
-      const base = await roots()
+      const base = await optionalRoots()
+      if (!base) return false
       const projection = await readOptional(recordPath(base, "sessions", sessionId))
       if (!projection) return false
       let state

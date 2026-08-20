@@ -3,6 +3,7 @@ import path from "node:path"
 import { createRuntimeFacade } from "../../../runtime/application/runtime-facade.mjs"
 import { createFileContextComposer } from "../../../runtime/application/context-composer.mjs"
 import { createSignalHub } from "../../../runtime/application/signal-hub.mjs"
+import { ContractError } from "../../../runtime/contracts.mjs"
 import { createFileArtifactRepository, createFileStore, initializeProjectRuntime } from "../../../runtime/persistence/index.mjs"
 
 function taskSelectionProblem() {
@@ -12,6 +13,22 @@ function taskSelectionProblem() {
     impact: "任务状态未改变；请先打开或创建任务。",
     next: { kind: "none", reason: "需要先调用 workflow_open" },
   }
+}
+
+function projectRuntimeProblem(error) {
+  return {
+    code: error.code ?? "STATE_CORRUPT",
+    message: `项目 Runtime 标记不可用：${error.message}`,
+    impact: "本次工作流操作未执行；任务状态与既有制品未改变。",
+    next: {
+      kind: "none",
+      reason: "请检查 .team-work/project.json（备份并移除损坏或异版本的标记文件后重新调用 workflow_open，项目标记会自动重建；v1 遗留数据不受影响）。",
+    },
+  }
+}
+
+function isProjectRuntimeFailure(error) {
+  return error instanceof ContractError || error.code === "PATH_ESCAPE"
 }
 
 function taskNotFoundProblem(taskId) {
@@ -183,6 +200,15 @@ export function createOpenCodeRuntimeHost({
     return { ...selected, card, restored: true }
   }
 
+  async function restoreOrProblem(hostSessionRef) {
+    try {
+      return { selected: await restore(hostSessionRef) }
+    } catch (error) {
+      if (isProjectRuntimeFailure(error)) return { problem: projectRuntimeProblem(error) }
+      throw error
+    }
+  }
+
   async function reconcilePlatform(taskId) {
     if (typeof executionAdapter.reconcileTaskExecutions !== "function") return
     await executionAdapter.reconcileTaskExecutions(taskId)
@@ -190,7 +216,12 @@ export function createOpenCodeRuntimeHost({
 
   return Object.freeze({
     async open(hostSessionRef, input) {
-      await ready()
+      try {
+        await ready()
+      } catch (error) {
+        if (isProjectRuntimeFailure(error)) return projectRuntimeProblem(error)
+        throw error
+      }
       const sessionId = requireSession(hostSessionRef)
       const normalizedInput = normalizeOpenInput(projectRoot, input)
       const current = sessions.get(sessionId)
@@ -212,22 +243,25 @@ export function createOpenCodeRuntimeHost({
     },
 
     async plan(hostSessionRef, input) {
-      const selected = await restore(hostSessionRef)
-      return selected ? selected.runtime.leadControl.plan(input) : taskSelectionProblem()
+      const outcome = await restoreOrProblem(hostSessionRef)
+      if (outcome.problem) return outcome.problem
+      return outcome.selected ? outcome.selected.runtime.leadControl.plan(input) : taskSelectionProblem()
     },
 
     async run(hostSessionRef, { signal } = {}) {
-      const selected = await restore(hostSessionRef)
-      if (!selected) return taskSelectionProblem()
-      await reconcilePlatform(selected.taskId)
-      return selected.runtime.hostControl.run({ waitBudgetMs: runWaitBudgetMs, ...(signal ? { signal } : {}) })
+      const outcome = await restoreOrProblem(hostSessionRef)
+      if (outcome.problem) return outcome.problem
+      if (!outcome.selected) return taskSelectionProblem()
+      await reconcilePlatform(outcome.selected.taskId)
+      return outcome.selected.runtime.hostControl.run({ waitBudgetMs: runWaitBudgetMs, ...(signal ? { signal } : {}) })
     },
 
     async steer(hostSessionRef, input) {
-      const selected = await restore(hostSessionRef)
-      if (!selected) return taskSelectionProblem()
-      const state = await store.loadTask(selected.taskId)
-      return selected.runtime.leadControl.steer(normalizeOpenCodeSteerInput(state, input))
+      const outcome = await restoreOrProblem(hostSessionRef)
+      if (outcome.problem) return outcome.problem
+      if (!outcome.selected) return taskSelectionProblem()
+      const state = await store.loadTask(outcome.selected.taskId)
+      return outcome.selected.runtime.leadControl.steer(normalizeOpenCodeSteerInput(state, input))
     },
 
     async report(memberSessionRef, report) {

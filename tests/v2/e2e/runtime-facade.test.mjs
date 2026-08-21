@@ -799,3 +799,86 @@ test("an out-of-scope artifact modification is rejected and restored to the regi
   assert.equal(await artifacts.read("reviews/existing.md"), "Authoritative review\n")
   assert.equal(digestValue(await artifacts.read("reviews/existing.md")), registered)
 })
+
+test("a fixed task intent returns a valid problem card instead of an invalid masked error", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const runtime = createRuntimeFacade({
+    store: createInMemoryStore(),
+    executionAdapter: createFakeExecutionAdapter({ clock: () => "2026-08-21T04:18:00.000Z" }),
+    specProviderAdapter: createFakeSpecProvider(),
+    artifactRepository: createInMemoryArtifactRepository(),
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-21T04:18:00.000Z",
+  })
+  const opened = await runtime.leadControl.open({
+    title: "Research without a requirement input",
+    objective: "Investigate the delivery tracing gap",
+    entryStage: "research",
+    completion: { mode: "workflow" },
+  })
+  assert.equal(opened.next.kind, "plan")
+
+  const firstPlan = await runtime.leadControl.plan({
+    objective: "Investigate the delivery tracing gap",
+    constraints: ["base the design on facts"],
+    exclusions: [],
+    preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+  })
+  assert.equal(firstPlan.code, "ENTRY_UNSATISFIED")
+  assert.match(firstPlan.impact, /existing_artifacts/)
+  assert.equal(firstPlan.next.kind, "none")
+
+  const revisedPlan = await runtime.leadControl.plan({
+    objective: "Investigate the delivery tracing gap with a revised scope",
+    constraints: ["base the design on facts", "revised constraint"],
+    exclusions: [],
+    preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+  })
+  assert.equal(revisedPlan.code, "PLAN_INVALID")
+  assert.match(revisedPlan.message, /固化/)
+  assert.match(revisedPlan.impact, /workflow_open mode=create/)
+  assert.equal(revisedPlan.next.kind, "none")
+})
+
+test("an unmapped plan failure degrades to a schema-valid problem card that keeps the original code", async () => {
+  const workflowDefinition = await loadJson("workflow/definitions/engineering.json")
+  const teamPolicy = await loadJson("team-work/policies/default.json")
+  const execution = createFakeExecutionAdapter({ clock: () => "2026-08-21T04:18:00.000Z" })
+  const failing = Object.freeze({
+    ...execution,
+    async capabilities() {
+      const error = new Error("custom platform failure detail")
+      error.code = "CUSTOM_PLATFORM_CODE"
+      throw error
+    },
+  })
+  const runtime = createRuntimeFacade({
+    store: createInMemoryStore(),
+    executionAdapter: failing,
+    specProviderAdapter: createFakeSpecProvider(),
+    artifactRepository: createInMemoryArtifactRepository({ "requirements/traced.md": "Traced requirement.\n" }),
+    workflowDefinition,
+    teamPolicy,
+    routeConfig: { spec: { mode: "disabled" }, e2e: { mode: "disabled" } },
+    clock: () => "2026-08-21T04:18:00.000Z",
+  })
+  await runtime.leadControl.open({
+    title: "Unmapped failure surfaces readably",
+    objective: "Surface the original platform error",
+    entryStage: "research",
+    completion: { mode: "workflow" },
+    existingArtifacts: [{ kind: "requirement", locator: { type: "project-path", value: "requirements/traced.md" } }],
+  })
+  const planCard = await runtime.leadControl.plan({
+    objective: "Surface the original platform error",
+    constraints: [],
+    exclusions: [],
+    preferences: { execution: "auto", budget: "balanced", risk: "normal" },
+  })
+  assert.equal(planCard.code, "PLAN_INVALID")
+  assert.match(planCard.message, /CUSTOM_PLATFORM_CODE/)
+  assert.match(planCard.message, /custom platform failure detail/)
+})

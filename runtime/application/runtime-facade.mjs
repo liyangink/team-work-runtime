@@ -8,8 +8,37 @@ import { createTaskReconciler } from "./reconciler.mjs"
 import { composeActionCard } from "./action-card.mjs"
 import { validateWorkflowDefinition } from "../../workflow/compiler.mjs"
 
-function problem(code, message, impact, retry = false) {
-  return { code, message, impact, next: retry ? { kind: "run", when: "问题修复后继续" } : { kind: "none", reason: "需要先处理上述问题" } }
+// 与 schemas/v2/runtime-card.schema.json 的 problemCard.code 枚举保持一致；
+// 未知错误码必须收敛到枚举内，否则"错误处理"本身会产出非法卡片并掩盖真实错误。
+const PROBLEM_CODES = new Set([
+  "TASK_SELECTION_REQUIRED",
+  "PLAN_INVALID",
+  "ACTION_STALE",
+  "ENTRY_UNSATISFIED",
+  "ROUTE_BLOCKED",
+  "ROUTE_SKIPPED",
+  "BUDGET_DECISION_REQUIRED",
+  "EVIDENCE_CHANGED",
+  "WORK_CHAIN_INCOMPLETE",
+  "PLATFORM_UNAVAILABLE",
+  "EXTERNAL_EFFECT_IN_DOUBT",
+  "RECOVERY_REQUIRED",
+  "HUMAN_DECISION_REQUIRED",
+  "CONTEXT_BUDGET_EXCEEDED",
+  "STATE_CORRUPT",
+  "RUNTIME_MAJOR_MISMATCH",
+])
+
+function problem(code, message, impact) {
+  if (PROBLEM_CODES.has(code)) {
+    return { code, message, impact, next: { kind: "none", reason: "需要先处理上述问题" } }
+  }
+  return {
+    code: "PLAN_INVALID",
+    message: `${message}（原始错误码 ${code ?? "UNKNOWN"}）`,
+    impact,
+    next: { kind: "none", reason: "需要先处理上述问题" },
+  }
 }
 
 function compactCard(state, workflowDefinition, reason) {
@@ -119,7 +148,12 @@ export function createRuntimeFacade({
         if (result.reason === "budget-decision") return problem("BUDGET_DECISION_REQUIRED", "下一波团队工作将超出自动成本上限。", "需要人工确认预算或缩小范围。")
         return compactCard(result.state, workflowDefinition, result.reason)
       } catch (error) {
-        if (error.code === "WORKFLOW_INPUT_MISSING") return problem("ENTRY_UNSATISFIED", error.message, "当前阶段缺少最低输入，尚不能生成计划。")
+        if (error.code === "WORKFLOW_INPUT_MISSING") {
+          return problem("ENTRY_UNSATISFIED", error.message, "当前阶段缺少最低输入，且制品只能在创建任务时通过 existing_artifacts 登记。若无法补齐，请重新创建任务（workflow_open mode=create 并声明 existing_artifacts）；已固化的目标或约束变更请用 workflow_steer action=replan。")
+        }
+        if (error.code === "TASK_INTENT_CONFLICT") {
+          return problem("PLAN_INVALID", "任务目标或约束已固化，直接修改会被拒绝。", "任务状态未改变。存在待决策时可用 workflow_steer（action=replan）受控重规划；当前没有待决策的固化任务请新建（workflow_open mode=create）并使用修正后的目标与约束。")
+        }
         return problem(error.code ?? "PLAN_INVALID", error.message, "Runtime 未改变当前任务。")
       }
     },

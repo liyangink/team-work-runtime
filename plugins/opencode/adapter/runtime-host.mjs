@@ -214,6 +214,16 @@ export function createOpenCodeRuntimeHost({
     await executionAdapter.reconcileTaskExecutions(taskId)
   }
 
+  // 被动投影路径容忍绑定指向的任务已被外部删除：视为未绑定，避免上下文注入 Hook 每条消息抛错。
+  async function loadBoundTaskOrNull(taskId) {
+    try {
+      return await store.loadTask(taskId)
+    } catch (error) {
+      if (error.code === "TASK_NOT_FOUND") return null
+      throw error
+    }
+  }
+
   return Object.freeze({
     async open(hostSessionRef, input) {
       try {
@@ -306,7 +316,8 @@ export function createOpenCodeRuntimeHost({
       if (typeof executionAdapter.resolveMemberBinding === "function") {
         const member = await executionAdapter.resolveMemberBinding(sessionId)
         if (member) {
-          const state = await store.loadTask(member.taskId)
+          const state = await loadBoundTaskOrNull(member.taskId)
+          if (!state) return null
           const assignment = state.workGraph.assignments.find(({ assignmentId }) => assignmentId === member.assignmentId)
           if (!assignment) return null
           const artifactById = new Map(state.artifacts.map((artifact) => [`artifact:${artifact.artifactId}`, artifact.path]))
@@ -326,7 +337,8 @@ export function createOpenCodeRuntimeHost({
       }
       const lead = await executionAdapter.resolveLeadBindingForSession(sessionId)
       if (!lead) return null
-      const state = await store.loadTask(lead.taskId)
+      const state = await loadBoundTaskOrNull(lead.taskId)
+      if (!state) return null
       return {
         kind: "lead",
         taskId: state.taskId,

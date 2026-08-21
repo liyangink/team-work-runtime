@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -419,4 +419,16 @@ test("workflow_run timeout and host abort do not mutate a stable waiting task", 
   controller.abort()
   await runtimeHost.run("lead-timeout", { signal: controller.signal })
   assert.equal(await readFile(statePath, "utf8"), before)
+})
+
+test("session projections tolerate a bound task deleted out of band", async () => {
+  const projectRoot = await project()
+  const runtimeHost = await host(projectRoot, durableFake())
+  const opened = await runtimeHost.open("lead-deleted", openIntent("Deleted task"))
+
+  const before = await runtimeHost.describeSession("lead-deleted")
+  assert.equal(before.kind, "lead")
+
+  await rm(path.join(projectRoot, ".team-work", "tasks", opened.task.id), { recursive: true })
+  assert.equal(await runtimeHost.describeSession("lead-deleted"), null)
 })

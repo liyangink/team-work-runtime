@@ -1,7 +1,7 @@
 export const LEAD_TOOL_NAMES = Object.freeze(["workflow_open", "workflow_plan", "workflow_run", "workflow_steer"])
 
 export const TOOL_DESCRIPTIONS = Object.freeze({
-  workflow_open: "打开任务并返回当前进展和唯一下一步。必须明确 mode=create|resume；create 提供 title/objective，resume 提供 task_id。",
+  workflow_open: "打开任务并返回当前进展和唯一下一步。必须明确 mode=create|resume；create 提供 title/objective，可用 existing_artifacts 登记项目内已有制品（补齐阶段最低输入，只在创建时生效）；resume 提供 task_id，不新增制品——需求变化请用 workflow_steer replan。",
   workflow_plan: "提交目标、约束和成本偏好，由 Harness 生成并启动当前阶段计划。",
   workflow_run: "按已持久化事实继续推进；成员工作未完成时在平台内等待事件，不需要轮询。",
   workflow_steer: "响应当前决策，或请求解释、返工、补证据、追加挑战、Expert 意见、更换 Owner、重规划或升级用户。只提交意图。",

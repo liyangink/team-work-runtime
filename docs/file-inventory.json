@@ -42,6 +42,7 @@
     "docs/file-inventory.json",
     "docs/runtime-roadmap.md",
     "docs/runtime-v3-charter.md",
+    "docs/dsh-phase1-plan.md",
     "docs/v2-e2e-findings.md"
   ],
   "sharedBuild": [

@@ -16,6 +16,7 @@
 | `ctx.skills.register({name, description(必填), content(必填=SKILL.md 全文), whenToUse?, resourceBase?{kind:"directory"|"url"|"opaque"}, ...})`——references 经 resourceBase（directory=插件内打包目录） | dsh-skill:193-215/465-469 |
 | 徽标装载：client 插件须 `dsh.client.platform:"web"` + `exports["./client"]`，产物为 **window.__ModuleLoader__.load 工厂式 CJS bundle**（无运行时 JSX 转译）；slots.inject(slot,cb)+slots.register({name,locale,inject},Component)；单席位 slot "conversation.input.model"；RPC = ctx.get("connection").api.sessions.models({sessionId})→current{provider,model,reasoningEffort}；徽标显示注入后的运行时值（request/header waterfall 晚于 agent/request 注入） | dsh-client-modules + model-selection:774-793 + apiproxy:2580（用户调研+B 证实） |
 | profile 装载：$DSH_HOME/profiles/<name>（package.json bundles + pnpm-workspace + cordis.patch.yml），node_modules flat fallback 解析——本地验证脚本路径可行 | dsh-app-boot:284-406 |
+| **bundle 装载协议（C1 实机发现）**：插件作为 profile bundle 需 package.json 声明 `dsh.bundle.patch`（指向入口 patch 文件）+ patch 文件本体声明插件（`- id + plugin: ./dist/index.js`）——缺任一 dsh boot 拒绝装载（"declares no dsh.bundle"） | dsh-app-boot:549 + 实机 dump-config 验证 |
 
 ## 1. 包结构与打包范围
 

@@ -6,7 +6,7 @@ import { readFile, rm, cp, mkdir, access } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { initTask, loadTask, taskExists, taskRoot, archiveRoot, controlRoot, atomicJson, atomicWrite, withOwnerLock, validName } from "./store.mjs"
+import { initTask, loadTask, taskExists, taskRoot, archiveRoot, controlRoot, atomicJson, atomicWrite, withOwnerLock, validName, readJson } from "./store.mjs"
 import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
@@ -164,12 +164,17 @@ function inflightDispatches(task, stageId) {
 
 // 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
 const TIER_RANK = { junior: 1, senior: 2, expert: 3 }
-function ownerTierFor(task, sp) {
+// 档位计算（pre-phase3 §A）：实际档 = max(包 tier ?? 场景默认, riskTiers[risk])
+function ownerTierFor(task, sp, pkg = null) {
   const base = sp.ownerTier
-  const risk = task.intent?.risk
-  const up = task.policy?.riskTiers?.[risk]
-  if (up && (TIER_RANK[up] ?? 0) > (TIER_RANK[base] ?? 0)) return up
-  return base
+  const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
+  const up = task.policy?.riskTiers?.[task.intent?.risk]
+  return [base, pkgTier, up].filter(Boolean).reduce((acc, t) => ((TIER_RANK[t] ?? 0) > (TIER_RANK[acc] ?? 0) ? t : acc), base)
+}
+// 升档审批判定（C 触发条件）：包 tier 高于场景默认（直接比较，不含 risk）
+function isEscalatedTier(task, sp, pkg) {
+  const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
+  return Boolean(pkgTier && (TIER_RANK[pkgTier] ?? 0) > (TIER_RANK[sp.ownerTier] ?? 0))
 }
 
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
@@ -213,7 +218,7 @@ function dispatchCard(task, stageDef, wave, detail) {
     dispatch: {
       key: detail.key,
       role: wave.role,
-      tier: wave.role === 'owner' ? ownerTierFor(task, sp) : wave.role === 'challenger' ? sp.challengerTier : 'expert',
+      tier: wave.role === 'owner' ? ownerTierFor(task, sp, pkg) : wave.role === 'challenger' ? sp.challengerTier : 'expert',
       round: detail.round ?? wave.round,
       kind: wave.kind,
       ...(pkg != null ? { package: pkg } : {}),
@@ -263,9 +268,35 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
   // 复核修复：判定与写入同锁——并发 run 只有一方完成派发/推进，另一方锁内重推导后拿到新状态
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy })
+    await ensureE2ePackages(task) // B：e2e 场景无 packages 时按模板物化（幂等；在 derive 前生效）
     const state = deriveTask(task)
     return runTransition({ projectRoot, name, writable, workflow, policy, task, state })
   })
+}
+
+// B（pre-phase3 §B）：e2eTemplate 物化——e2e 场景阶段首次派发前，任务无 packages 时按 policy 模板生成
+// （journal 记 packages-planned，detail 附 source:"e2eTemplate"）；已 plan 不覆盖；非 e2e 场景跳过。
+// 形状映射：packageId→id、outputRefs（artifact:e2e-design）→ writable（约定路径 e2e/<name>.md:<ref>）、completionCriteria→done。
+async function ensureE2ePackages(task) {
+  const state = deriveTask(task)
+  const stageDef = task.workflow.stages.find((st) => st.id === state.stage)
+  if (!stageDef || stageDef.teamScene !== 'e2e') return false
+  if (Array.isArray(task.packages) && task.packages.length) return false
+  const template = task.policy?.e2eTemplate
+  if (!Array.isArray(template) || template.length === 0) return false
+  const items = template.map((entry) => ({
+    id: entry.packageId,
+    writable: (entry.outputRefs ?? []).map((ref) => {
+      const name = String(ref).replace(/^artifact:/, '')
+      return 'e2e/' + name + '.md:' + name
+    }),
+    done: entry.completionCriteria ?? [],
+    dependsOn: entry.dependsOn ?? [],
+  }))
+  await atomicJson(path.join(task.root, 'packages.json'), { items })
+  task.packages = items
+  await appendEventsUnlocked(task, [{ type: 'packages-planned', detail: { packages: items.map((p) => p.id), source: 'e2eTemplate' } }])
+  return true
 }
 
 async function runTransition({ projectRoot, name, writable, workflow, policy, task, state }) {
@@ -296,6 +327,37 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         // --writable none = 无产物派单（纯调查/回应，outputs 为空的阶段）；其余按 路径:kind 解析
         const decl = writable.length === 1 && writable[0] === 'none' ? [] : writable.map(parseWritableEntry)
         decls = [{ key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
+      }
+      // C（pre-phase3 §C）：升档审批——包 tier 高于场景默认的派发批次需用户批准一次（合批）。
+      // 幂等身份 = stage + 波轮次 + 包集；已批准同批不再出卡；拒绝 = 本批按默认档派发（忽略包 tier）。
+      if (wave.kind === 'produce' || wave.kind === 'respond') {
+        const spC = scenePolicy(policy, stageDef.teamScene)
+        const escPkgs = decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => ({ package: d.package, tier: (task.packages ?? []).find((p) => p.id === d.package)?.tier }))
+        if (escPkgs.length) {
+          const batchRound = Math.max(...decls.map((d) => d.round))
+          const batchKey = JSON.stringify([state.stage, batchRound, [...escPkgs.map((e) => e.package)].sort()])
+          const approved = task.decisions.find((dc) => dc.batchKey === batchKey && (dc.grant === 'approve-escalation' || dc.choice === '降回默认档继续'))
+          if (!approved) {
+            const decisionId = 'esc-' + randomBytes(3).toString('hex')
+            const choices = [
+              { n: 1, label: '批准升档', grant: 'approve-escalation', batchKey },
+              { n: 2, label: '降回默认档继续', batchKey },
+            ]
+            await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: { decisionId, gateId: null, reason: '升档审批：' + escPkgs.map((e) => e.package + '→' + e.tier).join('、'), choices } }])
+            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: '以下包的 tier 高于场景默认档，是否批准按升档派发？（权重倍数 junior:senior:expert = 1:10:50）', escalations: escPkgs, choices }
+          }
+        }
+        // 已批准（或降回默认档）：按实际档派发——降级路径由 decisions 中 choice='降回默认档继续' 体现：包 tier 忽略
+        const declinedKey = JSON.stringify([state.stage, Math.max(...decls.map((d) => d.round)), [...decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => d.package)].sort()])
+        const declined = task.decisions.some((dc) => dc.choice === '降回默认档继续' && dc.batchKey === declinedKey)
+        if (declined) {
+          const tiersBackup = task.packages
+          task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
+          const cardsD = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
+          task.packages = tiersBackup
+          await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
+          return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
+        }
       }
       await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
       const cards = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
@@ -396,6 +458,7 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
       gateId: pending.detail.gateId ?? null,
       choice: picked.label,
       ...(picked.grant ? { grant: picked.grant } : {}),
+      ...(picked.batchKey ? { batchKey: picked.batchKey } : {}),
       ...(pending.detail.gateId ? { fingerprint: artifactsFingerprint(current) } : {}),
       ...(note ? { note } : {}),
       proof: { mode: "caller-reported", at: new Date().toISOString() },
@@ -540,6 +603,7 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
       paths.push({ path: rel, pkg: p.id })
     }
     if (!Array.isArray(p.done) || p.done.length === 0 || p.done.some((d) => typeof d !== 'string' || !d.trim())) reasons.push('包 ' + p.id + ' 缺完成标准 done（非空字符串数组）')
+    if (p.tier !== undefined && !['junior', 'senior', 'expert'].includes(p.tier)) reasons.push('包 ' + p.id + ' tier 非法：' + JSON.stringify(p.tier) + '（可选 junior|senior|expert；缺省用场景默认档）')
   }
   for (let i = 0; i < paths.length; i += 1) {
     for (let j = i + 1; j < paths.length; j += 1) {
@@ -632,6 +696,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
     const planStop = (stop, card, extra = {}) => ({ ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra })
     for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
       const task = await loadTask(projectRoot, name, { workflow, policy })
+      await ensureE2ePackages(task) // B：e2e 场景模板物化（幂等；advance 进入 e2e 后首轮生效）
       const state = deriveTask(task)
       const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
       if (card.transition === 'dispatch') {

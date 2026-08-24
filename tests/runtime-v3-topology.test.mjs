@@ -345,8 +345,77 @@ test("D6：多包任务的评审/裁决派单内嵌包计划（未交付包不�
   await call(["deliver", "--task", "d6-t", "--key", kS, "--outcome", "delivered", "--summary", "s", "--paths", "S.md"])
   await call(["deliver", "--task", "d6-t", "--key", kI, "--outcome", "delivered", "--summary", "s", "--paths", "I.md"])
   const rv = await call(["run", "--task", "d6-t"])
-  assert.match(rv.dispatch.prompt, /本任务包计划：store（已交付）、intake（已交付）、overview（未交付，依赖满足后自动派发）/， "评审派单内嵌包计划事实")
+  assert.match(rv.dispatch.prompt, new RegExp("本任务包计划：store（已交付）、intake（已交付）、overview（未交付，依赖满足后自动派发）"), "评审派单内嵌包计划事实")
   assert.match(rv.dispatch.prompt, /未交付包不构成 rework 依据/, "明确指引避免缺包误判")
+})
+
+test("A：包 tier 字段——验收非法值拒绝；实际档 = max(包tier, risk)；缺省回落默认", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "a-t")
+  // 非法 tier 拒绝
+  const bad = await call(["plan", "--task", "a-t", "--packages", JSON.stringify([{ id: "x", writable: ["X.md:k"], done: ["d"], tier: "staff" }])])
+  assert.equal(bad.ok, false)
+  assert.match(bad.message, /tier 非法/)
+  // 合法 tier：senior 包 + risk critical → max = expert（risk 不触发升档卡，包 tier 触发 → 先批准）
+  await call(["intent", "--task", "a-t", "--risk", "critical"])
+  await call(["plan", "--task", "a-t", "--packages", JSON.stringify([
+    { id: "lo", writable: ["LO.md:k"], done: ["d"], dependsOn: [] },
+    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "senior", dependsOn: [] },
+  ])])
+  const gate = await call(["run", "--task", "a-t"])
+  assert.equal(gate.status, "awaiting-user", "包 tier 高于默认 → 升档审批卡（C）")
+  assert.deepEqual(gate.escalations, [{ package: "hi", tier: "senior" }], "升档清单合批")
+  await call(["decide", "--task", "a-t", "--choice", "1"])
+  const d = await call(["run", "--task", "a-t"])
+  const lo = d.dispatches.find((x) => x.package === "lo")
+  const hi = d.dispatches.find((x) => x.package === "hi")
+  assert.equal(lo.tier, "expert", "无包 tier + risk critical → expert（risk 不触发卡）")
+  assert.equal(hi.tier, "expert", "包 senior + risk critical → max=expert")
+  // 批准后重跑幂等：交付 lo 后再 run（hi 在途）不再出卡
+  await writeFile(path.join(root, "LO.md"), "x", "utf8")
+  await call(["deliver", "--task", "a-t", "--key", d.dispatches.find((x) => x.package === "lo").key, "--outcome", "delivered", "--summary", "s", "--paths", "LO.md"])
+  const w = await call(["run", "--task", "a-t"])
+  assert.equal(w.transition, "wait-inflight", "已批准批次不重复出卡（幂等）")
+  // 缺省回落（risk normal）+ 拒绝路径（降回默认档）
+  const root2 = await makeProject()
+  const call2 = caller(root2)
+  await openTask(root2, "a2-t")
+  await call2(["plan", "--task", "a2-t", "--packages", JSON.stringify([{ id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "senior", dependsOn: [] }])])
+  const gate2 = await call2(["run", "--task", "a2-t"])
+  assert.equal(gate2.status, "awaiting-user")
+  await call2(["decide", "--task", "a2-t", "--choice", "2"])  // 拒绝 → 降回默认档
+  const d2 = await call2(["run", "--task", "a2-t"])
+  assert.equal(d2.dispatches[0].tier, "junior", "拒绝升档 → 场景默认 junior")
+  assert.match(d2.note ?? "", /默认档/, "降级说明")
+})
+
+test("B：e2eTemplate 物化——entry e2e 直达自动三包（形状映射+依赖锁+已 plan 不覆盖）", async () => {
+  const wf = { terminalStages: ["finish"], gates: [], stages: [
+    { id: "e2e", label: "端到端", outputs: ["e2e-result"], teamScene: "e2e", route: "e2e" },
+  ], edges: [] }
+  const pol = { maxAutonomousRounds: 3, scenes: { e2e: { core: true } }, e2eTemplate: [
+    { packageId: "path-design", assignmentKind: "e2e", outputRefs: ["artifact:e2e-design"], dependsOn: [], completionCriteria: ["设计真实用户路径"] },
+    { packageId: "fixture-implementation", assignmentKind: "e2e", outputRefs: ["artifact:e2e-fixtures"], dependsOn: ["path-design"], completionCriteria: ["实现可重复测试设施"] },
+    { packageId: "execution", assignmentKind: "e2e", outputRefs: ["artifact:e2e-result"], dependsOn: ["fixture-implementation"], completionCriteria: ["执行并保留证据"] },
+  ] }
+  const root = await makeProject({ workflow: wf, policy: pol })
+  const call = caller(root)
+  await openTask(root, "b-t", { entry: "e2e" })
+  const d = await call(["run", "--task", "b-t"])
+  assert.equal(d.dispatches.length, 1, "只派 path-design（后两包依赖锁）")
+  assert.equal(d.dispatches[0].package, "path-design")
+  assert.match(d.dispatches[0].prompt, /e2e\/e2e-design.md/, "形状映射：artifact:e2e-design → e2e/e2e-design.md:e2e-design")
+  const task = await loadTask(root, "b-t", { workflow: wf, policy: pol })
+  assert.ok(task.journal.some((e) => e.type === "packages-planned" && e.detail.source === "e2eTemplate"), "journal 记物化来源")
+  assert.equal(task.packages.length, 3)
+  // 已 plan 不覆盖：手动 plan 后 run 保持用户定义
+  const root2 = await makeProject({ workflow: wf, policy: pol })
+  const call2 = caller(root2)
+  await openTask(root2, "b2-t", { entry: "e2e" })
+  await call2(["plan", "--task", "b2-t", "--packages", JSON.stringify([{ id: "my-own", writable: ["X.md:e2e-design"], done: ["自定义"], dependsOn: [] }])])
+  const d2 = await call2(["run", "--task", "b2-t"])
+  assert.equal(d2.dispatches[0].package, "my-own", "用户已 plan 不被模板覆盖")
 })
 
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {

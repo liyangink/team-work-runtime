@@ -608,7 +608,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(picked ? { family: picked.family, selectedBy: picked.selectedBy } : {}) },
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "平台派发原语暂无下发通道，Phase 3 插件消费" } : {}), ...(picked ? { family: picked.family, selectedBy: picked.selectedBy } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }

@@ -187,6 +187,17 @@ test("init：skill 装载/幂等/--force，映射模板就位", async () => {
   assert.match(await readFile(path.join(root, ".dsh/skills/team-work-v3/SKILL.md"), "utf8"), /team-work（v3）/)
 })
 
+test("effort 预留字段：候选条目可选 effort，解析透传（平台派发原语暂无通道，Phase 3 消费）", async () => {
+  const root = await makeProject()
+  await ensureDshMap(root)
+  const map = JSON.parse(await readFile(dshMapPath(root), "utf8"))
+  map.tiers.senior = { provider: "prov-main", model: "glm-5.3", effort: "high" }
+  await writeMap(root, map)
+  const r = await resolveTiers(root)
+  assert.equal(r.tiers.senior.effort, "high", "候选池条目 effort 透传")
+  assert.throws(() => validateDshMap({ tiers: { senior: { provider: "a", model: "b", effort: 3 } }, defaults: null }), (e) => e.code === "MAP_INVALID" && /effort/.test(e.message), "effort 非字符串拒绝")
+})
+
 test("verdict 派单必须内嵌工具调用指令（P2：成员不调用 review 则 runtime 永远收不到裁决）", async () => {
   const root = await makeProject()
   const call = caller(root)

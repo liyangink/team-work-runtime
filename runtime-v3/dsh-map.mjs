@@ -87,12 +87,17 @@ function validEntry(entry, label) {
     return { use: PLACEHOLDER }
   }
   for (const key of keys) {
-    if (!!["provider", "model", "family"].includes(key) === false) throw invalid(`${label} 含未知字段 "${key}"`, ENTRY_EXAMPLE)
+      // effort 可选（预留）：Lead 派发原语当前无通道下发（workflow agent 显式拒绝、subagent 无此参数），
+  // Phase 3 插件自建 session 时消费（底层 options.reasoningEffort 通道存在）；值须为非空字符串。
+  if (!["provider", "model", "family", "effort"].includes(key)) throw invalid(`${label} 含未知字段 "${key}"`, ENTRY_EXAMPLE)
   }
   if (typeof entry.provider !== "string" || !entry.provider.trim() || typeof entry.model !== "string" || !entry.model.trim()) {
     throw invalid(`${label} 的 provider 与 model 必须是非空字符串`, ENTRY_EXAMPLE)
   }
-  return { provider: entry.provider, model: entry.model, family: entry.family ?? entry.model.split("-")[0] }
+  if (entry.effort !== undefined && (typeof entry.effort !== "string" || !entry.effort.trim())) {
+    throw invalid(`${label} 的 effort 必须是非空字符串（模型声明 reasoningEfforts 的档位键，如 high/max）`, ENTRY_EXAMPLE)
+  }
+  return { provider: entry.provider, model: entry.model, family: entry.family ?? entry.model.split("-")[0], ...(entry.effort !== undefined ? { effort: entry.effort } : {}) }
 }
 
 export function validateDshMap(map) {
@@ -137,7 +142,8 @@ export async function resolveTiers(projectRoot, { settingsFile, map: mapOverride
     const d = map.defaults
     if (entry && (Array.isArray(entry) || entry.provider)) {
       const pool = asPool(entry).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
-      return { pool, provider: pool[0].provider, model: pool[0].model, source: "explicit" }
+      const top = pool[0]
+      return { pool, provider: top.provider, model: top.model, source: "explicit", ...(top.effort !== undefined ? { effort: top.effort } : {}) }
     }
     if (entry?.use === PLACEHOLDER) {
       if (agentDefault.resolved) {
@@ -150,7 +156,8 @@ export async function resolveTiers(projectRoot, { settingsFile, map: mapOverride
     }
     if (d && (Array.isArray(d) || d.provider)) {
       const pool = asPool(d).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
-      return { pool, provider: pool[0].provider, model: pool[0].model, source: "fallback" }
+      const top = pool[0]
+      return { pool, provider: top.provider, model: top.model, source: "fallback", ...(top.effort !== undefined ? { effort: top.effort } : {}) }
     }
     if (d?.use === PLACEHOLDER && agentDefault.resolved) {
       const a = { ...agentDefault.resolved, family: agentDefault.resolved.model.split("-")[0] }

@@ -542,6 +542,10 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     error.card = { ok: false, code: 'PLAN_REJECTED', message: error.message, fix: '修正 --packages 后重试；验收只保机械属性（互斥/无环/标准在场），拆分语义质量由 Lead 把关' }
     throw error
   }
+  // 标签可读性软警告（非机械验收项，不拒绝）：DSH 子代理列表标签约 32 半角字符，
+  // 阶段·角色@包 前置后包 id 超 12 字符会挤压简述空间
+  const longIds = items.filter((p) => ids.has(p.id) && p.id.length > 12).map((p) => p.id)
+  const tagWarn = longIds.length ? `包 id 过长（${longIds.join("、")}，>12 字符）：子代理标签中会挤压简述空间，建议短词（如 store/intake）` : null
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy })
@@ -557,7 +561,7 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     const had = task.packages != null
     await atomicJson(path.join(task.root, 'packages.json'), { items })
     await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: items.map((p) => p.id) } }])
-    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'run', note: had ? '包定义已更新（下一波生效）' : '包定义已登记；下一次 run 将按波组派发' }
+    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'run', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: had ? '包定义已更新（下一波生效）' : '包定义已登记；下一次 run 将按波组派发' }
   })
 }
 

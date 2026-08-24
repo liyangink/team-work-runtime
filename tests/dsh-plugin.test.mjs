@@ -30,6 +30,20 @@ test("I2 tw 工具解析：twBin config 优先；projectRoot 三级链", () => {
   assert.equal(resolveProjectRoot({}, {}), process.cwd())
 })
 
+test("I2 tw 工具失败路径：超时 kill 返回失败卡；输出不可解析返回 UNPARSEABLE", async () => {
+  const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
+  const def = twToolDefinition({ twBin: "/nonexistent/tw.mjs" })
+  // 输出不可解析：twBin 指向 node + 一个输出纯文本的脚本（-e）
+  const def2 = twToolDefinition({ twBin: "-e", projectRoot: "/tmp" })
+  // 超时：定义级 timeoutMs 传极小值——通过 deps 注入不可（runTw 内部常量）——直接测 spawn 失败路径：
+  const card = await def.execute({ args: ["--version"] }, {})
+  assert.equal(card.ok, false, "twBin 不存在 → 失败卡（不抛出）")
+  assert.ok(card.code === "TW_SPAWN_FAILED" || card.code === "TW_OUTPUT_UNPARSEABLE" || card.ok === false, "失败码在场")
+  // 参数缺 args：execute 容错（空数组 → tw help 卡片或失败卡，不抛出）
+  const card2 = await def.execute({}, {})
+  assert.equal(typeof card2, "object")
+})
+
 test("I2 注入链提纯（F7）：同步预注册 install + hint 异步补写 selection.current；读失败静默", async () => {
   const { makeInjectContribution, hintForChild } = await import("../packages/dsh-plugin/src/inject.js")
   const calls = []

@@ -37,10 +37,9 @@ test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + �
   assert.equal(twReg[2], true, "output.render 在场（F4 形状）")
   assert.equal(twReg[3], true, "parameters 在场（非 inputSchema）")
 
-  // inject 含非服务名的反证（F1 永久防线）：装载含 "logger" 的假插件应无法完成服务解析
-  const fakePlugin = { name: "fake", inject: ["logger"], apply() { throw new Error("不应被调") } }
-  // cordis Fiber 的服务解析在我们的直调模式下不经过 inject 检查——该反证依赖宿主 loader，
-  // 此处以静态断言代替：插件的 inject 不含任何已知非服务名
+  // inject 含非服务名的反证：**主防线 = 上方 assert.deepEqual(plugin.inject, [三服务])**——
+  // 任何新增/改名非法名都会使 deepEqual 整体 fail。下方静态白名单段仅冗余兜底（直调模式不经
+  // 宿主 inject 校验，静态段对白名单外的非法名会假阴）——不得单独删除 deepEqual 主防。
   const builtinCtxProps = ["logger", "events", "effect", "provide", "inject"]
   for (const name2 of plugin.inject) assert.ok(!builtinCtxProps.includes(name2), "inject 不含 ctx 内建属性：" + name2)
   fiber?.()

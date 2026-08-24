@@ -6,6 +6,8 @@
   "automaticLimits": { "economy": 70, "balanced": 200, "quality": 500 },
   "maxAutonomousRounds": 3,
   "concurrencySoftLimit": 4,
+  "riskTiers": { "critical": "expert", "high": "senior" },
+  "selection": { "diversityWithinTier": true },
   "scenes": {
     "research": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
     "design": { "ownerTier": "senior", "challengerTier": "senior", "core": true },

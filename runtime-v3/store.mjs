@@ -50,7 +50,7 @@ export async function taskExists(projectRoot, name) {
   }
 }
 
-export async function initTask({ projectRoot, name, objective, entry, completion, workflowDigest, stages }) {
+export async function initTask({ projectRoot, name, objective, entry, completion, workflowDigest, stages, risk }) {
   const root = taskRoot(projectRoot, name)
   if (await taskExists(projectRoot, name)) {
     const error = new Error(`任务 ${name} 已存在。换一个名字，或用 run 继续它。`)
@@ -70,7 +70,7 @@ export async function initTask({ projectRoot, name, objective, entry, completion
   await mkdir(path.join(root, "gates"), { recursive: true })
   await mkdir(path.join(root, "locks"), { recursive: true })
   await Promise.all([
-    atomicJson(path.join(root, "intent.json"), { objective, constraints: [], exclusions: [], revisions: [] }),
+    atomicJson(path.join(root, "intent.json"), { objective, constraints: [], exclusions: [], revisions: [], risk: risk ?? "normal" }),
     atomicJson(path.join(root, "scope.json"), { entry, completion, stages, workflowDigest, createdAt: at }),
     atomicJson(path.join(root, "artifacts.json"), { items: [] }),
     atomicWrite(path.join(root, "journal.jsonl"), `${JSON.stringify({ seq: 1, at, type: "task-opened", detail: { name, objective, entry } })}\n`),

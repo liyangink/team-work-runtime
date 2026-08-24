@@ -165,3 +165,38 @@ test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单�
   assert.equal(d.dispatches.length, 1)
   assert.equal(d.dispatches[0].package, undefined, "单 owner 不带 package 字段")
 })
+
+test("risk 升档：critical → expert Owner（只升 owner 档，challenger 不变）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "risk-t")
+  await call(["intent", "--task", "risk-t", "--risk", "critical"])
+  const d = await call(["run", "--task", "risk-t", "--writable", "R.md:code-review"])
+  assert.equal(d.dispatch.tier, "expert", "critical 任务 Owner 升 expert 档")
+  // challenger 档不受 risk 影响（policy challengerTier=senior）
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "risk-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const r = await call(["run", "--task", "risk-t"])
+  assert.equal(r.dispatch.tier, "senior", "challenger 档不随 risk 升降")
+})
+
+test("候选池 + 家族去重：同档多 owner 派发优先不同模型家族", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "pool-t")
+  // junior 池：两个不同家族候选
+  const mapFile = path.join(root, ".team-work", "platform", "dsh.json")
+  await mkdir(path.dirname(mapFile), { recursive: true })
+  await writeFile(mapFile, JSON.stringify({ tiers: { junior: [
+    { provider: "prov-a", model: "familyone-lite", family: "familyone" },
+    { provider: "prov-b", model: "familytwo-lite", family: "familytwo" },
+  ] }, defaults: null }))
+  await call(["plan", "--task", "pool-t", "--packages", PKGS])
+  const plan = await call(["dispatch-plan", "--task", "pool-t", "--json"])
+  assert.equal(plan.waves.length, 2, "首波两包（overview 依赖锁）")
+  const [m1, m2] = plan.waves.map((w) => w.modelHint)
+  assert.equal(m1.model, "familyone-lite")
+  assert.equal(m2.model, "familytwo-lite", "同档第二 owner 家族去重选第二候选")
+  assert.equal(m2.selectedBy, "diversity")
+})
+

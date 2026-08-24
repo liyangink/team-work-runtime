@@ -12,9 +12,17 @@ import { controlRoot, atomicJson, readJson } from "./store.mjs"
 export const TIERS = ["junior", "senior", "expert"]
 export const PLACEHOLDER = "agent-default"
 // 脱敏规则：不内置任何环境特定默认 provider；无法解析显式 unresolved（派发前需配置）
-export const UNRESOLVED = Object.freeze({ provider: null, model: null, source: "unresolved" })
+export const UNRESOLVED = Object.freeze({ provider: null, model: null, source: "unresolved", pool: [] })
 
 const ENTRY_EXAMPLE = '写法：{"provider":"...","model":"..."} 显式分档，或 {"use":"agent-default"} 占位（解析为 DSH 主 agent 模型）；删除本文件可自动重建占位模板'
+
+// 家族去重挑选（v3.2 选人规则：同档优先不同模型家族；已用家族之外取序首位）
+export function pickFromPool(pool, usedFamilies = []) {
+  if (!pool || pool.length === 0) return null
+  const fresh = pool.find((c) => !usedFamilies.includes(c.family))
+  const picked = fresh ?? pool[0]
+  return { ...picked, selectedBy: fresh ? "diversity" : "first" }
+}
 
 export function dshMapPath(projectRoot) {
   return path.join(controlRoot(projectRoot), "platform", "dsh.json")
@@ -65,7 +73,12 @@ export async function readAgentDefault({ settingsFile } = {}) {
 
 function validEntry(entry, label) {
   if (entry == null) return null
-  if (typeof entry !== "object" || Array.isArray(entry)) throw invalid(`${label} 必须是对象`, ENTRY_EXAMPLE)
+  // v3.2 候选池：档位值可为数组（按性价比排序；同档家族去重后取序）
+  if (Array.isArray(entry)) {
+    if (entry.length === 0) throw invalid(`${label} 候选数组不能为空`, ENTRY_EXAMPLE)
+    return entry.map((e) => validEntry(e, label)).filter(Boolean).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
+  }
+  if (typeof entry !== "object") throw invalid(`${label} 必须是对象或候选数组`, ENTRY_EXAMPLE)
   const keys = Object.keys(entry)
   if (keys.length === 0) throw invalid(`${label} 为空对象`, ENTRY_EXAMPLE)
   if (keys.includes("use")) {
@@ -74,12 +87,12 @@ function validEntry(entry, label) {
     return { use: PLACEHOLDER }
   }
   for (const key of keys) {
-    if (!["provider", "model"].includes(key)) throw invalid(`${label} 含未知字段 "${key}"`, ENTRY_EXAMPLE)
+    if (!!["provider", "model", "family"].includes(key) === false) throw invalid(`${label} 含未知字段 "${key}"`, ENTRY_EXAMPLE)
   }
   if (typeof entry.provider !== "string" || !entry.provider.trim() || typeof entry.model !== "string" || !entry.model.trim()) {
     throw invalid(`${label} 的 provider 与 model 必须是非空字符串`, ENTRY_EXAMPLE)
   }
-  return { provider: entry.provider, model: entry.model }
+  return { provider: entry.provider, model: entry.model, family: entry.family ?? entry.model.split("-")[0] }
 }
 
 export function validateDshMap(map) {
@@ -118,20 +131,33 @@ export async function resolveTiers(projectRoot, { settingsFile, map: mapOverride
     warnings.push(`${agentDefault.reason}；占位档只能回退 defaults，仍无则该档未解析（unresolved），派发前需配置映射`)
   }
 
+  const asPool = (resolved) => (Array.isArray(resolved) ? resolved : [resolved])
   const resolveOne = (tier) => {
     const entry = map.tiers[tier]
     const d = map.defaults
-    if (entry?.provider) return { provider: entry.provider, model: entry.model, source: "explicit" }
+    if (entry && (Array.isArray(entry) || entry.provider)) {
+      const pool = asPool(entry).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
+      return { pool, provider: pool[0].provider, model: pool[0].model, source: "explicit" }
+    }
     if (entry?.use === PLACEHOLDER) {
-      if (agentDefault.resolved) return { ...agentDefault.resolved, source: PLACEHOLDER }
-      // 占位不可解析 → defaults → 内置（全局警告已给）
+      if (agentDefault.resolved) {
+        const a = { ...agentDefault.resolved, family: agentDefault.resolved.model.split("-")[0] }
+        return { pool: [a], provider: a.provider, model: a.model, source: PLACEHOLDER }
+      }
+      // 占位不可解析 → defaults（全局警告已给）
     } else if (entry == null) {
       warnings.push(`档位 ${tier} 未配置，回退 defaults`)
     }
-    if (d?.provider) return { provider: d.provider, model: d.model, source: "fallback" }
-    if (d?.use === PLACEHOLDER && agentDefault.resolved) return { ...agentDefault.resolved, source: PLACEHOLDER }
+    if (d && (Array.isArray(d) || d.provider)) {
+      const pool = asPool(d).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
+      return { pool, provider: pool[0].provider, model: pool[0].model, source: "fallback" }
+    }
+    if (d?.use === PLACEHOLDER && agentDefault.resolved) {
+      const a = { ...agentDefault.resolved, family: agentDefault.resolved.model.split("-")[0] }
+      return { pool: [a], provider: a.provider, model: a.model, source: PLACEHOLDER }
+    }
     warnings.push(`档位 ${tier} 未解析（无显式配置、占位不可解析、无 defaults）：派发前需配置映射或确认 DSH 主模型设置`)
-    return { ...UNRESOLVED }
+    return { ...UNRESOLVED, pool: [] }
   }
   const tiers = Object.fromEntries(TIERS.map((t) => [t, resolveOne(t)]))
   return { file, map, agentDefault, tiers, warnings }

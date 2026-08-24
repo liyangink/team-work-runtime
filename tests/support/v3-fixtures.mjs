@@ -11,7 +11,7 @@ export const FIX_WORKFLOW = {
   gates: [],
   stages: [{ id: "code-review", label: "代码审查", outputs: ["code-review"], teamScene: "code-review", route: "e2e" }],
 }
-export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { "code-review": { core: true } } }
+export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" }, scenes: { "code-review": { core: true } } }
 
 export async function makeProject({ workflow = FIX_WORKFLOW, policy = FIX_POLICY } = {}) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-fx-"))

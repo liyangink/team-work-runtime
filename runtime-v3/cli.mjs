@@ -11,7 +11,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
-import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath } from "./dsh-map.mjs"
+import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath, pickFromPool } from "./dsh-map.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -146,6 +146,16 @@ function inflightDispatches(task, stageId) {
     .map((d) => dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch)
 }
 
+// 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
+const TIER_RANK = { junior: 1, senior: 2, expert: 3 }
+function ownerTierFor(task, sp) {
+  const base = sp.ownerTier
+  const risk = task.intent?.risk
+  const up = task.policy?.riskTiers?.[risk]
+  if (up && (TIER_RANK[up] ?? 0) > (TIER_RANK[base] ?? 0)) return up
+  return base
+}
+
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
 function dispatchCard(task, stageDef, wave, detail) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
@@ -179,7 +189,7 @@ function dispatchCard(task, stageDef, wave, detail) {
     dispatch: {
       key: detail.key,
       role: wave.role,
-      tier: wave.role === 'owner' ? sp.ownerTier : wave.role === 'challenger' ? sp.challengerTier : 'expert',
+      tier: wave.role === 'owner' ? ownerTierFor(task, sp) : wave.role === 'challenger' ? sp.challengerTier : 'expert',
       round: detail.round ?? wave.round,
       kind: wave.kind,
       ...(pkg != null ? { package: pkg } : {}),
@@ -190,14 +200,17 @@ function dispatchCard(task, stageDef, wave, detail) {
   }
 }
 
-async function cmdOpen({ projectRoot, name, objective, entry }) {
+async function cmdOpen({ projectRoot, name, objective, entry, risk }) {
   if (!name || !objective) throw fail("OPEN_INPUT_REQUIRED", "open 需要 --name 与 --objective")
+  if (risk && !['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical（high→senior Owner、critical→expert Owner，仅升不降）")
   const { workflow } = await loadDefinitions(projectRoot)
   const resolvedEntry = entry ?? "research"
   if (!workflow.stages.some((s) => s.id === resolvedEntry)) throw fail("ENTRY_UNKNOWN", `未知阶段：${resolvedEntry}`)
   const completion = entry ? { mode: "through-stage", stage: entry } : { mode: "workflow" }
-  await initTask({ projectRoot, name, objective, entry: resolvedEntry, completion, workflowDigest: workflow.version, stages: workflow.stages.map((s) => s.id) })
-  return { ok: true, task: name, stage: resolvedEntry, status: "working", next: "run", note: entry ? `任务从 ${entry} 介入，将运行到该阶段验收` : "任务将运行完整工作流" }
+  await initTask({ projectRoot, name, objective, entry: resolvedEntry, completion, workflowDigest: workflow.version, stages: workflow.stages.map((s) => s.id), risk })
+  const baseNote = entry ? `任务从 ${entry} 介入，将运行到该阶段验收` : "任务将运行完整工作流"
+  const riskNote = risk && risk !== 'normal' ? `；按 ${risk} 档运行：Owner 将升用 ${risk === 'critical' ? 'expert' : 'senior'} 档模型` : ""
+  return { ok: true, task: name, stage: resolvedEntry, status: "working", next: "run", note: baseNote + riskNote }
 }
 
 // 归档后的任务不是"不存在"：返回只读摘要卡（E2E-14 精神 + §5.2 归档只读摘要）
@@ -375,7 +388,7 @@ async function cmdRoute({ projectRoot, name, route, decision, basis }) {
   })
 }
 
-async function cmdIntent({ projectRoot, name, objective, addConstraint = [], addExclusion = [] }) {
+async function cmdIntent({ projectRoot, name, objective, risk, addConstraint = [], addExclusion = [] }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task = await loadTask(projectRoot, name, { workflow, policy })
   if (deriveTask(task).status === "completed") {
@@ -385,6 +398,11 @@ async function cmdIntent({ projectRoot, name, objective, addConstraint = [], add
   return withOwnerLock(path.join(task.root, "locks", "task.lock"), async () => {
     const intent = JSON.parse(await readFile(file, "utf8"))
     const change = {}
+    if (risk) {
+      if (!['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical")
+      intent.risk = risk
+      change.risk = risk
+    }
     if (objective) { intent.objective = objective; change.objective = objective }
     for (const c of addConstraint) if (!intent.constraints.includes(c)) intent.constraints.push(c)
     if (addConstraint.length) change.addConstraints = addConstraint
@@ -545,10 +563,14 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
+        const usedFamilies = [] // 波内家族去重（v3.2 选人：同档多 owner 优先不同模型家族）
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
-          const hint = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
+          const tierRes = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
           if (!resolved.tiers[d.tier]) warnings.push('未知档位 ' + d.tier + '，标记未解析')
+          const picked = pickFromPool(tierRes.pool, usedFamilies)
+          if (picked) usedFamilies.push(picked.family)
+          const hint = picked ? { ...tierRes, ...picked } : tierRes
           const pkgDef = (task.packages ?? []).find((p) => p.id === d.package)
           const example = deliver === 'deliver'
             ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
@@ -561,7 +583,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source },
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(picked ? { family: picked.family, selectedBy: picked.selectedBy } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }
@@ -675,10 +697,10 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
   const common = { projectRoot }
   try {
     switch (cmd) {
-      case "open": return await cmdOpen({ ...common, name: args.name, objective: args.objective, entry: args.entry })
+      case "open": return await cmdOpen({ ...common, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk })
       case "run": return await cmdRun({ ...common, name: args.task, writable: collectWritable(argv) })
       case "decide": return await cmdDecide({ ...common, name: args.task, choice: Number(args.choice), note: args.note })
-      case "intent": return await cmdIntent({ ...common, name: args.task, objective: args.objective, addConstraint: flag("add-constraint"), addExclusion: flag("add-exclusion") })
+      case "intent": return await cmdIntent({ ...common, name: args.task, objective: args.objective, risk: args.risk, addConstraint: flag("add-constraint"), addExclusion: flag("add-exclusion") })
       case "route": return await cmdRoute({ ...common, name: args.task, route: args.route, decision: args.decision, basis: args.basis })
       case "restore": return await cmdRestore({ ...common, name: args.task, target: args.path })
       case "gate": return await cmdGate({ ...common, name: args.task })

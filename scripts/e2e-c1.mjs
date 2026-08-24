@@ -1,24 +1,28 @@
 // e2e-c1：真实 dsh 宿主装载验证（dump-config 装配树）
-// 隔离 DSH_HOME → 复制 web profile → package.json 加插件依赖 + bundles 条目 → dump-config 断言
+// 方法：隔离 DSH_HOME → 复制 web profile → package.json 声明 bundle → node_modules symlink 挂载插件
+//      （共享 hoist 层 @deepseek-ai 也 symlink——与 dsh flat fallback 解析一致）→ dump-config 断言。
+// 注：不用 pnpm install（宿主 pnpm 缺失、corepack EPERM、npx 通道对 file: 依赖在此环境不可靠）——
+//      symlink 与 pnpm file: 安装的装载效果等价（node_modules 解析路径相同），正式安装走 dsh plugin add。
 import { execFile } from "node:child_process"
-import { cp, mkdir, writeFile, rm } from "node:fs/promises"
+import { cp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
 import { promisify } from "node:util"
 import os from "node:os"
 import path from "node:path"
 
 const run = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
-const LF = String.fromCharCode(10)
 
 async function main() {
   const home = path.join(os.tmpdir(), "tw-dsh-e2ec-" + Date.now())
   const src = path.join(os.homedir(), ".dsh")
-  await mkdir(path.join(home, "profiles"), { recursive: true })
-  await cp(path.join(src, "profiles", "web"), path.join(home, "profiles", "web"), { recursive: true }).catch(() => {})
-  await cp(path.join(src, "settings.yaml"), path.join(home, "settings.yaml")).catch(() => {})
-
-  // 插件挂载 = profile 依赖 + bundles 条目（dsh plugin add 的等价手动形态）
   const profileDir = path.join(home, "profiles", "web")
+  await mkdir(profileDir, { recursive: true })
+  // profile 基础文件（patch/cordis/workspace 从用户 profile 拷贝）
+  for (const f of ["cordis.patch.yml", "cordis.yml", "pnpm-workspace.yaml"]) {
+    await cp(path.join(src, "profiles", "web", f), path.join(profileDir, f)).catch(() => {})
+  }
+  await cp(path.join(src, "settings.yaml"), path.join(home, "settings.yaml")).catch(() => {})
+  // 声明 bundle（dsh plugin add 的等价 package.json 形态）
   const pkg = {
     name: "dsh-profile-web",
     private: true,
@@ -26,22 +30,24 @@ async function main() {
     dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "team-work-runtime-dsh"] } },
   }
   await writeFile(path.join(profileDir, "package.json"), JSON.stringify(pkg, null, 2))
+  // node_modules：插件 symlink + 共享 hoist 层 @deepseek-ai symlink（dsh flat fallback 同源）
+  const nm = path.join(profileDir, "node_modules")
+  await mkdir(nm, { recursive: true })
+  await symlink(path.join(repoRoot, "packages", "dsh-plugin"), path.join(nm, "team-work-runtime-dsh"), "dir")
+  const sharedDeps = path.join(src, "profiles", "node_modules", "@deepseek-ai")
+  await symlink(sharedDeps, path.join(nm, "@deepseek-ai"), "dir").catch(() => {})
 
-  // pnpm install（经 npx --cache 通道——宿主 pnpm 不在 PATH 且 corepack enable 遇 EPERM）
-  await run("npx", ["-y", "--cache", "/tmp/tw-npm-cache", "pnpm@9", "install", "--no-frozen-lockfile"], { cwd: profileDir, timeout: 300000 })
-    .catch((e) => { throw new Error("pnpm install 失败: " + String(e.stderr ?? e.message).slice(0, 400)) })
-
-  const { stdout } = await run("dsh", ["--profile", "web", "--dump-config"], {
+  const { stdout, stderr } = await run("dsh", ["--profile", "web", "--dump-config"], {
     env: { ...process.env, DSH_HOME: home },
-    timeout: 60000,
-  }).catch((e) => ({ stdout: String(e.stdout ?? "") + String(e.stderr ?? "") }))
-  const tree = String(stdout)
-  if (!tree.includes("team-work")) {
+    timeout: 90000,
+  }).catch((e) => ({ stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }))
+  const tree = String(stdout) + String(stderr)
+  if (!tree.includes("team-work-dsh")) {
     console.error("FAIL: 装配树不含插件。输出：")
-    console.error(tree.slice(0, 1000) || "(空)")
+    console.error(tree.slice(0, 800) || "(空)")
     process.exit(1)
   }
-  console.log("C1 OK 宿主装配树含 team-work 插件（pnpm install + dump-config 双层验证）")
+  console.log("C1 OK 宿主装配树含 team-work-dsh（symlink 挂载 + dump-config）")
   await rm(home, { recursive: true, force: true }).catch(() => {})
 }
 

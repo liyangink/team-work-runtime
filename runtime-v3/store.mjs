@@ -103,13 +103,15 @@ export async function loadTask(projectRoot, name, { workflow, policy }) {
   // I3：索引缺失/损坏时从不可变事实（reports + snapshots）重建
   let items = artifacts?.items
   if (!Array.isArray(items)) {
-    items = await rebuildArtifacts(root, reports)
+    items = await rebuildArtifacts(root, reports, journal)
     await atomicJson(path.join(root, "artifacts.json"), { items })
   }
   return { root, name, scope, intent, artifacts: { items }, reports, decisions: decisions?.items ?? [], journal, packages: packages?.items ?? null, workflow, policy }
 }
 
-async function rebuildArtifacts(root, reports) {
+// D1：kind 从 journal 派发事件的 writable 还原（path→artifactKind）；查不到派发事件的历史报告兜底 misc。
+// 预建 dispatchKey→writable Map（O(m)），逐 report O(1) 查；原地修订取该 path 最后一次派发的 kind（journal 顺序=时间序，后写的赢）。
+async function rebuildArtifacts(root, reports, journal = []) {
   const snapshotsDir = path.join(root, "snapshots")
   const byPath = new Map()
   for (const entry of await readdir(snapshotsDir).catch(() => [])) {
@@ -118,11 +120,16 @@ async function rebuildArtifacts(root, reports) {
     const prev = byPath.get(snap.path)
     if (!prev || (snap.at ?? "") > (prev.at ?? "")) byPath.set(snap.path, snap)
   }
+  const writableByKey = new Map()
+  for (const e of journal) {
+    if (e.type === "dispatched" && Array.isArray(e.detail?.writable)) writableByKey.set(e.detail.key, e.detail.writable)
+  }
   const kindByPath = new Map()
   for (const report of reports) {
     if (report.kind !== "deliver") continue
-    // 最近的 deliver 报告决定 kind（原地修订时后写的赢）
-    for (let i = 0; i < (report.payload?.paths ?? []).length; i += 1) kindByPath.set(report.payload.paths[i], null)
+    for (const w of writableByKey.get(report.dispatchKey) ?? []) {
+      if (w?.path && w.artifactKind) kindByPath.set(w.path, w.artifactKind)
+    }
   }
   const items = []
   for (const report of reports) {
@@ -130,7 +137,7 @@ async function rebuildArtifacts(root, reports) {
     for (const p of report.payload?.paths ?? []) {
       const snap = byPath.get(p)
       if (snap && !items.some((it) => it.path === p)) {
-        items.push({ path: p, digest: snap.digest, kind: "misc", stage: report.stage, reportRef: report.reportId, snapshotRef: `snapshots/${snap.digest}.json` })
+        items.push({ path: p, digest: snap.digest, kind: kindByPath.get(p) ?? "misc", stage: report.stage, reportRef: report.reportId, snapshotRef: `snapshots/${snap.digest}.json` })
       }
     }
   }

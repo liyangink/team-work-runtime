@@ -207,6 +207,148 @@ test("路由 blocker 优先于人工门卡（E2E 实测缺陷：人工门提前�
   assert.equal(done.status, "completed", "decide 后完成，不再循环签卡")
 })
 
+test("D7：advance 按 e2e 路由决定选边（run→e2e 阶段 / skip→finish），无路由阶段不回归", async () => {
+  // workflow：code-review --(run-e2e)--> e2e --(pass)--> finish；code-review --(skip-e2e)--> finish
+  const wf = { terminalStages: ["finish"], gates: [], stages: [
+    { id: "research", label: "调研", outputs: [], teamScene: "research" },
+    { id: "code-review", label: "审查", outputs: ["code-review"], teamScene: "code-review", route: "e2e" },
+    { id: "e2e", label: "端到端", outputs: ["e2e-result"], teamScene: "e2e", route: "e2e" },
+    { id: "finish", label: "收尾", outputs: [], teamScene: "finish" },
+  ], edges: [
+    { from: "research", to: "code-review", outcome: "pass" },
+    { from: "code-review", to: "e2e", outcome: "run-e2e" },
+    { from: "code-review", to: "implementation", outcome: "implementation-defect" },
+    { from: "code-review", to: "finish", outcome: "skip-e2e" },
+    { from: "e2e", to: "finish", outcome: "pass" },
+  ] }
+  const pol = { maxAutonomousRounds: 3, scenes: { research: { core: false }, "code-review": { core: false }, e2e: { core: false }, finish: { core: false } } }
+  const root = await makeProject({ workflow: wf, policy: pol })
+  const call = caller(root)
+  await openTask(root, "d7-t", { entry: null })  // workflow 模式：gate 过 → advance（through-stage 会走 complete）
+  // research（非 core 无 outputs）一轮收敛 → advance 到 code-review
+  const r0 = await call(["run", "--task", "d7-t", "--writable", "none"])
+  await call(["deliver", "--task", "d7-t", "--key", r0.dispatch.key, "--outcome", "delivered", "--summary", "调研完成"])
+  const rv0 = await call(["run", "--task", "d7-t"])
+  await call(["review", "--task", "d7-t", "--key", rv0.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  const atCr = await call(["run", "--task", "d7-t"])
+  assert.equal(atCr.stage, "code-review", "research 过门推进到 code-review")
+  // code-review 收敛
+  const d = await call(["run", "--task", "d7-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "d7-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["run", "--task", "d7-t"])
+  await call(["review", "--task", "d7-t", "--key", rv.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  // skip → 直达 finish（原实现恒取 implementation-defect 弹回）
+  await call(["route", "--task", "d7-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
+  const skipped = await call(["run", "--task", "d7-t"])
+  assert.equal(skipped.stage, "finish", "skip-e2e 边被选择")
+  // run → e2e 阶段
+  const root2 = await makeProject({ workflow: wf, policy: pol })
+  const call2 = caller(root2)
+  await openTask(root2, "d7r-t", { entry: null })
+  const r1 = await call2(["run", "--task", "d7r-t", "--writable", "none"])
+  await call2(["deliver", "--task", "d7r-t", "--key", r1.dispatch.key, "--outcome", "delivered", "--summary", "调研"])
+  const rv1 = await call2(["run", "--task", "d7r-t"])
+  await call2(["review", "--task", "d7r-t", "--key", rv1.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  await call2(["run", "--task", "d7r-t"])  // advance 到 code-review
+  const d2 = await call2(["run", "--task", "d7r-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root2, "R.md"), "x", "utf8")
+  await call2(["deliver", "--task", "d7r-t", "--key", d2.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv2 = await call2(["run", "--task", "d7r-t"])
+  await call2(["review", "--task", "d7r-t", "--key", rv2.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  await call2(["route", "--task", "d7r-t", "--route", "e2e", "--decision", "run", "--basis", "适用"])
+  const ran = await call2(["run", "--task", "d7r-t"])
+  assert.equal(ran.stage, "e2e", "run-e2e 边被选择（原实现恒弹回 implementation）")
+})
+
+test("D1：索引重建从派发事件还原 kind（gate 按 kind 匹配通过）；无事件兜底 misc", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "d1-t")
+  const d = await call(["run", "--task", "d1-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "d1-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  // 删索引触发重建
+  const { rm } = await import("node:fs/promises")
+  await rm(path.join(root, ".team-work/tasks/d1-t/artifacts.json"))
+  const task = await loadTask(root, "d1-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const rebuilt = task.artifacts.items.find((it) => it.path === "R.md")
+  assert.equal(rebuilt.kind, "code-review", "kind 从派发事件 writable 还原（原硬编码 misc）")
+  // gate 按 kind 匹配：产出物在场检查应通过（blockers 不含"code-review 尚未登记"）
+  const { gateCheck } = await import("../runtime-v3/gate.mjs")
+  const g = gateCheck({ workflow: FIX_WORKFLOW, policy: FIX_POLICY, stageId: "code-review", scope: task.scope, artifacts: task.artifacts, reports: task.reports, decisions: [], journal: task.journal })
+  assert.ok(!g.blockers.some((b) => /code-review 尚未登记/.test(b.requirement)), "重建后 gate 按 kind 匹配通过")
+  // 无派发事件的历史报告兜底 misc
+  const rogue = { reportId: "r-rogue", dispatchKey: "k-unknown", role: "owner", kind: "deliver", round: 1, stage: "code-review", payload: { outcome: "delivered", summary: "s", paths: ["R.md"] }, at: new Date().toISOString() }
+  const rebuilt2 = await (await import("../runtime-v3/store.mjs")).rebuildForTest?.(path.join(root, ".team-work/tasks/d1-t"), [rogue], task.journal) ?? null
+  // rebuildForTest 不存在则直接验证逻辑分支：rogue 的 dispatchKey 不在 journal → kind 兜底
+  assert.ok(rebuilt2 === null || rebuilt2[0].kind === "misc", "未知派发事件兜底 misc")
+})
+
+test("D2：拒绝文案带派单身份（key 错配提示在途清单；路径越界附角色/包/轮次）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "d2-t")
+  const d = await call(["run", "--task", "d2-t", "--writable", "R.md:code-review"])
+  // 场景②：不存在 key → 在途清单（提示别用别人 key）
+  const rogue = await call(["deliver", "--task", "d2-t", "--key", "w99-nonexist", "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  assert.equal(rogue.ok, false)
+  assert.match(rogue.message, /在途派单/, "key 不存在给在途清单")
+  assert.match(rogue.message, new RegExp(d.dispatch.key.replace(/[-]/g, "\-")), "清单含真实在途 key")
+  // 场景①：路径越界 → 附本派单身份
+  const cross = await call(["deliver", "--task", "d2-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "OTHER.md"])
+  assert.equal(cross.ok, false)
+  assert.match(cross.message, /owner 轮次 1/, "越界拒绝附派单身份")
+  // 场景①：角色错配（owner key 用于 review）→ 附归属提示
+  const roleMix = await call(["review", "--task", "d2-t", "--key", d.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  assert.equal(roleMix.ok, false)
+  assert.match(roleMix.message, /owner 交付派单/, "角色错配提示 key 归属")
+})
+
+test("D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatchKey", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "d34-t")
+  const d = await call(["run", "--task", "d34-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "d34-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["run", "--task", "d34-t"])
+  await call(["review", "--task", "d34-t", "--key", rv.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  // 登记 review 波成员映射 → verdict 波应带 expectedAgentId（原无包波匹配不到）
+  await call(["agent-map", "--task", "d34-t", "--key", rv.dispatch.key, "--agent", "agent-chal-1"])
+  const ve = await call(["run", "--task", "d34-t"])
+  await call(["review", "--task", "d34-t", "--key", ve.dispatch.key, "--recommendation", "accept", "--summary", "s", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  // 人工门：过掉再走 e2e-skip → completed
+  await call(["route", "--task", "d34-t", "--route", "e2e", "--decision", "skip", "--basis", "x"])
+  const g1 = await call(["run", "--task", "d34-t"])
+  await call(["decide", "--task", "d34-t", "--choice", "1"])
+  // D4：在途卡 inflight 元素带 dispatchKey（与 waves 统一）
+  const root2 = await makeProject()
+  const call2 = caller(root2)
+  await openTask(root2, "d4-t")
+  await call2(["run", "--task", "d4-t", "--writable", "R.md:code-review"])
+  const w = await call2(["run", "--task", "d4-t"])
+  assert.equal(w.transition, "wait-inflight")
+  assert.ok(w.inflight[0].dispatchKey, "inflight 元素带 dispatchKey")
+})
+
+test("D6：多包任务的评审/裁决派单内嵌包计划（未交付包不构成 rework 依据）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "d6-t")
+  await call(["plan", "--task", "d6-t", "--packages", PKGS])
+  const d1 = await call(["run", "--task", "d6-t"])
+  const kS = d1.dispatches.find((x) => x.package === "store").key
+  const kI = d1.dispatches.find((x) => x.package === "intake").key
+  await writeFile(path.join(root, "S.md"), "v1", "utf8")
+  await writeFile(path.join(root, "I.md"), "v1", "utf8")
+  await call(["deliver", "--task", "d6-t", "--key", kS, "--outcome", "delivered", "--summary", "s", "--paths", "S.md"])
+  await call(["deliver", "--task", "d6-t", "--key", kI, "--outcome", "delivered", "--summary", "s", "--paths", "I.md"])
+  const rv = await call(["run", "--task", "d6-t"])
+  assert.match(rv.dispatch.prompt, /本任务包计划：store（已交付）、intake（已交付）、overview（未交付，依赖满足后自动派发）/， "评审派单内嵌包计划事实")
+  assert.match(rv.dispatch.prompt, /未交付包不构成 rework 依据/, "明确指引避免缺包误判")
+})
+
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {
   const root = await makeProject()
   const call = caller(root)

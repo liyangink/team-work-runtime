@@ -17,6 +17,10 @@ tw dispatch-plan --task <名> --json 取计划 → 对 waves[] 逐条：
 
 外层循环：dispatch-plan → 按表派发 → 等成员通知（成员自行调 tw deliver/review，派单已内嵌绝对路径指令）→ 再 dispatch-plan……直到 stop。
 
+## 评审修订纪律（D5）
+
+challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主动通知 Lead，Lead 重新 `dispatch-plan` 取波再转发——已按旧版意见派出的 respond 波不会自动更新依据。汇总包的完成标准应含"冲突归并"兜底（两版意见以修订版为准）。
+
 ## stop 处理
 
 - stop: awaiting-user：向用户呈现 card.choices，答案走 tw decide；任务静止（不轮询、不代答、不越门）；

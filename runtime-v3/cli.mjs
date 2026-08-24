@@ -156,7 +156,10 @@ function inflightDispatches(task, stageId) {
   for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
   return batch
     .filter((d) => !settled.has(d.key))
-    .map((d) => dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch)
+    .map((d) => {
+      const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch
+      return { ...card, dispatchKey: card.key }  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
+    })
 }
 
 // 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
@@ -187,6 +190,14 @@ function dispatchCard(task, stageDef, wave, detail) {
     detail.continuation ? '' : (task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : ''),
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。被审制品清单：' + NLART(task) : '',
+    // D6（台账）：评审/裁决派单内嵌包计划事实——把编排事实给到裁决者，
+    // 消除"缺包误判 rework"（topo-e2e w17 实例：expert 不知道未交付包会自动解锁派发）
+    (wave.role === 'challenger' || wave.role === 'expert') && Array.isArray(task.packages) && task.packages.length
+      ? '本任务包计划：' + task.packages.map((p) => {
+          const delivered = task.reports.some((r) => r.kind === 'deliver' && r.package === p.id)
+          return p.id + (delivered ? '（已交付）' : '（未交付' + ((p.dependsOn ?? []).length ? '，依赖满足后自动派发' : '') + '）')
+        }).join('、') + '——未交付包不构成 rework 依据；对完整性的顾虑写进 findings 或 unresolved。'
+      : '',
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
     wave.kind === 'respond' ? reworkContext(task, stageDef.id, pkg) : '',
@@ -282,7 +293,9 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           throw fail('DISPATCH_INPUT_REQUIRED', 'Owner 波次需要声明可写路径与产物类型。阶段 ' + stageDef.id + ' 的产出物合同：\n' + (outputs || '  （无声明产出物，纯调查/回应类派单可直接 --writable none）'))
         }
         const o = wave.owners?.[0]
-        decls = [{ key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: writable.map(parseWritableEntry) }]
+        // --writable none = 无产物派单（纯调查/回应，outputs 为空的阶段）；其余按 路径:kind 解析
+        const decl = writable.length === 1 && writable[0] === 'none' ? [] : writable.map(parseWritableEntry)
+        decls = [{ key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
       }
       await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
       const cards = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
@@ -295,7 +308,19 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
 
   if (state.next.kind === "advance") {
     const edges = (workflow.edges ?? []).filter((e) => e.from === state.stage)
-    const edge = edges.find((e) => e.outcome === "pass") ?? edges[0]
+    // D7（评审 B-F1）：路由阶段按决定选边——code-review 等阶段无 pass 边且
+    // run-e2e/skip-e2e 曾无消费者，原 edges[0] 兜底会恒取第一条边弹回 implementation。
+    const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const routeOf = stageDef?.route
+    const routeDecision = routeOf ? task.decisions.find((d) => d.route === routeOf) : null
+    const wanted = routeOf === "e2e"
+      ? (routeDecision?.choice === "run" ? "run-e2e" : routeDecision?.choice === "skip" ? "skip-e2e" : null)
+      : routeOf === "spec"
+        ? (routeDecision?.choice === "run" ? "use-spec" : routeDecision?.choice === "skip" ? "skip-spec" : null)
+        : null
+    const edge = (wanted && edges.find((e) => e.outcome === wanted))
+      ?? edges.find((e) => e.outcome === "pass")
+      ?? edges[0]
     if (!edge) throw fail("STATE_CORRUPT", `阶段 ${state.stage} 没有可用出边`)
     await appendEventsUnlocked(task, [{ type: "stage-advanced", detail: { from: state.stage, to: edge.to } }])
     return { ok: true, task: name, stage: edge.to, status: "working", next: "run", transition: "advance", note: `${state.stage} 门禁通过，进入 ${edge.to}` }
@@ -614,8 +639,11 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         const usedFamilies = [] // 波内家族去重（v3.2 选人：同档多 owner 优先不同模型家族）
         const agentMaps = JSON.parse(await readFile(path.join(controlRoot(projectRoot), 'platform', 'agents.json'), 'utf8').catch(() => '{ "mappings": {} }')).mappings ?? {}
         // 同包同角色上一派发 key（expectedAgentId 推导源）
+        // D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
+        // 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。
         const prevKeyOf = (d) => {
-          const prior = task.journal.filter((e) => e.type === 'dispatched' && e.detail.key !== d.key && e.detail.role === d.role && (e.detail.package ?? null) === (d.package ?? null)).at(-1)
+          const prior = task.journal.filter((e) => e.type === 'dispatched' && e.detail.key !== d.key && e.detail.role === d.role
+            && ((d.package ?? null) === null ? true : (e.detail.package ?? null) === d.package)).at(-1)
           return prior?.detail.key ?? null
         }
         const waves = list.map((d) => {

@@ -74,6 +74,18 @@ async function readStable(projectRoot, relativePath) {
   }
 }
 
+// D2：key 不存在时列当前在途派单（帮成员发现 key 错配——E2E 实测 intake 成员用错 key 覆盖他人报告）
+function inflightHint(journal, reports) {
+  const settled = new Set(reports.map((r) => r.dispatchKey))
+  const lastIdx = journal.map((e) => e.type).lastIndexOf("dispatched")
+  const batch = []
+  for (let i = lastIdx; i >= 0 && journal[i].type === "dispatched"; i -= 1) batch.unshift(journal[i].detail)
+  const inflight = batch.filter((d) => !settled.has(d.key))
+  return inflight.length
+    ? `当前在途派单：${inflight.map((d) => `${d.key}（${d.role}${d.package ? "@" + d.package : ""} 轮次 ${d.round}）`).join("、")}——检查你是否用了别人的 key`
+    : "当前无在途派单；key 可能属于其他任务或已交付完毕"
+}
+
 // deliver：Owner 交卷。paths ⊆ 派单可写集；同路径原地修订 = 新 digest 新快照，旧快照保留（E2E-16/I8）。
 // 并发安全（复核修复）：读-算-写整体在任务锁内，并发 deliver 不丢失任一方登记。
 export async function registerDelivery({ projectRoot, task, dispatchKey, payload }) {
@@ -87,7 +99,7 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   const fresh = await freshState(task)
   const dispatch = findDispatch(fresh.journal, dispatchKey)
   if (!dispatch || dispatch.detail.role !== "owner") {
-    reasons.push(`dispatchKey ${dispatchKey} 不对应有效的 Owner 派单。请从你的派单文本原样复制 --key 的值。`)
+    reasons.push(`dispatchKey ${dispatchKey} 不对应有效的 Owner 派单。${dispatch ? `该 key 属于 ${dispatch.detail.role} 派单（轮次 ${dispatch.detail.round}${dispatch.detail.package ? "，包 " + dispatch.detail.package : ""}）——deliver 只接受 owner 派单 key，你可能用了评审者的 key。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
   // 同 key 重交 = 幂等覆盖同一报告（E2E-10：重试不产生第二身份、不烧 key）
@@ -102,7 +114,7 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   for (const p of paths) {
     const rel = normalizeRelative(p)
     if (rel === null) { reasons.push(`路径不合法：${JSON.stringify(p)}（必须是项目内相对路径）`); continue }
-    if (!allowed.has(rel)) reasons.push(`路径 ${rel} 不在本派单可写范围（${[...allowed].join("、") || "无"}）。发现的问题请写进交付物或 unresolved，不要改派单外文件。`)
+    if (!allowed.has(rel)) reasons.push(`路径 ${rel} 不在本派单可写范围（${[...allowed].join("、") || "无"}；本派单：${dispatch.detail.role} 轮次 ${dispatch.detail.round}${dispatch.detail.package ? " 包 " + dispatch.detail.package : ""}）。发现的问题请写进交付物或 unresolved，不要改派单外文件。`)
     if (!normalized.includes(rel)) normalized.push(rel)
   }
   if (outcome === "delivered" && normalized.length === 0 && writable.length > 0) {
@@ -160,7 +172,7 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
   const fresh = await freshState(task)
   const dispatch = findDispatch(fresh.journal, dispatchKey)
   if (!dispatch || !["challenger", "expert"].includes(dispatch.detail.role)) {
-    reasons.push(`dispatchKey ${dispatchKey} 不对应有效的评审派单。请从你的派单文本原样复制 --key 的值。`)
+    reasons.push(`dispatchKey ${dispatchKey} 不对应有效的评审派单。${dispatch ? `该 key 属于 ${dispatch.detail.role === "owner" ? "owner 交付派单（轮次 " + dispatch.detail.round + (dispatch.detail.package ? "，包 " + dispatch.detail.package : "") + "）——review 只接受 challenger/expert 派单 key" : "未知角色派单"}。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
   // 同 key 重交 = 幂等覆盖同一报告

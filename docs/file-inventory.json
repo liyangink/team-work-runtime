@@ -31,6 +31,7 @@
     "team-work/policies/default.json",
     "spec-providers/openspec/",
     "skills/team-work-v3/",
+    "skills/team-work-v3/SKILL.md",
     "skills/team-work-v3/references/topology-and-cost.md",
     "skills/team-work-v3/references/scenarios.md",
     "skills/team-work-v3/references/dsh-orchestration.md",
@@ -47,7 +48,11 @@
     "docs/runtime-roadmap.md",
     "docs/runtime-v3-charter.md",
     "docs/dsh-phase1-plan.md",
-    "docs/v2-e2e-findings.md"
+    "docs/v2-e2e-findings.md",
+    "docs/team-topology-recovery-plan.md",
+    "docs/M-store.md",
+    "docs/M-intake.md",
+    "docs/M-overview.md"
   ],
   "sharedBuild": [
     "package.json",

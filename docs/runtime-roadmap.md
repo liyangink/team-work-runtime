@@ -11,8 +11,9 @@
 - 预算终核（DoD #3）：实现 979 行 ≤3k；断言测试 599 行（复核修复后现状：实现 1059 行、断言 678 行、42/42 测试绿，比率 0.64 略超 0.6，为并发安全与恢复闭环的增量）；
 - 旧实现清理（2026-08-21，用户批准）：v2 Runtime 状态机、OpenCode PlatformPlugin、installer、v2 skills/schemas/测试/文档已全部删除（Git 历史可恢复）；保留件仅 persistence 原语、workflow 定义、team-work policy、OpenSpec provider、policy kernel；package.json 零运行时依赖，bin 只剩 `tw`。
 - **交叉复核与修复（2026-08-21，双 subagent 独立审计）**：修复两个实证竞态——并发 deliver 丢登记（读-算-写整体入任务锁）、并发/重复 run 双派发（derive 增加在途波次检查：派发未交付=等待态）；补 I8 恢复闭环 `tw restore`（快照恢复死代码激活）；project.json 版本标记显式化；部分失败孤儿快照消除（先读全部再写）。文档对齐：charter §5 与实现一致（gates/runtime.json 删除、decisions 单文件、journal 七事件、reviews 入 manifest）、route 补进工具面（九命令）、§6.2 文件名纠正。遗留已知项：cmdRun 职责集中（重构候选）、checks 平台对账待 DSH 绑定层、成员越级模型调用治理待插件 hook。
+- **v3.2 第一批（团队拓扑找回）已完成**（关键提交 `14a82a2`–`5dc1429`）：波次机波组化（多包 produce/respond 波带 owners、DAG 分层派发与依赖解锁、按包计轮、challenger findings 带包归属选择性重派、聚合裁决新鲜度、reviewedPackages 评审覆盖快照）、`tw plan` 包定义登记与调用内机械验收、continuation 增量续派、`tw agent-map` 派单映射、选人候选池（dsh.json 档位候选数组 + 族去重 + effort 预留）、risk 升档、wait-inflight 卡内嵌 inflight 数组、标签规范。真实多包 E2E（topo-e2e，已归档）全链路实测并揪出修复 4 个真缺陷（组合评审缺制品清单、inflight 重建丢 scope、respond 派单丢 Expert 裁决原因、路由 blocker 被人工门淹没死循环），三份双重核验产物 `docs/M-store.md`/`M-intake.md`/`M-overview.md`；测试 76/76 绿（新增 topology 波组集成 + core 波组专项 + fixtures 包化构造器）。Phase 3 前置研究就绪（`ctx.subagents.registerContinuableSetup` 注入通道、子代上下文内派单寻址、模型席位徽标方案），尚未实施。遗留台账 6 项与规划项见 §v3.1 与 charter §8。
 
-下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v2 里程碑为准。
+下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v3 里程碑为准（见上文 v3.2 第一批记录）。
 
 ## v2 重构进度
 

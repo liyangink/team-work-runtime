@@ -214,7 +214,8 @@ plugins/opencode/ 全部（~2.6k 行）及其测试：停止投入、留档、�
 
 - **唯一 skill**：`team-work`——不再区分 lead/member 两个 skill。skill 内容：工具用法（open/run/decide/intent/archive + deliver/review）、卡片转述规范、门禁静止语义、写边界与"上下文已内嵌"纪律（E2E-08）。**阶段触发、是否组团、是否要求八视角完整审查，由 Lead 依据用户语义判断；skill 提供判断指引**（何种目标对应哪个 entry、何时 solo 何时 team、何时要求完整视角合同、何时允许轻量抽查），不由编译器强制。成员派单文本由 Lead 生成：从 policy 查角色档位，按 skill 指引组装完成条件与边界。
 - **薄 CLI（九命令）**：`tw open / run / decide / intent / route / archive / deliver / review / gate`（open 用 `--name` 寻址，其余动词带 `--task`），Lead 与成员经 bash 调用；CLI 是工具契约的参考实现。
-- **派发与拓扑**：团队拓扑由 DSH 编排工具（workflow：`agent/pipeline/parallel`）在平台层执行——`tw dispatch-plan` 导出波次事实，编排脚本按 tier→模型映射（`.team-work/platform/dsh.json`）以 `agent(prompt, {provider, model})` 派发成员，推进到人工门即终止返回卡片；成本控制的本质是该映射：简单任务廉价模型、复杂任务高预算，`costWeights` 为映射权重标注（详见 Roadmap v3.1）。runtime 不实现派发循环与 DAG 调度。
+- **派发与拓扑**：团队拓扑由 DSH 编排工具（workflow：`agent/pipeline/parallel`）在平台层执行——`tw dispatch-plan` **按波组导出**波次事实（`multi-wave` 多包波带 owners、`continuation` 增量续派、challenger findings 包归属选择性重派、`expectedAgentId` 续派映射、`weight` 成本权重），编排脚本按 tier→模型映射（`.team-work/platform/dsh.json`，档位值支持候选数组）以 `agent(prompt, {provider, model})` 派发成员，推进到人工门即终止返回卡片；成本控制的本质是该映射：简单任务廉价模型、复杂任务高预算，`costWeights` 为映射权重标注（详见 Roadmap v3.1）。runtime 不实现派发循环与 DAG 调度。
+- **v3.2 拓扑进度**：`tw plan` 包定义登记与机械验收、波次机波组化与选择性重派、邻派映射（`tw agent-map`）已随 v3.2 第一批实施，详 E2E 实测见 Roadmap 进度条目；未完成项（八视角独立审、e2eTemplate 复活、Phase 2 成本投影、Phase 3 插件包）仍属规划，不得描述为可用。
 - **人工门禁**：任务静止由 DSH 语义天然保证（无宿主自动续跑）；决定凭证绑定制品指纹。
 
 ## 9. 完成标准（Definition of Done）

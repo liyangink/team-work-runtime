@@ -38,7 +38,7 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 7. `gate` 保持只读；门禁失败必须返回 blocker、证据和修复建议。
 8. Agent 声称完成、平台状态完成或消息送达都不代表验收通过；Lead 只能核对流程、制品、证据和复核链是否完整。非作者 Challenger 每轮强制在场（无 accept 不过门）；核心场景还必须由非作者 Expert 给出技术裁决（裁决新鲜度：制品变化后旧裁决失效）。Owner 必须独立核验，可用证据接受或提出异议；Lead 不强行裁定技术分歧，三轮仍未收敛时交用户决定。
 9. 模型只供语义（P4）：工具参数只收模型才知道的东西（做了什么、产出在哪、发现什么）；凡 Runtime 能从自己拥有的事实推导的簿记（ID、ref、链接）一律不向模型索要。CLI 的 --help 与拒绝输出即完整 meta（CLI 即接口），不存在第二层 schema。
-10. 执行拓扑 = 波次序列 + 平台编排：Owner → Challenger →（core 场景加 Expert）→ 门；多 Owner 并行由平台编排层（`parallel`）执行，可写范围互斥是并行前提；Lead 不得亲自承担成员工作。
+10. 执行拓扑 = 波次序列与波组 + 平台编排：Owner → Challenger →（core 场景加 Expert）→ 门；多 Owner 并行由平台编排层（`parallel`）执行，可写范围互斥是并行前提；Lead 不得亲自承担成员工作。
 11. 每个相对完整工作单元都必须由非作者 Senior 或 Expert 挑战；核心环节还必须由非作者 Expert 作技术内容裁决。挑战者从成本、合理性、事实、推理、需求、边界和失败路径主动找漏洞，并给出证据与最小修正。
 12. 每项工作必须有唯一 Owner、范围、完成条件和产物路径。自主讨论与审查最多三轮，之后出用户卡片（追加一轮需显式授权）；用户可批准有目标、有预算的有限追加轮次。
 13. 成员通过结构化报告（deliver/review 的 payload）交付；Runtime 记录波次事实并由编排续派，不依赖 N-to-N 实时通信，也不得由 Lead 重写技术结论。团队评分机制已随 v2 删除（如需选模数据由平台侧自行积累，不进任务循环）。
@@ -62,5 +62,6 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 
 - **Runtime v3（工具中心重写）已完成核心实现与真实任务验证**，验收规约为 `docs/runtime-v3-charter.md`（P1–P6 原则、I1–I10 不变量、台账 20 课处置）。核心：`runtime-v3/`（waves/gate/derive/store/intake/cli，约 1k 行）+ `bin/tw.mjs`，38 项测试；真实 E2E（code-review 介入、人工门 rework 返工轮）五次成员交互零参数拒绝。
 - v2 及更早实现（含 OpenCode PlatformPlugin、installer、v2 状态机与全部 v2 测试/文档）已于 2026-08-21 经用户批准删除，仅存于 Git 历史；不得重新引入 v2 状态机、MemberReport 回显契约或 state.json 权威模型。
-- **DSH 绑定（Roadmap v3.1，规划中）**：Phase 1 = `tw dispatch-plan` 波次事实导出 + tier→模型映射（`.team-work/platform/dsh.json`）+ 编排脚本模板（平台编排工具执行拓扑）+ `tw init` skill 装载；Phase 2 = 成本投影与限额；Phase 3 = Cordis 插件包（`dsh plugin add`）。已知边界：成员写边界当前 = 派单纪律 + deliver 校验 + 快照恢复三层，平台级写入拦截待插件 hook 调查；成员理论上可越级调用昂贵模型（嵌套派发实测可用），治理靠派单纪律。
+- **v3.2 第一批（团队拓扑找回）已完成**：波次机波组化（多包波带 owners、DAG 分层派发与依赖解锁、按包计轮、challenger findings 带包归属选择性重派、聚合裁决新鲜度、reviewedPackages 覆盖快照）、`tw plan` 包定义登记与机械验收、continuation 增量续派、`tw agent-map` 派单映射、选人候选池（dsh.json 档位候选数组 + 族去重 + effort 预留）、risk 升档、wait-inflight 卡内嵌 inflight 数组、标签规范；真实多包 E2E（topo-e2e 已归档）揪出修复 4 个真缺陷，测试 76/76 绿。未完成项（八视角独立审、e2eTemplate 复活、Phase 2 成本投影、Phase 3 插件包）仍属规划，Phase 3 前置研究已就绪但尚未实施。
+- **DSH 绑定（Roadmap v3.1）**：Phase 1 与 v3.2 第一批已实施——`tw dispatch-plan` 按波组导出波次事实（multi-wave/continuation/expectedAgentId/weight）+ tier→模型映射（`.team-work/platform/dsh.json`，候选数组）+ 编排脚本模板（平台编排工具执行拓扑）+ `tw init` skill 装载；Phase 2（成本投影与限额）与 Phase 3（Cordis 插件包，`dsh plugin add`）规划中。已知边界：成员写边界当前 = 派单纪律 + deliver 校验 + 快照恢复三层，平台级写入拦截待插件 hook 调查；成员理论上可越级调用昂贵模型（嵌套派发实测可用），治理靠派单纪律。
 - OpenSpec Provider 代码保留但 v3 接入未实现（见规则 19 注）；OpenCode 支持待核心稳定后按 charter §4 seam 另起薄适配器。

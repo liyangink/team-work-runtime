@@ -45,9 +45,9 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
     })
   }
 
-  // 3. 非作者评审在场：最近一轮 challenger review 为 accept（rework/escalate 不会走到门，此处防御）
-  const round = ownerReports.length
-  const challenger = reports.filter((r) => r.role === "challenger" && r.round === round).at(-1)
+  // 3. 非作者评审在场：最新 challenger review 为 accept（能走到门=波次机已判收敛，多包下
+  // 轮次按包计，不再用 ownerReports 数当全局轮；rework/escalate 不会走到门，此处防御）
+  const challenger = reports.filter((r) => r.role === "challenger").at(-1)
   if (!challenger || challenger.payload?.recommendation !== "accept") {
     blockers.push({
       requirement: "非作者评审未接受当前交付",

@@ -8,6 +8,7 @@ import { atomicJson, atomicWrite, withOwnerLock } from "../runtime/persistence/t
 import { readStableArtifact } from "../runtime/persistence/file-artifact-repository.mjs"
 import { artifactsFingerprint } from "./gate.mjs"
 import { readJson } from "./store.mjs"
+import { readdir } from "node:fs/promises"
 
 function reject(reasons) {
   const error = new Error(Array.isArray(reasons) ? reasons.join("\n") : reasons)
@@ -37,7 +38,11 @@ async function freshState(task) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error
   }
-  return { journal, artifacts }
+  const reports = []
+  for (const entry of await readdir(path.join(task.root, "reports")).catch(() => [])) {
+    if (entry.endsWith(".json")) reports.push(await readJson(path.join(task.root, "reports", entry)))
+  }
+  return { journal, artifacts, reports }
 }
 
 function parseJournal(raw) {
@@ -126,7 +131,7 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   const stage = currentStageOf(fresh.journal, task.scope)
   const registered = stables.map(({ rel, digest }) => ({ path: rel, digest, kind: kindByPath.get(rel) ?? "misc", stage }))
   const reportId = `deliver-${dispatchKey}`
-  const report = { reportId, dispatchKey, role: "owner", kind: "deliver", round: dispatch.detail.round, stage, payload: { outcome, summary, paths: normalized, checks, unresolved }, at }
+  const report = { reportId, dispatchKey, role: "owner", kind: "deliver", round: dispatch.detail.round, stage, package: dispatch.detail.package ?? null, payload: { outcome, summary, paths: normalized, checks, unresolved }, at }
   for (const { rel, digest, content } of stables) {
     await atomicJson(path.join(task.root, "snapshots", `${digest}.json`), { digest, path: rel, content, at })
   }
@@ -191,8 +196,18 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
   const stage = currentStageOf(fresh.journal, task.scope)
   // 被审指纹与 gate.mjs 的 artifactsFingerprint 同公式，门禁可校验裁决绑定的是当前制品
   const taskSha = artifactsFingerprint(fresh.artifacts.items.filter((item) => item.stage === stage))
+  // 被审包快照（v3.2）：评审时该阶段各包的最新轮次——runtime 自有事实推导（P4），
+  // 波次机据此精确判定"评审是否覆盖某包的最新交付"（同包更高轮次 = 未覆盖），不依赖时间戳近似
+  const latestRoundByPkg = new Map()
+  for (const r of fresh.reports) {
+    if (r.kind !== "deliver" || r.stage !== stage) continue
+    const key = r.package ?? null
+    const round = r.round ?? 1
+    if (!latestRoundByPkg.has(key) || round > latestRoundByPkg.get(key)) latestRoundByPkg.set(key, round)
+  }
+  const reviewedPackages = [...latestRoundByPkg.entries()].map(([p, round]) => ({ package: p, round }))
   const reportId = `review-${dispatchKey}`
-  const report = { reportId, dispatchKey, role: dispatch.detail.role, kind: "review", round: dispatch.detail.round, stage, taskSha, payload: { summary, recommendation, findings, ...(verdict ? { verdict } : {}) }, at }
+  const report = { reportId, dispatchKey, role: dispatch.detail.role, kind: "review", round: dispatch.detail.round, stage, taskSha, reviewedPackages, payload: { summary, recommendation, findings, ...(verdict ? { verdict } : {}) }, at }
   await atomicJson(path.join(task.root, "reports", `${reportId}.json`), report)
   const journal = await readFile(path.join(task.root, "journal.jsonl"), "utf8")
   const seq = journal.trim().split("\n").length + 1

@@ -11,7 +11,7 @@ export const FIX_WORKFLOW = {
   gates: [],
   stages: [{ id: "code-review", label: "代码审查", outputs: ["code-review"], teamScene: "code-review", route: "e2e" }],
 }
-export const FIX_POLICY = { maxAutonomousRounds: 3, scenes: { "code-review": { core: true } } }
+export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { "code-review": { core: true } } }
 
 export async function makeProject({ workflow = FIX_WORKFLOW, policy = FIX_POLICY } = {}) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-fx-"))
@@ -72,9 +72,22 @@ export async function seedConvergedStage(projectRoot, name) {
 // 纯函数层报告构造器（gate/derive 测试共用）；时间戳随轮次单调（裁决新鲜度依赖 at）
 const t = (n) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`
 export const ownerDeliver = (round, extra = {}) => ({ reportId: `o${round}`, role: "owner", kind: "deliver", round, stage: "code-review", payload: { outcome: "delivered", summary: "s", paths: ["CODE_REVIEW.md"], checks: [], ...extra }, at: t((round - 1) * 10 + 1) })
-export const challengerReview = (round, recommendation) => ({ reportId: `c${round}`, role: "challenger", kind: "review", round, stage: "code-review", payload: { summary: "s", findings: [], recommendation }, at: t((round - 1) * 10 + 2) })
+export const challengerReview = (round, recommendation) => ({ reportId: `c${round}`, role: "challenger", kind: "review", round, stage: "code-review", reviewedPackages: [{ package: null, round }], payload: { summary: "s", findings: [], recommendation }, at: t((round - 1) * 10 + 2) })
 export const expertVerdict = (outcome) => ({ reportId: "e1", role: "expert", kind: "review", round: 1, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome, rationale: "r", confidence: "high", risks: [], recommendedAction: "a" } }, at: t(3) })
 export const registeredArtifacts = { items: [{ path: "CODE_REVIEW.md", digest: "d1", kind: "code-review", stage: "code-review", reportRef: "o1", snapshotRef: "snap1" }] }
 export const throughStageScope = { entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd" }
 export const e2eSkipped = [{ route: "e2e", choice: "skip", basis: "测试夹具：跳过" }]
 export const acceptedChain = () => [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("accept")]
+// v3.2 波组夹具：包化 deliver/review（package 由 runtime 从派发事件写入报告）
+// reviewed 快照便捷构造：包名数组 + 各包评审时轮次（默认 1）
+export const snap = (pkgs, round = 1) => pkgs.map((p) => ({ package: p ?? null, round }))
+export const pkgDeliver = (pkg, round, extra = {}) => ({ reportId: `o-${pkg ?? "solo"}-${round}`, role: "owner", kind: "deliver", round, stage: "code-review", package: pkg ?? null, payload: { outcome: "delivered", summary: "s", paths: [], checks: [], ...extra }, at: t((round - 1) * 10 + 1) })
+export const pkgReview = (round, recommendation, packages_ = undefined, reviewed = undefined, extraPayload = {}) => ({ reportId: `c-${round}`, role: "challenger", kind: "review", round, stage: "code-review", ...(reviewed ? { reviewedPackages: reviewed } : {}), payload: { summary: "s", recommendation, ...(packages_ ? { findings: packages_.map((p) => ({ severity: "risk", statement: "s", ...(p != null ? { package: p } : {}) })) } : {}), ...extraPayload }, at: t((round - 1) * 10 + 5) })
+export const pkgVerdict = (outcome, round = 1) => ({ reportId: `e-${round}`, role: "expert", kind: "review", round, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome, rationale: "r", confidence: "high", risks: [], recommendedAction: "a" } }, at: t((round - 1) * 10 + 7) })
+export const PACKAGES = [
+  { id: "store", writable: ["runtime-v3/store.mjs"], done: ["覆盖 store"], dependsOn: [] },
+  { id: "intake", writable: ["runtime-v3/intake.mjs"], done: ["覆盖 intake"], dependsOn: [] },
+  { id: "cli", writable: ["runtime-v3/cli.mjs"], done: ["覆盖 cli"], dependsOn: [] },
+  { id: "overview", writable: ["docs/overview.md"], done: ["汇总各包结论、解决冲突、不丢信息"], dependsOn: ["store", "intake", "cli"] },
+]
+

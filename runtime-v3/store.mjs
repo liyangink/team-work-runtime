@@ -85,12 +85,13 @@ export async function loadTask(projectRoot, name, { workflow, policy }) {
     error.code = "TASK_NOT_FOUND"
     throw error
   }
-  const [scope, intent, artifacts, decisions, journalRaw] = await Promise.all([
+  const [scope, intent, artifacts, decisions, journalRaw, packages] = await Promise.all([
     readJson(path.join(root, "scope.json")),
     readJson(path.join(root, "intent.json")),
     readJson(path.join(root, "artifacts.json"), { allowMissing: true }),
     readJson(path.join(root, "decisions.json"), { allowMissing: true }),
     readFile(path.join(root, "journal.jsonl"), "utf8").catch(() => ""),
+    readJson(path.join(root, "packages.json"), { allowMissing: true }),
   ])
   const journal = journalRaw.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line))
   const reports = []
@@ -105,7 +106,7 @@ export async function loadTask(projectRoot, name, { workflow, policy }) {
     items = await rebuildArtifacts(root, reports)
     await atomicJson(path.join(root, "artifacts.json"), { items })
   }
-  return { root, name, scope, intent, artifacts: { items }, reports, decisions: decisions?.items ?? [], journal, workflow, policy }
+  return { root, name, scope, intent, artifacts: { items }, reports, decisions: decisions?.items ?? [], journal, packages: packages?.items ?? null, workflow, policy }
 }
 
 async function rebuildArtifacts(root, reports) {

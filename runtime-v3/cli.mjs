@@ -95,24 +95,25 @@ async function appendEvents(task, events) {
   return withOwnerLock(path.join(task.root, "locks", "task.lock"), () => appendEventsUnlocked(task, events))
 }
 
-function reworkContext(task, stageId) {
-  // E2E-07 v3 编码：回应波次必须携带触发返工的意见（目录推导，成员不填报告 ID）
+// 返工/回应语境（v3.2：多包时按 findings.package 过滤，无归属意见对全体可见）
+function reworkContext(task, stageId, pkg = null) {
   const stageReports = task.reports.filter((r) => r.stage === stageId)
   const latest = (role) => stageReports.filter((r) => r.role === role).at(-1)
-  const challenger = latest("challenger")
-  const expert = latest("expert")
-  const humanRework = task.decisions.filter((d) => d.choice === "rework").at(-1)
+  const challenger = latest('challenger')
+  const expert = latest('expert')
+  const humanRework = task.decisions.filter((d) => d.choice === 'rework').at(-1)
+  const forPkg = (findings) => (findings ?? []).filter((f) => pkg == null || f.package == null || f.package === pkg)
   const sections = []
-  if (challenger?.payload?.recommendation === "rework" || challenger?.payload?.findings?.length) {
-    const findings = (challenger.payload.findings ?? []).map((f) => `- [${f.severity}] ${f.statement}`).join("\n")
-    sections.push(`### Challenger 意见（${challenger.payload.recommendation}）\n${challenger.payload.summary}${findings ? "\n" + findings : ""}`)
+  if (challenger?.payload?.recommendation === 'rework' || challenger?.payload?.findings?.length) {
+    const findings = forPkg(challenger.payload.findings).map((f) => '- [' + f.severity + ']' + (f.package ? '（包 ' + f.package + '）' : '') + ' ' + f.statement).join('\n')
+    sections.push('### Challenger 意见（' + challenger.payload.recommendation + '）\n' + challenger.payload.summary + (findings ? '\n' + findings : ''))
   }
-  if (expert?.payload?.verdict) {
+  if (expert?.payload?.verdict && (pkg == null)) {
     const v = expert.payload.verdict
-    sections.push(`### Expert 裁决（${v.outcome}）\n${v.rationale}\n建议：${v.recommendedAction}`)
+    sections.push('### Expert 裁决（' + v.outcome + '）\n' + v.rationale + '\n建议：' + v.recommendedAction)
   }
-  if (humanRework) sections.push(`### 用户决定：返工\n${humanRework.note ?? "用户在人工门要求返工；结合上述意见修订交付。"}`)
-  return sections.length ? `## 本轮返工/回应原因\n\n${sections.join("\n\n")}` : ""
+  if (humanRework && (pkg == null || task.packages == null)) sections.push('### 用户决定：返工\n' + (humanRework.note ?? '用户在人工门要求返工；结合上述意见修订交付。'))
+  return sections.length ? '## 本轮返工/回应原因\n\n' + sections.join('\n\n') : ''
 }
 
 // 派单 PATH 注入（Phase 1 过渡）：成员环境未必有 tw 于 PATH——解析本包 bin 绝对路径写入交付指令；
@@ -128,36 +129,63 @@ function twCommand() {
   }
 }
 
+function parseWritableEntry(entry) {
+  const sep = entry.lastIndexOf(':')
+  return { path: entry.slice(0, sep), artifactKind: entry.slice(sep + 1) }
+}
+
+// 在途派单重建（F4）：journal 尾部连续 dispatched 批次中尚无 report 的派发，重建完整派单文本
+function inflightDispatches(task, stageId) {
+  const stageDef = task.workflow.stages.find((st) => st.id === stageId)
+  const settled = new Set(task.reports.map((r) => r.dispatchKey))
+  const batch = []
+  const lastIdx = task.journal.map((e) => e.type).lastIndexOf('dispatched')
+  for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
+  return batch
+    .filter((d) => !settled.has(d.key))
+    .map((d) => dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch)
+}
+
+// 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
 function dispatchCard(task, stageDef, wave, detail) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
-  const boundaries = detail.writable.map(({ path: p, artifactKind }) => `${p}（产出物 ${artifactKind}）`)
+  const pkg = detail.package ?? null
+  const boundaries = detail.writable.map(({ path: p, artifactKind }) => p + (pkg ? '（包 ' + pkg + '，产出物 ' + artifactKind + '）' : '（产出物 ' + artifactKind + '）'))
+  const deliverCmd = twCommand() + ' deliver --task ' + task.name + ' --key ' + detail.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
+  const verdictArg = ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>'
+  const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
+  const intro = detail.continuation ? '# 续派（key: ' + detail.key + '）——你在原上下文基础上继续' : '# 派单（key: ' + detail.key + '）'
+  const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '')
+  const parts = [
+    intro,
+    headLine,
+    detail.continuation ? '' : '目标：' + task.intent.objective,
+    detail.continuation ? '' : (task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : ''),
+    detail.continuation ? '' : (task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : ''),
+    wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
+    wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。' : '',
+    wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
+    wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
+    wave.kind === 'respond' ? reworkContext(task, stageDef.id, pkg) : '',
+    '上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。',
+  ]
   return {
     ok: true,
     task: task.name,
     stage: stageDef.id,
-    status: "working",
-    next: "dispatch",
-    transition: "dispatch",
+    status: 'working',
+    next: 'dispatch',
+    transition: 'dispatch',
     dispatch: {
       key: detail.key,
       role: wave.role,
-      tier: wave.role === "owner" ? sp.ownerTier : wave.role === "challenger" ? sp.challengerTier : "expert",
-      round: wave.round,
+      tier: wave.role === 'owner' ? sp.ownerTier : wave.role === 'challenger' ? sp.challengerTier : 'expert',
+      round: detail.round ?? wave.round,
       kind: wave.kind,
-      prompt: [
-        `# 派单（key: ${detail.key}）`,
-        `任务：${task.name}；阶段：${stageDef.id}（${stageDef.label}）；角色：${wave.role}；轮次：${wave.round}`,
-        `目标：${task.intent.objective}`,
-        task.intent.constraints.length ? `约束：\n${task.intent.constraints.map((c) => "- " + c).join("\n")}` : "",
-        task.intent.exclusions.length ? `排除：\n${task.intent.exclusions.map((c) => "- " + c).join("\n")}` : "",
-        wave.role === "owner" ? `可写路径（仅限）：\n${boundaries.map((b) => "- " + b).join("\n")}` : "只读派单：不得修改任何文件",
-        wave.kind === "produce" || wave.kind === "respond"
-          ? `完成后调用：${twCommand()} deliver --task ${task.name} --key ${detail.key} --outcome delivered --summary <一句话> --paths <可写路径>`
-          : `完成后调用：${twCommand()} review --task ${task.name} --key ${detail.key} --recommendation <accept|rework|escalate> --summary <一句话>${wave.kind === "verdict" ? ' --verdict \'{"outcome":"accept|rework|choose-option|need-more-evidence|escalate-to-user","rationale":"…","confidence":"low|medium|high","recommendedAction":"…"}\'' : ""}`,
-        wave.kind === "verdict" ? "Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。" : "",
-        wave.kind === "respond" ? reworkContext(task, stageDef.id) : "",
-        "上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。",
-      ].filter(Boolean).join("\n\n"),
+      ...(pkg != null ? { package: pkg } : {}),
+      continuation: Boolean(detail.continuation),
+      ...(wave.scope ? { scope: wave.scope } : {}),
+      prompt: parts.filter(Boolean).join('\n\n'),
     },
   }
 }
@@ -205,31 +233,40 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
 
 async function runTransition({ projectRoot, name, writable, workflow, policy, task, state }) {
 
-  if (state.next.kind === "dispatch") {
+  if (state.next.kind === 'dispatch') {
     if (!state.next.wave) {
       // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：返回 blocker 卡（I5）
-      const blockers = (state.gate?.blockers ?? state.next.hint ?? []).map((b) => (typeof b === "string" ? { message: b, recovery: b } : b))
-      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers, transition: "blocked" }
+      const blockers = (state.gate?.blockers ?? state.next.hint ?? []).map((b2) => (typeof b2 === 'string' ? { message: b2, recovery: b2 } : b2))
+      return { ok: true, task: name, stage: state.stage, status: 'blocked', next: 'none', blockers, transition: 'blocked' }
     }
     const wave = state.next.wave
-    const stageDef = workflow.stages.find((s) => s.id === state.stage)
-    const key = `w${task.journal.length + 1}-${randomBytes(3).toString("hex")}`
-    let decl
-    if (wave.role === "owner") {
-      if (!writable.length) {
-        const outputs = (stageDef.outputs ?? []).map((k) => `  --writable <路径>:${k}`).join("\n")
-        throw fail("DISPATCH_INPUT_REQUIRED", `Owner 波次需要声明可写路径与产出物类型。阶段 ${stageDef.id} 的产出物合同：\n${outputs || "  （无声明产出物，纯调查/回应类派单可直接 --writable none）"}`)
+    const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const pkgItems = Array.isArray(task.packages) && task.packages.length ? task.packages : null
+    if (wave.role === 'owner') {
+      let decls
+      if (pkgItems) {
+        // 多包：可写范围来自包定义（--writable 不适用）；每包独立 key/轮次/continuation
+        decls = wave.owners.map((o) => {
+          const pkg = pkgItems.find((p) => p.id === o.package)
+          return { key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: o.package, round: o.round, continuation: o.continuation, writable: (pkg?.writable ?? []).map(parseWritableEntry) }
+        })
+      } else {
+        if (!writable.length) {
+          const outputs = (stageDef.outputs ?? []).map((k) => '  --writable <路径>:' + k).join('\n')
+          throw fail('DISPATCH_INPUT_REQUIRED', 'Owner 波次需要声明可写路径与产物类型。阶段 ' + stageDef.id + ' 的产出物合同：\n' + (outputs || '  （无声明产出物，纯调查/回应类派单可直接 --writable none）'))
+        }
+        const o = wave.owners?.[0]
+        decls = [{ key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: writable.map(parseWritableEntry) }]
       }
-      decl = writable.map((entry) => {
-        const sep = entry.lastIndexOf(":")
-        return { path: entry.slice(0, sep), artifactKind: entry.slice(sep + 1) }
-      })
-    } else {
-      decl = []
+      await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
+      const cards = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
+      return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
-    await appendEventsUnlocked(task, [{ type: "dispatched", detail: { key, kind: wave.kind, role: wave.role, round: wave.round, writable: decl } }])
-    return dispatchCard({ ...task, policy }, stageDef, wave, { key, writable: decl })
+    const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
+    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: { key, kind: wave.kind, role: wave.role, round: wave.round, package: null, continuation: wave.continuation ?? false, writable: [] } }])
+    return dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
   }
+
   if (state.next.kind === "advance") {
     const edges = (workflow.edges ?? []).filter((e) => e.from === state.stage)
     const edge = edges.find((e) => e.outcome === "pass") ?? edges[0]
@@ -241,9 +278,18 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     await appendEventsUnlocked(task, [{ type: "task-completed", detail: { stage: state.stage } }])
     return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
-  if (state.next.kind === "wait-inflight") {
-    return { ok: true, task: name, stage: state.stage, status: "working", next: "wait", transition: "wait-inflight", dispatchKey: state.next.dispatchKey, wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round }, note: `波次 ${state.wave.kind}（${state.wave.role} 轮次 ${state.wave.round}）已派发，key ${state.next.dispatchKey}；等待成员交付后再 run。` }
+  if (state.next.kind === 'wait-inflight') {
+    // F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派
+    const inflight = inflightDispatches(task, state.stage)
+    return {
+      ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
+      dispatchKey: state.next.dispatchKey,
+      wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round },
+      inflight,
+      note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组可原样转发补派）：' + inflight.map((d) => d.key).join('、'),
+    }
   }
+
   if (state.next.kind === "await-decision") {
     const open = task.journal.filter((e) => e.type === "decision-issued").map((e) => e.detail.decisionId)
     const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
@@ -398,6 +444,80 @@ async function cmdArchive({ projectRoot, name }) {
   return { ok: true, task: name, archivedTo: path.relative(projectRoot, dest), form, kept: ["manifest.json", "artifacts/", "reviews(在 manifest)", "decisions.json", "journal-summary.jsonl"], cleaned: ["reports/", "snapshots/", "gates/", "runtime 状态"] }
 }
 
+// plan（v3.2）：Lead 拆包登记 + 机械验收（P2 调用内一次查完）。
+// 仅验机械属性（id 唯一/可写互斥/依赖无环/完成标准在场/路径合法）；拆分语义质量归 Lead（skill 指引）。
+async function cmdPlan({ projectRoot, name, packagesJson }) {
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  let items
+  try {
+    items = JSON.parse(packagesJson)
+  } catch {
+    throw fail('USAGE', '--packages 不是合法 JSON 数组')
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    throw fail('USAGE', '--packages 必须是非空 JSON 数组：[{id, writable:["路径:kind"], done:["完成标准"], dependsOn:["包id"]}]')
+  }
+  const reasons = []
+  const ids = new Set()
+  const paths = []
+  for (const p of items) {
+    if (!p || typeof p.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(p.id)) { reasons.push('包 id 不合法：' + JSON.stringify(p?.id) + '（小写字母/数字/连字符）'); continue }
+    if (ids.has(p.id)) reasons.push('包 id 重复：' + p.id)
+    ids.add(p.id)
+    if (!Array.isArray(p.writable) || p.writable.length === 0) reasons.push('包 ' + p.id + ' 缺 writable（["路径:产出物kind"]）')
+    for (const w of p.writable ?? []) {
+      const rel = String(w).split(':').slice(0, -1).join(':') || String(w)
+      if (rel.startsWith('/') || rel.split('/').includes('..')) reasons.push('包 ' + p.id + ' 可写路径不合法：' + w + '（须为项目内相对路径）')
+      paths.push({ path: rel, pkg: p.id })
+    }
+    if (!Array.isArray(p.done) || p.done.length === 0 || p.done.some((d) => typeof d !== 'string' || !d.trim())) reasons.push('包 ' + p.id + ' 缺完成标准 done（非空字符串数组）')
+  }
+  for (let i = 0; i < paths.length; i += 1) {
+    for (let j = i + 1; j < paths.length; j += 1) {
+      if (paths[i].path === paths[j].path) reasons.push('可写范围重叠：' + paths[i].pkg + ' 与 ' + paths[j].pkg + ' 都写 ' + paths[i].path)
+    }
+  }
+  for (const p of items) {
+    for (const d of p.dependsOn ?? []) {
+      if (!ids.has(d)) reasons.push('包 ' + p?.id + ' 依赖不存在的包：' + d)
+    }
+  }
+  const graph = new Map(items.filter((p) => ids.has(p.id)).map((p) => [p.id, (p.dependsOn ?? []).filter((d) => ids.has(d))]))
+  const visiting = new Set(), visited = new Set()
+  const dfs = (id) => {
+    if (visited.has(id)) return
+    if (visiting.has(id)) { reasons.push('依赖成环：涉及包 ' + id); return }
+    visiting.add(id)
+    for (const d of graph.get(id) ?? []) dfs(d)
+    visiting.delete(id); visited.add(id)
+  }
+  for (const id of graph.keys()) dfs(id)
+  if (reasons.length) {
+    const error = new Error('包定义未通过机械验收：' + String.fromCharCode(10) + '- ' + [...new Set(reasons)].join(String.fromCharCode(10) + '- '))
+    error.code = 'PLAN_REJECTED'
+    error.card = { ok: false, code: 'PLAN_REJECTED', message: error.message, fix: '修正 --packages 后重试；验收只保机械属性（互斥/无环/标准在场），拆分语义质量由 Lead 把关' }
+    throw error
+  }
+  const task0 = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
+    const task = await loadTask(projectRoot, name, { workflow, policy })
+    // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）
+    const state = deriveTask(task)
+    if (state.status === 'awaiting-user') throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
+    const batch = []
+    const lastIdx = task.journal.map((e) => e.type).lastIndexOf('dispatched')
+    for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
+    const settledKeys = new Set(task.reports.map((r) => r.dispatchKey))
+    const inflight = batch.filter((d) => !settledKeys.has(d.key))
+    if (inflight.length) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
+    const had = task.packages != null
+    await atomicJson(path.join(task.root, 'packages.json'), { items })
+    await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: items.map((p) => p.id) } }])
+    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'run', note: had ? '包定义已更新（下一波生效）' : '包定义已登记；下一次 run 将按波组派发' }
+  })
+}
+
+
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
 // 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
 async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
@@ -423,42 +543,48 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       const task = await loadTask(projectRoot, name, { workflow, policy })
       const state = deriveTask(task)
       const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
-      if (card.transition === "dispatch") {
-        const d = card.dispatch
-        const deliver = d.kind === "produce" || d.kind === "respond" ? "deliver" : "review"
-        const hint = resolved.tiers[d.tier]
-        if (!hint) warnings.push(`未知档位 ${d.tier}，标记未解析`)
-        const modelHint = hint ?? { ...UNRESOLVED }
-        const wave = {
-          dispatchKey: d.key, kind: d.kind, role: d.role, tier: d.tier, round: d.round,
-          prompt: d.prompt,
-          deliver,
-          modelHint: { provider: modelHint.provider, model: modelHint.model, source: modelHint.source },
-          dispatchExample: deliver === "deliver"
-            ? `${twCommand()} deliver --task ${name} --key ${d.key} --outcome delivered --summary <一句话> --paths <可写路径>`
-            : `${twCommand()} review --task ${name} --key ${d.key} --recommendation <accept|rework|escalate> --summary <一句话>${d.kind === "verdict" ? " --verdict '{\"outcome\":\"accept\",\"rationale\":\"…\",\"confidence\":\"high\",\"recommendedAction\":\"…\"}'" : ""}`,
-        }
+      if (card.transition === 'dispatch') {
+        const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
+        const waves = list.map((d) => {
+          const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
+          const hint = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
+          if (!resolved.tiers[d.tier]) warnings.push('未知档位 ' + d.tier + '，标记未解析')
+          const pkgDef = (task.packages ?? []).find((p) => p.id === d.package)
+          const example = deliver === 'deliver'
+            ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
+            : twCommand() + ' review --task ' + name + ' --key ' + d.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (d.kind === 'verdict' ? ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>' : '')
+          return {
+            dispatchKey: d.key, kind: d.kind, role: d.role, tier: d.tier, round: d.round,
+            ...(d.package != null ? { package: d.package } : {}),
+            continuation: Boolean(d.continuation),
+            ...(d.scope ? { scope: d.scope } : {}),
+            ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
+            prompt: d.prompt,
+            deliver,
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source },
+            weight: policy.costWeights?.[d.tier] ?? null,
+            dispatchExample: example,
+          }
+        })
         const plan = {
           ok: true, task: name, stage: card.stage, stop: null,
-          waves: [wave],
+          waves,
           card: { status: card.status, next: card.next },
           mapping: path.relative(projectRoot, dshMapPath(projectRoot)),
           ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}),
         }
         if (!json) {
-          plan.human = [
-            `任务 ${name} · 阶段 ${card.stage} · ${wave.role}(${wave.tier}) ${wave.kind} 第 ${wave.round} 轮`,
-            `模型：${modelHint.provider}/${modelHint.model}（来源 ${modelHint.source}）`,
-            "派单全文：",
-            wave.prompt,
-            `交付示例：${wave.dispatchExample}`,
-          ]
+          plan.human = ['任务 ' + name + ' · 阶段 ' + card.stage + ' · ' + waves.length + ' 个派单']
+          for (const w of waves) {
+            plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + (w.modelHint.model ?? '(未解析)') + '（' + w.modelHint.source + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
+          }
         }
         return plan
       }
+
       if (card.transition === "advance") continue // stage-advanced 已写；锁内重推导下一阶段
       if (card.transition === "complete") return planStop("completed", card)
-      if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey })
+      if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey, inflight: card.inflight ?? [] })
       if (card.transition === "await-decision") return planStop("awaiting-user", card)
       return planStop("blocked", card)
     }
@@ -519,7 +645,8 @@ function helpCard() {
   return {
     ok: true,
     commands: {
-      open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
+      plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
+            open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
       run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
       decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片",
@@ -556,6 +683,7 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
       case "restore": return await cmdRestore({ ...common, name: args.task, target: args.path })
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
+      case "plan": return await cmdPlan({ ...common, name: args.task, packagesJson: args.packages })
       case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
       case "models": return await cmdModels(common)
       case "init": return await cmdInit({ ...common, force: argv.includes("--force") })

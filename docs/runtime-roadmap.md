@@ -58,13 +58,13 @@
 - 编排脚本在下一波预估将越过 `automaticLimits` 时先出用户卡片（软预算门），不静默升级；
 - `concurrencySoftLimit` 作为编排脚本 `parallel` 的并发上限参数。
 
-### Phase 3：DSH 插件包（team-work-runtime-dsh）
+### Phase 3：DSH 插件包（team-work-runtime-dsh）——**已实施（2026-08-24，实施规约 docs/phase3-plugin-plan.md v2）**
 
-- Cordis 插件：`ctx.skills.register` 内嵌 skill 与编排模板（免文件拷贝、随包版本化）；调查 `ctx.tools` 原生工具封装与成员写边界 hook；
-- **成员模型/effort 注入（实测可行 2026-08-24；寻址方案定稿并经源码验证）**：`ctx.subagents.registerContinuableSetup` + `installModelSelection` 向 continuable 子代注入 `{provider, model, reasoningEffort}`（官方 API，fresh+cold-resume 均覆盖）。**寻址 = 子代上下文内的派单事实**：源码证实 `createAgent` 先 `sessions.prepare(seed)`（派单 prompt 先落子代自己的 session）后 `setup(childCtx)`——contribution 执行时 `childCtx.agent.session.events` 已含派单全文，就地解析 key → 读任务目录 `agents.json`（Lead 派发前经 agent-map --model-hint 落盘）→ 按键注入。**隔离性源码证实**：每子代独立 sessionId/Agent/ctx（seed 只进自身 session；监听器挂子代 carrier），同进程多会话多任务无串台路径；重派新 key 新决策；resume 同构注入。标签卸下寻址职责回归纯人读分组建。workflow 一次性子代不可达（RO 扇出，低需求可接受）；
-- **子代理模型席位徽标（client 插件，用户调研 2026-08-24，声明经源码核实）**：模型席位对 addressed 子代理会话是**设计性隐藏**（subagentAddress 判定，非 bug），但 `sessions.models({sessionId})` RPC 已返回 `selectionFor(agent).current`（provider/model/reasoningEffort——注入写的 effort 就在此）。方案：client 插件经 `ctx.slots.inject("conversation.input.model")` 注册只读徽标（order 20，仅子代理会话渲染，与原生 ModelSelect 互补不冲突），直接展示真实执行的模型与推理档位——**与成员注入方案配套的自验证 UI**（显示 effort = 注入成功）。边界：仅在线子代理（离线需 host 端 fallback 读持久化 header，属改 DSH 源码，不做）；开发需 dev:web HMR 或 profile 挂载重建；
-- 发布 npm → `dsh plugin add team-work-runtime-dsh`；
-- `e2eTemplate` 仅在 e2e 路由 run 时物化子波次图（当前路由只是门检查）。
+- **packages/dsh-plugin 已实现**（六段增量 I1-I6，双轴方案评审 16 findings + 三轮交叉审查全处置）：host 插件（inject:["subagents","skills","tools"]——childId 寻址 agents.json modelHints 注入 installModelSelection 同步预注册+异步补读；skill 构建期内嵌注册；tw 原生工具 args 透传 + timeoutMs + output.render）+ client 徽标（React 组件、仅 addressed 子代理、sessions.models RPC）+ 构建链（build.mjs：skill 拷贝/CJS 工厂 bundle/npm pack 双向断言"不多不少"）+ bundle 装载协议（dsh.bundle.patch + 入口 patch，C1 实机发现补齐）；
+- **注入寻址（v2 评审后定稿）**：childId 主键（childCtx.agent.id 直查 modelHints——时序证伪了 seed 文本解析）+ agent-map 自动落盘（P4：零手动转录）；隔离性源码证实（每子代独立 session/agent/ctx）；
+- **验收状态（功能矩阵 F-1..F-12）**：F-1..F-4/F-6/F-8..F-11 全自动验证通过（E2E-A 真实 cordis 装载层 + E2E-B runtime 全功能矩阵 + C1 实机宿主 boot 链 dump-config + 隔离 web 实例启动零 error）；**F-5/F-7/F-12（真实 LLM 注入/effort 进 header/徽标显示）待用户实机确认**（需带凭据真实会话创建 subagent——插件安装后参照插件 README"实机验证"节）；
+- 剩余：npm 正式发布（本地 pack 已验证）；写边界平台 hook 不做（用户裁决：skill 规范承载，派单边界声明已落地）；
+- `e2eTemplate` 物化已实施（run 路由 → e2e 阶段 → 三包依赖链，E2E-B F-11 验证）。
 
 ## v1 Phase 0：规则冻结
 

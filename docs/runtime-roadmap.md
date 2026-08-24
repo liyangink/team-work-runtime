@@ -1,6 +1,16 @@
 # team-work-runtime Roadmap
 
-状态：Runtime v2 的不兼容重构设计已通过人工确认；V2-0 至 V2-7 均已完成并通过两轴终审，V2-8 正在进行真实 E2E 收尾。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 目标设计见 [`runtime-v2-architecture.md`](runtime-v2-architecture.md)，实施与验收见 [`runtime-v2-implementation-plan.md`](runtime-v2-implementation-plan.md)，真实问题跟踪见 [`v2-e2e-findings.md`](v2-e2e-findings.md)。
+状态：**v3 工具中心重写进行中**（规约：[`runtime-v3-charter.md`](runtime-v3-charter.md)）。v2 未发布即冻结：V2-8 E2E 台账（20 项）的根因分析结论是 v2 契约设计（MemberReport 回显、EvidenceVerifier 职责、state.json 权威模型）制造了三层不可见校验与平行状态宇宙；继续修补的成本高于重写。**OpenCode PlatformPlugin（plugins/opencode/，约 2.6k 行）自 2026-08-21 冻结**：停止投入、不在 v3 打包清单，OpenCode 支持待 v3 核心稳定后按规约 §4 seam 另起薄适配器。首个 v3 平台绑定为 DSH。不可变规则见 [`AGENTS.md`](../AGENTS.md)，v2 历史设计文档已随实现清理（Git 历史可查；其 §7.3/§8.6/§11 已被 v3 规约替代），真实问题台账见 [`v2-e2e-findings.md`](v2-e2e-findings.md)。
+
+## v3 里程碑（工具中心重写）
+
+- 规约冻结：P1–P6 原则、I1–I10 不变量、台账 20 课处置映射、目录约定与归档、模块判决——已完成；
+- 核心实现：waves/gate/derive/store/intake、tw CLI 九命令（open/run/decide/intent/route/archive/gate/deliver/review）、bin/tw.mjs 入口——已完成；
+- DSH 绑定：唯一 skill team-work-v3（Lead 判断指引 + 成员纪律）、派发经后台 subagent——已落地；
+- 真实 E2E（DoD #4）：已完成。audit-live 任务全链路实测：code-review 介入 → Owner 交付 → Challenger/Expert 评审 → 用户人工门 rework → Owner 原地修订 → Challenger/Expert 复审（裁决新鲜度强制重裁）→ E2E 路由 skip（带依据）→ 人工门 accept → completed → 归档（只读强制 + 终态幂等 + 归档摘要卡）。五位成员交互零参数形状拒绝（优于 DoD 允许的一次）；返工轮实测暴露并修复了人工门 rework 分支丢失、Expert 裁决无新鲜度校验、respond 派单不含返工原因三个缺陷，各有回归测试（33/33 绿，v2 套件不受影响）；
+- 预算终核（DoD #3）：实现 979 行 ≤3k；断言测试 599 行（复核修复后现状：实现 1059 行、断言 678 行、42/42 测试绿，比率 0.64 略超 0.6，为并发安全与恢复闭环的增量）；
+- 旧实现清理（2026-08-21，用户批准）：v2 Runtime 状态机、OpenCode PlatformPlugin、installer、v2 skills/schemas/测试/文档已全部删除（Git 历史可恢复）；保留件仅 persistence 原语、workflow 定义、team-work policy、OpenSpec provider、policy kernel；package.json 零运行时依赖，bin 只剩 `tw`。
+- **交叉复核与修复（2026-08-21，双 subagent 独立审计）**：修复两个实证竞态——并发 deliver 丢登记（读-算-写整体入任务锁）、并发/重复 run 双派发（derive 增加在途波次检查：派发未交付=等待态）；补 I8 恢复闭环 `tw restore`（快照恢复死代码激活）；project.json 版本标记显式化；部分失败孤儿快照消除（先读全部再写）。文档对齐：charter §5 与实现一致（gates/runtime.json 删除、decisions 单文件、journal 七事件、reviews 入 manifest）、route 补进工具面（九命令）、§6.2 文件名纠正。遗留已知项：cmdRun 职责集中（重构候选）、checks 平台对账待 DSH 绑定层、成员越级模型调用治理待插件 hook。
 
 下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v2 里程碑为准。
 
@@ -22,6 +32,36 @@
 | V2-6 OpenCode/OpenSpec Adapter | 完成 |
 | V2-7 OpenCode 控制面切换 | 完成 |
 | V2-8 安装生命周期、真实 E2E 与发布 | 实现与复验收敛：待发布决策 |
+
+## v3.1 DSH 适配：编排引擎与成本映射（规划 2026-08-21 第二稿，修正两处认知偏差）
+
+### 设计原则（修正稿）
+
+1. **团队拓扑在平台层编排，不在 runtime 重建**：DSH 的 workflow 编排工具（`agent(prompt, opts)` / `pipeline(items, ...stages)` / `parallel(thunks)` / 结构化 `schema` 结果）是拓扑执行引擎。runtime 只提供**波次事实**（`tw dispatch-plan`）与**验收**（deliver/review/gate），不实现派发循环与 DAG 调度——E2E 时"Lead 手动逐个 subagent"是权宜形态，目标形态是编排脚本一次驱动整段房间（从当前波次到下一扇门）。
+2. **成本控制的本质是 tier→模型映射**：`agent(prompt, {provider, model})` 的独立 LLM target 覆盖是平台原语。简单任务用廉价模型、复杂任务投入高预算 = 派单时按 tier 指定模型；`costWeights`（1:10:50）是映射的权重标注，服务于成本展示与限额判断——不是记账。
+3. `awaiting-user` 语义在编排下的落点：编排脚本推进到人工门即终止返回卡片；不越门、不代答。
+4. **嵌套派发（实测 2026-08-21）**：DSH subagent 拥有完整工具面（含 `subagent/subagent_fork/workflow`），成员可自行派发子代理；跨层通信受限——`send_message` 仅达 depth-1 直接子代，更深层只能 `interrupt_agent`。团队树深度纪律：Lead(0) → 成员(1) → 只读子派单(2) 为止（规则 16"不得继续委托"即深度上限）。成员层成本治理当前只能靠派单纪律（成员可越级调用昂贵模型，Phase 3 调查 hook 拦截）。
+
+### Phase 1：编排绑定（目标形态，待实测）
+
+1. **`tw dispatch-plan --task <name>`**（runtime 侧新增）：输出当前可派发波次的机器可读描述 `[{dispatchKey, role, tier, kind, round, prompt, writable[], dependsOn[]}]`——编排脚本的唯一输入；波次推进逻辑（waves.mjs 纯函数）不变，门与人工门语义不变。
+2. **tier→模型映射配置** `.team-work/platform/dsh.json`：`{tiers: {junior: {provider?, model}, senior: {...}, expert: {...}}, defaults}`；`tw init` 生成模板。角色消费档位：Owner 用场景 `ownerTier`，**Challenger 用场景 `challengerTier`（默认 senior）**，Expert 用 expert。示例：junior→廉价快速模型，senior→强推理中价模型，expert→旗舰模型。**只读子派单（原 v2 助手）= junior 档 + writable 为空 + parallel() 并行**，不设专属角色。
+3. **编排脚本模板**（skill references 提供，Lead 经 workflow 工具执行）：读映射 + dispatch-plan → 循环 {并行派发无依赖波次（`agent(prompt, modelByTier[tier])`，成员在 agent 内调 `tw deliver/review --key`）→ `tw run` 消费推进} 直到 gate/awaiting-user 返回卡片。
+4. **review 复杂拓扑模板**：八视角 Owner → 并行多 Challenger（`parallel`，按视角分组）→ Expert 裁决 → 门；重派轮在脚本内闭环（rework 波次由 dispatch-plan 顺序导出）。
+5. skill 投递：`tw init` 安装到项目 `.dsh/skills/`（DSH filesystem provider 扫描该根）。
+- **已知边界（如实记录）**：成员写边界仍是派单纪律 + deliver 校验 + 快照恢复（三层已实现）；编排层按派单沙箱待 Phase 3 调查插件 hook。
+
+### Phase 2：成本投影与限额（建立在映射之上）
+
+- `tw status --task <name>`：journal 的 dispatched 波次 × 映射权重 **纯推导**累计相对成本与"下一波预估"（P1：投影非账本，无新状态文件）；
+- 编排脚本在下一波预估将越过 `automaticLimits` 时先出用户卡片（软预算门），不静默升级；
+- `concurrencySoftLimit` 作为编排脚本 `parallel` 的并发上限参数。
+
+### Phase 3：DSH 插件包（team-work-runtime-dsh）
+
+- Cordis 插件：`ctx.skills.register` 内嵌 skill 与编排模板（免文件拷贝、随包版本化）；调查 `ctx.tools` 原生工具封装与成员写边界 hook；
+- 发布 npm → `dsh plugin add team-work-runtime-dsh`；
+- `e2eTemplate` 仅在 e2e 路由 run 时物化子波次图（当前路由只是门检查）。
 
 ## v1 Phase 0：规则冻结
 

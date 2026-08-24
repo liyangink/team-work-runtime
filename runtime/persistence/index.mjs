@@ -1,5 +1,4 @@
-export { createFileStore } from "./file-store.mjs"
 export { createFileArtifactRepository } from "./file-artifact-repository.mjs"
-export { createInMemoryStore } from "./in-memory-store.mjs"
-export { initializeProjectRuntime } from "./project-runtime.mjs"
 export { StoreError } from "./store-error.mjs"
+export { atomicWrite, atomicJson, canonicalJson, withOwnerLock, syncDirectory } from "./transactions.mjs"
+export { resolveStorePaths, resolveExistingTaskRoot, newTaskRoot, assertChildPath, resolveTaskSubdirectory, resolveSafeFile } from "./paths.mjs"

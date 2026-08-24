@@ -1,6 +1,2 @@
-export { DomainError, assertTaskState } from "./invariants.mjs"
+export { DomainError, assertIdentifier, assertDigest, assertTimestamp, assertNonEmptyString, assertUniqueStrings, assertStringList } from "./invariants.mjs"
 export { digestEffect, digestValue } from "./digests.mjs"
-export { artifactIdentity } from "./artifact-reference.mjs"
-export { projectStageScope } from "./stage-plan.mjs"
-export { createTaskAggregate } from "./task-aggregate.mjs"
-export { reduceTask } from "./reducer.mjs"

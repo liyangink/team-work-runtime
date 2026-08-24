@@ -17,70 +17,28 @@ test("repository inventory contains only the current implementation", async () =
   assert.ok(inventory.rules.some((rule) => rule.includes("Git history")))
 })
 
-test("repository contract preserves OpenCode and challenger invariants", async () => {
-  const agents = await read("AGENTS.md")
-  assert.match(agents, /任务允许从任意研发阶段创建并介入工作流/)
-  assert.match(agents, /非作者 Senior 或 Expert 挑战/)
-  assert.match(agents, /background\/non-blocking 模式派发/)
-  assert.match(agents, /不得重新引入[^。\n]*旧版资产/)
-  assert.match(agents, /subagent 默认使用 `gpt-5\.6-terra`/)
-})
-
-test("OpenCode guide preserves child sessions and emits clickable file references", async () => {
-  const guide = await read("plugins/opencode/guides/team-work.md")
-  const recovery = await read("plugins/opencode/guides/recovery.md")
-  const combined = `${guide}\n${recovery}`
-
-  assert.match(combined, /同一工作项[^。\n]*同一 child session/i)
-  assert.match(combined, /Expert[^。\n]*同一阶段[^。\n]*(?:session|会话)/i)
-  assert.match(combined, /\[.+\]\(file:\/\/\/<absolute-path>\)/)
-  assert.match(combined, /用户[^。\n]*(?:文件|制品|代码)[^。\n]*(?:Markdown|可点击)/i)
-})
-
-test("OpenCode Runtime owns background dispatch and session continuation details", async () => {
-  const plugin = await read("plugins/opencode/assets/team-work.js")
-  const guide = await read("plugins/opencode/guides/team-work.md")
-  const recovery = await read("plugins/opencode/guides/recovery.md")
-  const combined = `${plugin}\n${guide}\n${recovery}`
-
-  assert.match(plugin, /workflow_open:\s*tool\(/)
-  assert.match(combined, /Lead 不传[^。\n]*session[^。\n]*background[^。\n]*revision/)
-  assert.match(guide, /非阻塞 child session/)
-  assert.match(recovery, /参数错误[^。\n]*不代表[^。\n]*(?:会话|网关)/)
-  assert.match(recovery, /不启动[^。\n]*(?:降级|容灾|重复调度)/)
-  assert.match(recovery, /网关[^。\n]*不会[^。\n]*任务状态/)
-  assert.match(recovery, /恢复原 child session/)
-})
-
-test("OpenCode event wait is Runtime-owned and never treated as acceptance", async () => {
-  const plugin = await read("plugins/opencode/assets/team-work.js")
-  const guide = await read("plugins/opencode/guides/team-work.md")
-  const recovery = await read("plugins/opencode/guides/recovery.md")
-
-  assert.match(plugin, /workflow_run/)
-  assert.match(guide, /不需要定时轮询/)
-  assert.match(guide, /会话空闲[^。\n]*不等于[^。\n]*(?:交付|验收)/)
-  assert.match(recovery, /人工等待期间[^。\n]*不启动后台任务、定时检查或状态轮询/)
-})
-
-test("OpenCode exposes a small intent-level Lead tool surface", async () => {
-  const plugin = await read("plugins/opencode/assets/team-work.js")
-  const guide = await read("plugins/opencode/guides/team-work.md")
-  const recovery = await read("plugins/opencode/guides/recovery.md")
-  for (const name of ["open", "plan", "run", "steer"]) {
-    assert.match(plugin, new RegExp(`workflow_${name}:\\s*tool\\(`))
+test("v3 assets exist and v2 trees are removed (git history preserves them)", async () => {
+  for (const present of ["runtime-v3/cli.mjs", "bin/tw.mjs", "skills/team-work-v3/SKILL.md", "docs/runtime-v3-charter.md"]) {
+    await assert.doesNotReject(access(path.join(projectRoot, present)), present)
   }
-  assert.match(plugin, /team_work_report:\s*tool\(/)
-  assert.doesNotMatch(plugin, /team_work_(?:overview|begin|register|dispatch|assess|continue|review_gate|sync):\s*tool\(/)
-  assert.doesNotMatch(plugin, /team_work_runtime:\s*tool\(/)
-  assert.doesNotMatch(plugin, /team_work_work_(?:create|start|submit|accept|rework):\s*tool\(/)
-  assert.doesNotMatch(plugin, /team_work_(?:spawn|resume|status|wait|collect|stop):\s*tool\(/)
-  assert.doesNotMatch(plugin, /expected_revision|gate_id|work_item_id|run_in_background/)
-  assert.match(guide, /workflow_open.*workflow_plan.*workflow_run.*workflow_steer/s)
-  assert.match(recovery, /修正一次/)
+  for (const removed of ["plugins/opencode", "installer", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2"]) {
+    await assert.rejects(access(path.join(projectRoot, removed)), (error) => error.code === "ENOENT", removed)
+  }
 })
 
-test("new implementation documents have valid local links", async () => {
+test("AGENTS.md preserves core collaboration invariants", async () => {
+  const agents = await read("AGENTS.md")
+  assert.match(agents, /任意研发阶段创建并介入/)
+  assert.match(agents, /非作者 Senior 或 Expert 挑战/)
+  assert.match(agents, /只读子派单/)
+  assert.match(agents, /不得重新引入[^。\n]*旧版资产/)
+  assert.match(agents, /subagent 默认使用 \`gpt-5\.6-terra\`/)
+  assert.match(agents, /名字寻址/)
+  assert.match(agents, /状态从事实源推导/)
+  assert.match(agents, /工具调用是唯一检查点/)
+})
+
+test("charter documents have valid local links", async () => {
   const inventory = JSON.parse(await read("docs/file-inventory.json"))
   const markdownFiles = inventory.newImplementation.filter((file) => file.endsWith(".md"))
   for (const relativeFile of markdownFiles) {
@@ -92,60 +50,4 @@ test("new implementation documents have valid local links", async () => {
       await assert.doesNotReject(access(resolved), `${relativeFile} links to missing ${target}`)
     }
   }
-})
-
-test("README is the single user guide with intro, quick start, and one fixed config", async () => {
-  const usage = await read("README.md")
-  const report = await read("docs/validation/opencode-real-gateway-2026-08-11.md")
-  const evidence = JSON.parse(await read("docs/validation/opencode-real-gateway-2026-08-11.json"))
-  const quickStart = usage.slice(usage.indexOf("## QuickStart"), usage.indexOf("## 使用说明"))
-  const faq = usage.slice(usage.indexOf("## 常见问题"))
-  assert.ok(usage.indexOf("## 简介") < usage.indexOf("## QuickStart"))
-  assert.ok(usage.indexOf("## QuickStart") < usage.indexOf("## 使用说明"))
-  assert.ok(usage.indexOf("## 使用说明") < usage.indexOf("## 成本控制与团队分档"))
-  assert.ok(usage.indexOf("## 成本控制与团队分档") < usage.indexOf("## 工作流"))
-  assert.match(usage, /npx team-work-runtime@latest install/)
-  assert.match(quickStart, /全局插件目录[^。\n]*tui\.json[^。\n]*不会修改[^。\n]*opencode\.json/i)
-  assert.match(usage, /~\/\.config\/team-work\/config\.json/)
-  assert.match(usage, /首次调用.*`.team-work\/`/s)
-  assert.match(usage, /TEAM_WORK_CONFIG_HOME/)
-  assert.match(usage, /%APPDATA%/)
-  assert.match(usage, /Junior.*Senior.*Expert/s)
-  assert.equal([...usage.matchAll(/flowchart TB/g)].length, 2)
-  assert.match(usage, /OpenSpec 与工作流/)
-  assert.match(usage, /auto.*required.*disabled/s)
-  assert.match(usage, /E2E 小循环/)
-  assert.match(usage, /挑战者参与每一轮/)
-  assert.match(usage, /Lead[^。\n]*(?:不得|不)[^。\n]*(?:具体工作|具体内容)/)
-  assert.match(usage, /solo[^。\n]*(?:单一|一个)[^。\n]*Owner/i)
-  assert.match(usage, /核心[^。\n]*(?:Expert|专家)[^。\n]*(?:裁决|把关)|(?:Expert|专家)[^。\n]*核心[^。\n]*(?:裁决|把关)/)
-  assert.match(usage, /三轮[^。\n]*用户[^。\n]*追加轮次/)
-  assert.match(usage, /同一 work item[^。\n]*(?:同一|复用)[^。\n]*(?:session|会话)/i)
-  assert.match(usage, /"\$schema"/)
-  assert.doesNotMatch(usage, /schemaVersion/)
-  assert.match(usage, /"effort"/)
-  assert.match(usage, /"role"/)
-  assert.doesNotMatch(usage, /"helper"/)
-  assert.match(usage, /team-work-explore.*team-work-librarian/s)
-  assert.match(usage, /reasoningEffort/)
-  assert.match(usage, /\/workflow/)
-  assert.match(usage, /\/team-work/)
-  assert.match(usage, /任意阶段/)
-  assert.match(usage, /查看或继续任务/)
-  assert.match(usage, /修改配置后只需重启 OpenCode/)
-  assert.match(usage, /team-work-runtime@latest disable/)
-  assert.match(usage, /team-work-runtime@latest enable/)
-  assert.match(usage, /停用[^。\n]*保留[^。\n]*(?:配置|任务|\.team-work)/)
-  assert.doesNotMatch(quickStart, /doctor|debug agent|model-map|plugins\/opencode\/scripts/)
-  assert.equal([...faq.matchAll(/^### /gm)].length, 1)
-  assert.doesNotMatch(usage, /USAGE\.md|--model-map|## OpenCode 注意事项|OMO|## 开发文档|## (?:Archive|历史归档)/)
-  assert.doesNotMatch(usage, /发布前真实网关验收|下一项最小验收/)
-  assert.doesNotMatch(report, /下一项最小验收/)
-  assert.match(report, /双成员后台派发/)
-  assert.match(report, /跨进程续派/)
-  assert.match(report, /不是完整 Team-work 策略验收/)
-  assert.equal(evidence.backgroundTeamRun.children.length, 2)
-  assert.ok(evidence.backgroundTeamRun.children.every(({ spawnMode }) => spawnMode === "background"))
-  assert.equal(evidence.crossProcessResume.sessionIdBefore, evidence.crossProcessResume.sessionIdAfter)
-  assert.equal(evidence.crossProcessResume.newRuntimeEvent, "platform.resume.accepted")
 })

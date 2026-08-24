@@ -1,6 +1,0 @@
-import "./v2/application/task-driver.test.mjs"
-import "./v2/application/human-wait.test.mjs"
-import "./v2/application/action-card.test.mjs"
-import "./v2/application/decision-packet.test.mjs"
-import "./v2/application/spec-effect-coordinator.test.mjs"
-import "./v2/application/file-context-composer.test.mjs"

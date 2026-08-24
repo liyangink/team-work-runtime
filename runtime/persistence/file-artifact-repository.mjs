@@ -108,6 +108,13 @@ function validateSnapshotIdentity({ taskId, artifactId, digest }) {
   return `${artifactId}-${String(digest).slice(0, 12)}`
 }
 
+// 稳定读取：路径校验、逐段拒符号链接、读中变化检测、realpath 防逃逸。
+// v3 intake 的 deliver/review 制品读取必须走这里（charter I1：路径不得越出项目根，含符号链接）。
+export async function readStableArtifact(projectRoot, relativePath) {
+  const root = await realpath(path.resolve(projectRoot))
+  return readStable(root, relativePath)
+}
+
 export function createFileArtifactRepository({ projectRoot } = {}) {
   if (typeof projectRoot !== "string" || projectRoot === "") throw new TypeError("projectRoot is required")
   let rootPromise

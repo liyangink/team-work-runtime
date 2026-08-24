@@ -1,4 +1,0 @@
-interface:
-  display_name: "团队协作"
-  short_description: "组织分档团队、协作拓扑、挑战收敛和验收汇报"
-  default_prompt: "使用 $team-work 为当前研发场景组织团队并完成收敛。"

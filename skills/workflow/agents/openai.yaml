@@ -1,4 +1,0 @@
-interface:
-  display_name: "研发工作流"
-  short_description: "驱动阶段、上下文、门禁、团队判断和 SPEC 路由"
-  default_prompt: "使用 $workflow 创建或恢复研发任务并推进当前阶段。"

@@ -1,3 +1,5 @@
 node_modules/
 .DS_Store
 .team-work/
+packages/dsh-plugin/dist/
+.npm-cache-tmp/

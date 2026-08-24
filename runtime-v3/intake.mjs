@@ -7,6 +7,7 @@ import { digestValue } from "../runtime/domain/digests.mjs"
 import { atomicJson, atomicWrite, withOwnerLock } from "../runtime/persistence/transactions.mjs"
 import { readStableArtifact } from "../runtime/persistence/file-artifact-repository.mjs"
 import { artifactsFingerprint } from "./gate.mjs"
+import { readJson } from "./store.mjs"
 
 function reject(reasons) {
   const error = new Error(Array.isArray(reasons) ? reasons.join("\n") : reasons)
@@ -107,6 +108,13 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   }
   if (reasons.length) throw reject(reasons)
 
+  // 事件层幂等（E2E-10 补全）：同 key 同 payload 重交（重试/成员重复提交）返回同一接受结果，
+  // 不追加第二条 report-accepted；payload 变化才是真实修订，照常覆盖并记录。
+  const prior = await readJson(path.join(task.root, "reports", `deliver-${dispatchKey}.json`), { allowMissing: true })
+  if (prior && JSON.stringify(prior.payload) === JSON.stringify({ outcome, summary, paths: normalized, checks, unresolved })) {
+    return { reportId: `deliver-${dispatchKey}`, accepted: true, idempotent: true, registered: prior.payload.paths.map((p) => ({ path: p })), hint: "此前已接受同一交付（幂等返回）；无需重复操作。" }
+  }
+
   // 全部检查通过后一次性落盘（I10：失败不留半态）；先读全部再写，单路径失败不留孤儿快照（复核修复）
   const at = new Date().toISOString()
   const kindByPath = new Map(writable.map((w) => [w.path, w.artifactKind]))
@@ -171,6 +179,12 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
     reasons.push("verdict 只能由 Expert 填写；Challenger 请用 findings + recommendation")
   }
   if (reasons.length) throw reject(reasons)
+
+  // 事件层幂等（E2E-10 补全）：同 key 同 payload 重交不追加第二条 report-accepted
+  const prior = await readJson(path.join(task.root, "reports", `review-${dispatchKey}.json`), { allowMissing: true })
+  if (prior && JSON.stringify(prior.payload) === JSON.stringify({ summary, recommendation, findings, ...(verdict ? { verdict } : {}) })) {
+    return { reportId: `review-${dispatchKey}`, accepted: true, idempotent: true, reviewedDigest: prior.taskSha, hint: "此前已接受同一评审（幂等返回）；无需重复操作。" }
+  }
 
   const at = new Date().toISOString()
   const stage = currentStageOf(fresh.journal, task.scope)

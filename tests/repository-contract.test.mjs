@@ -26,6 +26,27 @@ test("v3 assets exist and v2 trees are removed (git history preserves them)", as
   }
 })
 
+test("package metadata is intact (install simulation once caught corruption)", async () => {
+  const pkg = JSON.parse(await read("package.json"))
+  assert.equal(typeof pkg.name, "string")
+  assert.ok(pkg.name.length > 0)
+  assert.match(pkg.version, /^\d+\.\d+\.\d+/, "version 语义化")
+  assert.equal(typeof pkg.bin?.tw, "string")
+  assert.ok(pkg.bin.tw.length > 0)
+  for (const entry of ["bin/", "runtime-v3/", "skills/team-work-v3/", "workflow/definitions/", "team-work/policies/"]) {
+    assert.ok(pkg.files.includes(entry), `files 缺 ${entry}`)
+  }
+})
+
+test("dsh orchestration template stays consistent with skill surface", async () => {
+  const skill = await read("skills/team-work-v3/SKILL.md")
+  assert.match(skill, /dsh-orchestration\.md/, "SKILL.md 链接编排模板")
+  const template = await read("skills/team-work-v3/references/dsh-orchestration.md")
+  assert.match(template, /dispatch-plan/)
+  assert.match(template, /agent\(/)
+  assert.match(template, /modelHint/)
+})
+
 test("AGENTS.md preserves core collaboration invariants", async () => {
   const agents = await read("AGENTS.md")
   assert.match(agents, /任意研发阶段创建并介入/)

@@ -1,14 +1,17 @@
 // cli.mjs — tw CLI：v3 工具契约的参考实现（§4）
 // 卡片输出为 JSON（Lead 在 DSH 里用 bash 调用并解析）；拒绝输出带修复指引（P2）。
 import { randomBytes } from "node:crypto"
-import { readFile, rm, cp, mkdir } from "node:fs/promises"
+import { accessSync, constants } from "node:fs"
+import { readFile, rm, cp, mkdir, access } from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 import { initTask, loadTask, taskExists, taskRoot, archiveRoot, controlRoot, atomicJson, atomicWrite, withOwnerLock, validName } from "./store.mjs"
 import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
+import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath } from "./dsh-map.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -71,7 +74,10 @@ function fixHint(code) {
     DECISION_STALE: "读取最新卡片（tw run）后按其中的选项序号重新 decide",
     ENTRY_UNKNOWN: "--entry 必须是 workflow 声明的阶段之一",
     DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次）",
-  })[code] ?? "参考 tw --help"
+    MAP_INVALID: "映射写法：{\"provider\":\"...\",\"model\":\"...\"} 显式分档，或 {\"use\":\"agent-default\"} 占位；档位 junior/senior/expert；删除 dsh.json 可自动重建",
+    STATE_CORRUPT: "控制文件损坏：映射文件可删除重建；任务事实在 reports/journal，可重推导",
+    LOCK_UNAVAILABLE: "任务锁被并发写者占用（成员交付/Lead 推进同时进行）：等几秒原样重试同一命令即可；崩溃进程的锁会被自动回收",
+  })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
 // 复核修复：判定与写入必须同锁。appendEventsUnlocked 供已持锁的临界区使用。
@@ -108,6 +114,19 @@ function reworkContext(task, stageId) {
   return sections.length ? `## 本轮返工/回应原因\n\n${sections.join("\n\n")}` : ""
 }
 
+// 派单 PATH 注入（Phase 1 过渡）：成员环境未必有 tw 于 PATH——解析本包 bin 绝对路径写入交付指令；
+// Phase 3 插件把 tw 注册为 preset 层原生工具后本注入退役。
+function twCommand() {
+  if (process.env.TW_CMD) return process.env.TW_CMD
+  const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "tw.mjs")
+  try {
+    accessSync(bin, constants.R_OK)
+    return `node ${bin}`
+  } catch {
+    return "tw"
+  }
+}
+
 function dispatchCard(task, stageDef, wave, detail) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const boundaries = detail.writable.map(({ path: p, artifactKind }) => `${p}（产出物 ${artifactKind}）`)
@@ -117,6 +136,7 @@ function dispatchCard(task, stageDef, wave, detail) {
     stage: stageDef.id,
     status: "working",
     next: "dispatch",
+    transition: "dispatch",
     dispatch: {
       key: detail.key,
       role: wave.role,
@@ -130,7 +150,10 @@ function dispatchCard(task, stageDef, wave, detail) {
         task.intent.constraints.length ? `约束：\n${task.intent.constraints.map((c) => "- " + c).join("\n")}` : "",
         task.intent.exclusions.length ? `排除：\n${task.intent.exclusions.map((c) => "- " + c).join("\n")}` : "",
         wave.role === "owner" ? `可写路径（仅限）：\n${boundaries.map((b) => "- " + b).join("\n")}` : "只读派单：不得修改任何文件",
-        wave.kind === "verdict" ? "输出 Expert 裁决：recommendation + verdict（outcome/rationale/confidence/recommendedAction）" : wave.kind === "produce" || wave.kind === "respond" ? "完成后调用：tw deliver --task <任务名> --key " + detail.key + " --outcome delivered --summary <一句话> --paths <可写路径>" : "完成后调用：tw review --task <任务名> --key " + detail.key + " --recommendation <accept|rework|escalate> --summary <一句话>",
+        wave.kind === "produce" || wave.kind === "respond"
+          ? `完成后调用：${twCommand()} deliver --task ${task.name} --key ${detail.key} --outcome delivered --summary <一句话> --paths <可写路径>`
+          : `完成后调用：${twCommand()} review --task ${task.name} --key ${detail.key} --recommendation <accept|rework|escalate> --summary <一句话>${wave.kind === "verdict" ? ' --verdict \'{"outcome":"accept|rework|choose-option|need-more-evidence|escalate-to-user","rationale":"…","confidence":"low|medium|high","recommendedAction":"…"}\'' : ""}`,
+        wave.kind === "verdict" ? "Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。" : "",
         wave.kind === "respond" ? reworkContext(task, stageDef.id) : "",
         "上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。",
       ].filter(Boolean).join("\n\n"),
@@ -169,7 +192,7 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
   const earlyState = deriveTask(early)
   if (earlyState.status === "completed") {
     // E2E-14：终态幂等——重复 run 返回与完成时完全相同的卡片
-    return { ok: true, task: name, stage: earlyState.stage, status: "completed", next: "archive", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
+    return { ok: true, task: name, stage: earlyState.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   // 复核修复：判定与写入同锁——并发 run 只有一方完成派发/推进，另一方锁内重推导后拿到新状态
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
@@ -184,7 +207,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   if (state.next.kind === "dispatch") {
     if (!state.next.wave) {
       // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：返回 blocker 卡（I5）
-      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers: state.next.hint ?? [] }
+      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers: state.next.hint ?? [], transition: "blocked" }
     }
     const wave = state.next.wave
     const stageDef = workflow.stages.find((s) => s.id === state.stage)
@@ -210,14 +233,14 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const edge = edges.find((e) => e.outcome === "pass") ?? edges[0]
     if (!edge) throw fail("STATE_CORRUPT", `阶段 ${state.stage} 没有可用出边`)
     await appendEventsUnlocked(task, [{ type: "stage-advanced", detail: { from: state.stage, to: edge.to } }])
-    return { ok: true, task: name, stage: edge.to, status: "working", next: "run", note: `${state.stage} 门禁通过，进入 ${edge.to}` }
+    return { ok: true, task: name, stage: edge.to, status: "working", next: "run", transition: "advance", note: `${state.stage} 门禁通过，进入 ${edge.to}` }
   }
   if (state.next.kind === "complete") {
     await appendEventsUnlocked(task, [{ type: "task-completed", detail: { stage: state.stage } }])
-    return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
+    return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   if (state.next.kind === "wait-inflight") {
-    return { ok: true, task: name, stage: state.stage, status: "working", next: "wait", dispatchKey: state.next.dispatchKey, wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round }, note: `波次 ${state.wave.kind}（${state.wave.role} 轮次 ${state.wave.round}）已派发，key ${state.next.dispatchKey}；等待成员交付后再 run。` }
+    return { ok: true, task: name, stage: state.stage, status: "working", next: "wait", transition: "wait-inflight", dispatchKey: state.next.dispatchKey, wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round }, note: `波次 ${state.wave.kind}（${state.wave.role} 轮次 ${state.wave.round}）已派发，key ${state.next.dispatchKey}；等待成员交付后再 run。` }
   }
   if (state.next.kind === "await-decision") {
     const open = task.journal.filter((e) => e.type === "decision-issued").map((e) => e.detail.decisionId)
@@ -230,15 +253,15 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         ? [{ n: 1, label: "accept", desc: "接受本阶段交付" }, { n: 2, label: "rework", desc: "要求返工（回到 Owner 波次）" }]
         : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
       await appendEventsUnlocked(task, [{ type: "decision-issued", detail: { decisionId, gateId: human, reason: state.next.reason ?? `人工门 ${human}`, choices } }])
-      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices }
+      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices }
     }
     const issued = task.journal.find((e) => e.type === "decision-issued" && e.detail.decisionId === pending)
-    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", decisionId: pending, question: issued.detail.reason, choices: issued.detail.choices }
+    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending, question: issued.detail.reason, choices: issued.detail.choices }
   }
   if (state.next.kind === "blocked") {
-    return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers: [{ message: state.next.reason }] }
+    return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason }] }
   }
-  return { ok: true, task: name, stage: state.stage, status: state.status, next: "run", gate: state.gate }
+  return { ok: true, task: name, stage: state.stage, status: state.status, next: "run", transition: "none", gate: state.gate }
 }
 
 async function cmdDecide({ projectRoot, name, choice, note }) {
@@ -373,6 +396,148 @@ async function cmdArchive({ projectRoot, name }) {
   return { ok: true, task: name, archivedTo: path.relative(projectRoot, dest), form, kept: ["manifest.json", "artifacts/", "reviews(在 manifest)", "decisions.json", "journal-summary.jsonl"], cleaned: ["reports/", "snapshots/", "gates/", "runtime 状态"] }
 }
 
+// dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
+// 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
+async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  if (!await taskExists(projectRoot, name)) {
+    const archived = await archivedCard(projectRoot, name)
+    if (archived) return { ok: true, task: name, stage: null, stop: "archived", waves: [], card: archived }
+  }
+  const early = await loadTask(projectRoot, name, { workflow, policy })
+  const earlyState = deriveTask(early)
+  if (earlyState.status === "completed") {
+    const card = { ok: true, task: name, stage: earlyState.stage, status: "completed", next: "archive", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
+    return { ok: true, task: name, stage: earlyState.stage, stop: "completed", waves: [], card }
+  }
+  return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
+    const warnings = []
+    const ensured = await ensureDshMap(projectRoot).catch((error) => ({ error }))
+    if (ensured.error) warnings.push(`映射模板生成失败（${ensured.error.message}）；按占位解析继续`)
+    const resolved = await resolveTiers(projectRoot)
+    warnings.push(...resolved.warnings)
+    const planStop = (stop, card, extra = {}) => ({ ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra })
+    for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
+      const task = await loadTask(projectRoot, name, { workflow, policy })
+      const state = deriveTask(task)
+      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
+      if (card.transition === "dispatch") {
+        const d = card.dispatch
+        const deliver = d.kind === "produce" || d.kind === "respond" ? "deliver" : "review"
+        const hint = resolved.tiers[d.tier]
+        if (!hint) warnings.push(`未知档位 ${d.tier}，标记未解析`)
+        const modelHint = hint ?? { ...UNRESOLVED }
+        const wave = {
+          dispatchKey: d.key, kind: d.kind, role: d.role, tier: d.tier, round: d.round,
+          prompt: d.prompt,
+          deliver,
+          modelHint: { provider: modelHint.provider, model: modelHint.model, source: modelHint.source },
+          dispatchExample: deliver === "deliver"
+            ? `${twCommand()} deliver --task ${name} --key ${d.key} --outcome delivered --summary <一句话> --paths <可写路径>`
+            : `${twCommand()} review --task ${name} --key ${d.key} --recommendation <accept|rework|escalate> --summary <一句话>`,
+        }
+        const plan = {
+          ok: true, task: name, stage: card.stage, stop: null,
+          waves: [wave],
+          card: { status: card.status, next: card.next },
+          mapping: path.relative(projectRoot, dshMapPath(projectRoot)),
+          ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}),
+        }
+        if (!json) {
+          plan.human = [
+            `任务 ${name} · 阶段 ${card.stage} · ${wave.role}(${wave.tier}) ${wave.kind} 第 ${wave.round} 轮`,
+            `模型：${modelHint.provider}/${modelHint.model}（来源 ${modelHint.source}）`,
+            "派单全文：",
+            wave.prompt,
+            `交付示例：${wave.dispatchExample}`,
+          ]
+        }
+        return plan
+      }
+      if (card.transition === "advance") continue // stage-advanced 已写；锁内重推导下一阶段
+      if (card.transition === "complete") return planStop("completed", card)
+      if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey })
+      if (card.transition === "await-decision") return planStop("awaiting-user", card)
+      return planStop("blocked", card)
+    }
+    throw fail("STATE_CORRUPT", "dispatch-plan 推进循环超界（阶段图可能成环）")
+  })
+}
+
+// models（§1.3）：映射解析结果展示——每档 provider/model + 来源 + 警告。无状态、不派发。
+async function cmdModels({ projectRoot }) {
+  const ensured = await ensureDshMap(projectRoot).catch((error) => ({ error }))
+  const resolved = await resolveTiers(projectRoot)
+  const warnings = [...resolved.warnings, ...(ensured.error ? [`映射模板生成失败（${ensured.error.message}）`] : [])]
+  return {
+    ok: true,
+    file: path.relative(projectRoot, dshMapPath(projectRoot)),
+    settings: resolved.agentDefault.file,
+    agentDefault: resolved.agentDefault.resolved ? `${resolved.agentDefault.resolved.provider}/${resolved.agentDefault.resolved.model}` : null,
+    tiers: TIERS.map((t) => ({ tier: t, ...resolved.tiers[t] })),
+    ...(warnings.length ? { warnings } : {}),
+    note: '分档：把任一档改为 {"provider":"...","model":"..."}；占位 {"use":"agent-default"} 解析为 DSH 主 agent 模型（agent-default-model）',
+  }
+}
+
+// init（可选便捷命令，Phase 1 降级）：装载 skill 到 .dsh/skills/（DSH filesystem provider 扫描根）+ 确保映射模板。
+// 核心流程（安装 → open → run）不需要它。
+async function cmdInit({ projectRoot, force = false }) {
+  const mapInfo = await ensureDshMap(projectRoot)
+  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "team-work-v3")
+  const dest = path.join(projectRoot, ".dsh", "skills", "team-work-v3")
+  let skill
+  try {
+    await access(path.join(src, "SKILL.md"))
+    const exists = await access(path.join(dest, "SKILL.md")).then(() => true, () => false)
+    if (exists && !force) {
+      skill = { installedTo: path.relative(projectRoot, dest), action: "skipped", note: "已存在；--force 覆盖" }
+    } else {
+      await rm(dest, { recursive: true, force: true })
+      await cp(src, dest, { recursive: true })
+      skill = { installedTo: path.relative(projectRoot, dest), action: exists ? "overwritten" : "installed" }
+    }
+  } catch {
+    skill = { installedTo: null, action: "unavailable", note: "skill 源不在本安装布局内（npm files 应含 skills/team-work-v3/）" }
+  }
+  const resolved = await resolveTiers(projectRoot)
+  return {
+    ok: true,
+    mapping: { file: path.relative(projectRoot, mapInfo.file), created: mapInfo.created },
+    skill,
+    agentDefault: resolved.agentDefault.resolved ? `${resolved.agentDefault.resolved.provider}/${resolved.agentDefault.resolved.model}` : null,
+    tiers: TIERS.map((t) => ({ tier: t, ...resolved.tiers[t] })),
+    ...(resolved.warnings.length ? { warnings: resolved.warnings } : {}),
+    note: "init 只是便捷命令：装载 Lead 判断指引 skill 并确保映射模板；核心流程安装后直接 tw open 即可",
+  }
+}
+
+// help（P4：CLI 即接口，--help 与拒绝输出即完整 meta）
+function helpCard() {
+  return {
+    ok: true,
+    commands: {
+      open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
+      run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
+      "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
+      decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片",
+      intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",
+      route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
+      gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
+      models: "tw models：tier→模型映射解析结果（来源 explicit/agent-default/fallback/default）",
+      init: "tw init [--force]：可选——装载 skill 到 .dsh/skills/ 并确保映射模板",
+      restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
+      archive: "tw archive --task <n>：归档（用户确认后；归档目录只读）",
+      deliver: "成员交卷：tw deliver --task <n> --key <k> --outcome delivered --summary <一句话> --paths <路径...> [--checks <JSON>] [--unresolved <JSON>]",
+      review: "成员阅卷：tw review --task <n> --key <k> --recommendation accept|rework|escalate --summary <一句话> [--findings <JSON>] [--verdict <JSON>]",
+    },
+    notes: [
+      "卡片即接口：按返回卡片行动，不预判步骤；拒绝输出自带修复指引",
+      "映射文件 .team-work/platform/dsh.json（缺失自动生成三档 agent-default 占位）；tier→模型在派发点生效",
+    ],
+  }
+}
+
 export async function tw(argv, { projectRoot = process.cwd(), stdout = process.stdout } = {}) {
   const [cmd, ...rest] = argv
   const args = {}
@@ -389,6 +554,10 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
       case "restore": return await cmdRestore({ ...common, name: args.task, target: args.path })
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
+      case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
+      case "models": return await cmdModels(common)
+      case "init": return await cmdInit({ ...common, force: argv.includes("--force") })
+      case "help": return helpCard()
       case "deliver": return await cmdDeliver({ ...common, name: args.task, key: args.key, payload: {
         outcome: args.outcome, summary: args.summary,
         paths: collectList(argv, "paths"),
@@ -401,7 +570,7 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
         verdict: parseJsonArg(args.verdict, "--verdict"),
       } })
       default:
-        throw fail("USAGE", "用法：tw open|run|decide|intent|gate|archive（成员：tw deliver|review）")
+        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/run/dispatch-plan/decide/intent/route/gate/models/init/restore/archive；成员：deliver/review）")
     }
   } catch (error) {
     if (error.card) return error.card

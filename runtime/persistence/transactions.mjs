@@ -83,7 +83,7 @@ async function reclaimOrphanedLock(lockPath) {
 export async function withOwnerLock(lockPath, action) {
   const ownerId = randomUUID()
   let handle
-  const maxAttempts = 101
+  const maxAttempts = 401
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       handle = await open(lockPath, "wx", 0o600)

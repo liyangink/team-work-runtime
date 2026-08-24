@@ -57,7 +57,7 @@ return plan.card
 ## 2. 映射解析规则（新模块 runtime-v3/dsh-map.mjs）
 
 ```
-tier 显式 → defaults → {provider:"zai-coding-cn", model:"glm-5.3"} 内置兜底 → 全部标注来源
+tier 显式 → defaults → 仍无法解析则标记 unresolved（不内置环境默认，派发前需配置）→ 全部标注来源
 ```
 - 派发时读取（波次粒度生效）；已派发成员不可变；改文件下一波生效；
 - 校验：provider/model 非空字符串；未知字段拒绝并指引。

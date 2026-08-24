@@ -115,10 +115,10 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
   自审：仅 addressed 渲染/RPC 失败静默；**交叉审查 ②**（装载链/边界：非 web 平台、离线子代理、RPC 失败路径）。
 - **I5 集成自证（本地）**：本地 profile 全装配（host+client+runtime 包）→ 冒烟：单任务注入生效（F-5 手动版）+ tw 工具调用（F-8）。
   自审：冒烟脚本可重复执行（固化为 scripts/e2e-smoke.mjs）；复核：F-1/F-2/F-3 手动勾选。
-- **I6 压轴 E2E（全功能）**：node:test 编写 e2e-.test.mjs（走真实 DSH 进程装配 profile + 双任务并发）：覆盖 F-1..F-11 全矩阵（F-12 人工过目补录）。
+- **I6 压轴 E2E（全功能）**：分层覆盖——自动层（node:test：E2E-A cordis 装载 / E2E-B runtime 全功能 / C1 实机 boot 链 + 隔离 web 实例启动）覆盖 F-1..F-4、F-6、F-8..F-11；**F-5/F-7/F-12（真实 LLM 注入/effort header/徽标显示）需带凭据真实会话，归用户实机确认**（插件 README 实机验证节；注入链的纯函数与真文件层已自动验证）。
   **交叉审查 ③**（验收向：矩阵逐项覆盖核对/断言强度/失败路径是否真断言而非走过场）→ 修复 → 复跑至全绿 → 用户验收。
 
-**完成定义**：I6 全绿（+F-12 人工确认）+ 交叉审查 ③ findings 清零 + 文档同步（roadmap/charter/file-inventory/README）。
+**完成定义**：自动层全绿（E2E-A/B/C1 + 98 测试）+ F-5/F-7/F-12 如实标注待用户实机（README 指引）+ 交叉审查③ findings 清零 + 文档同步（roadmap/AGENTS/charter/file-inventory/README/验收快照）。
 
 ## 6. 风险与缓解（v2 更新）
 

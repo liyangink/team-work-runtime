@@ -7,11 +7,12 @@
 
 背景：DSH Phase 1 编排 E2E（orch-e2e 任务）跑通了串行角色链，同时暴露多 Agent 拓扑缺口；复盘确认 v3 重写时"拓扑执行归平台"被扩大为"拓扑语义不存在"，v2 的拆分/并行/汇总/选人语义丢失（原始设计见 Git 历史 `c4d5270:skills/team-work/references/` 与 `c4d5270:team-work/compiler.mjs`）。
 
-## 0. 平台事实修正（实测 2026-08-24）
+## 0. 平台事实修正（实测 2026-08-24；插件注入通道 2026-08-24 二次更新）
 
 - workflow 的 `agent()` 一次性、无句柄、子代不入可持续 registry（UI 标签退化为指纹）——**不能承载持续角色**；
 - 续聊原语 = Lead 层后台 `subagent`（持久 id、可命名）+ `send_message`（仅 depth-1）——**凡需多轮续派的成员，首次派发必须在 Lead 层建立**；
-- 一次性扇出（只读探查、独立视角审）适合 workflow `parallel`。
+- 一次性扇出（只读探查、独立视角审）适合 workflow `parallel`；
+- **continuable 子代理的模型/effort 插件注入通道（用户实测证实，2026-08-24）**：`ctx.subagents.registerContinuableSetup(contribution)`（dsh-subagent 官方 API）+ `installModelSelection`（dsh-agent 导出，含 reasoningEffort 继承剥离）可向**每个 continuable 子代**（fresh creation 与 cold-resume）注入 `{provider, model, reasoningEffort}`——对照实验证实请求头真实携带。**这同时关闭两个平台缺口**：Lead 层 subagent 无 provider/model 参数（tier→模型映射可达持续角色成员）与 effort 无下发通道。**覆盖边界**：仅 continuable 路径（subagent/subagent_fork 后台）；workflow/ralph 的一次性子代不走 setupRegistry、不可达（恰为 RO 廉价扇出，effort 需求最低，可接受）。另一 effort 来源：provider adapter 的 `resolveModel` 返回 `reasoning.defaultEffort` 会被物化进请求头，但真实环境未声明。
 
 ## 1. 分层判定（谁决策 / 谁执行）
 

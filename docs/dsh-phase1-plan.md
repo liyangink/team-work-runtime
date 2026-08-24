@@ -24,10 +24,14 @@
 - `modelHint` = 映射解析结果（tier→provider/model + 来源标记 explicit/fallback/default）。
 - 人读模式（无 --json）打印派单全文与派发指令示例。
 
-### 1.2 `tw init [--force]`
-1. 写 `.team-work/platform/dsh.json` 映射模板：扫描 `~/.dsh/settings.yaml` 的 `llm-pi-ai.providers`，列出全部 provider/model 供用户选择；未配置则生成骨架并给指引；
-2. 复制 skill 到项目 `.dsh/skills/team-work-v3/`（存在则跳过，--force 覆盖）；
-3. 幂等，输出已安装清单与下一步（一句话上手指引）。
+### 1.2 映射与初始化（模拟修正版：零初始化门槛）
+
+**实测结论（2026-08-24 全流程模拟）**：核心流程（open → run → 成员 deliver）**不依赖** skill 装载与映射文件——派单全文已内嵌工作合同，无映射时 tier 标签照常输出。因此：
+
+- **映射默认值 = 主 agent 模型占位**：`.team-work/platform/dsh.json` 安装/首次使用时自动生成，三档默认 `{"use": "agent-default"}`（常量占位）；运行时解析为 DSH 当前主 agent 模型（`~/.dsh/settings.yaml` 的 `agent-default-model`，实测存在该配置）。用户分档 = 把任一档改为显式 `{provider, model}`；
+- **`tw init` 降级为可选便捷命令**：仅做 skill 装载到 `.dsh/skills/`（服务 Lead 判断指引）；README 快速开始不包含它；核心流程 = 安装 → open → run；
+- **派单 PATH 注入**：`tw run` 派发时解析自身可执行路径写入派单交付指令（Phase 1 过渡；Phase 3 插件把 tw 封装为 preset 层原生工具后消失）；
+- **package contract 测试**：package.json 的 name/version/bin 非空断言（模拟中曾发现元数据损坏，防止复发）。
 
 ### 1.3 `tw models`
 显示当前映射解析结果：每 tier → provider/model + 来源（explicit/fallback/default）+ 缺档警告。无参数、无状态。
@@ -77,7 +81,7 @@ tier 显式 → defaults → {provider:"zai-coding-cn", model:"glm-5.3"} 内置�
 
 ## 5. 明确不做（Phase 1 边界）
 
-- Cordis 插件包、ctx.tools、写入拦截 hook（Phase 3）；
+- Cordis 插件包（含 **tw 注册为 preset 层原生工具**——实测确认 preset = agent.cordis.yml 目录、roster 挂载、工具按 agent→preset→global 作用域链解析；Phase 3 落地后 PATH 方案退役）、写入拦截 hook（Phase 3）；
 - 成本投影 `tw status`（Phase 2，但 dsh-map 的权重标注先行落地）；
 - OpenSpec provider 接入（独立决策）；
 - cmdRun 职责重构（独立技术债，不阻塞本阶段）。

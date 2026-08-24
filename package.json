@@ -1,290 +1,30 @@
 {
-  "path": "/Users/liyang/Projects/Opensource/team-work-runtime/package.json",
-  "offset": 1,
-  "lines": [
-    {
-      "number": 1,
-      "text": "{"
-    },
-    {
-      "number": 2,
-      "text": "  \"name\": \"team-work-runtime\","
-    },
-    {
-      "number": 3,
-      "text": "  \"version\": \"0.1.0-beta.1\","
-    },
-    {
-      "number": 4,
-      "text": "  \"description\": \"平台无关的 multiagent engineering loop 与 PlatformPlugin 安装器\","
-    },
-    {
-      "number": 5,
-      "text": "  \"repository\": {"
-    },
-    {
-      "number": 6,
-      "text": "    \"type\": \"git\","
-    },
-    {
-      "number": 7,
-      "text": "    \"url\": \"git+https://github.com/liyangink/team-work-runtime.git\""
-    },
-    {
-      "number": 8,
-      "text": "  },"
-    },
-    {
-      "number": 9,
-      "text": "  \"homepage\": \"https://github.com/liyangink/team-work-runtime#readme\","
-    },
-    {
-      "number": 10,
-      "text": "  \"bugs\": {"
-    },
-    {
-      "number": 11,
-      "text": "    \"url\": \"https://github.com/liyangink/team-work-runtime/issues\""
-    },
-    {
-      "number": 12,
-      "text": "  },"
-    },
-    {
-      "number": 13,
-      "text": "  \"license\": \"Apache-2.0\","
-    },
-    {
-      "number": 14,
-      "text": "  \"type\": \"module\","
-    },
-    {
-      "number": 15,
-      "text": "  \"bin\": {"
-    },
-    {
-      "number": 16,
-      "text": "    \"team-work\": \"cli.mjs\","
-    },
-    {
-      "number": 17,
-      "text": "    \"tw\": \"bin/tw.mjs\""
-    },
-    {
-      "number": 18,
-      "text": "  },"
-    },
-    {
-      "number": 19,
-      "text": "  \"scripts\": {"
-    },
-    {
-      "number": 20,
-      "text": "    \"test\": \"node --test tests/*.test.mjs\","
-    },
-    {
-      "number": 21,
-      "text": "    \"prepublishOnly\": \"npm test\","
-    },
-    {
-      "number": 22,
-      "text": "    \"test:contract\": \"node --test tests/runtime-v2-contract.test.mjs\","
-    },
-    {
-      "number": 23,
-      "text": "    \"test:runtime\": \"node --test tests/runtime-v2-*.test.mjs\","
-    },
-    {
-      "number": 24,
-      "text": "    \"test:policy\": \"node --test tests/policy-skills.test.mjs\","
-    },
-    {
-      "number": 25,
-      "text": "    \"test:opencode\": \"node --test tests/opencode-*.test.mjs\""
-    },
-    {
-      "number": 26,
-      "text": "  },"
-    },
-    {
-      "number": 27,
-      "text": "  \"engines\": {"
-    },
-    {
-      "number": 28,
-      "text": "    \"node\": \">=18\""
-    },
-    {
-      "number": 29,
-      "text": "  },"
-    },
-    {
-      "number": 30,
-      "text": "  \"publishConfig\": {"
-    },
-    {
-      "number": 31,
-      "text": "    \"access\": \"public\","
-    },
-    {
-      "number": 32,
-      "text": "    \"tag\": \"beta\""
-    },
-    {
-      "number": 33,
-      "text": "  },"
-    },
-    {
-      "number": 34,
-      "text": "  \"files\": ["
-    },
-    {
-      "number": 35,
-      "text": "    \"cli.mjs\","
-    },
-    {
-      "number": 36,
-      "text": "    \"installer/\","
-    },
-    {
-      "number": 37,
-      "text": "    \"runtime/\","
-    },
-    {
-      "number": 38,
-      "text": "    \"policy/\","
-    },
-    {
-      "number": 39,
-      "text": "    \"workflow/\","
-    },
-    {
-      "number": 40,
-      "text": "    \"team-work/\","
-    },
-    {
-      "number": 41,
-      "text": "    \"spec-providers/\","
-    },
-    {
-      "number": 42,
-      "text": "    \"schemas/\","
-    },
-    {
-      "number": 43,
-      "text": "    \"skills/workflow/\","
-    },
-    {
-      "number": 44,
-      "text": "    \"skills/team-work/\","
-    },
-    {
-      "number": 45,
-      "text": "    \"plugins/opencode/assets/\","
-    },
-    {
-      "number": 46,
-      "text": "    \"plugins/opencode/adapter/\","
-    },
-    {
-      "number": 47,
-      "text": "    \"plugins/opencode/context/\","
-    },
-    {
-      "number": 48,
-      "text": "    \"plugins/opencode/config/\","
-    },
-    {
-      "number": 49,
-      "text": "    \"plugins/opencode/guides/\","
-    },
-    {
-      "number": 50,
-      "text": "    \"plugins/opencode/src/\","
-    },
-    {
-      "number": 51,
-      "text": "    \"plugins/opencode/tools/\","
-    },
-    {
-      "number": 52,
-      "text": "    \"plugins/opencode/tui/\""
-    },
-    {
-      "number": 53,
-      "text": "  ],"
-    },
-    {
-      "number": 54,
-      "text": "  \"keywords\": ["
-    },
-    {
-      "number": 55,
-      "text": "    \"multiagent\","
-    },
-    {
-      "number": 56,
-      "text": "    \"workflow\","
-    },
-    {
-      "number": 57,
-      "text": "    \"opencode\","
-    },
-    {
-      "number": 58,
-      "text": "    \"ai-agent\""
-    },
-    {
-      "number": 59,
-      "text": "  ],"
-    },
-    {
-      "number": 60,
-      "text": "  \"dependencies\": {"
-    },
-    {
-      "number": 61,
-      "text": "    \"@opencode-ai/plugin\": \"^1.18.0\","
-    },
-    {
-      "number": 62,
-      "text": "    \"@opentui/core\": \"0.4.5\","
-    },
-    {
-      "number": 63,
-      "text": "    \"@opentui/solid\": \"0.4.5\","
-    },
-    {
-      "number": 64,
-      "text": "    \"ajv\": \"^8.20.0\","
-    },
-    {
-      "number": 65,
-      "text": "    \"ajv-formats\": \"^3.0.1\","
-    },
-    {
-      "number": 66,
-      "text": "    \"jsonc-parser\": \"^3.3.1\","
-    },
-    {
-      "number": 67,
-      "text": "    \"solid-js\": \"1.9.12\""
-    },
-    {
-      "number": 68,
-      "text": "  }"
-    },
-    {
-      "number": 69,
-      "text": "}"
-    }
-  ],
-  "totalLines": 69,
+  "name": "team-work-runtime",
+  "version": "0.2.0-beta.1",
+  "description": "平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liyangink/team-work-runtime.git"
+  },
+  "homepage": "https://github.com/liyangink/team-work-runtime#readme",
+  "bugs": "https://github.com/liyangink/team-work-runtime/issues",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "tw": "bin/tw.mjs"
+  },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:v3": "node --test tests/runtime-v3-*.test.mjs"
+    "test:v3": "node --test tests/runtime-v3-*.test.mjs",
+    "prepublishOnly": "npm test"
   },
-  "dependencies": {},
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  },
   "files": [
     "bin/",
     "runtime-v3/",
@@ -293,6 +33,15 @@
     "workflow/definitions/",
     "team-work/policies/",
     "spec-providers/",
-    "skills/team-work-v3/"
-  ]
+    "skills/team-work-v3/",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "multiagent",
+    "workflow",
+    "dsh",
+    "ai-agent"
+  ],
+  "dependencies": {}
 }

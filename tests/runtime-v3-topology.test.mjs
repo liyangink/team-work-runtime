@@ -439,6 +439,15 @@ test("升档卡在 dispatch-plan 路径同样触发（Lead 编排入口不漏）
   assert.equal(mech.tier, "junior", "机械核对包保持 junior（复杂度判断表的事实体现）")
 })
 
+test("写边界声明：owner 派单内嵌越界后果（deliver 拒绝 + 快照恢复）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "wb-t")
+  const d = await call(["run", "--task", "wb-t", "--writable", "R.md:code-review"])
+  assert.match(d.dispatch.prompt, /可写范围外的修改会被 deliver 拒绝/, "边界声明在场")
+  assert.match(d.dispatch.prompt, /快照恢复/, "恢复通道提示在场")
+})
+
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {
   const root = await makeProject()
   const call = caller(root)

@@ -34,7 +34,7 @@ tw archive --task <名字>                                              # 用户
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
-- 成员只做派单内工作；可写路径外的修改会被平台沙箱与 deliver 检查双重拒绝。
+- 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 只评价这版交付本身；产品缺陷写 findings，不因此 rework 审查制品。

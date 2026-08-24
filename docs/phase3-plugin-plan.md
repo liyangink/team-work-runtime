@@ -82,15 +82,41 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
 
 owner 派单可写路径清单后追加："可写范围外的修改会被 deliver 拒绝并可在恢复轮回滚（快照恢复）；不要尝试绕过"。skill 成员纪律同步引用。
 
-## 5. 实施序
+## 5. 实施路径（以压轴 E2E 全功能验证通过为完成目标；每段独立可验证+自审记录，三处交叉审查）
 
-1. **验证脚本**：本地 profile 装配最小插件（skills.register 空 + tools.register echo，按 §0 钉死形状）确认装载链；
-2. runtime：agent-map 自动 modelHint（复用 dispatch-plan 决策函数导出）+ 测试（自动落盘/覆盖/无映射降级）；
-3. packages/dsh-plugin 骨架：host 插件（inject/tw-tool/skill-embed）+ inject 寻址纯函数单测（childId 查表/降级链）；
-4. build.mjs（esbuild client bundle + skill 拷贝 + npm pack 双向断言）；
-5. badge + 客户端装载验证（dev:web 或 profile 挂载）；
-6. skill 补强 + 文档（file-inventory/roadmap/README 脱敏示例）；
-7. **压轴 E2E**：插件本地挂载，多任务并发——指定派发断言用 **sessions.models RPC 返回值**（A-F4：node:test 可执行；顺带实证 effort 是否进 header.config，B-F6 尾注）+ 数据隔离（两任务 childId 各自注入）+ 八视角全流程 + 升档卡 + e2eTemplate + 人工门。
+**功能验收矩阵（E2E 必须覆盖的全功能面，来自用户要求）**：
+
+| # | 功能 | 验证层 | 手段 |
+| --- | --- | --- | --- |
+| F-1 | 安装（profile 装载/插件挂载） | E2E | profile 手动装配 → dsh 会话内插件 apply 无错 |
+| F-2 | 安装后生效（skill 注册+tw 工具在场） | E2E | 成员会话枚举 skills 含 team-work-v3；工具面含 tw |
+| F-3 | 默认配置（零配置开箱） | E2E | 不写 dsh.json/config → 注入降级继承默认，徽标显示默认模型，任务全流程可走 |
+| F-4 | 自定义配置生效 | E2E | dsh.json 候选池 + config.projectRoot → 注入按池选择（多样性/家族去重可观察） |
+| F-5 | 插件注入生效（指定派发） | E2E | sessions.models RPC 断言 current = modelHint 的 provider/model/effort（A-F4） |
+| F-6 | 数据隔离（多任务并发） | E2E | 两任务同进程并发派发 → 各 childId 注入各自 modelHint，无串台 |
+| F-7 | effort 链路 | E2E | F-5 断言含 reasoningEffort 字段（若平台 header 不落，如实记录边界） |
+| F-8 | tw 原生工具 | E2E | 成员经工具调 deliver/review（args 透传）卡片返回 |
+| F-9 | 升档审批卡 | E2E | 八视角流程中 expert 视角包触发 → decide → 按批派发 |
+| F-10 | 八视角全流程 | E2E | 视角包并行 → consolidation → 裁决 → 门 |
+| F-11 | e2eTemplate 物化 | 单测已覆盖 | 压轴任务选 e2e 场景顺路复验 |
+| F-12 | 徽标（client） | E2E 人工确认 | addressed 子代理会话显示 provider/model · 推理等级（RPC 已断言，UI 人工过目一次） |
+
+**六段增量（I1→I6），段内自审、段间复核、I2/I4/I6 交叉审查**：
+
+- **I1 runtime 基座**：modelHint 决策函数提取为纯函数导出 + agent-map 自动落盘（--model-hint 覆盖）+ 单测（自动/覆盖/无映射降级/并发写）。
+  自审：P4 合规复查（零手动转录）；复核：84 基线全绿 + 新增测试清单核对 F-4/F-5 的数据前提。
+- **I2 插件骨架（host）**：验证脚本（profile 装配最小插件）→ index/inject/tw-tool/skill-embed + inject 寻址纯函数单测（childId 查表/三级降级链/header.cwd 兜底）。
+  自审：§0 API 形状逐条对照；**交叉审查 ①**（技术向：API 用法/降级链/错误处理）。
+- **I3 构建与打包**：build.mjs（esbuild client bundle + skill 构建期拷贝 + npm pack 双向断言固化）+ 打包单测。
+  自审：断言清单 = 设计清单逐项核对（防漏防多）；复核：npm pack 双包 dry-run 输出审读。
+- **I4 client 徽标**：badge 源码 + bundle 构建装载验证（profile 挂载后 web 会话可见）。
+  自审：仅 addressed 渲染/RPC 失败静默；**交叉审查 ②**（装载链/边界：非 web 平台、离线子代理、RPC 失败路径）。
+- **I5 集成自证（本地）**：本地 profile 全装配（host+client+runtime 包）→ 冒烟：单任务注入生效（F-5 手动版）+ tw 工具调用（F-8）。
+  自审：冒烟脚本可重复执行（固化为 scripts/e2e-smoke.mjs）；复核：F-1/F-2/F-3 手动勾选。
+- **I6 压轴 E2E（全功能）**：node:test 编写 e2e-.test.mjs（走真实 DSH 进程装配 profile + 双任务并发）：覆盖 F-1..F-11 全矩阵（F-12 人工过目补录）。
+  **交叉审查 ③**（验收向：矩阵逐项覆盖核对/断言强度/失败路径是否真断言而非走过场）→ 修复 → 复跑至全绿 → 用户验收。
+
+**完成定义**：I6 全绿（+F-12 人工确认）+ 交叉审查 ③ findings 清零 + 文档同步（roadmap/charter/file-inventory/README）。
 
 ## 6. 风险与缓解（v2 更新）
 

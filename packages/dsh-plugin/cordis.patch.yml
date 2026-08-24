@@ -1,0 +1,3 @@
+# team-work-runtime-dsh 的 loader patch：声明入口插件（bundle 装载协议）
+- id: team-work-dsh
+  plugin: ./dist/index.js

@@ -10,10 +10,12 @@
     "./client": "./dist/client.js"
   },
   "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
     "client": { "platform": "web" }
   },
   "files": [
     "dist/",
+    "cordis.patch.yml",
     "README.md"
   ],
   "peerDependencies": {

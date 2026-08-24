@@ -155,6 +155,30 @@ test("dispatch-plan 波组导出：package/continuation/dependsOn/weight 字段"
   assert.equal(plan.waves.every((x) => x.modelHint), true)
 })
 
+test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不按包过滤裁决）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "erwd-t")
+  await call(["plan", "--task", "erwd-t", "--packages", PKGS])
+  const d1 = await call(["run", "--task", "erwd-t"])
+  const kS = d1.dispatches.find((x) => x.package === "store").key
+  const kI = d1.dispatches.find((x) => x.package === "intake").key
+  await writeFile(path.join(root, "S.md"), "v1", "utf8")
+  await writeFile(path.join(root, "I.md"), "v1", "utf8")
+  await call(["deliver", "--task", "erwd-t", "--key", kS, "--outcome", "delivered", "--summary", "s", "--paths", "S.md"])
+  await call(["deliver", "--task", "erwd-t", "--key", kI, "--outcome", "delivered", "--summary", "s", "--paths", "I.md"])
+  const d2 = await call(["run", "--task", "erwd-t"])
+  await call(["review", "--task", "erwd-t", "--key", d2.dispatch.key, "--recommendation", "accept", "--summary", "ok"])
+  const d3 = await call(["run", "--task", "erwd-t"])
+  await call(["review", "--task", "erwd-t", "--key", d3.dispatch.key, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "rework", rationale: "总览交付物缺失，模块文档本身可接受", confidence: "high", recommendedAction: "补齐缺失交付物" })])
+  const d4 = await call(["run", "--task", "erwd-t"])
+  assert.equal(d4.dispatches.length, 2, "verdict rework 无归属 → 全组 respond")
+  for (const card of d4.dispatches) {
+    assert.match(card.prompt, /Expert 裁决（rework）/, "每个包的回应派单都带裁决原因")
+    assert.match(card.prompt, /总览交付物缺失/, "裁决 rationale 内嵌")
+  }
+})
+
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {
   const root = await makeProject()
   const call = caller(root)

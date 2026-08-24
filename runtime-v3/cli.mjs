@@ -108,11 +108,13 @@ function reworkContext(task, stageId, pkg = null) {
     const findings = forPkg(challenger.payload.findings).map((f) => '- [' + f.severity + ']' + (f.package ? '（包 ' + f.package + '）' : '') + ' ' + f.statement).join('\n')
     sections.push('### Challenger 意见（' + challenger.payload.recommendation + '）\n' + challenger.payload.summary + (findings ? '\n' + findings : ''))
   }
-  if (expert?.payload?.verdict && (pkg == null)) {
+  // Expert 裁决面向组合制品（verdict 无 findings 归属），对每个包的回应轮都相关，不过滤；
+  // challenger findings 才按包归属过滤（上方 forPkg）。
+  if (expert?.payload?.verdict) {
     const v = expert.payload.verdict
     sections.push('### Expert 裁决（' + v.outcome + '）\n' + v.rationale + '\n建议：' + v.recommendedAction)
   }
-  if (humanRework && (pkg == null || task.packages == null)) sections.push('### 用户决定：返工\n' + (humanRework.note ?? '用户在人工门要求返工；结合上述意见修订交付。'))
+  if (humanRework) sections.push('### 用户决定：返工\n' + (humanRework.note ?? '用户在人工门要求返工；结合上述意见修订交付。'))
   return sections.length ? '## 本轮返工/回应原因\n\n' + sections.join('\n\n') : ''
 }
 

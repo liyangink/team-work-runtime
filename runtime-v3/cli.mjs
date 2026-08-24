@@ -536,6 +536,24 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
 }
 
 
+// agent-map（v3.2/F5）：登记 dispatchKey → 平台 subagent id（Lead 实际开 subagent 后调用）。
+// 存 .team-work/platform/agents.json（平台绑定事实，Lead 维护；runtime 只读写不调平台）。
+// 续派波经 dispatch-plan 导出 expectedAgentId（同包同角色上一派发的映射）——Lead 据此 send_message 续原会话。
+async function cmdAgentMap({ projectRoot, name, key, agent }) {
+  if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  const task = await loadTask(projectRoot, name, { workflow, policy })
+  if (!task.journal.some((e) => e.type === 'dispatched' && e.detail.key === key)) {
+    throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
+  }
+  const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
+  const fallback = '{ "mappings": {} }'
+  const current = JSON.parse(await readFile(file, 'utf8').catch(() => fallback))
+  current.mappings = { ...(current.mappings ?? {}), [key]: agent }
+  await atomicJson(file, current)
+  return { ok: true, task: name, key, agent, note: '已登记；同包同角色的续派波将携带 expectedAgentId' }
+}
+
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
 // 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
 async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
@@ -564,6 +582,12 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
         const usedFamilies = [] // 波内家族去重（v3.2 选人：同档多 owner 优先不同模型家族）
+        const agentMaps = JSON.parse(await readFile(path.join(controlRoot(projectRoot), 'platform', 'agents.json'), 'utf8').catch(() => '{ "mappings": {} }')).mappings ?? {}
+        // 同包同角色上一派发 key（expectedAgentId 推导源）
+        const prevKeyOf = (d) => {
+          const prior = task.journal.filter((e) => e.type === 'dispatched' && e.detail.key !== d.key && e.detail.role === d.role && (e.detail.package ?? null) === (d.package ?? null)).at(-1)
+          return prior?.detail.key ?? null
+        }
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
           const tierRes = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
@@ -579,6 +603,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             dispatchKey: d.key, kind: d.kind, role: d.role, tier: d.tier, round: d.round,
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
+            ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
@@ -668,6 +693,7 @@ function helpCard() {
     ok: true,
     commands: {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
+      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员映射（续派波自动携带 expectedAgentId）",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
       run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
@@ -706,6 +732,7 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
       case "plan": return await cmdPlan({ ...common, name: args.task, packagesJson: args.packages })
+      case "agent-map": return await cmdAgentMap({ ...common, name: args.task, key: args.key, agent: args.agent })
       case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
       case "models": return await cmdModels(common)
       case "init": return await cmdInit({ ...common, force: argv.includes("--force") })

@@ -1,44 +1,41 @@
-# DSH 编排模板（Lead 经 workflow 工具执行）
+# DSH 编排：Lead 派发操作规程（v3.2）
 
-平台事实：workflow 脚本没有 fs/network/shell——**Lead 在脚本外执行 `tw dispatch-plan --task <名> --json` 取计划，把 JSON 作为 args 传入脚本；脚本内只调 `agent()`**。成员在 agent 内自带 bash，会按派单内嵌的指令自行调用 `tw deliver / tw review`（派单已注入 tw 的绝对调用路径，不依赖成员 PATH）。
+平台事实：workflow 的 agent() 一次性无句柄（不能承载持续角色）；**续聊原语 = 后台 subagent（持久 id、可命名）+ send_message（仅 depth-1 直接子代）**。因此：凡需要多轮续派的成员（owner 修 rework、challenger 复审、expert 重裁），首次派发就必须在 Lead 层开 subagent；workflow 只用于一次性扇出。
 
-## 循环模板（从当前波次推进到下一扇门）
+## 派发决策表（每轮 dispatch-plan 按 wave 字段机械执行）
 
-```js
-// args = { plan: <tw dispatch-plan --json 的输出> }，每轮由 Lead 重新生成
-const plan = args.plan
-if (plan.stop) return plan.card          // awaiting-user / wait-inflight / completed / blocked：终止带回卡片
-const results = []
-for (const w of plan.waves) {
-  results.push(await agent(w.prompt, {
-    label: w.dispatchKey,
-    provider: w.modelHint.provider,      // tier→模型映射在派发点生效
-    model: w.modelHint.model,
-  }))
-}
-// 成员已在 agent 内交付；个别失败(null)不阻断——下一轮 dispatch-plan 会给出 wait-inflight 补派提示
-return {
-  dispatched: plan.waves.map((w) => w.dispatchKey),
-  failed: results.filter((r) => r === null).length,
-  card: plan.card,
-}
-```
+tw dispatch-plan --task <名> --json 取计划 → 对 waves[] 逐条：
 
-Lead 的外层循环：`dispatch-plan` → workflow（args=plan）→ 等成员通知 → 再 `dispatch-plan`……直到 stop。
+| wave 字段 | 动作 |
+| --- | --- |
+| 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label = <任务>.<阶段>.owner@<包>（人读稳定标签），provider/model 按 modelHint；prompt 原样转发；开完立即 tw agent-map --task <名> --key <wave.dispatchKey> --agent <subagentId> 登记 |
+| continuation=true 且有 expectedAgentId | 对该 subagent send_message（消息 = wave.prompt 增量派单全文）；**不要开新 agent** |
+| continuation=true 但 send_message 失败/会话不可用 | 降级规程：按 prompt 全量新开 fresh subagent + 重新 agent-map（用户点名换人 replace-owner 走同一通道） |
+| role=challenger（scope=consolidation）| 单个 challenger subagent（label = <任务>.<阶段>.challenger），组合制品视角 |
+| role=expert | 单个 expert subagent；verdict 通过派单内嵌的 review 调用提交 |
+| 一次性探查（成员自派） | 成员用只读子派单（junior、可写空、workflow parallel），不占团队波次 |
 
-- `stop: "awaiting-user"`：向用户呈现 `card.choices`，答案经 `tw decide` 写入后继续循环；
-- `stop: "wait-inflight"`：有成员未交付（agent 失败或提前结束）——按 `card.dispatchKey` 从上一轮 plan.waves 取原派单全文补派；
-- `stop: "completed"`：问用户是否 `tw archive`；
-- `stop: "blocked"`：读 `card.blockers` 的 recovery 字段修复后继续。
+外层循环：dispatch-plan → 按表派发 → 等成员通知（成员自行调 tw deliver/review，派单已内嵌绝对路径指令）→ 再 dispatch-plan……直到 stop。
 
-## 拓扑与并行
+## stop 处理
 
-- Phase 1 波次机每轮派一个角色（owner → challenger →（核心场景）expert → 门），`plan.waves` 长度为 1；返工/重裁轮由 dispatch-plan 顺序导出，脚本无需特判。
-- 多视角并行不发生在编排层：Challenger 成员用**只读子派单**（junior 档、可写范围为空、`parallel()` 并行、按视角分组）自查，整合成一份 review 交付；子派单数量遵守 policy `concurrencySoftLimit`（默认 4）。
-- 成员可嵌套派发（DSH subagent 完整工具面），但只读子派单不得继续委托、不进收敛与裁决。
+- stop: awaiting-user：向用户呈现 card.choices，答案走 tw decide；任务静止（不轮询、不代答、不越门）；
+- stop: wait-inflight：有成员未交付。用卡内嵌的 inflight[]（原派单全文）原样补派——continuation 且有 expectedAgentId 则 send_message，否则新开 + agent-map；
+- stop: completed：问用户是否 tw archive；
+- stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后继续。
 
-## tier→模型映射
+## 拆包（tw plan）
 
-- `.team-work/platform/dsh.json`：缺失时自动生成三档 `{"use":"agent-default"}` 占位（解析为 DSH 主 agent 模型）；
-- 分档示例：junior→deepseek-v4-flash（廉价快），senior→glm-5.3（强推理中价），expert→gpt-5.6-terra（旗舰）；
-- `tw models` 查看当前解析与来源（explicit / agent-default / fallback / default）；改映射下一波生效，已派发成员不变。
+- 判断要不要拆：目标含多个可独立验收的垂直范围且可写范围能互斥拆分才拆；共享热点收进一个包或设 dependsOn 汇总包；拆分粒度以"子 agent 高注意力"为准（每包一个清晰交付物）；拆分语义质量由 Lead 把关（runtime 只验机械属性：互斥/无环/完成标准在场）；
+- dependsOn 汇总包 = 整合 Owner：完成标准必须含"合并各包结论、解决冲突、不丢信息"；
+- 登记：tw plan --task <名> --packages '<JSON>'（形状 [{id, writable:["路径:kind"], done:["标准"], dependsOn:["包id"]}]）；待决卡片或在途派发时会被拒绝（先处理再拆）；
+- 复杂目标可先开只读子派单收集事实辅助判断拆分边界。
+
+## risk 与选人
+
+- tw open --risk critical|high|normal（或 tw intent --risk 修订）：critical→expert Owner、high→senior（只升不降；challenger/expert 不变）。判断：不可逆/数据迁移/安全敏感/核心跨模块 → critical；常规 → normal；
+- 模型来自 .team-work/platform/dsh.json（tw models 查看）：档位可配候选数组（按性价比排序），同波多 owner 自动家族去重（多样性）；改映射下一波生效。
+
+## 成员标签规范
+
+subagent label 一律 <任务名>.<阶段>.<角色>[@<包>]——稳定、人读、不随轮次变化；不要用派单 key 或哈希做标签。

@@ -418,6 +418,27 @@ test("B：e2eTemplate 物化——entry e2e 直达自动三包（形状映射+�
   assert.equal(d2.dispatches[0].package, "my-own", "用户已 plan 不被模板覆盖")
 })
 
+test("升档卡在 dispatch-plan 路径同样触发（Lead 编排入口不漏）；合理选档的事实体现", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "escdp-t")
+  await call(["plan", "--task", "escdp-t", "--packages", JSON.stringify([
+    { id: "mech", writable: ["M.md:k"], done: ["机械核对"], dependsOn: [] },
+    { id: "arch", writable: ["A.md:k"], done: ["架构裁决"], tier: "expert", dependsOn: [] },
+  ])])
+  const plan = await call(["dispatch-plan", "--task", "escdp-t", "--json"])
+  assert.equal(plan.stop, "awaiting-user", "dispatch-plan 在升档批次前停住")
+  assert.match(plan.card.question, /高于场景默认档/, "升档问题文本")
+  assert.deepEqual(plan.card.escalations, [{ package: "arch", tier: "expert" }], "只列升档包（mech 默认档零打扰）")
+  await call(["decide", "--task", "escdp-t", "--choice", "1"])
+  const plan2 = await call(["dispatch-plan", "--task", "escdp-t", "--json"])
+  assert.equal(plan2.stop, null, "批准后正常出波")
+  const arch = plan2.waves.find((w) => w.package === "arch")
+  const mech = plan2.waves.find((w) => w.package === "mech")
+  assert.equal(arch.tier, "expert", "架构裁决包按 expert 派发")
+  assert.equal(mech.tier, "junior", "机械核对包保持 junior（复杂度判断表的事实体现）")
+})
+
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {
   const root = await makeProject()
   const call = caller(root)

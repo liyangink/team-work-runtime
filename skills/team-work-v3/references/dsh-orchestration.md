@@ -23,7 +23,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 
 ## stop 处理
 
-- stop: awaiting-user：向用户呈现 card.choices，答案走 tw decide；任务静止（不轮询、不代答、不越门）；
+- stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
 - stop: wait-inflight：有成员未交付。用卡内嵌的 inflight[]（原派单全文）原样补派——continuation 且有 expectedAgentId 则 send_message，否则新开 + agent-map；
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后继续。

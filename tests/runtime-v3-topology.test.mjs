@@ -370,8 +370,8 @@ test("A：包 tier 字段——验收非法值拒绝；实际档 = max(包tier, 
   const d = await call(["run", "--task", "a-t"])
   const lo = d.dispatches.find((x) => x.package === "lo")
   const hi = d.dispatches.find((x) => x.package === "hi")
-  assert.equal(lo.tier, "expert", "无包 tier + risk critical → expert（risk 不触发卡）")
-  assert.equal(hi.tier, "expert", "包 senior + risk critical → max=expert")
+  assert.equal(lo.tier, "expert", "无包 tier + risk critical → 兜底抬 expert（用户 open 时已授权，免审批）")
+  assert.equal(hi.tier, "senior", "包显式 senior + risk critical → senior（包级判断优先，risk 不无差别抬全部包）")
   // 批准后重跑幂等：交付 lo 后再 run（hi 在途）不再出卡
   await writeFile(path.join(root, "LO.md"), "x", "utf8")
   await call(["deliver", "--task", "a-t", "--key", d.dispatches.find((x) => x.package === "lo").key, "--outcome", "delivered", "--summary", "s", "--paths", "LO.md"])

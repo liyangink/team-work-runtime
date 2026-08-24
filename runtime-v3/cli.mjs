@@ -168,10 +168,14 @@ const TIER_RANK = { junior: 1, senior: 2, expert: 3 }
 function ownerTierFor(task, sp, pkg = null) {
   const base = sp.ownerTier
   const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
+  // risk 语义修正（用户裁决）：risk 不再无差别抬全部包——仅当包未显式定 tier 时作为兜底抬档；
+  // 包有显式 tier = Lead 的包级判断优先（risk 任务里的外围机械包保持默认档）。
+  if (pkgTier) return pkgTier
   const up = task.policy?.riskTiers?.[task.intent?.risk]
-  return [base, pkgTier, up].filter(Boolean).reduce((acc, t) => ((TIER_RANK[t] ?? 0) > (TIER_RANK[acc] ?? 0) ? t : acc), base)
+  return up && (TIER_RANK[up] ?? 0) > (TIER_RANK[base] ?? 0) ? up : base
 }
-// 升档审批判定（C 触发条件）：包 tier 高于场景默认（直接比较，不含 risk）
+// 升档审批判定（C 触发条件）：包 tier 高于场景默认（直接比较）。
+// risk=critical/high 且包未显式定 tier 的升档免审批——用户在 open 时已知情授权，不重复打扰。
 function isEscalatedTier(task, sp, pkg) {
   const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
   return Boolean(pkgTier && (TIER_RANK[pkgTier] ?? 0) > (TIER_RANK[sp.ownerTier] ?? 0))

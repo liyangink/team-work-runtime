@@ -179,6 +179,34 @@ test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不�
   }
 })
 
+test("路由 blocker 优先于人工门卡（E2E 实测缺陷：人工门提前签发死循环）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "route-t")
+  const d = await call(["run", "--task", "route-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "route-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["run", "--task", "route-t"])
+  await call(["review", "--task", "route-t", "--key", rv.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  const ve = await call(["run", "--task", "route-t"])
+  await call(["review", "--task", "route-t", "--key", ve.dispatch.key, "--recommendation", "accept", "--summary", "s", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  // gate 此时有 E2E 路由 + 人工门两个 awaiting blocker → 必须先出路由卡，不签 decision-issued
+  const card1 = await call(["run", "--task", "route-t"])
+  assert.equal(card1.status, "awaiting-user")
+  assert.equal(card1.next, "route", "路由卡优先")
+  assert.equal(card1.route, "e2e")
+  assert.match(card1.fix ?? card1.note, /route|路由/)
+  const task1 = await loadTask(root, "route-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(task1.journal.filter((e) => e.type === "decision-issued").length, 0, "未提前签发人工门决定")
+  // route 判定后 → 人工门卡出现 → decide → completed
+  await call(["route", "--task", "route-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
+  const card2 = await call(["run", "--task", "route-t"])
+  assert.equal(card2.next, "decide", "路由决定后人工门卡才出现")
+  await call(["decide", "--task", "route-t", "--choice", "1"])
+  const done = await call(["run", "--task", "route-t"])
+  assert.equal(done.status, "completed", "decide 后完成，不再循环签卡")
+})
+
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {
   const root = await makeProject()
   const call = caller(root)

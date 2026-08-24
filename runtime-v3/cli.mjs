@@ -317,6 +317,19 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   }
 
   if (state.next.kind === "await-decision") {
+    // 路由类 blocker 优先（E2E 实测缺陷修复）：gate 同时有路由未判定与人工门时，
+    // 必须先出路由指引卡（走 tw route），不提前签发人工门决定——否则用户答完人工门
+    // 又收到同样的人工门卡（路由仍悬空），死循环且指引缺失。
+    const routeBlocker = (state.gate?.blockers ?? []).find((b) => b.route && b.awaitingUser)
+    if (routeBlocker && !task.decisions.some((d) => d.route === routeBlocker.route)) {
+      return {
+        ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "route", transition: "await-route",
+        route: routeBlocker.route,
+        question: routeBlocker.requirement,
+        fix: routeBlocker.recovery,
+        note: "先做路由判定（tw route），完成后人工门卡才会出现",
+      }
+    }
     const open = task.journal.filter((e) => e.type === "decision-issued").map((e) => e.detail.decisionId)
     const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
     const pending = open.find((id) => !settled.has(id))

@@ -6,7 +6,8 @@ import { twToolDefinition } from "./tw-tool.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 
 export const name = "team-work-dsh"
-export const inject = ["subagents", "skills", "tools", "logger"]
+// F1（交叉审查①）：logger 是 ctx 内建属性非可注入服务——inject 含非服务名会导致 fiber INACTIVE（cordis 实验证实）
+export const inject = ["subagents", "skills", "tools"]
 
 export function apply(ctx, config = {}) {
   // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）

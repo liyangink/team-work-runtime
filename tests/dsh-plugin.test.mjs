@@ -30,6 +30,51 @@ test("I2 tw 工具解析：twBin config 优先；projectRoot 三级链", () => {
   assert.equal(resolveProjectRoot({}, {}), process.cwd())
 })
 
+test("I2 注入链提纯（F7）：同步预注册 install + hint 异步补写 selection.current；读失败静默", async () => {
+  const { makeInjectContribution, hintForChild } = await import("../packages/dsh-plugin/src/inject.js")
+  const calls = []
+  const installs = []
+  const fakeInstall = (ctx, selection) => { installs.push({ ctx, selection }) }
+  const fakeRead = async (file) => {
+    calls.push(file)
+    return JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } })
+  }
+  const ctx = { logger: { info() {} } }
+  let providerAtInstall = "UNSET"
+  const fakeInstallChecked = (childCtx2, selection) => {
+    providerAtInstall = selection.current.provider // 注册时刻的占位快照（应为 null——补读在其后）
+    fakeInstall(childCtx2, selection)
+  }
+  const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+    readFile: fakeRead,
+    resolveInstaller: async () => fakeInstallChecked,
+  })
+  const childCtx = { agent: { id: "child-1", session: { header: { cwd: "/x" } } } }
+  await contribution(childCtx)
+  // 同步预注册：install 已被调用（监听器在场——F2 契约）；注册时刻占位为空（补读未发生）
+  assert.equal(installs.length, 1, "install 同步预注册")
+  assert.equal(providerAtInstall, null, "注册时刻占位为空（补读在注册之后）")
+  const selection = installs[0].selection
+  // 异步补读：selection.current 被覆写为 hint
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(selection.current.model, "m", "hint 异步补写")
+  assert.equal(selection.current.reasoningEffort, "max")
+  // 读失败静默：selection 保持
+  const contribution2 = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+    readFile: async () => { throw new Error("enoent") },
+    resolveInstaller: async () => fakeInstall,
+  })
+  const installs2 = []
+  await contribution2({ agent: { id: "child-2", session: { header: { cwd: "/x" } } } })
+  await new Promise((r) => setTimeout(r, 20))
+  // 无抛出即为通过（selection 保持占位）
+  // installer 解析失败 → 不注入
+  const contribution3 = makeInjectContribution(ctx, {}, { resolveInstaller: async () => null })
+  const before = installs.length
+  await contribution3({ agent: { id: "child-3" } })
+  assert.equal(installs.length, before, "无安装器 → install 不被调")
+})
+
 test("I2 frontmatter 解析：name/description 提取与引号剥离", () => {
   const md = ["---", "name: team-work-v3", 'description: "用 tw CLI 驱动多智能体研发工作流"', "---", "正文"].join(String.fromCharCode(10))
   const fm = parseFrontmatter(md)

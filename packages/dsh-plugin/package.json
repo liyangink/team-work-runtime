@@ -4,9 +4,9 @@
   "description": "team-work-runtime 的 DSH 平台绑定插件：成员模型/effort 注入、skill 注册、tw 原生工具、子代理模型席位徽标",
   "license": "Apache-2.0",
   "type": "module",
-  "main": "src/index.js",
+  "main": "dist/index.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": "./dist/index.js",
     "./client": "./dist/client.js"
   },
   "dsh": {
@@ -14,7 +14,6 @@
   },
   "files": [
     "dist/",
-    "src/",
     "README.md"
   ],
   "peerDependencies": {

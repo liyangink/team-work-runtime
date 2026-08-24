@@ -25,6 +25,10 @@ async function main() {
   await cp(path.join(repoRoot, "skills", "team-work-v3"), path.join(here, "dist", "skill"), { recursive: true })
   console.log("OK dist/skill（SKILL.md + references）")
 
+  // 1b) host 源码拷贝入 dist（F5：发布只含 dist——入口 dist/index.js；src 不进包）
+  await cp(path.join(here, "src"), path.join(here, "dist"), { recursive: true })
+  console.log("OK dist/*.js（host 插件源码拷贝）")
+
   // 2) client bundle：badge 源码本身即 CJS（module.exports），零语法转换纯包装
   const badgeSrc = await readFile(path.join(here, "src-client", "badge.js"), "utf8")
   const bundle = [
@@ -42,7 +46,7 @@ async function main() {
   console.log("OK dist/client.js（工厂式 bundle）")
 
   // 3) npm pack 双向断言（不多不少；npm notice 走 stderr 合并判断；--cache 规避宿主 EPERM）
-  await assertPack(here, "插件包", ["dist/client.js", "dist/skill/SKILL.md", "src/index.js", "README.md", "package.json"], ["roadmap", "tests/", "charter", "team-topology", "pre-phase3"])
+  await assertPack(here, "插件包", ["dist/client.js", "dist/skill/SKILL.md", "dist/index.js", "dist/inject.js", "README.md", "package.json"], ["roadmap", "tests/", "charter", "team-topology", "pre-phase3", "src/index.js"])
   await assertPack(repoRoot, "主包（不含插件）", null, ["packages/", "dsh-plugin"])
   console.log("OK npm pack 双向断言通过")
 }

@@ -1,6 +1,11 @@
 # 团队拓扑找回方案（v3.2 计划）
 
-状态：已吸收交叉评审 A（架构/规范轴）findings F1–F9 修订；待评审 B（实现轴）后实施。背景：DSH Phase 1 编排 E2E（orch-e2e 任务）跑通了串行角色链，同时暴露多 Agent 拓扑缺口；复盘确认 v3 重写时"拓扑执行归平台"被扩大为"拓扑语义不存在"，v2 的拆分/并行/汇总/选人语义丢失（原始设计见 Git 历史 `c4d5270:skills/team-work/references/` 与 `c4d5270:team-work/compiler.mjs`）。
+状态：双交叉评审完成并处置，进入第一批实施。评审记录：
+
+- **评审 A（架构/规范轴，2026-08-24）**：无 blocker；F1–F9 全部吸收（见 §2 各条标注）——F1 DAG 分层派发、F2 按包计轮、F3 findings 包归属与无归属回退、F4 incumbent 降级规程、F5 continuation 基线锚定（agent-map）、F6 重拆窗口事实锚定、F7 整合 Owner=汇总包、F8 consolidation 聚合指纹；A1–A3/A6 判定合规（tw plan 仅机械验收、语义质量归 Lead；packages.json 为决策事实非平行权威；plan 验收即 P2 检查点）。
+- **评审 B（实现轴，2026-08-24，对象 73c8e92+c5623d5）**：无 blocker；F1 损坏锁回收（已修：超龄回收+竞态窗口重试+fixHint）、F3 verdict dispatchExample 缺 --verdict（已修+断言）两个 major；F2 tiers:null（已修）、F5 blocked 卡形状（已修统一对象数组带 recovery）、F6 幂等 registered 形状（已修补 digest）三个 minor；F4 wait-inflight 内嵌全文=本方案 §2.4 范围；review 幂等 findings 顺序敏感判定可接受（顺序即内容）；测试缺口补 5 项；62/62 绿。
+
+背景：DSH Phase 1 编排 E2E（orch-e2e 任务）跑通了串行角色链，同时暴露多 Agent 拓扑缺口；复盘确认 v3 重写时"拓扑执行归平台"被扩大为"拓扑语义不存在"，v2 的拆分/并行/汇总/选人语义丢失（原始设计见 Git 历史 `c4d5270:skills/team-work/references/` 与 `c4d5270:team-work/compiler.mjs`）。
 
 ## 0. 平台事实修正（实测 2026-08-24）
 

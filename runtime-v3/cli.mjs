@@ -129,6 +129,17 @@ function twCommand() {
   }
 }
 
+// 组合评审被审制品清单（当前阶段登记产出物按包分组；P4：runtime 自有事实推导）
+function NLART(task) {
+  const stage = task.workflow ? null : null
+  const items = (task.artifacts?.items ?? []).filter((it) => it.stage === (task.reports?.at(-1)?.stage ?? it.stage))
+  const lines = (task.packages ?? []).map((p) => {
+    const paths = items.filter((it) => (p.writable ?? []).some((w) => w.split(':')[0] === it.path)).map((it) => it.path)
+    return '- 包 ' + p.id + '：' + (paths.join('、') || '（无登记产出物）')
+  })
+  return lines.length ? String.fromCharCode(10) + lines.join(String.fromCharCode(10)) : '（当前阶段登记产出物：' + items.map((it) => it.path).join('、') + '）'
+}
+
 function parseWritableEntry(entry) {
   const sep = entry.lastIndexOf(':')
   return { path: entry.slice(0, sep), artifactKind: entry.slice(sep + 1) }
@@ -143,7 +154,7 @@ function inflightDispatches(task, stageId) {
   for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
   return batch
     .filter((d) => !settled.has(d.key))
-    .map((d) => dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch)
+    .map((d) => dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch)
 }
 
 // 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
@@ -173,7 +184,7 @@ function dispatchCard(task, stageDef, wave, detail) {
     detail.continuation ? '' : (task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : ''),
     detail.continuation ? '' : (task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : ''),
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
-    wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。' : '',
+    wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。被审制品清单：' + NLART(task) : '',
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
     wave.kind === 'respond' ? reworkContext(task, stageDef.id, pkg) : '',
@@ -276,7 +287,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
-    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: { key, kind: wave.kind, role: wave.role, round: wave.round, package: null, continuation: wave.continuation ?? false, writable: [] } }])
+    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: { key, kind: wave.kind, role: wave.role, round: wave.round, package: null, continuation: wave.continuation ?? false, ...(wave.scope ? { scope: wave.scope } : {}), writable: [] } }])
     return dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
   }
 

@@ -10,7 +10,7 @@ description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱�
 ## 判断指引（Lead 依据用户语义决定，不由工具强制）
 
 - **选入口**：审查请求 → `code-review`；新功能/改动 → `research` 或直接 `implementation`（已有明确方案时）；测试补充 → `test`；方案讨论 → `design`。显式 `--entry` = 任务只运行到该阶段验收；缺省 research = 完整工作流。
-- **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier 按复杂度判断表**：机械作业 junior / 常规+推理 senior / 高复杂或不可逆 expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
+- **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier：默认 junior**——廉价档胜任绝大多数常规作业，审查链兜底；仅按失败成本升档：错误难发现/返工贵 → senior，不可逆/安全敏感 → expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡；成员执行中力有不逮可经 unresolved 上抛建议升档）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
 - **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（Owner 升 expert 模型）；较高风险 → `high`（升 senior）；常规缺省 normal。
 - **审查强度**：默认轻量；安全敏感、跨模块、用户点名严格、生产缺陷复盘时要求完整八视角。
 - **何时升级**：两轮未收敛 → 第三轮 Expert 裁决；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。

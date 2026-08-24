@@ -15,6 +15,6 @@
 | F-9 升档审批卡 | ✅ 自动 | E2E-B F-9+F-10（触发/只列升档包/批准后 expert 生效） |  |
 | F-10 八视角全流程 | ✅ 自动 | 同上（三视角并行→组合评审→裁决→汇总包解锁→completed） |  |
 | F-11 e2eTemplate | ✅ 自动 | E2E-B F-11（run 路由→e2e 阶段→path-design/execution 依赖串行） |  |
-| F-12 徽标 | ⏳ 待用户实机 | React 组件形态 + 装载约定源码闭合 + client bundle 构建/语法验证；显示效果需 web 会话人工过目 |  |
+| F-12 徽标 | ⏳ 待用户实机 | React 组件形态 + 装载约定源码闭合（dsh.client + exports["./client"]，client-modules 收集协议）+ client bundle 构建/语法验证；隔离 web 实例 client.js 供给 404（按平台约束：client 插件热载需 dev:web 运行中重建 web artifacts，或正式 dsh plugin add 安装后供给）——显示效果需用户实机过目 |  |
 
 实施过程审查链：方案双轴评审（16 findings 含 2 blocker 全处置）→ 交叉审查①（8 findings 含 1 blocker 全修复 0fba810）→ 交叉审查③（运行中）。C1 实机挖出并修复 bundle 装载协议缺失（eba7480）；§4 写边界声明遗漏自查补上（6fec6d3）。

@@ -1,7 +1,7 @@
 // 并发回归（复核修复验证）：并发 deliver 不丢登记、并发 run 不双派发、并发 decide 不双记
 import test from "node:test"
 import assert from "assert/strict"
-import { mkdtemp, writeFile, readFile } from "node:fs/promises"
+import {mkdtemp, writeFile, readFile, utimes} from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -57,4 +57,16 @@ test("多路径部分失败不留孤儿快照（I10 补强：断言 snapshots）
   await assert.rejects(registerDelivery({ projectRoot, task, dispatchKey: "k-orp", payload: { outcome: "delivered", summary: "s", paths: ["OK1.md", "MISSING.md"] } }))
   const snaps = await fsp.readdir(path.join(taskRoot(projectRoot, "orphan-t"), "snapshots")).catch(() => [])
   assert.equal(snaps.length, 0, "失败后 snapshots 目录为空（复核缺陷 3：曾留孤儿快照）")
+})
+
+test("损坏锁回收（评审 B F1）：超龄损坏锁自动回收，不永久卡死", async () => {
+  const { withOwnerLock } = await import("../runtime/persistence/transactions.mjs")
+  const root = await mkdtemp(path.join(tmpdir(), "tw-lock-"))
+  const lockPath = path.join(root, "task.lock")
+  await writeFile(lockPath, "{ 半截崩溃残留，不是 JSON", "utf8")
+  // mtime 回拨到 11 秒前：越过回收年龄阈值（写入竞态窗口是毫秒级，不受影响）
+  const old = new Date(Date.now() - 11_000)
+  await utimes(lockPath, old, old)
+  const result = await withOwnerLock(lockPath, async () => "ok")
+  assert.equal(result, "ok", "超龄损坏锁应被回收而非 LOCK_CORRUPT 永久失败")
 })

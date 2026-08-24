@@ -77,6 +77,7 @@ function fixHint(code) {
     MAP_INVALID: "映射写法：{\"provider\":\"...\",\"model\":\"...\"} 显式分档，或 {\"use\":\"agent-default\"} 占位；档位 junior/senior/expert；删除 dsh.json 可自动重建",
     STATE_CORRUPT: "控制文件损坏：映射文件可删除重建；任务事实在 reports/journal，可重推导",
     LOCK_UNAVAILABLE: "任务锁被并发写者占用（成员交付/Lead 推进同时进行）：等几秒原样重试同一命令即可；崩溃进程的锁会被自动回收",
+    LOCK_CORRUPT: "任务锁读取异常：崩溃残留的损坏锁会在约 10 秒后自动回收；持续失败且确认无并发写者时，可手动删除任务目录 locks/task.lock",
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
@@ -207,7 +208,8 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   if (state.next.kind === "dispatch") {
     if (!state.next.wave) {
       // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：返回 blocker 卡（I5）
-      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers: state.next.hint ?? [], transition: "blocked" }
+      const blockers = (state.gate?.blockers ?? state.next.hint ?? []).map((b) => (typeof b === "string" ? { message: b, recovery: b } : b))
+      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers, transition: "blocked" }
     }
     const wave = state.next.wave
     const stageDef = workflow.stages.find((s) => s.id === state.stage)
@@ -259,7 +261,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending, question: issued.detail.reason, choices: issued.detail.choices }
   }
   if (state.next.kind === "blocked") {
-    return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason }] }
+    return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason, recovery: state.next.reason }] }
   }
   return { ok: true, task: name, stage: state.stage, status: state.status, next: "run", transition: "none", gate: state.gate }
 }
@@ -434,7 +436,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
           modelHint: { provider: modelHint.provider, model: modelHint.model, source: modelHint.source },
           dispatchExample: deliver === "deliver"
             ? `${twCommand()} deliver --task ${name} --key ${d.key} --outcome delivered --summary <一句话> --paths <可写路径>`
-            : `${twCommand()} review --task ${name} --key ${d.key} --recommendation <accept|rework|escalate> --summary <一句话>`,
+            : `${twCommand()} review --task ${name} --key ${d.key} --recommendation <accept|rework|escalate> --summary <一句话>${d.kind === "verdict" ? " --verdict '{\"outcome\":\"accept\",\"rationale\":\"…\",\"confidence\":\"high\",\"recommendedAction\":\"…\"}'" : ""}`,
         }
         const plan = {
           ok: true, task: name, stage: card.stage, stop: null,

@@ -1,4 +1,4 @@
-import { open, readFile, rename, rm } from "node:fs/promises"
+import { open, readFile, rename, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
@@ -54,6 +54,8 @@ function processIsAlive(pid) {
   }
 }
 
+const LOCK_STALE_MS = 10_000
+
 async function reclaimOrphanedLock(lockPath) {
   const recoveryPath = `${lockPath}.recovery`
   let recoveryHandle
@@ -69,7 +71,17 @@ async function reclaimOrphanedLock(lockPath) {
       owner = JSON.parse(await readFile(lockPath, "utf8"))
     } catch (error) {
       if (error.code === "ENOENT") return true
-      throw new StoreError("LOCK_CORRUPT", "owner lock is unreadable", [{ message: error.message }])
+      if (error instanceof SyntaxError) {
+        // 损坏锁：写入竞态窗口（另一进程 open 后尚未写完）内读到半截 JSON 是毫秒级现象，删除会破坏互斥——
+        // 只有超过回收年龄的损坏锁才判定为崩溃残留并回收；年轻的照常重试。
+        const ageMs = Date.now() - (await stat(lockPath)).mtimeMs
+        if (ageMs > LOCK_STALE_MS) {
+          await rm(lockPath)
+          return true
+        }
+        return false
+      }
+      throw error
     }
     if (processIsAlive(owner.pid)) return false
     await rm(lockPath)

@@ -112,7 +112,8 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   // 不追加第二条 report-accepted；payload 变化才是真实修订，照常覆盖并记录。
   const prior = await readJson(path.join(task.root, "reports", `deliver-${dispatchKey}.json`), { allowMissing: true })
   if (prior && JSON.stringify(prior.payload) === JSON.stringify({ outcome, summary, paths: normalized, checks, unresolved })) {
-    return { reportId: `deliver-${dispatchKey}`, accepted: true, idempotent: true, registered: prior.payload.paths.map((p) => ({ path: p })), hint: "此前已接受同一交付（幂等返回）；无需重复操作。" }
+    const registered = normalized.map((rel) => ({ path: rel, digest: fresh.artifacts.items.find((i) => i.path === rel)?.digest ?? null }))
+    return { reportId: `deliver-${dispatchKey}`, accepted: true, idempotent: true, registered, hint: "此前已接受同一交付（幂等返回）；无需重复操作。" }
   }
 
   // 全部检查通过后一次性落盘（I10：失败不留半态）；先读全部再写，单路径失败不留孤儿快照（复核修复）

@@ -89,6 +89,7 @@ export function validateDshMap(map) {
   for (const key of Object.keys(map)) {
     if (!["tiers", "defaults"].includes(key)) throw invalid(`dsh.json 含未知顶层字段 "${key}"`, `只允许 tiers 与 defaults；${ENTRY_EXAMPLE}`)
   }
+  if (map.tiers === null) throw invalid("tiers 不能为 null（不配置该键或用空对象 {} 表示三档全回退）", ENTRY_EXAMPLE)
   const tiers = map.tiers ?? {}
   if (typeof tiers !== "object" || Array.isArray(tiers)) throw invalid("tiers 必须是对象", ENTRY_EXAMPLE)
   const out = { tiers: {}, defaults: null }

@@ -195,11 +195,60 @@ test("verdict 派单必须内嵌工具调用指令（P2：成员不调用 review
   await writeFile(path.join(root, "R.md"), "x", "utf8")
   await call(["deliver", "--task", "vd-t", "--key", d1.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   await call(["review", "--task", "vd-t", "--key", (await call(["run", "--task", "vd-t"])).dispatch.key, "--recommendation", "accept", "--summary", "s"])
-  const verdictDispatch = await call(["run", "--task", "vd-t"])
-  assert.equal(verdictDispatch.dispatch.kind, "verdict")
-  assert.match(verdictDispatch.dispatch.prompt, /review --task vd-t --key /, "verdict 派单含 review 调用指令")
-  assert.match(verdictDispatch.dispatch.prompt, /--verdict/, "verdict 派单含 --verdict 参数指引")
-  assert.match(verdictDispatch.dispatch.prompt, /不要只写成文字/, "明确禁止纯文本裁决")
+  // dispatch-plan 派发 verdict 波并导出（后续 run 会因在途检查返回 wait，不可重复取）
+  const plan = await call(["dispatch-plan", "--task", "vd-t", "--json"])
+  assert.equal(plan.waves.length, 1)
+  assert.equal(plan.waves[0].kind, "verdict")
+  assert.match(plan.waves[0].prompt, /review --task vd-t --key /, "verdict 派单含 review 调用指令")
+  assert.match(plan.waves[0].prompt, /--verdict/, "verdict 派单含 --verdict 参数指引")
+  assert.match(plan.waves[0].prompt, /不要只写成文字/, "明确禁止纯文本裁决")
+  // 评审 B F3：dispatchExample 必须同样含 --verdict（人读模式照抄补派不得复现 P2 违反）
+  assert.match(plan.waves[0].dispatchExample, /--verdict/, "dispatchExample 与 prompt 一致含 --verdict")
+})
+
+test("dispatch-plan stop:blocked 可达且 blockers 为对象数组（评审 B F5 形状统一）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "blk-t")
+  const d = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "blk-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md", "--checks", '[{"name":"lint","result":"fail"}]'])
+  const task = await loadTask(root, "blk-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const at = new Date().toISOString()
+  const base = { dispatchKey: d.dispatch.key, round: 1, stage: "code-review", taskSha: "x" }
+  await writeFile(path.join(task.root, "reports", "rc.json"), JSON.stringify({ reportId: "rc", role: "challenger", kind: "review", ...base, payload: { summary: "s", recommendation: "accept" }, at }))
+  await writeFile(path.join(task.root, "reports", "re.json"), JSON.stringify({ reportId: "re", role: "expert", kind: "review", ...base, payload: { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } }, at }))
+  await call(["route", "--task", "blk-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
+  // through-stage 有人工门：先出 awaiting-user，decide 过门后剩 checks-fail（非 awaiting）→ blocked
+  const gate1 = await call(["run", "--task", "blk-t"])
+  assert.equal(gate1.status, "awaiting-user")
+  await call(["decide", "--task", "blk-t", "--choice", "1"])
+  const plan = await call(["dispatch-plan", "--task", "blk-t", "--json"])
+  assert.equal(plan.stop, "blocked", "checks fail 的 gate blocker 非 awaiting → blocked stop")
+  assert.ok(Array.isArray(plan.card.blockers) && plan.card.blockers.length > 0)
+  for (const b of plan.card.blockers) {
+    assert.equal(typeof b, "object", "blockers 统一对象数组：" + JSON.stringify(b))
+    assert.ok(b.recovery, "每条 blocker 带恢复指引")
+  }
+})
+
+test("TW_CMD 覆盖派单注入指令（PATH 注入可配置）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "cmd-t")
+  const prev = process.env.TW_CMD
+  process.env.TW_CMD = "twx"
+  try {
+    const d = await call(["run", "--task", "cmd-t", "--writable", "R.md:code-review"])
+    assert.match(d.dispatch.prompt, /twx deliver --task cmd-t/, "TW_CMD 优先于自动解析")
+  } finally {
+    if (prev === undefined) delete process.env.TW_CMD
+    else process.env.TW_CMD = prev
+  }
+})
+
+test("映射校验：tiers:null 显式拒绝（评审 B F2）", async () => {
+  assert.throws(() => validateDshMap({ tiers: null, defaults: null }), (e) => e.code === "MAP_INVALID" && /null/.test(e.message), "tiers 显式 null 是配置错误")
 })
 
 test("幂等重交：同 key 同 payload 不追加第二条 report-accepted（E2E-10 补全）", async () => {

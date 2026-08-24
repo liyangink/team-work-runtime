@@ -47,6 +47,7 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
       hint && installModelSelection(childCtx, { current: { provider, model, reasoningEffort: effort } })
   agents.json 定位：config.projectRoot 显式配置 → 兜底 childCtx.agent.session.header.cwd + "/.team-work/platform/agents.json"
   失败语义（逐级静默降级）：无 config 无 header.cwd / 无 modelHints / 无此 childId → 不注入（继承 Lead 默认，不劣化现状）
+  边界注记（I1 实现确认）：agent-map 自动重算取该档池首选（单成员注册无波内上下文）——波内多样性仍以 dispatch-plan 输出为权威；Lead 需要精确多样性时用 --model-hint 覆盖（罕见）
 ```
 
 ### 2.2 tw 原生工具（tw-tool.js，B-F4/F7 修正形状）

@@ -24,6 +24,20 @@ export function pickFromPool(pool, usedFamilies = []) {
   return { ...picked, selectedBy: fresh ? "diversity" : "first" }
 }
 
+// 单波 modelHint 决策（I1 提取为纯函数，dispatch-plan 与 agent-map 自动落盘共用）：
+// tier 档位池 → 波内家族去重 → effort 透传。返回 {provider, model, source, effort?} 或 null（未解析）。
+export function computeModelHint(tierRes, usedFamilies) {
+  if (!tierRes || !tierRes.pool || tierRes.pool.length === 0) return null
+  const picked = pickFromPool(tierRes.pool, usedFamilies)
+  const hint = picked ? { ...tierRes, ...picked } : tierRes
+  return {
+    provider: hint.provider, model: hint.model, source: hint.source,
+    ...(hint.family !== undefined ? { family: hint.family } : {}),
+    ...(picked?.selectedBy ? { selectedBy: picked.selectedBy } : {}),
+    ...(hint.effort !== undefined ? { effort: hint.effort } : {}),
+  }
+}
+
 export function dshMapPath(projectRoot) {
   return path.join(controlRoot(projectRoot), "platform", "dsh.json")
 }

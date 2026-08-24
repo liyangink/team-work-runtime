@@ -11,7 +11,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
-import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath, pickFromPool } from "./dsh-map.mjs"
+import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath, pickFromPool, computeModelHint } from "./dsh-map.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -662,19 +662,41 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
 // agent-map（v3.2/F5）：登记 dispatchKey → 平台 subagent id（Lead 实际开 subagent 后调用）。
 // 存 .team-work/platform/agents.json（平台绑定事实，Lead 维护；runtime 只读写不调平台）。
 // 续派波经 dispatch-plan 导出 expectedAgentId（同包同角色上一派发的映射）——Lead 据此 send_message 续原会话。
-async function cmdAgentMap({ projectRoot, name, key, agent }) {
+async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task = await loadTask(projectRoot, name, { workflow, policy })
-  if (!task.journal.some((e) => e.type === 'dispatched' && e.detail.key === key)) {
+  const dispatch = task.journal.find((e) => e.type === 'dispatched' && e.detail.key === key)
+  if (!dispatch) {
     throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
   }
+  await ensureDshMap(projectRoot) // 确保 platform/ 目录与映射环境存在（agent-map 可能是首个平台命令）
+  // I1/A-F1（P4）：modelHint 由 runtime 自动重算（与 dispatch-plan 同一决策函数），
+  // 以 childId 为主键落 modelHints——Lead 零手动转录；--model-hint 仅显式覆盖（测试/特殊场景）。
+  let hint = null
+  if (modelHint !== undefined) {
+    try { hint = JSON.parse(modelHint) } catch { throw fail('USAGE', '--model-hint 不是合法 JSON：{"provider":"...","model":"...","effort":"..."}') }
+    if (!hint.provider || !hint.model) throw fail('USAGE', '--model-hint 需要 provider 与 model 非空')
+  } else {
+    const resolved = await resolveTiers(projectRoot)
+    const stageScene = scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation')
+    const tier = dispatch.detail.role === 'owner'
+      ? ownerTierFor(task, stageScene, dispatch.detail.package ?? null)
+      : dispatch.detail.role === 'challenger' ? stageScene.challengerTier : 'expert'
+    hint = computeModelHint(resolved.tiers[tier], [])
+      ? ownerTierFor(task, scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation'), dispatch.detail.package ?? null)
+      : dispatch.detail.role === 'challenger'
+        ? scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation').challengerTier
+        : 'expert'
+    hint = computeModelHint(resolved.tiers[tier], [])
+  }
   const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
-  const fallback = '{ "mappings": {} }'
+  const fallback = '{ "mappings": {}, "modelHints": {} }'
   const current = JSON.parse(await readFile(file, 'utf8').catch(() => fallback))
   current.mappings = { ...(current.mappings ?? {}), [key]: agent }
+  if (hint) current.modelHints = { ...(current.modelHints ?? {}), [agent]: hint }
   await atomicJson(file, current)
-  return { ok: true, task: name, key, agent, note: '已登记；同包同角色的续派波将携带 expectedAgentId' }
+  return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并自动落盘该成员的模型注入决策（modelHints[childId]，插件注入消费）' : '已登记；同包同角色的续派波将携带 expectedAgentId' }
 }
 
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
@@ -719,9 +741,8 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
           const tierRes = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
           if (!resolved.tiers[d.tier]) warnings.push('未知档位 ' + d.tier + '，标记未解析')
-          const picked = pickFromPool(tierRes.pool, usedFamilies)
-          if (picked) usedFamilies.push(picked.family)
-          const hint = picked ? { ...tierRes, ...picked } : tierRes
+          const hint = computeModelHint(tierRes, usedFamilies)
+          if (hint && hint.family) usedFamilies.push(hint.family)
           const pkgDef = (task.packages ?? []).find((p) => p.id === d.package)
           const example = deliver === 'deliver'
             ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
@@ -735,7 +756,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员" } : {}), ...(picked ? { family: picked.family, selectedBy: picked.selectedBy } : {}) },
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员" } : {}), ...(hint?.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }
@@ -859,7 +880,7 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
       case "plan": return await cmdPlan({ ...common, name: args.task, packagesJson: args.packages })
-      case "agent-map": return await cmdAgentMap({ ...common, name: args.task, key: args.key, agent: args.agent })
+      case "agent-map": return await cmdAgentMap({ ...common, name: args.task, key: args.key, agent: args.agent, modelHint: args["model-hint"] })
       case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
       case "models": return await cmdModels(common)
       case "init": return await cmdInit({ ...common, force: argv.includes("--force") })

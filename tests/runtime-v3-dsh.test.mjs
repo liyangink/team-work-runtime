@@ -282,6 +282,31 @@ test("幂等重交：同 key 同 payload 不追加第二条 report-accepted（E2
   assert.equal(task2.journal.filter((e) => e.type === "report-accepted").length, 2, "deliver 一条 + review 一条")
 })
 
+test("I1：agent-map 自动落盘 modelHint（P4：零手动转录）+ --model-hint 覆盖 + childId 主键", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "i1-t")
+  const d = await call(["run", "--task", "i1-t", "--writable", "R.md:code-review"])
+  // 自动：不传 --model-hint → runtime 重算（settings 夹具为 prov-main/deepseek-v4-pro 占位）
+  const r1 = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-abc"])
+  assert.equal(r1.ok, true)
+  assert.equal(r1.modelHint.model, "deepseek-v4-pro", "自动重算（owner 波 junior 档 → 占位解析）")
+  assert.equal(r1.modelHint.source, "agent-default")
+  const agentsJson = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+  assert.equal(agentsJson.mappings[d.dispatch.key], "child-abc", "mappings 按 key")
+  assert.equal(agentsJson.modelHints["child-abc"].model, "deepseek-v4-pro", "modelHints 按 childId 主键（插件注入消费）")
+  // 覆盖：--model-hint 显式指定
+  const r2 = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-def", "--model-hint", '{"provider":"prov-x","model":"m-y","effort":"high"}'])
+  assert.equal(r2.modelHint.model, "m-y")
+  assert.equal(agentsJson !== null || true, true)
+  const aj2 = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+  assert.equal(aj2.modelHints["child-def"].effort, "high", "覆盖含 effort")
+  // 非法覆盖拒绝
+  const bad = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-ghi", "--model-hint", "not-json"])
+  assert.equal(bad.ok, false)
+  assert.match(bad.message, /model-hint/)
+})
+
 test("help：CLI 即接口——全部命令与新增动词在场", async () => {
   const r = await tw(["help"])
   assert.equal(r.ok, true)

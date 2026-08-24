@@ -13,7 +13,7 @@ description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱�
 - **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier：默认 junior**——廉价档胜任绝大多数常规作业，审查链兜底；仅按失败成本升档：错误难发现/返工贵 → senior，不可逆/安全敏感 → expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡；成员执行中力有不逮可经 unresolved 上抛建议升档）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
 - **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（未显式定 tier 的包兜底升 expert 且免审批；包级判断仍以 tw plan 的显式 tier 优先）；较高风险 → `high`；常规缺省 normal。
 - **审查强度**：默认轻量；安全敏感、跨模块、用户点名严格、生产缺陷复盘时要求完整八视角。
-- **何时升级**：两轮未收敛 → 第三轮 Expert 裁决；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。
+- **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与档位（junior/senior/expert 预算）正交——裁决者每轮一个（波次机结构），expert 档的 owner 包完全正常，见拓扑与成本篇。
 
 场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；代码审查八视角与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（dispatch-plan → agent 派发）的脚本模板见 **[DSH 编排](references/dsh-orchestration.md)**。
 

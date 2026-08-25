@@ -54,8 +54,11 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
       if (config.injectionEnabled === false) return
       const install = await resolveInstallerFn(settings)
       if (!install) return // 解析不到安装器 → 不注入（继承默认）
-      // 同步预注册（F2 核心）：selection.current 先为空占位，监听器即刻在场
-      const selection = { current: { provider: null, model: null }, assembled: void 0 }
+      // 同步预注册（F2 核心）：selection.current 初始必须 undefined——宿主语义里
+      // undefined = 不干预（继承默认模型），而 {provider:null} 会把 variables.provider/model
+      // 覆写成 null → 子代 no provider/model 直接 turn error（实机两例铁证）。
+      // hint 异步就绪后赋值完整对象才参与覆盖。
+      const selection = { current: undefined, assembled: undefined }
       install(childCtx, selection)
       // 项目根：config.projectRoots 最长前缀命中 → config.projectRoot 兜底 → header.cwd
       const cwd = agent?.session?.header?.cwd

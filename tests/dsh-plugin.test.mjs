@@ -75,7 +75,9 @@ test("I2 注入链提纯（F7）：同步预注册 install + hint 异步补写 s
   const ctx = { logger: { info() {} } }
   let providerAtInstall = "UNSET"
   const fakeInstallChecked = (childCtx2, selection) => {
-    providerAtInstall = selection.current.provider // 注册时刻的占位快照（应为 null——补读在其后）
+    // 注册时刻的快照：current 必须是 undefined（宿主语义：undefined=不干预继承默认；
+    // {provider:null} 会覆写 variables → 子代 no provider/model 直接 turn error——实机铁证）
+    providerAtInstall = selection.current === undefined ? "UNDEFINED" : String(selection.current.provider)
     fakeInstall(childCtx2, selection)
   }
   const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
@@ -86,7 +88,7 @@ test("I2 注入链提纯（F7）：同步预注册 install + hint 异步补写 s
   await contribution(childCtx)
   // 同步预注册：install 已被调用（监听器在场——F2 契约）；注册时刻占位为空（补读未发生）
   assert.equal(installs.length, 1, "install 同步预注册")
-  assert.equal(providerAtInstall, null, "注册时刻占位为空（补读在注册之后）")
+  assert.equal(providerAtInstall, "UNDEFINED", "注册时刻 current=undefined（不干预语义；null 对象会清空宿主模型选择）")
   const selection = installs[0].selection
   // 异步补读：selection.current 被覆写为 hint
   await new Promise((r) => setTimeout(r, 20))

@@ -65,6 +65,8 @@
 - **验收状态（功能矩阵 F-1..F-12）**：F-1..F-4/F-6/F-8..F-11 全自动验证通过（E2E-A 真实 cordis 装载层 + E2E-B runtime 全功能矩阵 + C1 实机宿主 boot 链 dump-config + 隔离 web 实例启动零 error）；**F-5/F-7/F-12（真实 LLM 注入/effort 进 header/徽标显示）待用户实机确认**（需带凭据真实会话创建 subagent——插件安装后参照插件 README"实机验证"节）；
 - **客户端启动回归修复（2026-08-25）**：根包市场通道实机刷新暴露 client 工厂误用 Node `(module, exports)` 形态，导致 `factory(require)` 返回 `undefined`；修正为直接返回 Cordis 插件导出，并移除把内建 `logger` 误声明为注入服务的第二层 pending blocker。新增工厂协议回归测试，隔离 web profile 已验证完整进入主界面且控制台零错误；根包/独立插件包版本分别推进到 `0.2.0-beta.2`/`0.1.0-beta.3`；
 - 剩余：npm 正式发布（本地 pack 已验证）；写边界平台 hook 不做（用户裁决：skill 规范承载，派单边界声明已落地）；
+- **台账（2026-08-25 复盘，记录待批不实施）**：① runtime 引导缺口——writable 形状校验应前移到 run 派发时（目录粒度警告、kind 不在阶段合同当场拒绝），DISPATCH_INPUT_REQUIRED 提示补文件级语义；② 归档 manifest 应保留 deliver 的 paths/digest 明细（当前 completed 归档精简后 P1 重算不完全成立）；③ Lead 纪律拟固化进 skill：派单禁伪代码级注入、"已验证"断言逐条真验、归档重开后新成员核验自交；④ skill 装载故障：宿主 skill 工具对仓库内 team-work-v3 报 "loaded skill source must be a string"（平台侧或 skill 资源形态问题，待查）；⑤ 后台 continuable 子代死亡根因见下条（已修）。
+- **注入致命 bug 修复（2026-08-25，实机铁证）**：inject.js selection 占位值 `{provider:null, model:null}` 违背宿主语义——installModelSelection 里 `selected === undefined` 才是不干预（继承默认），null 对象会把 variables.provider/model 覆写为 null → 子代 no provider/model 直接 turn error（两个后台子代无遗言死亡的根因；前台子代未登记 modelHints 未触发注入所以存活）。修复：占位改 undefined，hint 就绪才赋值完整对象；守护测试同步改判 undefined 语义。注意：此前"F-5 注入侧证"结论作废——当时 3 个前台子代正常恰因未注入。
 - `e2eTemplate` 物化已实施（run 路由 → e2e 阶段 → 三包依赖链，E2E-B F-11 验证）。
 
 ## v1 Phase 0：规则冻结

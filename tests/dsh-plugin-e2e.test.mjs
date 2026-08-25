@@ -74,6 +74,44 @@ test("E2E-A：插件激活等待安装器解析完成后才开放 continuable se
   dispose()
 })
 
+test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可注入", async () => {
+  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const setups = []
+  const installs = []
+  const warnings = []
+  let resolveCalls = 0
+  const ctx = {
+    subagents: { registerContinuableSetup(contribution) { setups.push(contribution); return () => {} } },
+    skills: { register() {} },
+    tools: { register() {} },
+    logger: { warn(message) { warnings.push(String(message)) }, info() {} },
+  }
+  const disposePlugin = await plugin.apply(ctx, { injectionEnabled: true }, {
+    resolveInstaller: async () => {
+      resolveCalls += 1
+      if (resolveCalls === 1) throw new Error("dependency unavailable")
+      return (_childCtx, selection) => { installs.push(selection); return () => {} }
+    },
+    installerRetryMs: 2,
+    registerEmbeddedSkill: async () => {},
+    installPluginSettings: (_ctx, entry) => () => entry,
+  })
+
+  assert.equal(setups.length, 1, "首次失败仍注册可降级 setup")
+  const disposeBeforeRecovery = setups[0]({ agent: { id: "child-before-recovery" } })
+  assert.equal(installs.length, 0, "安装器不可用时继承默认模型")
+  disposeBeforeRecovery()
+
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.ok(resolveCalls >= 2, "后台重新解析安装器")
+  const disposeAfterRecovery = setups[0]({ agent: { id: "child-after-recovery" } })
+  assert.equal(installs.length, 1, "安装器恢复后，新子代同步安装 listener")
+  disposeAfterRecovery()
+  assert.ok(warnings.some((message) => message.includes("dependency unavailable")), "首次失败原因留痕")
+  assert.equal(typeof disposePlugin, "function", "插件返回清理函数以停止后台重试并注销 setup")
+  disposePlugin()
+})
+
 test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真文件）", async () => {
   const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
   const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises")

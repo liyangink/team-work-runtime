@@ -1,6 +1,6 @@
 {
   "name": "team-work-runtime",
-  "version": "0.2.0-beta.5",
+  "version": "0.2.0-beta.6",
   "description": "平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转",
   "repository": {
     "type": "git",
@@ -14,6 +14,7 @@
   "exports": {
     ".": "./packages/dsh-plugin/src/index.js",
     "./client": "./packages/dsh-plugin/src-client/badge.js",
+    "./bin/tw.mjs": "./bin/tw.mjs",
     "./package.json": "./package.json"
   },
   "bin": {

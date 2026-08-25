@@ -175,7 +175,20 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
 
   assert.ok(reads > 0, "损坏同步快照后仍异步重试")
   assert.ok(warnings.some((message) => message.includes("agents.json") && message.includes("继续补读")), "读错留痕并说明自动重试")
-  assert.ok(warnings.some((message) => message.includes("超时") && message.includes("agent-map")), "补读超时给出恢复指引")
+  assert.ok(warnings.some((message) => message.includes("超时") && message.includes("读权限")), "权限错误超时后给出修复权限的恢复指引")
+
+  const damagedWarnings = []
+  const damagedContribution = makeInjectContribution({ logger: { warn: (message) => damagedWarnings.push(String(message)) } }, { projectRoot: "/proj" }, {
+    readFileSync: () => "{损坏",
+    readFile: async () => "{仍损坏",
+    installerNow: () => () => () => {},
+    pollMs: 2,
+    pollMaxMs: 8,
+  })
+  const disposeDamaged = damagedContribution({ agent: { id: "child-damaged" } })
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  disposeDamaged()
+  assert.ok(damagedWarnings.some((message) => message.includes("超时") && message.includes("修复或删除损坏的 agents.json")), "损坏 JSON 超时后给出恢复有效文件的指引")
 
   const contributionInstallerError = makeInjectContribution(ctx, {}, {
     installerNow: () => { throw new Error("installer failed") },

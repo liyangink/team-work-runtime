@@ -108,6 +108,7 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
       const startedAt = Date.now()
       let readIssueWarned = false
       let timeoutWarned = false
+      let lastReadError = null
       const applyHint = (text) => {
         const hint = hintForChild(JSON.parse(text), agent.id)
         if (!hint) return false
@@ -116,9 +117,22 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
         return true
       }
       const warnReadIssue = (error) => {
+        lastReadError = error
         if (readIssueWarned || error?.code === "ENOENT") return
         readIssueWarned = true
         warn("读取 agents.json 失败，将继续补读：" + describe(error))
+      }
+      const recoveryFor = (error) => {
+        if (error instanceof SyntaxError || error?.name === "SyntaxError") {
+          return "请修复或删除损坏的 agents.json，再重新运行 tw agent-map 后重试请求"
+        }
+        if (error?.code === "EACCES" || error?.code === "EPERM") {
+          return "请修复 .team-work/platform/agents.json 的读权限后重试请求"
+        }
+        if (error?.code === "ENOENT" || !error) {
+          return "请确认 tw agent-map 已写入该子代映射后重试请求"
+        }
+        return "请根据上述读取错误修复 agents.json 后重试请求"
       }
       const scheduleNext = (error) => {
         if (stopped) return
@@ -129,7 +143,7 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
         }
         if (!timeoutWarned) {
           timeoutWarned = true
-          warn("等待 agents.json modelHint 超时，当前子代保持默认模型；请确认 tw agent-map 已为子代 " + agent.id + " 写入映射后重试请求")
+          warn("等待 agents.json modelHint 超时，当前子代 " + agent.id + " 保持默认模型；" + recoveryFor(lastReadError))
         }
       }
       try {
@@ -142,6 +156,7 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
         readFileFn(file, "utf8").then((text) => {
           if (stopped) return
           if (applyHint(text)) return // 命中即停（一次性注入，幂等）
+          lastReadError = null
           scheduleNext()
         }).catch((error) => {
           scheduleNext(error)

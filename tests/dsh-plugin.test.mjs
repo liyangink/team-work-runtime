@@ -21,8 +21,233 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   for (const { factory } of registrations) {
     const plugin = factory(() => ({}))
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
-    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions"], "logger 是 ctx 内建属性，不得声明为注入服务")
+    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection"], "须声明模型查询使用的 connection；logger 是 ctx 内建属性")
   }
+})
+
+test("I4 模型席位声明回收时同步释放徽标注册", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const plugin = registrations[0].factory((id) => id === "react" ? {} : {})
+  let injectedDisposer
+  let releases = 0
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    slots: {
+      inject(_slot, install) { injectedDisposer = install() },
+      register() { return () => { releases += 1 } },
+    },
+    logger: { warn() {} },
+  })
+
+  assert.equal(typeof injectedDisposer, "function", "slots.inject 回调须透传 register disposer")
+  injectedDisposer()
+  assert.equal(releases, 1, "席位声明 collapse/reload 时不得遗留重复徽标")
+})
+
+test("I4 子代理模型席位显示 sessions.models 返回的实际模型与 effort", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  let state = null
+  let pendingEffect
+  const React = {
+    createElement(type, props, children) { return { type, props: { ...props, children } } },
+    useState(initial) {
+      if (state === undefined) state = initial
+      return [state, (next) => { state = next }]
+    },
+    useEffect(effect) { pendingEffect = effect },
+  }
+  const factory = registrations[0].factory
+  const plugin = factory((id) => {
+    if (id === "react") return React
+    throw new Error("测试未提供模块：" + id)
+  })
+
+  let contribution
+  const ctx = {
+    sessions: { subagentAddress: (sessionId) => sessionId === "child-session" ? { childId: "child" } : undefined },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    get(name) {
+      if (name !== "connection") return undefined
+      return { api: { sessions: { models: async () => ({
+        result: {
+          ok: true,
+          value: { current: { provider: "provider-example", model: "model-example", reasoningEffort: "high" } },
+        },
+      }) } } }
+    },
+    logger: { warn() {} },
+  }
+
+  plugin.apply(ctx)
+  const props = contribution.options.inject("child-session")
+  assert.equal(contribution.component(props), null, "RPC 返回前不显示占位值")
+  pendingEffect()
+  await Promise.resolve()
+  await Promise.resolve()
+
+  const rendered = contribution.component(props)
+  assert.equal(rendered?.type, "span")
+  assert.equal(rendered?.props?.children, "provider-example/model-example · 推理 high")
+})
+
+test("I4 徽标仅追加在模型席位旁，不替换父会话的原生模型选择器", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const React = {
+    createElement() { throw new Error("父会话不应渲染插件徽标") },
+    useState(initial) { return [initial, () => {}] },
+    useEffect() {},
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  let targetSlot
+  let contribution
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    slots: {
+      inject(slot, install) { targetSlot = slot; install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    logger: { warn() {} },
+  })
+
+  assert.equal(targetSlot, "conversation.input.right", "追加到模型席位左侧区域，不能抢占 single 模型席位")
+  const parentProps = contribution.options.inject("parent-session")
+  assert.deepEqual({ ...parentProps }, { sessionId: "parent-session", addressed: false }, "slot inject 必须始终返回对象")
+  assert.equal(contribution.component({
+    ...parentProps,
+    session: {
+      running: false,
+      nodes: [{ kind: "assistant", requestConfig: { provider: "parent-provider", model: "parent-model", reasoningEffort: "high" } }],
+    },
+  }), null, "父会话即使已有请求记录也只保留原生模型选择器")
+})
+
+test("I4 子代理开始新一轮运行时刷新实际模型与 effort", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  let state = null
+  let pendingEffect
+  let previousDeps
+  const React = {
+    createElement(type, props, children) { return { type, props: { ...props, children } } },
+    useState() { return [state, (next) => { state = next }] },
+    useEffect(effect, deps) {
+      const changed = !previousDeps || deps.some((value, index) => value !== previousDeps[index])
+      previousDeps = deps
+      if (changed) pendingEffect = effect
+    },
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  let contribution
+  let current = { provider: "provider-before", model: "model-before", reasoningEffort: "low" }
+  plugin.apply({
+    sessions: { subagentAddress() { return { childId: "child" } } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    get() {
+      return { api: { sessions: { models: async () => ({ result: { ok: true, value: { current } } }) } } }
+    },
+    logger: { warn() {} },
+  })
+
+  const injected = contribution.options.inject("child-session")
+  contribution.component({ ...injected, session: { running: false } })
+  pendingEffect()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(contribution.component({ ...injected, session: { running: false } }).props.children, "provider-before/model-before · 推理 low")
+
+  current = { provider: "provider-after", model: "model-after", reasoningEffort: "max" }
+  pendingEffect = undefined
+  contribution.component({ ...injected, session: { running: true } })
+  assert.equal(typeof pendingEffect, "function", "运行状态变化必须触发重新读取")
+  pendingEffect()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(contribution.component({ ...injected, session: { running: true } }).props.children, "provider-after/model-after · 推理 max")
+})
+
+test("I4 addressed 子代理的模型 RPC 不可用时显示会话真实请求记录", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  let pendingEffect
+  const React = {
+    createElement(type, props, children) { return { type, props: { ...props, children } } },
+    useState(initial) { return [initial, () => {}] },
+    useEffect(effect) { pendingEffect = effect },
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  let contribution
+  let rpcCalls = 0
+  plugin.apply({
+    sessions: { subagentAddress() { return { childId: "child" } } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    connection: { api: { sessions: { models: async () => { rpcCalls += 1; throw new Error("addressed session unavailable") } } } },
+    logger: { warn() {} },
+  })
+
+  const injected = contribution.options.inject("child-session")
+  const rendered = contribution.component({
+    ...injected,
+    session: {
+      running: false,
+      views: { get() { return { requests: [
+        { purpose: "assistant", requestConfig: { provider: "provider-recorded", model: "model-recorded", reasoningEffort: "xhigh" } },
+        { purpose: "compaction", requestConfig: { provider: "provider-compact", model: "model-compact", reasoningEffort: "low" } },
+      ] } } },
+      nodes: [
+        { kind: "assistant", requestConfig: { provider: "provider-recorded", model: "model-recorded", reasoningEffort: "xhigh" } },
+      ],
+    },
+  })
+  assert.equal(rendered?.props?.children, "provider-recorded/model-recorded · 推理 xhigh")
+  pendingEffect()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(rpcCalls, 1, "用例必须真实执行并遭遇 addressed sessions.models 拒绝")
+  const afterRejection = contribution.component({
+    ...injected,
+    session: {
+      running: false,
+      nodes: [{ kind: "assistant", requestConfig: { provider: "provider-recorded", model: "model-recorded", reasoningEffort: "xhigh" } }],
+    },
+  })
+  assert.equal(afterRejection?.props?.children, "provider-recorded/model-recorded · 推理 xhigh", "RPC 拒绝不清除真实请求记录")
 })
 
 test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {

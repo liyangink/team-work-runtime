@@ -7,7 +7,7 @@ team-work-runtime 的 DSH 平台绑定插件。
 - **成员模型/effort 注入**：continuable 子代理（后台 subagent）创建/恢复时，按 `.team-work/platform/agents.json` 的 modelHints（`tw agent-map` 自动落盘）注入 provider/model/reasoningEffort。恢复时已有 hint 会在当前请求前同步生效；新建子代因 ID 在首条 prompt 后才返回，首轮继承默认模型，agent-map 落盘并被补读命中后的下一请求生效；
 - **skill 注册**：team-work 判断指引内嵌（与 `tw init` 文件通道同源同版本，后者为无插件环境兜底）；
 - **tw 原生工具**：成员直接调用 `tw` 工具（args 透传 CLI），无需 PATH；
-- **模型席位徽标**：子代理会话显示实际执行的 provider/model · 推理等级（注入效果肉眼可核）。
+- **模型席位徽标**：子代理会话在原生模型选择器旁显示实际执行的 provider/model · 推理等级（优先依据真实请求记录，注入效果肉眼可核）。
 
 ## 安装（四种方式，前两种推荐）
 
@@ -85,7 +85,7 @@ team-work-dsh:
 ## 实机验证（安装后确认注入生效）
 
 1. 安装后重启 dsh 会话；开一个后台 subagent 任务（`tw agent-map --task <名> --key <派单key> --agent <subagentId>` 已登记 modelHints 的）；
-2. **注入确认**：子代理会话的模型席位显示注入的 provider/model（而非主会话默认）即注入生效——这也覆盖徽标功能确认；
+2. **注入确认**：子代理会话的原生模型选择器旁显示注入的 provider/model（而非主会话默认）即注入生效——这也覆盖徽标功能确认；
 3. **effort 确认**：dsh.json 该档候选带 effort 字段时，席位显示"· 推理 <档位>"；若平台 request header 不落 effort（已知边界），注入仍生效于运行时选择；
 4. 多任务并发时各子代理各显示各自注入（隔离确认）。
 

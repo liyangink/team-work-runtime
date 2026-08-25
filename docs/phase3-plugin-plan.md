@@ -14,7 +14,7 @@
 | `installModelSelection(agentCtx, selection)`：selection = `{current:{provider,model,reasoningEffort}, assembled}`（assembled 首次 assemble 自动填充） | dsh-agent:272-296 |
 | `ctx.tools.register(definition)`：**必填 output = {schema, render(args,value)}**（缺则 throw）；参数字段名 **parameters**（非 inputSchema）；JSON Schema 白名单含 array/items；保留名仅 run_code；execute(args, exec) async，exec 含 agent/signal；返回值经 output.schema 校验后由 render 转模型可见文本 | dsh-tools:2762-2790/3406-3411/851-862 |
 | `ctx.skills.register({name, description(必填), content(必填=SKILL.md 全文), whenToUse?, resourceBase?{kind:"directory"|"url"|"opaque"}, ...})`——references 经 resourceBase（directory=插件内打包目录） | dsh-skill:193-215/465-469 |
-| 徽标装载：client 插件须 `dsh.client.platform:"web"` + `exports["./client"]`，产物为 **window.__ModuleLoader__.load 工厂式 CJS bundle**（无运行时 JSX 转译）；slots.inject(slot,cb)+slots.register({name,locale,inject},Component)；单席位 slot "conversation.input.model"；RPC = ctx.get("connection").api.sessions.models({sessionId})→current{provider,model,reasoningEffort}；徽标显示注入后的运行时值（request/header waterfall 晚于 agent/request 注入） | dsh-client-modules + model-selection:774-793 + apiproxy:2580（用户调研+B 证实） |
+| 徽标装载：client 插件须 `dsh.client.platform:"web"` + `exports["./client"]`，产物为 **window.__ModuleLoader__.load 工厂式 CJS bundle**（无运行时 JSX 转译）；徽标注册到模型选择器左侧的可追加席位 `conversation.input.right`，不得抢占 `single` 的 `conversation.input.model`；实际请求值优先取会话 `requestConfig`，首轮前才以 `sessions.models` 的 `result.value.current` 兜底（部分宿主明确不向 addressed 子代理开放该 RPC） | dsh-client-modules + conversation slots contract + model-selection ModelDirectory（2026-08-25 实机问题复盘修正） |
 | profile 装载：$DSH_HOME/profiles/<name>（package.json bundles + pnpm-workspace + cordis.patch.yml），node_modules flat fallback 解析——本地验证脚本路径可行 | dsh-app-boot:284-406 |
 | **bundle 装载协议（rc.7 实锤修正，原 C1 结论有误）**：package.json 声明 `dsh.bundle.patch`（缺则 boot 拒绝 "declares no dsh.bundle"）+ patch 文件须为**规范 insert 行**：`- insert:` 子行 `{id, name}`，`name`=npm 包名（loader 据此从 profile node_modules 解析 main 入口）。旧写法 `- id:` + `plugin: ./dist/index.js` 是无 `insert` 键的 override 行——目标 id 不存在时 `applyEntryPatches` warn 后**静默跳过**（插件从未装载）；当年 C1 断言合并 stdout+stderr，命中的恰是这条 warn，误判为装载成功 | cordis-plugin-include applyEntryPatches（装载与 dump-config 共用语义）+ ntes-dsh-market verify.ts 实测 |
 
@@ -78,7 +78,7 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
 
 ## 3. client 徽标（src-client/badge.js → dist/client.js 工厂式 bundle，B-F6）
 
-用户调研骨架 + 装载事实修正：构建产物为 `window.__ModuleLoader__.load({id, factory})` CJS（factory 返回 {apply, inject}）；apply 内 slots.inject("conversation.input.model", ...) 注册（order 20、仅 addressed 子代理渲染、sessions.models RPC、失败静默）。构建用 esbuild（devDependency，仅构建期）。
+用户调研骨架 + 装载事实修正：构建产物为 `window.__ModuleLoader__.load({id, factory})` CJS（factory 返回 {apply, inject}）；apply 内向 `conversation.input.right` 追加徽标（order 20、仅 addressed 子代理渲染），不替换父会话的原生模型选择器。显示值优先读取会话中已经实际发出的最新 `requestConfig`，并在挂载/运行状态切换时以 `sessions.models` RPC 兜底；RPC 按 `{result:{ok,value}}` 解包，失败静默。构建用 esbuild（devDependency，仅构建期）。
 
 ## 4. skill 注入规范补强（写边界）
 
@@ -94,14 +94,14 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 | F-2 | 安装后生效（skill 注册+tw 工具在场） | E2E | 成员会话枚举 skills 含 team-work；工具面含 tw |
 | F-3 | 默认配置（零配置开箱） | E2E | 不写 dsh.json/config → 注入降级继承默认，徽标显示默认模型，任务全流程可走 |
 | F-4 | 自定义配置生效 | E2E | dsh.json 候选池 + config.projectRoot → 注入按池选择（多样性/家族去重可观察） |
-| F-5 | 插件注入生效（指定派发） | E2E | sessions.models RPC 断言 current = modelHint 的 provider/model/effort（A-F4） |
+| F-5 | 插件注入生效（指定派发） | E2E | 真实请求记录的 requestConfig = modelHint 的 provider/model/effort（addressed 子代理的 sessions.models 不作为必需证据） |
 | F-6 | 数据隔离（多任务并发） | E2E | 两任务同进程并发派发 → 各 childId 注入各自 modelHint，无串台 |
 | F-7 | effort 链路 | E2E | F-5 断言含 reasoningEffort 字段（若平台 header 不落，如实记录边界） |
 | F-8 | tw 原生工具 | E2E | 成员经工具调 deliver/review（args 透传）卡片返回 |
 | F-9 | 升档审批卡 | E2E | 八视角流程中 expert 视角包触发 → decide → 按批派发 |
 | F-10 | 八视角全流程 | E2E | 视角包并行 → consolidation → 裁决 → 门 |
 | F-11 | e2eTemplate 物化 | 单测已覆盖 | 压轴任务选 e2e 场景顺路复验 |
-| F-12 | 徽标（client） | E2E 人工确认 | addressed 子代理会话显示 provider/model · 推理等级（RPC 已断言，UI 人工过目一次） |
+| F-12 | 徽标（client） | 自动行为测试 + E2E 人工确认 | addressed 子代理会话显示最新真实请求的 provider/model · 推理等级；RPC 拒绝仍可显示，UI 人工过目一次 |
 
 **六段增量（I1→I6），段内自审、段间复核、I2/I4/I6 交叉审查**：
 
@@ -115,10 +115,10 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
   自审：仅 addressed 渲染/RPC 失败静默；**交叉审查 ②**（装载链/边界：非 web 平台、离线子代理、RPC 失败路径）。
 - **I5 集成自证（本地）**：本地 profile 全装配（host+client+runtime 包）→ 冒烟：单任务注入生效（F-5 手动版）+ tw 工具调用（F-8）。
   自审：冒烟脚本可重复执行（固化为 scripts/e2e-smoke.mjs）；复核：F-1/F-2/F-3 手动勾选。
-- **I6 压轴 E2E（全功能）**：分层覆盖——自动层（node:test：E2E-A cordis 装载 / E2E-B runtime 全功能 / C1 实机 boot 链 + 隔离 web 实例启动）覆盖 F-1..F-4、F-6、F-8..F-11；**F-5/F-7/F-12（真实 LLM 注入/effort header/徽标显示）需带凭据真实会话，归用户实机确认**（插件 README 实机验证节；注入链的纯函数与真文件层已自动验证）。
+- **I6 压轴 E2E（全功能）**：分层覆盖——自动层（node:test：E2E-A cordis 装载 / E2E-B runtime 全功能 / C1 实机 boot 链 + 隔离 web 实例启动）覆盖 F-1..F-4、F-6、F-8..F-11，并覆盖 F-12 的徽标行为；**F-5/F-7（真实 LLM 注入/effort header）及 F-12 的最终 UI 位置/样式需带凭据真实会话，归用户实机确认**（插件 README 实机验证节；注入链的纯函数与真文件层已自动验证）。
   **交叉审查 ③**（验收向：矩阵逐项覆盖核对/断言强度/失败路径是否真断言而非走过场）→ 修复 → 复跑至全绿 → 用户验收。
 
-**完成定义**：自动层全绿（E2E-A/B/C1 + 98 测试）+ F-5/F-7/F-12 如实标注待用户实机（README 指引）+ 交叉审查③ findings 清零 + 文档同步（roadmap/AGENTS/charter/file-inventory/README/验收快照）。
+**完成定义**：自动层全绿（E2E-A/B/C1 + 当前全量 116 测试）+ F-5/F-7 及 F-12 的 UI 位置/样式如实标注待用户实机（README 指引）+ 交叉审查③ findings 清零 + 文档同步（roadmap/AGENTS/charter/file-inventory/README/验收快照）。
 
 ## 6. 风险与缓解（v2 更新）
 

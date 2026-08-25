@@ -1,6 +1,6 @@
 # Phase 3 插件验收证据（F-1..F-12 状态快照，2026-08-24）
 
-自动验证全部通过（97/97 测试 + 构建链 + 冒烟 + C1 实机 boot 链 + 隔离 web 实例）。逐项证据：
+自动验证全部通过（当前 116/116 测试 + 构建链 + 冒烟 + C1 实机 boot 链 + 隔离 web 实例）。逐项证据：
 
 | # | 功能 | 状态 | 验证实体 |
 | --- | --- | --- | --- |
@@ -15,6 +15,6 @@
 | F-9 升档审批卡 | ✅ 自动 | E2E-B F-9+F-10（触发/只列升档包/批准后 expert 生效） |  |
 | F-10 八视角全流程 | ✅ 自动 | 同上（三视角并行→组合评审→裁决→汇总包解锁→completed） |  |
 | F-11 e2eTemplate | ✅ 自动 | E2E-B F-11（run 路由→e2e 阶段→path-design/execution 依赖串行） |  |
-| F-12 徽标 | ⏳ 待用户实机 | React 组件形态 + 装载约定源码闭合（dsh.client + exports["./client"]，client-modules 收集协议）+ client bundle 构建/语法验证；隔离 web 实例 client.js 供给 404（按平台约束：client 插件热载需 dev:web 运行中重建 web artifacts，或正式 dsh plugin add 安装后供给）——显示效果需用户实机过目 |  |
+| F-12 徽标 | ⏳ 自动行为已绿，待用户实机过目 | 6 项 I4 行为测试覆盖 DSH 工厂与席位释放、`result.value.current` 解包、父会话原生选择器隔离、运行状态刷新、addressed RPC 真拒绝时从真实 requestConfig 降级显示；注册到模型选择器相邻的 `conversation.input.right`。安装后的位置与样式仍需真实 web 会话过目 |  |
 
 实施过程审查链：方案双轴评审（16 findings 含 2 blocker 全处置）→ 交叉审查①（8 findings 含 1 blocker 全修复 0fba810）→ 交叉审查③：全量版中断但中间发现已消化（C1 脚本脱节修复 72a8474）；轻量版完成核验——**诚实性判定：无夸大无贬低、划分如实；断言强度三抽全强（升档卡 tier 真断言/依赖锁时序证明/inject deepEqual 主防线）；遗漏 1 major（charter §8 漏同步）已修**。C1 实机挖出并修复 bundle 装载协议缺失（eba7480）；§4 写边界声明遗漏自查补上（6fec6d3）。

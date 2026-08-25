@@ -161,7 +161,7 @@ function parseYamlFlow(text) {
     const char = text[index]
     if (char === "{") {
       index += 1
-      const object = {}
+      const object = Object.create(null)
       skip()
       if (text[index] === "}") { index += 1; return object }
       while (true) {
@@ -230,7 +230,7 @@ function parseYamlKeyValue(text, line) {
 
 function parseYamlBlock(lines, start, indent) {
   const array = lines[start]?.content === "-" || lines[start]?.content.startsWith("- ")
-  const value = array ? [] : {}
+  const value = array ? [] : Object.create(null)
   let index = start
   while (index < lines.length) {
     const current = lines[index]
@@ -269,7 +269,7 @@ function parseYamlBlock(lines, start, indent) {
       continue
     }
     const first = parseYamlKeyValue(rest, current.line)
-    const item = {}
+    const item = Object.create(null)
     if (first.value) item[first.key] = parseYamlValue(first.value)
     else if (index < lines.length && lines[index].indent > indent) {
       const child = parseYamlBlock(lines, index, lines[index].indent)
@@ -306,7 +306,7 @@ export function parseTeamWorkDshSettings(text) {
     section = parseYamlBlock(normalized, 0, 0).value
   }
   if (!section || typeof section !== "object" || Array.isArray(section)) throw yamlSyntaxError("team-work-dsh 必须是对象")
-  return section.tiers ?? null
+  return Object.hasOwn(section, "tiers") ? section.tiers : null
 }
 
 function normalizeCandidate(candidate, label) {
@@ -314,20 +314,22 @@ function normalizeCandidate(candidate, label) {
   for (const key of Object.keys(candidate)) {
     if (!['provider', 'model', 'family', 'effort'].includes(key)) throw new Error(`${label} 含未知字段 ${JSON.stringify(key)}`)
   }
-  if (typeof candidate.provider !== "string" || !candidate.provider.trim() || typeof candidate.model !== "string" || !candidate.model.trim()) {
+  if (!Object.hasOwn(candidate, "provider") || !Object.hasOwn(candidate, "model") || typeof candidate.provider !== "string" || !candidate.provider.trim() || typeof candidate.model !== "string" || !candidate.model.trim()) {
     throw new Error(`${label} 的 provider 与 model 必须是非空字符串`)
   }
-  if (candidate.family !== undefined && (typeof candidate.family !== "string" || !candidate.family.trim())) {
+  const hasFamily = Object.hasOwn(candidate, "family")
+  const hasEffort = Object.hasOwn(candidate, "effort")
+  if (hasFamily && (typeof candidate.family !== "string" || !candidate.family.trim())) {
     throw new Error(`${label} 的 family 必须是非空字符串`)
   }
-  if (candidate.effort !== undefined && (typeof candidate.effort !== "string" || !candidate.effort.trim())) {
+  if (hasEffort && (typeof candidate.effort !== "string" || !candidate.effort.trim())) {
     throw new Error(`${label} 的 effort 必须是非空字符串`)
   }
   return {
     provider: candidate.provider.trim(),
     model: candidate.model.trim(),
-    family: candidate.family?.trim() || familyOf(candidate.model.trim()),
-    ...(candidate.effort !== undefined ? { effort: candidate.effort.trim() } : {}),
+    family: hasFamily ? candidate.family.trim() : familyOf(candidate.model.trim()),
+    ...(hasEffort ? { effort: candidate.effort.trim() } : {}),
   }
 }
 
@@ -354,7 +356,7 @@ export function validateTierSettings(rawTiers, { file = "~/.dsh/settings.yaml" }
     return { tiers, warnings }
   }
   for (const tier of TIERS) {
-    if (!(tier in rawTiers)) {
+    if (!Object.hasOwn(rawTiers, tier)) {
       tiers[tier] = unresolvedTier()
       warnings.push(`档位 ${tier} 未配置（unresolved）；${configurationHint(file)}`)
       continue

@@ -6,7 +6,7 @@
 // installModelSelection 宿主语义（dsh-agent/lib/index.js 实证）：
 //   selection.current === undefined = 不干预（继承默认模型）；
 //   对象（哪怕 {provider:null}）会覆写 variables.provider/model——null 值杀 turn（实机铁证）。
-// 时序（实机修正，见 phase3-plugin-plan §时序）：新建子代的 childId 在首条 prompt 前不可预知，
+// 时序（实机验证）：新建子代的 childId 在首条 prompt 前不可预知，
 //   故 fresh 首轮继承默认模型，Lead 的 tw agent-map 落盘后由自循环补读供下轮请求使用；
 //   cold-resume 的 hint 已存在，可在 contribution 返回前同步读入并供当前请求使用。
 import { readFile } from "node:fs/promises"

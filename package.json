@@ -1,6 +1,6 @@
 {
   "name": "team-work-runtime",
-  "version": "0.2.0-beta.9",
+  "version": "0.2.0-beta.10",
   "description": "平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转",
   "repository": {
     "type": "git",
@@ -10,10 +10,10 @@
   "bugs": "https://github.com/liyangink/team-work-runtime/issues",
   "license": "Apache-2.0",
   "type": "module",
-  "main": "./packages/dsh-plugin/src/index.js",
+  "main": "./dsh/index.js",
   "exports": {
-    ".": "./packages/dsh-plugin/src/index.js",
-    "./client": "./packages/dsh-plugin/src-client/badge.js",
+    ".": "./dsh/index.js",
+    "./client": "./dsh/client/badge.js",
     "./bin/tw.mjs": "./bin/tw.mjs",
     "./package.json": "./package.json"
   },
@@ -39,11 +39,7 @@
   "files": [
     "bin/",
     "cordis.patch.yml",
-    "packages/dsh-plugin/src/",
-    "packages/dsh-plugin/src-client/",
-    "packages/dsh-plugin/cordis.patch.yml",
-    "packages/dsh-plugin/package.json",
-    "packages/dsh-plugin/README.md",
+    "dsh/",
     "runtime-v3/",
     "policy/",
     "workflow/definitions/",

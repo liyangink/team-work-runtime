@@ -1,8 +1,4 @@
-# team-work-runtime 根 bundle patch：市场 git 源码通道（根 package.json 即插件包，单包模型）。
-# name 必须是安装包名（根包 team-work-runtime）——loader 据此从 profile node_modules 解析
-# main（→ packages/dsh-plugin/src/index.js）；id 供上层 patch 寻址。
-# 注意：与 packages/dsh-plugin 独立插件包（team-work-runtime-dsh）是两个安装身份，二选一
-#（同装会产生重复 loader entry id，宿主会拒绝/市场会拦截）。
+# 唯一市场制品 team-work-runtime 的 DSH bundle 入口。
 - insert:
     - id: team-work-dsh
       name: team-work-runtime

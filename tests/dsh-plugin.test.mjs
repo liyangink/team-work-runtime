@@ -2,22 +2,23 @@
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 import vm from "node:vm"
 
-import { hintForChild, agentsJsonPath } from "../packages/dsh-plugin/src/inject.js"
-import { resolveTwExecutable, resolveChildCwd } from "../packages/dsh-plugin/src/tw-tool.js"
-import { installPluginSettings, SETTINGS_NS, TIER_DESCRIPTIONS } from "../packages/dsh-plugin/src/settings.js"
-import { parseFrontmatter } from "../packages/dsh-plugin/src/skill-embed.js"
+import { hintForChild, agentsJsonPath } from "../dsh/inject.js"
+import { resolveTwExecutable, resolveChildCwd } from "../dsh/tw-tool.js"
+import { installPluginSettings, SETTINGS_NS, TIER_DESCRIPTIONS } from "../dsh/settings.js"
+import { parseFrontmatter } from "../dsh/skill-embed.js"
 
 test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis 插件", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
   })
 
-  assert.deepEqual(registrations.map(({ id }) => id), ["team-work-runtime-dsh", "team-work-runtime"])
+  assert.deepEqual(registrations.map(({ id }) => id), ["team-work-runtime"])
   for (const { factory } of registrations) {
     const plugin = factory(() => ({}))
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
@@ -27,7 +28,7 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
 
 test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组，并依据目录热更新", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -172,7 +173,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
 
 test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，阻止保存并给出可恢复原因", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -268,7 +269,7 @@ test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，阻止保存并�
 
 test("I5 Web 插件配置卡：候选必须通过 Provider、模型目录与 effort 的硬校验", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -374,7 +375,7 @@ test("I5 Web 插件配置卡：候选必须通过 Provider、模型目录与 eff
 
 test("I4 模型席位声明回收时同步释放徽标注册", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -399,7 +400,7 @@ test("I4 模型席位声明回收时同步释放徽标注册", async () => {
 
 test("I4 子代理模型席位显示 sessions.models 返回的实际模型与 effort", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -454,7 +455,7 @@ test("I4 子代理模型席位显示 sessions.models 返回的实际模型与 ef
 
 test("I4 徽标仅追加在模型席位旁，不替换父会话的原生模型选择器", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -491,7 +492,7 @@ test("I4 徽标仅追加在模型席位旁，不替换父会话的原生模型�
 
 test("I4 子代理开始新一轮运行时刷新实际模型与 effort", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -543,7 +544,7 @@ test("I4 子代理开始新一轮运行时刷新实际模型与 effort", async (
 
 test("I4 addressed 子代理的模型 RPC 不可用时显示会话真实请求记录", async () => {
   const registrations = []
-  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
     globalThis: {},
     window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
@@ -598,10 +599,9 @@ test("I4 addressed 子代理的模型 RPC 不可用时显示会话真实请求�
 })
 
 test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {
-  for (const file of ["../package.json", "../packages/dsh-plugin/package.json"]) {
-    const metadata = JSON.parse(await readFile(new URL(file, import.meta.url), "utf8"))
-    assert.equal(metadata.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", file + " 必须声明直接导入的宿主模型选择包")
-  }
+  const file = "../package.json"
+  const metadata = JSON.parse(await readFile(new URL(file, import.meta.url), "utf8"))
+  assert.equal(metadata.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", file + " 必须声明直接导入的宿主模型选择包")
 })
 
 test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/损坏输入）", () => {
@@ -619,14 +619,14 @@ test("I2 agents.json 路径解析：只使用子会话 cwd", () => {
   assert.equal(agentsJsonPath(null), null, "无子会话 cwd → 不注入")
 })
 
-test("I2 tw 工具解析：可执行入口独立解析，工作目录只使用子会话 cwd", () => {
-  assert.equal(typeof resolveTwExecutable(), "string", "peerDep 解析或 PATH 兜底")
+test("I2 tw 工具解析：唯一根制品直接携带 Runtime，不依赖 PATH", () => {
+  assert.equal(resolveTwExecutable(), fileURLToPath(new URL("../bin/tw.mjs", import.meta.url)))
   assert.equal(resolveChildCwd({ agent: { session: { header: { cwd: "/c" } } } }), "/c")
   assert.equal(resolveChildCwd({}), null, "缺少子会话 cwd 时显式 unresolved")
 })
 
 test("I2 tw 工具 render 契约：必须返回 content 块数组（纯字符串致宿主 commit 崩溃——实机两崩铁证）", async () => {
-  const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
+  const { twToolDefinition } = await import("../dsh/tw-tool.js")
   const def = twToolDefinition({})
   const rendered = def.output.render({}, { ok: true, task: "t" })
   assert.ok(Array.isArray(rendered), "render 返回数组")
@@ -635,7 +635,7 @@ test("I2 tw 工具 render 契约：必须返回 content 块数组（纯字符串
   assert.doesNotThrow(() => rendered.some((b) => b.type === "image"), "宿主 commit 的 .some 调用形态必须可用")
 })
 test("I2 tw 工具失败路径：缺少子会话 cwd 返回可恢复失败卡", async () => {
-  const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
+  const { twToolDefinition } = await import("../dsh/tw-tool.js")
   const def = twToolDefinition({})
   const card = await def.execute({ args: ["--version"] }, {})
   assert.deepEqual(card, {
@@ -646,7 +646,7 @@ test("I2 tw 工具失败路径：缺少子会话 cwd 返回可恢复失败卡", 
 })
 
 test("I2 注入链（同步 contribution 契约）：install 同步在场 + undefined 占位 + hint 迟到补读 + disposer 语义", async () => {
-  const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
+  const { makeInjectContribution } = await import("../dsh/inject.js")
   const installs = []
   let installDisposers = 0
   const fakeInstall = (ctx, selection) => { installs.push({ ctx, selection }); return () => { installDisposers += 1 } }
@@ -722,7 +722,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
 })
 
 test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安装器异常均留恢复指引", async () => {
-  const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
+  const { makeInjectContribution } = await import("../dsh/inject.js")
   const warnings = []
   const ctx = { logger: { warn: (message) => warnings.push(String(message)), info() {} } }
   let reads = 0
@@ -968,10 +968,10 @@ test("I5 installPluginSettings 降级：模块不存在静默、其他异常 war
 
 test("I5 旧项目匹配与运行入口配置已彻底移除", async () => {
   const files = [
-    "../packages/dsh-plugin/src/settings.js",
-    "../packages/dsh-plugin/src/index.js",
-    "../packages/dsh-plugin/src/inject.js",
-    "../packages/dsh-plugin/src/tw-tool.js",
+    "../dsh/settings.js",
+    "../dsh/index.js",
+    "../dsh/inject.js",
+    "../dsh/tw-tool.js",
   ]
   for (const file of files) {
     const source = await readFile(new URL(file, import.meta.url), "utf8")

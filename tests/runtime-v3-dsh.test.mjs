@@ -70,11 +70,91 @@ team-work-dsh:
         family: two
     expert: [{ provider: vendor-three, model: model-three, effort: high }]
 `)
-  assert.deepEqual(tiers, {
+  assert.deepEqual(JSON.parse(JSON.stringify(tiers)), {
     junior: { provider: "vendor-one", model: "model-one" },
     senior: [{ provider: "vendor-two", model: "model-two", family: "two" }],
     expert: [{ provider: "vendor-three", model: "model-three", effort: "high" }],
   })
+})
+
+test("全局 settings：block 与 flow 特殊 tier 键保持自有并标记 MAP_INVALID", () => {
+  const block = (key) => `
+team-work-dsh:
+  tiers:
+    ${key}:
+      twYamlTierPolluted: true
+      junior: { provider: isolated-provider, model: isolated-junior }
+      senior: { provider: isolated-provider, model: isolated-senior }
+      expert: { provider: isolated-provider, model: isolated-expert }
+`
+  const flow = (key) => `team-work-dsh: { tiers: { ${key}: { twYamlTierPolluted: true, junior: { provider: isolated-provider, model: isolated-junior }, senior: { provider: isolated-provider, model: isolated-senior }, expert: { provider: isolated-provider, model: isolated-expert } } } }`
+  for (const [style, source] of [["block", block], ["flow", flow]]) {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      const tiers = parseTeamWorkDshSettings(source(key))
+      assert.equal(Object.getPrototypeOf(tiers), null, `${style}/${key} tier 映射没有原型`)
+      assert.equal(Object.hasOwn(tiers, key), true, `${style}/${key} 是自有未知键`)
+      for (const tier of TIERS) assert.equal(Object.hasOwn(tiers, tier), false, `${style}/${key} 不继承 ${tier}`)
+      const invalid = validateTierSettings(tiers, { file: settingsFile })
+      for (const tier of TIERS) assert.equal(invalid.tiers[tier].source, "unresolved")
+      assert.match(invalid.warnings.join("\n"), /MAP_INVALID/)
+      assert.match(invalid.warnings.join("\n"), new RegExp(`未知档位.*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))
+    }
+  }
+  assert.equal(Object.hasOwn(Object.prototype, "twYamlTierPolluted"), false, "YAML 不能污染 Object.prototype")
+})
+
+test("全局 settings：继承 tier 或候选 provider/model 不能通过完整性", () => {
+  const inheritedTiers = Object.create({
+    junior: { provider: "inherited-provider", model: "inherited-junior" },
+    senior: { provider: "inherited-provider", model: "inherited-senior" },
+    expert: { provider: "inherited-provider", model: "inherited-expert" },
+  })
+  const missingOwnTiers = validateTierSettings(inheritedTiers, { file: settingsFile })
+  for (const tier of TIERS) assert.equal(missingOwnTiers.tiers[tier].source, "unresolved")
+
+  const tiers = Object.create(null)
+  tiers.junior = Object.create({ provider: "inherited-provider", model: "inherited-junior" })
+  tiers.senior = { provider: "own-provider", model: "own-senior" }
+  tiers.expert = { provider: "own-provider", model: "own-expert" }
+  const inheritedCandidate = validateTierSettings(tiers, { file: settingsFile })
+  assert.equal(inheritedCandidate.tiers.junior.source, "unresolved")
+  assert.equal(inheritedCandidate.tiers.senior.source, "global-settings")
+  assert.match(inheritedCandidate.warnings.join("\n"), /provider 与 model 必须是非空字符串/)
+
+  const yamlSources = [
+    `
+team-work-dsh:
+  tiers:
+    junior:
+      __proto__: { provider: inherited-provider, model: inherited-junior }
+    senior: { provider: own-provider, model: own-senior }
+    expert: { provider: own-provider, model: own-expert }
+`,
+    `team-work-dsh: { tiers: { junior: { __proto__: { provider: inherited-provider, model: inherited-junior } }, senior: { provider: own-provider, model: own-senior }, expert: { provider: own-provider, model: own-expert } } }`,
+  ]
+  for (const source of yamlSources) {
+    const parsed = parseTeamWorkDshSettings(source)
+    assert.equal(Object.getPrototypeOf(parsed.junior), null)
+    const rejected = validateTierSettings(parsed, { file: settingsFile })
+    assert.equal(rejected.tiers.junior.source, "unresolved")
+  }
+})
+
+test("dispatch-plan：__proto__ tier 映射 MAP_INVALID 且零派发", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "prototype-tier")
+  await setSettings(`team-work-dsh: { tiers: { __proto__: { junior: { provider: isolated-provider, model: isolated-junior }, senior: { provider: isolated-provider, model: isolated-senior }, expert: { provider: isolated-provider, model: isolated-expert } } } }`)
+  try {
+    const plan = await call(["dispatch-plan", "--task", "prototype-tier", "--writable", "R.md:code-review", "--json"])
+    assert.equal(plan.stop, "blocked")
+    assert.match(plan.warnings.join("\n"), /MAP_INVALID/)
+    assert.match(plan.warnings.join("\n"), /未知档位.*__proto__/)
+    const task = await loadTask(root, "prototype-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
+  } finally {
+    await setSettings(BASE_SETTINGS)
+  }
 })
 
 test("全局 settings：三档候选池是唯一解析来源，缺档显式 unresolved", async () => {

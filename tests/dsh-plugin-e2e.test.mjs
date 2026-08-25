@@ -10,7 +10,7 @@ const DSH = "/Users/liyang/.nvm/versions/node/v24.15.0/lib/node_modules/@deepsee
 
 test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + 非法名防线", async () => {
   const { Context } = await import(pathToFileURL(path.join(DSH, "cordis/lib/index.js")).href)
-  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const plugin = await import("../dsh/index.js")
 
   // 注入面核查：inject 数组只含服务名（logger 等 ctx 内建属性不得出现——交叉审查① F1 契约）
   assert.deepEqual(plugin.inject, ["subagents", "skills", "tools"], "inject 恰为三个真实服务")
@@ -46,7 +46,7 @@ test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + �
 })
 
 test("E2E-A：插件激活等待安装器解析完成后才开放 continuable setup", async () => {
-  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const plugin = await import("../dsh/index.js")
   const setups = []
   const installs = []
   let finishResolve
@@ -75,7 +75,7 @@ test("E2E-A：插件激活等待安装器解析完成后才开放 continuable se
 })
 
 test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可注入", async () => {
-  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const plugin = await import("../dsh/index.js")
   const setups = []
   const installs = []
   const warnings = []
@@ -113,7 +113,7 @@ test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可
 })
 
 test("E2E-A：安装器解析不 settle 时超时降级，不阻塞插件激活", async () => {
-  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const plugin = await import("../dsh/index.js")
   const setups = []
   const warnings = []
   const ctx = {
@@ -137,7 +137,7 @@ test("E2E-A：安装器解析不 settle 时超时降级，不阻塞插件激活"
 })
 
 test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真文件）", async () => {
-  const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
+  const { makeInjectContribution } = await import("../dsh/inject.js")
   const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises")
   const os = await import("node:os")
   // 真实临时项目 + agents.json

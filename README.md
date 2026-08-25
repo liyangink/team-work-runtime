@@ -32,14 +32,31 @@ tw archive --task audit-q3
 
 ## 平台绑定
 
-- **DSH**：唯一 skill（`skills/team-work-v3/`，含拓扑/成本/场景指导）+ `tw` CLI + 后台 subagent 派发 + `team-work-runtime-dsh` 插件包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active，且该 Provider 的模型目录必须可验证并实际列出所选模型；模型 RPC 整体失败、候选 Provider 的目录失败或缺少该 Provider 目录时都会阻止保存并给出恢复指引。模型公开非空 effort 列表时，填写值必须命中该列表。项目 `dsh.json` 已废弃且不会被读取/创建，`agents.json` 仍是项目内 child 映射与模型快照事实。插件的自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
+- **DSH**：根 `package.json` 产出的 `team-work-runtime` 是唯一市场制品，同时携带 Runtime、`tw` CLI、skill、host 插件与 Web client；不存在第二个插件子包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active，且该 Provider 的模型目录必须可验证并实际列出所选模型；模型 RPC 整体失败、候选 Provider 的目录失败或缺少该 Provider 目录时都会阻止保存并给出恢复指引。模型公开非空 effort 列表时，填写值必须命中该列表。项目 `dsh.json` 已废弃且不会被读取/创建，`agents.json` 仍是项目内 child 映射与模型快照事实。自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
 - **OpenCode**：v2 插件已删除；待核心稳定后按规约 §4 seam 另起薄适配器。
 - OpenSpec Provider 保留，作为门禁路由检查范本。
+
+### DSH 安装与配置
+
+从 DSH 市场安装时选择 `team-work-runtime` 并指定目标 profile；源码安装同样以仓库根为入口。根制品通过 `cordis.patch.yml` 注册 `team-work-dsh`，Web client 由根清单的 `./client` 导出装载。卸载包名也是 `team-work-runtime`。
+
+启动 DSH Web 后，在“插件配置”页打开 `team-work-dsh`。首次安装可保持空配置；开始配置后，`junior`、`senior`、`expert` 必须同时完整：
+
+```yaml
+team-work-dsh:
+  tiers:
+    junior: [{ provider: <provider-id>, model: <model-id> }]
+    senior: [{ provider: <provider-id>, model: <model-id>, effort: <optional-effort-id> }]
+    expert: [{ provider: <provider-id>, model: <model-id> }]
+```
+
+`injectionEnabled`、`projectRoots`、`twBin` 已失效；项目 `.team-work/platform/dsh.json` 也不再读取。旧键和旧文件确认无用后可手动删除。
 
 ## 开发
 
 ```bash
 npm test          # v3 核心、插件、E2E 与仓库契约
+npm pack --dry-run --ignore-scripts  # 验证唯一根制品清单
 ```
 
 完整自动套件覆盖 v3 核心、插件、E2E 与仓库契约；宿主提供可解析的 Schemastery 依赖时，另执行对应的 settings schema 回归。实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。

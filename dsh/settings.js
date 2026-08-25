@@ -1,4 +1,4 @@
-// settings.js — DSH 全局档位配置：注册 settings 区段并向消费方提供热更新快照。
+// settings.js — 根市场制品的 DSH 全局档位配置与热更新快照。
 // 宿主契约：@deepseek-ai/dsh-settings 的 installSettingsSection(ctx, ns, schema, entry, hooks)
 // 在 settings 服务可用时注册一个 schema；不可用时保留 entry，插件其他能力照常降级运行。
 

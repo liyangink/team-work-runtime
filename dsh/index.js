@@ -1,5 +1,4 @@
-// index.js — host 插件入口：成员模型/effort 注入 + skill 注册 + tw 原生工具 + 全局配置接线
-// 平台事实（docs/phase3-plugin-plan.md §0）：三项均为官方插件 API；
+// index.js — 根市场制品的 DSH host 插件入口：模型注入 + skill + tw 工具 + 全局配置
 // 失败语义逐级降级（不注入/不注册不阻塞宿主），错误经 ctx.logger.warn 留痕。
 import { makeInjectContribution, resolveInstaller } from "./inject.js"
 import { twToolDefinition } from "./tw-tool.js"
@@ -77,7 +76,7 @@ export async function apply(ctx, config = {}, deps = {}) {
     retryTimer.unref?.()
   }
   if (!installerReady) scheduleInstallerRetry()
-  // 2) skill 注册（构建期内嵌 dist/skill/；失败不阻塞——tw init 文件通道为兜底）
+  // 2) skill 注册（直接读取根制品内的 skills/team-work-v3；失败不阻塞——tw init 为兜底）
   try {
     await registerSkill(ctx, config)
   } catch (error) {

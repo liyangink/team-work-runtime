@@ -1,16 +1,12 @@
 // tw-tool.js — tw 原生工具：args 透传 CLI（CLI 即接口 P4：单层契约，无第二层 schema）。
 // 工作目录只来自当前调用会话的 cwd，避免插件配置跨项目影响任务目录。
 import { spawn } from "node:child_process"
-import { createRequire } from "node:module"
+import { fileURLToPath } from "node:url"
 
-const require = createRequire(import.meta.url)
+const TW_EXECUTABLE = fileURLToPath(new URL("../bin/tw.mjs", import.meta.url))
 
 export function resolveTwExecutable() {
-  try {
-    return require.resolve("team-work-runtime/bin/tw.mjs")
-  } catch {
-    return "tw"
-  }
+  return TW_EXECUTABLE
 }
 
 export function resolveChildCwd(exec) {

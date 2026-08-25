@@ -575,6 +575,5 @@ var factory = function (require) {
 
 var api = (typeof window !== "undefined" ? window : globalThis).__ModuleLoader__
 if (api && api.load) {
-  api.load({ id: "team-work-runtime-dsh", factory: factory })
   api.load({ id: "team-work-runtime", factory: factory })
 }

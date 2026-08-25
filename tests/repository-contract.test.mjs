@@ -17,11 +17,11 @@ test("repository inventory contains only the current implementation", async () =
   assert.ok(inventory.rules.some((rule) => rule.includes("Git history")))
 })
 
-test("v3 assets exist and v2 trees are removed (git history preserves them)", async () => {
-  for (const present of ["runtime-v3/cli.mjs", "bin/tw.mjs", "skills/team-work-v3/SKILL.md", "docs/runtime-v3-charter.md"]) {
+test("v3 assets exist and historical trees are removed (git history preserves them)", async () => {
+  for (const present of ["runtime-v3/cli.mjs", "bin/tw.mjs", "dsh/index.js", "dsh/client/badge.js", "cordis.patch.yml", "tests/e2e-root.test.mjs", "skills/team-work-v3/SKILL.md", "docs/runtime-v3-charter.md"]) {
     await assert.doesNotReject(access(path.join(projectRoot, present)), present)
   }
-  for (const removed of ["plugins/opencode", "installer", "runtime", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2"]) {
+  for (const removed of ["plugins/opencode", "installer", "runtime", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2", "packages/dsh-plugin", "scripts/install-local.mjs", "scripts/uninstall-local.mjs", "scripts/e2e-c1.mjs", "docs/phase3-plugin-plan.md", "docs/pre-phase3-plan.md"]) {
     await assert.rejects(access(path.join(projectRoot, removed)), (error) => error.code === "ENOENT", removed)
   }
 })
@@ -33,7 +33,12 @@ test("package metadata is intact (install simulation once caught corruption)", a
   assert.match(pkg.version, /^\d+\.\d+\.\d+/, "version 语义化")
   assert.equal(typeof pkg.bin?.tw, "string")
   assert.ok(pkg.bin.tw.length > 0)
-  for (const entry of ["bin/", "runtime-v3/", "skills/team-work-v3/", "workflow/definitions/", "team-work/policies/"]) {
+  assert.equal(pkg.main, "./dsh/index.js", "唯一根制品直接提供 DSH host 入口")
+  assert.equal(pkg.exports?.["./client"], "./dsh/client/badge.js", "唯一根制品直接提供 Web client")
+  assert.equal(pkg.dsh?.bundle?.patch, "./cordis.patch.yml", "唯一根制品声明 DSH bundle patch")
+  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", "唯一根制品声明直接使用的宿主 peer")
+  assert.ok(!pkg.files.some((entry) => entry.startsWith("packages/")), "唯一根制品不得收编旧 packages 子包")
+  for (const entry of ["bin/", "cordis.patch.yml", "dsh/", "runtime-v3/", "skills/team-work-v3/", "workflow/definitions/", "team-work/policies/"]) {
     assert.ok(pkg.files.includes(entry), `files 缺 ${entry}`)
   }
 })

@@ -1,0 +1,1 @@
+runhint ok

@@ -10,6 +10,22 @@ import { resolveTwExecutable, resolveChildCwd } from "../dsh/tw-tool.js"
 import { installPluginSettings, SETTINGS_NS, TIER_DESCRIPTIONS } from "../dsh/settings.js"
 import { parseFrontmatter } from "../dsh/skill-embed.js"
 
+function findTree(node, predicate) {
+  if (!node || typeof node !== "object") return null
+  if (predicate(node)) return node
+  for (const child of node.props?.children ?? []) {
+    const found = findTree(child, predicate)
+    if (found) return found
+  }
+  return null
+}
+
+function hasInlineStyle(node) {
+  if (!node || typeof node !== "object") return false
+  if (node.props?.style) return true
+  return (node.props?.children ?? []).some(hasInlineStyle)
+}
+
 test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis 插件", async () => {
   const registrations = []
   const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
@@ -24,6 +40,60 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
     assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "settingsScope"], "须声明模型查询与全局 settingsScope；logger 是 ctx 内建属性")
   }
+})
+
+test("I5 Web 插件配置卡：继承 DSH 卡片形态并默认只显示插件名", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const hookState = []
+  let hookIndex = 0
+  const React = {
+    createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.flat(Infinity) } } },
+    useState(initial) {
+      const index = hookIndex++
+      if (!(index in hookState)) hookState[index] = typeof initial === "function" ? initial() : initial
+      return [hookState[index], (next) => { hookState[index] = typeof next === "function" ? next(hookState[index]) : next }]
+    },
+    useEffect() { hookIndex += 1 },
+  }
+  const cards = []
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    settingsScope: { bind() { return { getSnapshot() { return { status: "ready", writable: true, value: {} } } } } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { cards.push({ options, component }); return () => {} },
+    },
+    connection: {},
+    logger: { warn() {} },
+  })
+
+  const card = cards.find(({ options }) => options.name === "settings.plugin.item")
+  hookIndex = 0
+  const tree = card.component(card.options.inject())
+  const header = findTree(tree, (node) => node.type === "button" && node.props?.["aria-expanded"] === false)
+
+  assert.equal(tree.type, "li", "配置项须呈现为与 DSH 内建插件一致的列表卡片")
+  assert.equal(header?.props?.["aria-label"], "展开设置: team-work-runtime", "默认折叠并提供宿主一致的可访问名称")
+  assert.match(JSON.stringify(header), /team-work-runtime/, "折叠态只显示唯一插件制品名")
+  assert.equal(findTree(tree, (node) => node.props?.["data-tw-tier"]), null, "折叠态不渲染具体配置项")
+  assert.equal(hasInlineStyle(tree), false, "配置卡不得用内联样式绕过 DSH 主题与字体体系")
+  const stylesheet = findTree(tree, (node) => node.type === "style" && node.props?.["data-tw-settings-style"] === "tiers")
+  assert.match(stylesheet?.props?.children?.join("") ?? "", /--dsw-alias-/, "配置卡颜色须跟随 DSH 主题 token")
+  assert.match(stylesheet?.props?.children?.join("") ?? "", /font:inherit/, "配置控件须继承 DSH 字体体系")
+
+  header.props.onClick()
+  hookIndex = 0
+  const expandedTree = card.component(card.options.inject())
+  assert.ok(findTree(expandedTree, (node) => node.type === "button" && node.props?.["aria-expanded"] === true), "点击卡片后须切换为展开态")
+  assert.ok(findTree(expandedTree, (node) => node.props?.["data-tw-tier"] === "junior"), "展开后才显示具体配置项")
+  assert.ok(findTree(expandedTree, (node) => node.type === "input" && node.props?.className === "tw-settings-input"), "展开后的输入控件须使用统一宿主风格类")
 })
 
 test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组，并依据目录热更新", async () => {
@@ -118,6 +188,8 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
   await Promise.resolve()
   await Promise.resolve()
   await new Promise((resolve) => setTimeout(resolve, 0))
+  const collapsedTree = render()
+  findTree(collapsedTree, (node) => node.type === "button" && node.props?.["aria-expanded"] === false).props.onClick()
   const tree = render()
   assert.deepEqual(apiCalls.sort(), ["models", "providers"], "卡片读取 provider 目录与模型目录")
   assert.match(JSON.stringify(tree), /低成本/, "三档中文说明可见")
@@ -248,6 +320,8 @@ test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，阻止保存并�
   render()
   for (const effect of effects) effect()
   await new Promise((resolve) => setTimeout(resolve, 0))
+  const collapsedTree = render()
+  findTree(collapsedTree, (node) => node.type === "button" && node.props?.["aria-expanded"] === false).props.onClick()
   const tree = render()
   const find = (node, predicate) => {
     if (!node || typeof node !== "object") return null
@@ -349,6 +423,8 @@ test("I5 Web 插件配置卡：候选必须通过 Provider、模型目录与 eff
   await Promise.resolve()
   await Promise.resolve()
   await new Promise((resolve) => setTimeout(resolve, 0))
+  const collapsedTree = render()
+  findTree(collapsedTree, (node) => node.type === "button" && node.props?.["aria-expanded"] === false).props.onClick()
   const tree = render()
   const text = JSON.stringify(tree)
   const find = (node, predicate) => {

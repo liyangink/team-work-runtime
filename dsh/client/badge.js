@@ -10,6 +10,44 @@ var factory = function (require) {
     senior: "常规实现、复核与需要稳定判断的工作。",
     expert: "核心场景、技术裁决与高失败成本工作。",
   }
+  var SETTINGS_CSS = [
+    ".tw-settings-card{border:1px solid var(--dsw-alias-border-l2,#e1e5ee);background:var(--dsw-alias-bg-layer-3,#fff);border-radius:12px;list-style:none;color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;transition:border-color .16s,background .16s}",
+    ".tw-settings-card:hover{border-color:var(--dsw-alias-label-dimmed,#c8ccd4)}",
+    ".tw-settings-card-open{background:var(--dsw-alias-bg-layer-2,#f7f8fa);border-color:var(--dsw-alias-label-dimmed,#c8ccd4)}",
+    ".tw-settings-header{appearance:none;width:100%;box-sizing:border-box;font:inherit;color:inherit;text-align:left;cursor:pointer;background:transparent;border:0;border-radius:12px;display:flex;align-items:center;gap:12px;padding:14px 16px}",
+    ".tw-settings-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4f6ef7);outline-offset:-2px}",
+    ".tw-settings-name{flex:1;min-width:0;color:var(--dsw-alias-label-primary,#0f1115);font-size:15px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+    ".tw-settings-chevron{color:var(--dsw-alias-label-tertiary,#81858c);flex:none;display:inline-flex;transition:transform .16s}",
+    ".tw-settings-chevron-open{transform:rotate(180deg)}",
+    ".tw-settings-body{border-top:1px solid var(--dsw-alias-border-l2,#e1e5ee);margin:0 16px;padding:0 0 8px;container-type:inline-size}",
+    ".tw-settings-overview{margin:0;padding:12px 0;color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;line-height:18px}",
+    ".tw-settings-tier{display:flex;flex-direction:column;gap:10px;padding:12px 0;border-top:1px solid var(--dsw-alias-border-l2,#e1e5ee)}",
+    ".tw-settings-tier-head{display:flex;flex-direction:column;gap:3px}",
+    ".tw-settings-tier-name{margin:0;color:var(--dsw-alias-label-primary,#0f1115);font-size:13px;font-weight:500;line-height:20px}",
+    ".tw-settings-hint{margin:0;color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px;line-height:18px}",
+    ".tw-settings-candidate{display:flex;flex-direction:column;gap:10px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#e1e5ee);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff)}",
+    ".tw-settings-candidate-head{display:flex;align-items:center;gap:8px}",
+    ".tw-settings-candidate-name{flex:1;color:var(--dsw-alias-label-secondary,#5f636b);font-size:12px;font-weight:500;line-height:18px}",
+    ".tw-settings-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}",
+    ".tw-settings-field{display:flex;flex-direction:column;gap:6px;min-width:0;color:var(--dsw-alias-label-primary,#0f1115);font-size:13px;font-weight:500;line-height:20px}",
+    ".tw-settings-input{appearance:none;width:100%;height:32px;box-sizing:border-box;padding:0 12px;border:1px solid var(--dsw-alias-border-default,rgba(0,0,0,.1));border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#0f1115);font:inherit;font-size:13px;font-weight:400;line-height:1.5;outline:none}",
+    ".tw-settings-input:focus{border-color:var(--dsw-alias-brand-primary,#4f6ef7);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary,#4f6ef7) 18%,transparent)}",
+    ".tw-settings-button{appearance:none;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,#e1e5ee);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#0f1115);cursor:pointer;font:inherit;font-size:13px;font-weight:400;line-height:19.5px;padding:5px 12px}",
+    ".tw-settings-button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#f7f8fa)}",
+    ".tw-settings-button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4f6ef7);outline-offset:1px}",
+    ".tw-settings-button:disabled{cursor:default;opacity:.45}",
+    ".tw-settings-remove{border-color:transparent;background:transparent;color:var(--dsw-alias-label-tertiary,#81858c);padding:2px 6px;font-size:12px;line-height:18px}",
+    ".tw-settings-add{align-self:flex-start}",
+    ".tw-settings-message{margin:0;padding:8px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);font-size:12px;line-height:18px}",
+    ".tw-settings-status{color:var(--dsw-alias-label-tertiary,#81858c)}",
+    ".tw-settings-warning{color:var(--dsw-alias-state-warn-primary,#9a6700)}",
+    ".tw-settings-error{color:var(--dsw-alias-state-error-primary,#b42318)}",
+    ".tw-settings-success{color:var(--dsw-alias-state-success-primary,#067647)}",
+    ".tw-settings-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 0 4px;border-top:1px solid var(--dsw-alias-border-l2,#e1e5ee)}",
+    ".tw-settings-save{border-color:transparent;background:var(--dsw-alias-brand-primary,#0f1115);color:var(--dsw-alias-label-primary-foreground,#fff);padding:5px 14px}",
+    ".tw-settings-save:hover:not(:disabled){background:var(--dsw-alias-brand-primary-hover,var(--dsw-alias-brand-primary,#0f1115))}",
+    "@container (max-width:460px){.tw-settings-fields{grid-template-columns:minmax(0,1fr)}}",
+  ].join("")
   var inject = ["slots", "sessions", "connection", "settingsScope"]
 
   function getService(ctx, name) {
@@ -95,6 +133,9 @@ var factory = function (require) {
 
   function renderTierSettingsCard(ctx, React, props) {
     var h = React.createElement
+    var openState = React.useState(false)
+    var open = openState[0]
+    var setOpen = openState[1]
     var scope = props && props.scope
     var snapshot = useSettingsSnapshot(React, scope)
     var draftState = React.useState(function () {
@@ -178,67 +219,90 @@ var factory = function (require) {
 
     var status = snapshot.status === "ready" ? null : h("p", {
       role: "status",
-      style: { color: "#666" },
+      className: "tw-settings-message tw-settings-status",
     }, snapshot.status === "loading" ? "正在读取全局设置…" : "全局设置当前不可用。")
     var serializedDraft = serializeTiers(draft)
     var saveValidationError = validateForSave(serializedDraft, catalog)
     var catalogStatus = catalog.status === "loading" ? h("p", {
       role: "status",
-      style: { color: "#666" },
+      className: "tw-settings-message tw-settings-status",
     }, "正在读取 Provider 列表…") : (catalog.modelStatus === "loading" ? h("p", {
       role: "status",
-      style: { color: "#666" },
+      className: "tw-settings-message tw-settings-status",
     }, "正在读取模型目录；目录完成加载后才可验证并保存。") : null)
     var catalogError = catalog.status === "error" ? h("p", {
       role: "alert",
-      style: { color: "#b42318" },
+      className: "tw-settings-message tw-settings-error",
     }, "Provider 列表读取失败：" + catalog.error) : (catalog.modelStatus === "error" ? h("p", {
       role: "alert",
-      style: { color: "#b42318" },
+      className: "tw-settings-message tw-settings-error",
     }, "模型目录读取失败：" + catalog.modelError + "。请恢复模型目录服务后重试。") : null)
     var failureText = catalog.failures.length > 0 ? h("p", {
       role: "alert",
-      style: { color: "#b42318" },
+      className: "tw-settings-message tw-settings-error",
     }, "部分 Provider 的模型目录不可用；选择受影响的 Provider 前请恢复其模型目录后重试。") : null
 
-    return h("section", {
+    return h("li", {
       "data-tw-settings": "tiers",
-      style: { display: "grid", gap: "12px" },
+      className: open ? "tw-settings-card tw-settings-card-open" : "tw-settings-card",
     },
-    h("h3", null, "团队档位模型"),
-    h("p", null, "为 junior、senior、expert 配置候选模型。Provider 必须处于 active；每个候选都必须能在该 Provider 的可验证模型目录中找到。"),
-    status,
-    catalogStatus,
-    catalogError,
-    failureText,
-    TIER_ORDER.map(function (tier) {
-      return renderTier(React, tier, draft[tier], catalog, updateCandidate, addCandidate, removeCandidate)
-    }),
-    error ? h("p", { role: "alert", style: { color: "#b42318" } }, error) : null,
-    notice ? h("p", { role: "status", style: { color: "#067647" } }, notice) : null,
+    h("style", { "data-tw-settings-style": "tiers" }, SETTINGS_CSS),
     h("button", {
       type: "button",
-      "data-tw-action": "save-tiers",
-      onClick: save,
-      disabled: snapshot.status !== "ready" || snapshot.writable === false || !!saveValidationError,
-    }, "保存配置"))
+      className: "tw-settings-header",
+      "aria-expanded": open,
+      "aria-label": (open ? "收起设置: " : "展开设置: ") + "team-work-runtime",
+      onClick: function () { setOpen(!open) },
+    },
+    h("span", { className: "tw-settings-name" }, "team-work-runtime"),
+    h("span", {
+      className: open ? "tw-settings-chevron tw-settings-chevron-open" : "tw-settings-chevron",
+      "aria-hidden": "true",
+    }, h("svg", { width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", xmlns: "http://www.w3.org/2000/svg" },
+      h("path", { d: "M11.8486 5.5L11.4238 5.92383L8.69727 8.65137C8.44157 8.90706 8.21562 9.13382 8.01172 9.29785C7.79912 9.46883 7.55595 9.61756 7.25 9.66602C7.08435 9.69222 6.91565 9.69222 6.75 9.66602C6.44405 9.61756 6.20088 9.46883 5.98828 9.29785C5.78438 9.13382 5.55843 8.90706 5.30273 8.65137L2.57617 5.92383L2.15137 5.5L3 4.65137L3.42383 5.07617L6.15137 7.80273C6.42595 8.07732 6.59876 8.24849 6.74023 8.3623C6.87291 8.46904 6.92272 8.47813 6.9375 8.48047C6.97895 8.48703 7.02105 8.48703 7.0625 8.48047C7.07728 8.47813 7.12709 8.46904 7.25977 8.3623C7.40124 8.24849 7.57405 8.07732 7.84863 7.80273L10.5762 5.07617L11 4.65137L11.8486 5.5Z", fill: "currentColor" }))
+    )),
+    open ? h("div", { className: "tw-settings-body" },
+      h("p", { className: "tw-settings-overview" }, "为 junior、senior、expert 配置候选模型。Provider 和模型必填，推理等级可选；所有值都依据当前 DSH 模型目录校验。"),
+      status,
+      catalogStatus,
+      catalogError,
+      failureText,
+      TIER_ORDER.map(function (tier) {
+        return renderTier(React, tier, draft[tier], catalog, updateCandidate, addCandidate, removeCandidate)
+      }),
+      error ? h("p", { role: "alert", className: "tw-settings-message tw-settings-error" }, error) : null,
+      notice ? h("p", { role: "status", className: "tw-settings-message tw-settings-success" }, notice) : null,
+      h("div", { className: "tw-settings-footer" },
+        h("button", {
+          type: "button",
+          className: "tw-settings-button tw-settings-save",
+          "data-tw-action": "save-tiers",
+          onClick: save,
+          disabled: snapshot.status !== "ready" || snapshot.writable === false || !!saveValidationError,
+        }, "保存")
+      )
+    ) : null)
   }
 
   function renderTier(React, tier, candidates, catalog, updateCandidate, addCandidate, removeCandidate) {
     var h = React.createElement
     var rows = Array.isArray(candidates) ? candidates : []
-    return h("fieldset", {
+    return h("section", {
       key: tier,
       "data-tw-tier": tier,
-      style: { border: "1px solid #ddd", padding: "12px" },
+      className: "tw-settings-tier",
     },
-    h("legend", null, tier + "：" + TIER_TEXT[tier]),
+    h("div", { className: "tw-settings-tier-head" },
+      h("h3", { className: "tw-settings-tier-name" }, tier),
+      h("p", { className: "tw-settings-hint" }, TIER_TEXT[tier])
+    ),
     rows.map(function (candidate, index) {
       return renderCandidate(React, tier, index, candidate, catalog, updateCandidate, removeCandidate)
     }),
-    rows.length === 0 ? h("p", { style: { color: "#8a5b00" } }, "尚无候选；请新增一行。") : null,
+    rows.length === 0 ? h("p", { className: "tw-settings-message tw-settings-warning" }, "尚无候选；请新增一行。") : null,
     h("button", {
       type: "button",
+      className: "tw-settings-button tw-settings-add",
       "data-tw-action": "add-candidate",
       onClick: function () { addCandidate(tier) },
     }, "新增候选"))
@@ -256,10 +320,21 @@ var factory = function (require) {
     return h("div", {
       key: tier + "-" + index,
       "data-tw-candidate": tier + "-" + index,
-      style: { display: "grid", gap: "8px", padding: "8px 0" },
+      className: "tw-settings-candidate",
     },
-    h("label", null, "Provider（active，必填）",
+    h("div", { className: "tw-settings-candidate-head" },
+      h("span", { className: "tw-settings-candidate-name" }, "候选 " + (index + 1)),
+      h("button", {
+        type: "button",
+        className: "tw-settings-button tw-settings-remove",
+        "data-tw-action": "remove-candidate",
+        onClick: function () { removeCandidate(tier, index) },
+      }, "删除")
+    ),
+    h("div", { className: "tw-settings-fields" },
+    h("label", { className: "tw-settings-field" }, "Provider（active，必填）",
       h("input", {
+        className: "tw-settings-input",
         value: candidate.provider,
         list: providerId,
         onChange: function (event) { updateCandidate(tier, index, "provider", event.target.value) },
@@ -267,8 +342,9 @@ var factory = function (require) {
       h("datalist", { id: providerId }, activeProviders.map(function (provider) {
         return h("option", { key: provider.provider, value: provider.provider }, provider.displayName || provider.provider)
       }))),
-    h("label", null, "模型（必填）",
+    h("label", { className: "tw-settings-field" }, "模型（必填）",
       h("input", {
+        className: "tw-settings-input",
         value: candidate.model,
         list: modelId,
         onChange: function (event) { updateCandidate(tier, index, "model", event.target.value) },
@@ -276,21 +352,18 @@ var factory = function (require) {
       h("datalist", { id: modelId }, models.map(function (model) {
         return h("option", { key: model.id, value: model.id }, model.name || model.id)
       }))),
-    h("label", null, "推理等级（可选）",
+    h("label", { className: "tw-settings-field" }, "推理等级（可选）",
       h("input", {
+        className: "tw-settings-input",
         value: candidate.effort,
         list: effortId,
         onChange: function (event) { updateCandidate(tier, index, "effort", event.target.value) },
       }),
       h("datalist", { id: effortId }, efforts.map(function (effort) {
         return h("option", { key: effort.id, value: effort.id }, effort.name || effort.id)
-      }))),
-    warning ? h("p", { style: { color: "#8a5b00" } }, warning) : null,
-    h("button", {
-      type: "button",
-      "data-tw-action": "remove-candidate",
-      onClick: function () { removeCandidate(tier, index) },
-    }, "删除候选"))
+      })))
+    ),
+    warning ? h("p", { className: "tw-settings-hint tw-settings-warning" }, warning) : null)
   }
 
   function useSettingsSnapshot(React, scope) {

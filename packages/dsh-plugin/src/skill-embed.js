@@ -48,6 +48,9 @@ export async function registerEmbeddedSkill(ctx, config) {
   ctx.skills.register({
     name: fm.name || "team-work-v3",
     description: fm.description || "team-work 多智能体研发工作流",
+    // 宿主 validateCandidate 契约：source 必须是 string（runtimeCandidate 原样透传，
+    // 缺省 undefined 在消费侧抛 "source must be a string"——skill 工具装载即失败）
+    source: "team-work-runtime-dsh",
     content: md,
     resourceBase: { kind: "directory", path: path.join(skillDir, "references") },
   })

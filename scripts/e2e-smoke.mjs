@@ -20,7 +20,7 @@ async function main() {
   // S1 产物
   const client = await readFile(path.join(repoRoot, "packages/dsh-plugin/src-client/badge.js"), "utf8")
   const skill = await readFile(path.join(repoRoot, "skills/team-work-v3/SKILL.md"), "utf8")
-  if (!client.includes("__ModuleLoader__") || !client.includes("var factory = function (module, exports)")) throw new Error("S1: client 源文件非工厂形态（免构建装载协议）")
+  if (!client.includes("__ModuleLoader__") || !client.includes("var factory = function (require)") || !client.includes("return { apply: apply, inject: inject }")) throw new Error("S1: client 源文件未遵守 factory(require) → exports 装载协议")
   if (!skill.includes("team-work")) throw new Error("S1: skill 拷贝缺失")
   console.log("S1 OK 构建产物完整")
 

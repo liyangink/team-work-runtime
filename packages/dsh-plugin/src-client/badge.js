@@ -1,13 +1,13 @@
 // badge.js — client 插件源文件（自带工厂形态，免构建：本文件即装载产物）
 // dsh client 装载协议：宿主按 exports["./client"] 取本文件作为脚本执行，
 // __ModuleLoader__.load 注册工厂；react 经工厂内 require 解析自宿主模块空间。
-var factory = function (module, exports) {
+var factory = function (require) {
   // badge.js — client 插件：子代理模型席位徽标
   // CJS 工厂形状（build.mjs 零转换包装）；组件为 React 函数组件（slot 渲染器把注册组件直接挂进宿主 React 树——
   // 平台事实：原生 ModelSelect 同一形态 slots.register(spec, Component)；react 经 factory 的 require 解析自宿主模块空间）。
   var SLOT = "conversation.input.model"
 
-  var inject = ["slots", "sessions", "logger"]
+  var inject = ["slots", "sessions"]
 
   function apply(ctx) {
     var React
@@ -70,7 +70,7 @@ var factory = function (module, exports) {
     return value
   }
 
-  module.exports = { apply: apply, inject: inject }
+  return { apply: apply, inject: inject }
 
 };
 var api = (typeof window !== 'undefined' ? window : globalThis).__ModuleLoader__;

@@ -1,10 +1,28 @@
 // dsh-plugin 纯函数单测（不依赖 DSH 运行时；装载链验证在 I2 验证脚本与 I6 压轴 E2E）
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import test from "node:test"
+import vm from "node:vm"
 
 import { hintForChild, agentsJsonPath } from "../packages/dsh-plugin/src/inject.js"
 import { resolveTwBin, resolveProjectRoot } from "../packages/dsh-plugin/src/tw-tool.js"
 import { parseFrontmatter } from "../packages/dsh-plugin/src/skill-embed.js"
+
+test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis 插件", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  assert.deepEqual(registrations.map(({ id }) => id), ["team-work-runtime-dsh", "team-work-runtime"])
+  for (const { factory } of registrations) {
+    const plugin = factory(() => ({}))
+    assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
+    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions"], "logger 是 ctx 内建属性，不得声明为注入服务")
+  }
+})
 
 test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/损坏输入）", () => {
   const agents = { mappings: { w1: "child-a" }, modelHints: { "child-a": { provider: "p", model: "m", effort: "high" }, "child-b": { provider: "p", model: "m" }, "child-c": { provider: "", model: "m" } } }

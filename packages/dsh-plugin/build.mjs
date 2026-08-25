@@ -22,8 +22,8 @@ async function main() {
 
   // 2) client 形态校验（免构建：badge 源自带工厂形态，exports["./client"] 直指源文件）
   const badgeSrc = await readFile(path.join(here, "src-client", "badge.js"), "utf8")
-  if (!badgeSrc.includes("__ModuleLoader__") || !badgeSrc.includes("var factory = function (module, exports)")) {
-    throw new Error("src-client/badge.js 工厂形态不完整（装载协议：__ModuleLoader__.load 注册工厂）")
+  if (!badgeSrc.includes("__ModuleLoader__") || !badgeSrc.includes("var factory = function (require)") || !badgeSrc.includes("return { apply: apply, inject: inject }")) {
+    throw new Error("src-client/badge.js 工厂形态不完整（装载协议：factory(require) 直接返回插件导出）")
   }
   console.log("OK src-client/badge.js（工厂形态自足，免构建）")
 

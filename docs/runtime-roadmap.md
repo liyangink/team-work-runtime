@@ -63,6 +63,7 @@
 - **packages/dsh-plugin 已实现**（六段增量 I1-I6，双轴方案评审 16 findings + 三轮交叉审查全处置）：host 插件（inject:["subagents","skills","tools"]——childId 寻址 agents.json modelHints 注入 installModelSelection 同步预注册+异步补读；skill 构建期内嵌注册；tw 原生工具 args 透传 + timeoutMs + output.render）+ client 徽标（React 组件、仅 addressed 子代理、sessions.models RPC）+ 构建链（build.mjs：skill 拷贝/CJS 工厂 bundle/npm pack 双向断言"不多不少"）+ bundle 装载协议（dsh.bundle.patch + 入口 patch，C1 实机发现补齐）；
 - **注入寻址（v2 评审后定稿）**：childId 主键（childCtx.agent.id 直查 modelHints——时序证伪了 seed 文本解析）+ agent-map 自动落盘（P4：零手动转录）；隔离性源码证实（每子代独立 session/agent/ctx）；
 - **验收状态（功能矩阵 F-1..F-12）**：F-1..F-4/F-6/F-8..F-11 全自动验证通过（E2E-A 真实 cordis 装载层 + E2E-B runtime 全功能矩阵 + C1 实机宿主 boot 链 dump-config + 隔离 web 实例启动零 error）；**F-5/F-7/F-12（真实 LLM 注入/effort 进 header/徽标显示）待用户实机确认**（需带凭据真实会话创建 subagent——插件安装后参照插件 README"实机验证"节）；
+- **客户端启动回归修复（2026-08-25）**：根包市场通道实机刷新暴露 client 工厂误用 Node `(module, exports)` 形态，导致 `factory(require)` 返回 `undefined`；修正为直接返回 Cordis 插件导出，并移除把内建 `logger` 误声明为注入服务的第二层 pending blocker。新增工厂协议回归测试，隔离 web profile 已验证完整进入主界面且控制台零错误；根包/独立插件包版本分别推进到 `0.2.0-beta.2`/`0.1.0-beta.3`；
 - 剩余：npm 正式发布（本地 pack 已验证）；写边界平台 hook 不做（用户裁决：skill 规范承载，派单边界声明已落地）；
 - `e2eTemplate` 物化已实施（run 路由 → e2e 阶段 → 三包依赖链，E2E-B F-11 验证）。
 

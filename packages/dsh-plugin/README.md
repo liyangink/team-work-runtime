@@ -54,14 +54,30 @@ dsh plugin add team-work-runtime-dsh
 生效：安装后**重启 dsh 会话**，由 bundle 层装载（插件的 bundle patch 是纯 insert 行，支持热挂载的宿主环境可免重启即时生效）。
 验证：`dsh --profile web --dump-config 2>/dev/null | grep "name: team-work-runtime-dsh"`（stdout 装配树命中 name 行即装载成功；**勿合并 stderr**——patch 未生效时 loader 的 "entry not found" warn 恰好也含插件名，曾造成误判）。
 
-## 配置（可选）
+## 配置（全局 settings.yaml）
+
+插件配置已全局化：经宿主 settings 服务（`@deepseek-ai/dsh-settings`）写入 `$DSH_HOME/settings.yaml` 并热生效，无需写插件 config。namespace 为 `team-work-dsh`。
 
 ```yaml
-# 插件 config（通常零配置——默认从项目目录自动发现）
-projectRoot: /path/to/project   # 多项目/非标准布局时显式指定
-twBin: /path/to/bin/tw.mjs      # tw 入口（默认解析 peerDependencies 的 team-work-runtime）
-skillDir: /path/to/skill        # 覆盖内嵌 skill 目录
+# $DSH_HOME/settings.yaml
+team-work-dsh:
+  # projectRoots：项目根数组，每项一个项目；path 为绝对路径，命中决定注入寻址与 tw 工作目录
+  projectRoots:
+    - path: /path/to/project-a        # 项目 A 根目录
+      # twBin: /path/to/bin/tw.mjs     # 该项目专属 tw 入口（可选，覆盖全局 twBin）
+      # injectionEnabled: true         # 该项目是否启用模型注入（可选，默认 true）
+    - path: /path/to/project-a/sub     # 可嵌套——cwd 落在多级前缀时取最长前缀命中项
+  twBin: /path/to/bin/tw.mjs           # 全局 tw 入口（默认解析 peerDependencies 的 team-work-runtime，再兜底 PATH 的 tw）
+  injectionEnabled: true               # 全局注入开关（false 则不注入；消费时刻判定，热生效）
 ```
+
+- **多项目最长前缀匹配**：子代理的 `cwd` 同时命中多个 `projectRoots[].path` 前缀时，取 path 最长（最深）的那一项，作为该项目的工作目录与 twBin 覆盖来源；无任何前缀命中时不启用项目级覆盖（退回全局 `twBin` 与默认工作目录）。
+- **覆盖链（twBin）**：命中项 `twBin` > 全局 `twBin` > `require.resolve('team-work-runtime/bin/tw.mjs')` > PATH 的 `tw`。
+- **降级行为**：宿主无 settings 服务（import 失败）时静默跳过区段注册，插件以 entry config 初值照常装载，其余功能不受影响。
+- **热生效**：区段注册后注入与 tw 工具在每次子代理创建、每次工具调用时按最新 settings 快照读配置——injectionEnabled / projectRoots / twBin 改动无需重启即生效。entry 仅作初值（base 层）与无服务时的回退。
+- **契约要点**：setSource 收到的是「返回当前值的 thunk」（非值），读取方每次现调 source() 取新快照；schema 必须是 schemastery z.object(...) 可调用对象（服务端执行 schema(mergeLayers(base, section))，裸对象会抛 TypeError），故本实现动态 import @deepseek-ai/schemastery 构造真 schema，任一动态 import 失败则整段不注册。
+- **开关语义**：injectionEnabled: false 不注销 setup，而是在子代理创建时刻跳过注入（消费时刻判定），关闭/重开均即时生效。twBin 缺省回退到 peer 依赖解析与 PATH；projectRoots 缺省为空数组（不启用项目级覆盖）。matchProjectRoot 统一补尾斜杠做前缀比较，/a/b 不误命中 /a/bc。
+- **项目级配置已移除**：原先插件 config 的 `projectRoot` / `twBin` / `injectionEnabled` 不再从项目 config 读取，统一由全局 settings.yaml 承载；`skillDir` 仍属构建项，暂不在 settings 区段暴露。
 
 模型映射数据在项目侧 `.team-work/platform/dsh.json`（档位候选数组，参考主包 README；示例用公开模型名如 deepseek-v4-flash / glm-5.3）。
 

@@ -3,12 +3,14 @@
 // execute 返回值经 output.schema 校验后由 render 转模型可见文本。
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
+import { matchProjectRoot } from "./settings.js"
 
 const require = createRequire(import.meta.url)
 
-// twBin 解析：config → peerDep 主包 bin → PATH
-export function resolveTwBin(config) {
-  if (config?.twBin) return config.twBin
+// twBin 解析：matchProjectRoot 命中项的 twBin → settings.twBin → peerDep 主包 bin → PATH
+export function resolveTwBin(settings, hit = null) {
+  if (hit?.twBin) return hit.twBin
+  if (settings?.twBin) return settings.twBin
   try {
     return require.resolve("team-work-runtime/bin/tw.mjs")
   } catch {
@@ -16,7 +18,7 @@ export function resolveTwBin(config) {
   }
 }
 
-// 项目根解析：config → exec.agent.session.header.cwd（子代继承父工作目录）→ process.cwd()
+// 项目根解析：config.projectRoot → exec.agent.session.header.cwd（子代继承父工作目录）→ process.cwd()
 export function resolveProjectRoot(config, exec) {
   return config?.projectRoot ?? exec?.agent?.session?.header?.cwd ?? process.cwd()
 }
@@ -56,8 +58,9 @@ function runTw(twBin, args, cwd, timeoutMs = TW_TIMEOUT_MS) {
   })
 }
 
-export function twToolDefinition(config) {
-  const twBin = resolveTwBin(config)
+export function twToolDefinition(settings) {
+  // settings 可为对象（快照）或函数（getConfig thunk，返回最新 settings 快照）。
+  const snapshot = () => (typeof settings === "function" ? settings() : settings)
   return {
     name: "tw",
     timeoutMs: TW_TIMEOUT_MS, // F4：dsh-tools 支持的定义级超时（内部另有 kill 双保险）
@@ -71,7 +74,13 @@ export function twToolDefinition(config) {
     },
     async execute(params, exec) {
       const args = Array.isArray(params?.args) ? params.args.map(String) : []
-      return runTw(twBin, args, resolveProjectRoot(config, exec))
+      // 每次调用按 getConfig() 现值读配置（热生效；深冻结快照只读）。
+      const config = snapshot() ?? {}
+      const cwd = resolveProjectRoot(config, exec)
+      const hit = matchProjectRoot(config?.projectRoots, cwd)
+      const twBin = resolveTwBin(config, hit)
+      // 命中项 path 覆盖工作目录（否则用 header.cwd/process.cwd）
+      return runTw(twBin, args, hit?.path ?? cwd)
     },
     output: {
       schema: { type: "object" },

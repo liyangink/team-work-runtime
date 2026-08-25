@@ -6,6 +6,7 @@ import vm from "node:vm"
 
 import { hintForChild, agentsJsonPath } from "../packages/dsh-plugin/src/inject.js"
 import { resolveTwBin, resolveProjectRoot } from "../packages/dsh-plugin/src/tw-tool.js"
+import { matchProjectRoot, installPluginSettings, SETTINGS_NS } from "../packages/dsh-plugin/src/settings.js"
 import { parseFrontmatter } from "../packages/dsh-plugin/src/skill-embed.js"
 
 test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis 插件", async () => {
@@ -113,4 +114,118 @@ test("I2 frontmatter 解析：name/description 提取与引号剥离", () => {
   assert.equal(fm.name, "team-work-v3")
   assert.equal(fm.description, "用 tw CLI 驱动多智能体研发工作流")
   assert.deepEqual(parseFrontmatter("无 frontmatter"), {})
+})
+test("I5 matchProjectRoot：最长前缀命中/无命中/空数组", () => {
+  const roots = [
+    { path: "/a" },
+    { path: "/a/b", twBin: "/deep/tw.mjs" },
+    { path: "/a/b/c" },
+  ]
+  // 最长前缀命中：cwd 落在多级前缀，取最深命中项（带 twBin 覆盖）
+  assert.deepEqual(matchProjectRoot(roots, "/a/b/c/app"), { path: "/a/b/c" }, "最长前缀命中")
+  assert.deepEqual(matchProjectRoot(roots, "/a/b/x"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "次深命中（保留附加字段）")
+  // 无 path 前缀匹配 → null
+  assert.equal(matchProjectRoot(roots, "/other/proj"), null, "无前缀命中 → null")
+  // 空数组 → null
+  assert.equal(matchProjectRoot([], "/a/b/c"), null, "空数组 → null")
+  assert.equal(matchProjectRoot(null, "/a/b/c"), null, "非数组 → null")
+})
+
+test("I5 matchProjectRoot 分隔符边界（Risk 4）：/a/b 不误命中 /a/bc、末尾斜杠、相对路径", () => {
+  const roots = [{ path: "/a/b", twBin: "/deep/tw.mjs" }]
+  // /a/b vs /a/bc：目录名边界不得前缀误命中
+  assert.equal(matchProjectRoot(roots, "/a/bc"), null, "/a/bc 不得命中 /a/b")
+  assert.equal(matchProjectRoot(roots, "/a/bc/x/y"), null, "/a/bc 子路径不得命中 /a/b")
+  assert.deepEqual(matchProjectRoot(roots, "/a/b/app"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "/a/b 正常命中")
+  // 末尾斜杠：cwd 与 path 带尾斜杠等价于不带
+  assert.deepEqual(matchProjectRoot(roots, "/a/b/"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "cwd 尾斜杠")
+  assert.deepEqual(matchProjectRoot([{ path: "/a/b/" }], "/a/b/app"), { path: "/a/b/" }, "path 尾斜杠")
+  assert.deepEqual(matchProjectRoot(roots, "/a/b/app/"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "cwd 深路径尾斜杠")
+  // 相对路径输入：不越界匹配绝对 cwd（只按字符串前缀，相对对相对才可能命中）
+  assert.equal(matchProjectRoot(roots, "a/b"), null, "相对 cwd 不命中绝对 path")
+  assert.deepEqual(matchProjectRoot([{ path: "a/b" }], "a/b/x"), { path: "a/b" }, "相对对相对命中")
+  // 空 path / 非字符串 path / 缺 path 条目跳过（但其他有效条目仍参与命中）
+  assert.equal(matchProjectRoot([{ path: "" }], "/a/b"), null, "空 path 跳过")
+  assert.deepEqual(matchProjectRoot([{ path: "/a/b" }, {}], "/a/b/x"), { path: "/a/b" }, "缺 path 条目跳过，有效条目仍命中")
+  assert.deepEqual(matchProjectRoot([{ path: "/a/b/c", twBin: "/c" }, { path: "/a/b" }], "/a/b/x"), { path: "/a/b" }, "无效条目跳过不影响最长前缀")
+})
+
+test("I5 installPluginSettings 接线契约：setSource 收到 thunk、schema 为可调用函数", async () => {
+  // 桩 installSettingsSection：断言三方——schema 是函数、setSource 是函数、hooks 形状在场。
+  const calls = []
+  let receivedSource = null
+  const fakeInstallSettingsSection = (_ctx, ns, schema, entry, hooks) => {
+    calls.push({ ns, schema, entry, hooks })
+    // 模拟 service 契约：把「返回当前快照」的 thunk 交给 setSource（对应 scope.get()）
+    hooks.setSource((receivedSource = () => ({ seen: true })))
+    hooks.onChange()
+  }
+  const fakeZ = {
+    string: () => ({ default: () => void 0 }),
+    boolean: () => ({ default: () => void 0 }),
+    array: () => ({ default: () => void 0 }),
+    object: () => function (value) { return value ?? {} }, // z.object 返回可调用 schema
+  }
+  const importSettings = async () => ({
+    installSettingsSection: fakeInstallSettingsSection,
+    settingsNamespace: (ns) => ns,
+  })
+  const importSchemastery = async () => ({ default: fakeZ })
+
+  const ctx = { logger: { warn() {} } }
+  const entry = { projectRoots: [], twBin: null, injectionEnabled: true }
+  const getConfig = installPluginSettings(ctx, entry, { importSettings, importSchemastery })
+
+  // fire-and-forget 注册需要一拍：让异步 IIFE 跑完
+  await new Promise((r) => setTimeout(r, 20))
+
+  assert.equal(calls.length, 1, "installSettingsSection 被调用一次")
+  assert.equal(calls[0].ns, SETTINGS_NS, "namespace 直传")
+  assert.equal(typeof calls[0].schema, "function", "schema 必须是可调用函数（非裸对象，否则 service resolve 抛 TypeError）")
+  assert.equal(typeof calls[0].hooks.setSource, "function", "hooks.setSource 在场")
+  assert.equal(typeof receivedSource, "function", "setSource 收到的是 thunk（函数），非值")
+  // setSource 存 thunk + 读值调 source()：getConfig() 返回服务端快照（非 entry Object.assign 残留）
+  assert.deepEqual(getConfig(), { seen: true }, "getConfig 调 source() 取服务端快照")
+})
+
+test("I5 installPluginSettings 降级：模块不存在静默、其他异常 warn、两 import 任一失败整段降级", async () => {
+  // 模块不存在（ERR_MODULE_NOT_FOUND）→ 静默（无 warn）、getConfig 返回 entry
+  const warnsNotFound = []
+  const ctxNF = { logger: { warn: (...a) => warnsNotFound.push(a) } }
+  const g1 = installPluginSettings(ctxNF, { twBin: "/entry" }, {
+    importSettings: async () => { const e = new Error("Cannot find package '@deepseek-ai/dsh-settings'"); e.code = "ERR_MODULE_NOT_FOUND"; throw e },
+    importSchemastery: async () => { throw new Error("unreachable") },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(g1(), { twBin: "/entry" }, "无服务 → getConfig 返回 entry")
+  assert.equal(warnsNotFound.length, 0, "模块不存在 → 静默不 warn")
+
+  // schemastery 缺失（其他异常非模块缺失）→ warn 留痕再降级
+  const warnsOther = []
+  const ctxO = { logger: { warn: (...a) => warnsOther.push(a) } }
+  const g2 = installPluginSettings(ctxO, { twBin: "/entry2" }, {
+    importSettings: async () => ({ installSettingsSection: () => {}, settingsNamespace: (n) => n }),
+    importSchemastery: async () => { throw new Error("schemastery broken") },
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(g2(), { twBin: "/entry2" }, "schemastery 失败 → 整段降级返回 entry")
+  assert.equal(warnsOther.length, 1, "非模块缺失异常 → warn 留痕一次")
+
+  // installSettingsSection 本身抛错 → warn 留痕，getConfig 仍返回 entry（不阻断主链路）
+  const warnsReg = []
+  const ctxR = { logger: { warn: (...a) => warnsReg.push(a) } }
+  const g3 = installPluginSettings(ctxR, { injectionEnabled: false }, {
+    importSettings: async () => ({ installSettingsSection: () => { throw new Error("dup namespace") }, settingsNamespace: (n) => n }),
+    importSchemastery: async () => ({ default: { object: () => function () {}, array: () => ({ default: () => 0 }), string: () => ({}), boolean: () => ({ default: () => 0 }) } }),
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(g3(), { injectionEnabled: false }, "注册异常 → 返回 entry")
+  assert.equal(warnsReg.length, 1, "注册异常 warn 留痕一次")
+})
+
+test("I5 resolveTwBin 覆盖链：命中项 twBin > settings.twBin > peerDep 解析 > PATH", () => {
+  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, { twBin: "/hit/tw.mjs" }), "/hit/tw.mjs", "matchProjectRoot 命中项 twBin 最优先")
+  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, {}), "/settings/tw.mjs", "无命中项 → settings.twBin")
+  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, null), "/settings/tw.mjs", "hit=null → settings.twBin")
+  assert.equal(typeof resolveTwBin({}, {}), "string", "皆无 → peerDep 解析或 PATH 兜底")
 })

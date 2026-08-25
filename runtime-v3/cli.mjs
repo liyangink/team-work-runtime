@@ -272,11 +272,21 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
     return { ok: true, task: name, stage: earlyState.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   // 复核修复：判定与写入同锁——并发 run 只有一方完成派发/推进，另一方锁内重推导后拿到新状态
+  // run 派单同样固化全局配置模型快照（修复回归：9b0b92c 后仅 dispatch-plan 固化，run 派单丢失
+  // modelHint → agent-map 无快照可落 → 插件注入静默失效，Lead 主通道子代全部默认模型）。
+  // 与 dispatch-plan 同源：resolveTiers 全局读取 + usedFamilies 波内家族去重闭包。
+  const resolved = await resolveTiers()
+  const usedFamilies = []
+  const selectModelHint = (tier) => {
+    const hint = computeModelHint(resolved.tiers[tier], usedFamilies)
+    if (hint?.family) usedFamilies.push(hint.family)
+    return hint
+  }
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy })
     await ensureE2ePackages(task) // B：e2e 场景无 packages 时按模板物化（幂等；在 derive 前生效）
     const state = deriveTask(task)
-    return runTransition({ projectRoot, name, writable, workflow, policy, task, state })
+    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
   })
 }
 

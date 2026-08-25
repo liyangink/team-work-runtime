@@ -302,6 +302,21 @@ test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略
   assert.equal(again.stop, "wait-inflight", "在途波次不重复派发")
 })
 
+test("run 派单同样固化全局配置模型快照（防 9b0b92c 回归：run 丢 hint → agent-map 无快照 → 注入静默失效）", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "run-hint-t")
+  const card = await call(["run", "--task", "run-hint-t", "--writable", "R.md:code-review"])
+  assert.equal(card.next, "dispatch")
+  const hint = card.dispatch?.modelHint
+  assert.ok(hint?.provider && hint?.model, "run 派单卡带 modelHint（全局配置快照）")
+  assert.equal(hint.source, "global-settings")
+  const task = await loadTask(root, "run-hint-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const dispatched = task.journal.filter((e) => e.type === "dispatched")
+  assert.equal(dispatched.length, 1)
+  assert.deepEqual(dispatched[0].detail.modelHint, hint, "journal dispatched 事实与派单卡同一快照")
+})
+
 test("dispatch-plan：无全局模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
   const root = await makeProject()
   const call = caller(root)

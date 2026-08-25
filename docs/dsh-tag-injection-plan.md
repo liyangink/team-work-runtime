@@ -26,7 +26,9 @@
 - 三态回退全序：①标签合法且 tagHints 命中且 hint 合法 → 同步注入，stopped=true（与补读互斥，防覆盖）；②标签在但 hint 缺/畸形 → warn + 降级 childId 补读；③无标签/解析失败 → 现状（childId 补读）。
 - 读文件：readFileSync 阻塞首读（文件 <1KB，毫秒级；现行代码已有该基础设施）——同步段可行。
 
-### 2.4 家族去重与 effort
+### 2.3.1 审阅阶段同键语义（交叉审查 risk 处置）
+
+design↔design-review 复用 DESIGN、spec↔spec-review 复用 SPEC（规范固定表无独立缩写）：chal/expert 键在两个阶段间共享、被交替覆写。两场景对应档位池同源（均 senior/expert），差异仅波内家族去重，按“最近快照覆盖”语义处理（符合 §2.2 豁免）。
 
 - tagHints 存的是 dispatch 时快照（波内家族去重已应用），标签通道不重算去重。
 - 续聊不变量：同 child 跨轮 effort 不变（contribution 仅创建/恢复时跑；后续 agent-map 改 effort 不热改已注入子代——避免 thinking 历史断裂 400）。文档化 + 验证面断言首请求 header 含 reasoningEffort。

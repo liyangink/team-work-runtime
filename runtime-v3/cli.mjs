@@ -24,7 +24,7 @@ export function tagLabel(stageId, role, pkg) {
 
 // tagHints 落盘：dispatched 时把标签→modelHint 快照写入项目级 agents.json（P4 零转录）。
 // 项目级 owner 锁，跨任务并发派发不踩踏；写失败降级 warn 不阻塞派发。
-async function persistTagHints(projectRoot, entries) {
+export async function persistTagHints(projectRoot, entries) {
   const valid = (entries ?? []).filter((e) => e && e.tag && e.hint && e.hint.provider && e.hint.model)
   if (valid.length === 0) return
   const file = path.join(projectRoot, ".team-work", "platform", "agents.json")
@@ -32,7 +32,7 @@ async function persistTagHints(projectRoot, entries) {
   try {
     await mkdir(path.dirname(lock), { recursive: true }) // 锁原语 open("wx") 不建父目录
     await withOwnerLock(lock, async () => {
-      const current = await readJson(file).catch(() => ({}))
+      const current = (await readJson(file, { allowMissing: true })) ?? {} // 缺失容错；损坏(STATE_CORRUPT)重抛→外层 warn 降级，不静默覆盖
       const tagHints = { ...(current?.tagHints ?? {}) }
       for (const { tag, hint } of valid) {
         tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }

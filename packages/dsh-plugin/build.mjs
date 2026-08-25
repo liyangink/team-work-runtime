@@ -47,8 +47,16 @@ async function main() {
 
   // 3) npm pack 双向断言（不多不少；npm notice 走 stderr 合并判断；--cache 规避宿主 EPERM）
   await assertPack(here, "插件包", ["dist/client.js", "dist/skill/SKILL.md", "dist/index.js", "dist/inject.js", "README.md", "package.json"], ["roadmap", "tests/", "charter", "team-topology", "pre-phase3", "src/index.js"])
-  await assertPack(repoRoot, "主包（不含插件）", null, ["packages/", "dsh-plugin"])
+  // 主包 tarball 携带插件全套（packages/dsh-plugin/**）：市场 git 源码安装按仓库根构建——
+  // 根清单 files 收编插件产物，子目录保留独立 package.json（市场 #path: 子目录插件自动收录，多平台=加子目录）
+  await assertPack(repoRoot, "主包（含插件子目录，市场 git 通道）", ["packages/dsh-plugin/dist/index.js", "packages/dsh-plugin/dist/client.js", "packages/dsh-plugin/cordis.patch.yml", "packages/dsh-plugin/package.json"], ["src/index.js"])
   console.log("OK npm pack 双向断言通过")
+
+  // 4) dist 提交态脏检查：dist 已随 git 分发（市场 git 安装不执行构建脚本），
+  //    源码改动后忘 rebuild 会造成 git 安装拿到旧产物——build 后 dist 与 git 提交态不一致时提醒。
+  const { stdout: st } = await run("git", ["status", "--porcelain", "--", "packages/dsh-plugin/dist"], { cwd: repoRoot }).catch(() => ({ stdout: "" }))
+  if (String(st).trim() !== "") console.warn("提醒：dist 有未提交改动——记得提交，否则市场 git 安装拿到旧产物")
+  console.log("OK dist 提交态检查")
 }
 
 async function assertPack(cwd, label, mustContain, mustNotContain) {

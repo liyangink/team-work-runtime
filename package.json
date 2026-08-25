@@ -27,6 +27,10 @@
   },
   "files": [
     "bin/",
+    "packages/dsh-plugin/dist/",
+    "packages/dsh-plugin/cordis.patch.yml",
+    "packages/dsh-plugin/package.json",
+    "packages/dsh-plugin/README.md",
     "runtime-v3/",
     "runtime/",
     "policy/",

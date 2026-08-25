@@ -77,6 +77,24 @@ export function makeInjectContribution(ctx, deps = {}) {
         warn("模型注入跳过：子代缺少 agent.id；请检查 DSH continuable setup 上下文")
         return cleanup
       }
+      // 探针（标签寻址承重墙验证，实施时演化为正式诊断日志）：同步段 session 可见面
+      try {
+        const { appendFileSync } = requireSync("node:fs")
+        const evs = agent?.session?.events
+        const desc = Array.isArray(evs) ? evs.find((e) => e?.type === "subagent/descriptor") : null
+        appendFileSync("/tmp/tw-tag-probe.jsonl", JSON.stringify({
+          at: new Date().toISOString(),
+          agentId: agent.id,
+          eventsKind: Array.isArray(evs) ? "array:" + evs.length : typeof evs,
+          firstTypes: Array.isArray(evs) ? evs.slice(0, 3).map((e) => e?.type) : null,
+          descriptor: desc ? { label: desc.data?.label, mode: desc.data?.mode } : null,
+        }) + "\n")
+      } catch (error) {
+        try {
+          const { appendFileSync } = requireSync("node:fs")
+          appendFileSync("/tmp/tw-tag-probe.jsonl", JSON.stringify({ at: new Date().toISOString(), agentId: agent.id, probeError: String(error?.message ?? error) }) + "\n")
+        } catch { /* 探针自身失败静默 */ }
+      }
       const cwd = agent?.session?.header?.cwd
       const file = agentsJsonPath(cwd)
       if (!file) {

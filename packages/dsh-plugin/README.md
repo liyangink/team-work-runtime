@@ -29,7 +29,10 @@ node packages/dsh-plugin/build.mjs   # 先构建 dist
 dsh plugin --profile web add /绝对路径/team-work-runtime/packages/dsh-plugin
 ```
 注：pnpm 11 对目录参数落的是 `link:` 依赖（node_modules 内符号链接到源目录）——build 后改动即时生效，**无需重新 add**（早先"目录=拷贝"的记录是旧版 pnpm 行为；tgz 通道才是拷贝语义，升级需重新 add）。
-另注：若同一 profile 还装有私有 registry 来源的包，remove 会清空包存储，重装时需带该 registry 标志（`--registry <来源>`）才能重新解析私有依赖。
+另注（私有 registry 混装环境，实测两坑）：
+1. **scope 解析**：profile 里若装有私有源包（如内网市场），裸包名（无 @scope 前缀）无法用 scoped registry 覆盖——需在 `<profile>/.npmrc` 写 `registry=<私有源>`（私有源须镜像公网包，实测内网源可解析公网包）；仅影响该 profile 目录。
+2. **release-age 拦截**：pnpm 11 供应链策略拒绝发布未满冷却期（默认约 1 天）的依赖版本。与刚更新的私有市场包同装时，在子命令前加一次性参数绕过：`dsh plugin --profile web --config.minimumReleaseAge=0 add <包>`（仅该条命令生效）。
+3. **勿用裸 pnpm add**：`pnpm add` 只写 dependencies 不写 `dsh.profile.bundles`（装载层清单），装完不装载且无报错；必须走 `dsh plugin add`（跑完 pnpm 后 reconcile bundles 条目）。
 
 **方式三：仓库目录 symlink（开发期改动即时生效，免 pnpm）**
 ```bash

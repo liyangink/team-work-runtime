@@ -11,6 +11,8 @@ team-work-runtime 的 DSH 平台绑定插件。
 
 ## 安装（四种方式，前两种推荐）
 
+> **--profile 是什么**：profile 是 dsh 的插件组合配置（`~/.dsh/profiles/<名字>/`），每个 profile 独立装载自己的插件——`--profile web` 意为"装进 web 这套启动形态"，**不是"仅 web 能用"**。本机只有 web（GUI）一个 profile 时它就是你正在用的会话形态；将来建了 headless/tui 等 profile 想用本插件，同一命令换 profile 名各装一份即可。插件包平台无关：host 侧三件功能（注入/skill/tw 工具）任何 profile 可装；徽标是 web 界面专用（`dsh.client.platform: "web"` 声明），装到其他 profile 不报错、仅徽标不出现。
+
 **方式一：压缩包 + dsh plugin add（免发布，pnpm ≥9 在 PATH）——分发/试用首选**
 ```bash
 # 仓库内打包（或从发布渠道获取 .tgz）

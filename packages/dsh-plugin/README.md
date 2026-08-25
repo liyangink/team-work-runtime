@@ -40,11 +40,11 @@ node scripts/install-local.mjs                # symlink 指向 packages/dsh-plug
 node scripts/uninstall-local.mjs              # 卸载
 ```
 
-**方式四：git 源码仓库（市场/`github:` spec 通道）**
+**方式四：git 源码仓库（市场通道）**
 ```bash
 dsh plugin --profile web add github:<owner>/team-work-runtime
 ```
-仓库根是集合载体（根清单不带 `dsh` 声明）：装载方扫描子目录，把 `packages/dsh-plugin` 识别为独立插件按 `#path:` 安装。**插件免构建**：入口直载 `src/`（client 徽标源文件自带工厂装载形态，skill 运行期直读仓库 `skills/team-work-v3`）——git 只携带源码，无构建产物。未来多平台绑定=新增 `packages/<平台>` 子目录（独立 package.json + `dsh` 声明），同一仓库根自动收录。
+**根 package.json 即插件包**（市场按根清单构建安装）：根清单声明 `dsh.bundle`，入口指向 `packages/dsh-plugin/src/`（免构建），根 `cordis.patch.yml` 按**安装包名 `team-work-runtime`** 插入 entry。装的是根包=插件与 runtime 一体（`tw` 自带，无 peer 解析）。注意：本通道与方式一/二（插件单包 `team-work-runtime-dsh`）是**两个安装身份，二选一**——同装会产生重复 entry id 被宿主拒绝。未来多平台绑定基于根清单拓展映射。
 
 **方式五：npm 正式发布后**
 ```bash

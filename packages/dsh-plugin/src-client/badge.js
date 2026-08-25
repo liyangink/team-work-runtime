@@ -75,6 +75,9 @@ var factory = function (module, exports) {
 };
 var api = (typeof window !== 'undefined' ? window : globalThis).__ModuleLoader__;
 if (api && api.load) {
-  var m = { exports: {} };
+  // 双身份注册：client bundle 的 graph id = 安装包名（<包名>/client strip 后缀），
+  // 根包通道（team-work-runtime，市场 git 源码）与插件单包通道（team-work-runtime-dsh）
+  // 各命中各的 id；未命中的注册无消费者，惰性无害。
   api.load({ id: "team-work-runtime-dsh", factory: factory });
+  api.load({ id: "team-work-runtime", factory: factory });
 }

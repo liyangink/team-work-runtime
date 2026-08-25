@@ -47,6 +47,8 @@
     "tests/dsh-plugin.test.mjs",
     "tests/e2e-b-matrix.test.mjs",
     "tests/dsh-plugin-e2e.test.mjs",
+    "tests/e2e-root.test.mjs",
+    "cordis.patch.yml",
     "scripts/e2e-smoke.mjs",
     "scripts/e2e-c1.mjs",
     "packages/dsh-plugin/cordis.patch.yml",

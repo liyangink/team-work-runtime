@@ -31,7 +31,7 @@ async function main() {
   await assertPack(here, "插件包", ["src/index.js", "src-client/badge.js", "dist/skill/SKILL.md", "README.md", "package.json", "cordis.patch.yml"], ["roadmap", "tests/", "charter", "team-topology", "pre-phase3", "dist/index.js", "dist/client.js"])
   // 主包 tarball 携带插件源码全套（免构建，市场 git 通道同构）：根清单 files 收编插件目录，
   // 子目录保留独立 package.json + dsh 声明（装载方按子目录收录；多平台=新增 packages/<平台> 子目录）
-  await assertPack(repoRoot, "主包（含插件子目录）", ["packages/dsh-plugin/src/index.js", "packages/dsh-plugin/src-client/badge.js", "packages/dsh-plugin/cordis.patch.yml", "packages/dsh-plugin/package.json"], ["packages/dsh-plugin/dist/index.js"])
+  await assertPack(repoRoot, "主包（根即插件包，市场 git 通道）", ["cordis.patch.yml", "packages/dsh-plugin/src/index.js", "packages/dsh-plugin/src-client/badge.js", "packages/dsh-plugin/package.json", "skills/team-work-v3/SKILL.md", "bin/tw.mjs"], ["packages/dsh-plugin/dist/index.js"])
   console.log("OK npm pack 双向断言通过")
 }
 

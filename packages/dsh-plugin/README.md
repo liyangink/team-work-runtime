@@ -9,13 +9,37 @@ team-work-runtime 的 DSH 平台绑定插件。
 - **tw 原生工具**：成员直接调用 `tw` 工具（args 透传 CLI），无需 PATH；
 - **模型席位徽标**：子代理会话显示实际执行的 provider/model · 推理等级（注入效果肉眼可核）。
 
-## 安装
+## 安装（四种方式，前两种推荐）
 
+**方式一：压缩包 + dsh plugin add（免发布，pnpm ≥9 在 PATH）——分发/试用首选**
+```bash
+# 仓库内打包（或从发布渠道获取 .tgz）
+node packages/dsh-plugin/build.mjs && (cd packages/dsh-plugin && npm pack --ignore-scripts)
+# 安装（dsh 自动完成 pnpm 安装 + 写依赖与 bundles 条目）
+dsh plugin --profile web add /绝对路径/team-work-runtime-dsh-x.y.z.tgz
+# 卸载
+dsh plugin --profile web remove team-work-runtime-dsh
+```
+
+**方式二：仓库目录 + dsh plugin add（开发期）**
+```bash
+node packages/dsh-plugin/build.mjs   # 先构建 dist
+dsh plugin --profile web add /绝对路径/team-work-runtime/packages/dsh-plugin
+```
+注：pnpm 对目录依赖做的是拷贝而非链接——插件源码改动后需重跑 build 并重新 add（或改用方式三 symlink）。
+
+**方式三：仓库目录 symlink（开发期改动即时生效，免 pnpm）**
+```bash
+node scripts/install-local.mjs                # symlink 指向 packages/dsh-plugin，build 后即时生效
+node scripts/uninstall-local.mjs              # 卸载
+```
+
+**方式四：npm 正式发布后**
 ```bash
 dsh plugin add team-work-runtime-dsh
 ```
 
-开发期（本仓库）：`node packages/dsh-plugin/build.mjs` 构建后按 profile 手动装配。
+所有方式安装后**重启 dsh 会话**生效；验证：`dsh --profile web --dump-config | grep team-work-dsh`（有命中即装载成功）。
 
 ## 配置（可选）
 

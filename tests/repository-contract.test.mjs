@@ -21,7 +21,7 @@ test("v3 assets exist and v2 trees are removed (git history preserves them)", as
   for (const present of ["runtime-v3/cli.mjs", "bin/tw.mjs", "skills/team-work-v3/SKILL.md", "docs/runtime-v3-charter.md"]) {
     await assert.doesNotReject(access(path.join(projectRoot, present)), present)
   }
-  for (const removed of ["plugins/opencode", "installer", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2"]) {
+  for (const removed of ["plugins/opencode", "installer", "runtime", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2"]) {
     await assert.rejects(access(path.join(projectRoot, removed)), (error) => error.code === "ENOENT", removed)
   }
 })

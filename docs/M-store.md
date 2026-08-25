@@ -1,7 +1,7 @@
 # runtime-v3 · store 模块说明
 
 > 交付物：code-review 阶段 store 包模块说明文档。
-> 对应源码：`runtime-v3/store.mjs`，以及它复用的 `runtime/persistence/transactions.mjs`。
+> 对应源码：`runtime-v3/store.mjs`，以及它复用的 `runtime-v3/persistence/transactions.mjs`。
 > 本文档仅说明 **store** 模块自身（职责、关键函数、数据流、失败模式）；intake 模块与 store/intake 协作边界属其他包（intake 包、overview 包）分工，不在本文档内。
 > 原则锚点：AGENTS 规则 P1（目录即状态）、I3（索引缺失/损坏时从不可变事实重建）、I8（原地修订新快照）。
 
@@ -11,7 +11,7 @@
 
 `store` 是**任务目录 I/O 层**：它是任务目录（`.team-work/tasks/<name>/`）的**唯一写入通道**，负责初始化、读取、登记与原子落盘任务状态文件。它**不推导状态、不做门禁判定、不做交付/评审校验业务**——它只保证「目录读写正确、原子、带锁、路径安全」。
 
-它复用 v2 保留下来的 persistence 原语（`runtime/persistence/transactions.mjs`）：
+它复用 v2 保留下来的 persistence 原语（`runtime-v3/persistence/transactions.mjs`）：
 - `atomicWrite` / `atomicJson`：写临时文件 + `rename` + 目录 `fsync` 的原子落盘（失败回收临时文件），保证任意时刻目标文件要么是完整旧内容要么是完整新内容；
 - `withOwnerLock`：任务目录内 `locks/task.lock` 的互斥锁，含**孤儿锁回收**（超龄损坏锁、持有进程已退出时回收），使读-算-写整体串行化。
 
@@ -89,6 +89,6 @@ intake 的 deliver/review 通过 `withOwnerLock`（store 导出的同一把锁�
 
 ## 6. 边界声明（store 之外，不属本文档展开）
 
-- **制品内容稳定读取**（逐段拒符号链接、读中变化检测、realpath 防逃逸，I1）：由 `runtime/persistence/file-artifact-repository.mjs` 的 `readStableArtifact` 承担，intake 封装使用；store 不接触制品内容稳定读取。
+- **制品内容稳定读取**（逐段拒符号链接、读中变化检测、realpath 防逃逸，I1）：由 `runtime-v3/persistence/file-artifact-repository.mjs` 的 `readStableArtifact` 承担，intake 封装使用；store 不接触制品内容稳定读取。
 - **交付/评审校验与登记**：属 intake 模块分工。
 - **store 与 intake 协作边界、整体架构定位**：属 overview 包分工。

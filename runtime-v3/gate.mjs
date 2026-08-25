@@ -3,7 +3,7 @@
 // 每条 blocker 带 requirement/evidence/recovery（I5：拒绝必有出路）。
 // AGENTS 规则 5：只检查当前阶段声明的最低必需输入；历史阶段制品缺失不阻塞（制品两分法：输入上下文不登记）。
 
-import { digestValue } from "../runtime/domain/digests.mjs"
+import { digestValue } from "./domain/digests.mjs"
 
 export function artifactsFingerprint(items) {
   return digestValue(items.map(({ path, digest }) => ({ path, digest })).sort((a, b) => a.path.localeCompare(b.path)))

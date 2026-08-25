@@ -60,7 +60,7 @@ test("多路径部分失败不留孤儿快照（I10 补强：断言 snapshots）
 })
 
 test("损坏锁回收（评审 B F1）：超龄损坏锁自动回收，不永久卡死", async () => {
-  const { withOwnerLock } = await import("../runtime/persistence/transactions.mjs")
+  const { withOwnerLock } = await import("../runtime-v3/persistence/transactions.mjs")
   const root = await mkdtemp(path.join(tmpdir(), "tw-lock-"))
   const lockPath = path.join(root, "task.lock")
   await writeFile(lockPath, "{ 半截崩溃残留，不是 JSON", "utf8")

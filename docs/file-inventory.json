@@ -14,16 +14,16 @@
     "runtime-v3/intake.mjs",
     "runtime-v3/cli.mjs",
     "runtime-v3/dsh-map.mjs",
-    "runtime/domain/",
-    "runtime/domain/digests.mjs",
-    "runtime/domain/invariants.mjs",
-    "runtime/domain/index.mjs",
-    "runtime/persistence/",
-    "runtime/persistence/transactions.mjs",
-    "runtime/persistence/paths.mjs",
-    "runtime/persistence/file-artifact-repository.mjs",
-    "runtime/persistence/store-error.mjs",
-    "runtime/persistence/index.mjs",
+    "runtime-v3/domain/",
+    "runtime-v3/domain/digests.mjs",
+    "runtime-v3/domain/invariants.mjs",
+    "runtime-v3/domain/index.mjs",
+    "runtime-v3/persistence/",
+    "runtime-v3/persistence/transactions.mjs",
+    "runtime-v3/persistence/paths.mjs",
+    "runtime-v3/persistence/file-artifact-repository.mjs",
+    "runtime-v3/persistence/store-error.mjs",
+    "runtime-v3/persistence/index.mjs",
     "policy/kernel.mjs",
     "workflow/definitions/",
     "workflow/definitions/engineering.json",
@@ -74,8 +74,7 @@
     "docs/M-overview.md"
   ],
   "sharedBuild": [
-    "package.json",
-    "package-lock.json"
+    "package.json"
   ],
   "planned": [
     "DSH 平台绑定插件包（dsh plugin add 形态；见 charter §8）"

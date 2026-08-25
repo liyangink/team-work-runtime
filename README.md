@@ -42,4 +42,4 @@ tw archive --task audit-q3
 npm test          # 38 项：v3 核心/intake/CLI/不变量 + 仓库契约
 ```
 
-实现：`runtime-v3/`（waves/gate/derive/store/intake/cli，约 1k 行）+`bin/tw.mjs`；复用件：`runtime/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。
+实现：`runtime-v3/`（waves/gate/derive/store/intake/cli，约 1k 行）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。

@@ -24,7 +24,7 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 
 - **Workflow**（`workflow/definitions/`）：机器可读的研发阶段、合法边、门禁声明、SPEC/E2E 路由 Policy；gate 推导的数据源。
 - **Team-work**（`team-work/policies/` + `skills/team-work-v3/`）：角色档位、场景拓扑、收敛轮次等 Policy 数据；协作策略与判断指引保存在 skill。Policy 是数据，不是代码。
-- **CoreRuntime**（`runtime-v3/` + `runtime/persistence`）：`tw` CLI（Lead 与成员的唯一接口）、波次推进/门禁/状态推导纯函数、任务目录读写、deliver/review 调用内同步总检查。原子写、文件锁、路径防逃逸、digest 由 persistence 原语提供。
+- **CoreRuntime**（`runtime-v3/`，含 domain/persistence 复用件）：`tw` CLI（Lead 与成员的唯一接口）、波次推进/门禁/状态推导纯函数、任务目录读写、deliver/review 调用内同步总检查。原子写、文件锁、路径防逃逸、digest 由 persistence 原语提供。
 - **PlatformBinding**：目标形态 = 平台编排工具执行团队拓扑（`tw dispatch-plan` 导出波次事实，编排脚本按 tier→模型映射派发成员）+ skill 装载 + （调查中）插件 hook。Runtime 不实现派发循环与 DAG 调度；任务数据必须留在项目 `.team-work/`。
 
 ## 核心规则

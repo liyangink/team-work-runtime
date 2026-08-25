@@ -3,9 +3,9 @@
 import path from "node:path"
 import { readFile } from "node:fs/promises"
 
-import { digestValue } from "../runtime/domain/digests.mjs"
-import { atomicJson, atomicWrite, withOwnerLock } from "../runtime/persistence/transactions.mjs"
-import { readStableArtifact } from "../runtime/persistence/file-artifact-repository.mjs"
+import { digestValue } from "./domain/digests.mjs"
+import { atomicJson, atomicWrite, withOwnerLock } from "./persistence/transactions.mjs"
+import { readStableArtifact } from "./persistence/file-artifact-repository.mjs"
 import { artifactsFingerprint } from "./gate.mjs"
 import { readJson } from "./store.mjs"
 import { readdir } from "node:fs/promises"

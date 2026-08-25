@@ -2,7 +2,7 @@
 import { mkdir, readFile, readdir } from "node:fs/promises"
 import path from "node:path"
 
-import { atomicWrite, atomicJson, withOwnerLock } from "../runtime/persistence/transactions.mjs"
+import { atomicWrite, atomicJson, withOwnerLock } from "./persistence/transactions.mjs"
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 

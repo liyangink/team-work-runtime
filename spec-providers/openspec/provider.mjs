@@ -3,8 +3,8 @@ import { promisify } from "node:util"
 import { lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises"
 import path from "node:path"
 
-import { digestValue } from "../../runtime/domain/digests.mjs"
-import { atomicJson, atomicWrite, withOwnerLock } from "../../runtime/persistence/transactions.mjs"
+import { digestValue } from "../../runtime-v3/domain/digests.mjs"
+import { atomicJson, atomicWrite, withOwnerLock } from "../../runtime-v3/persistence/transactions.mjs"
 
 const execFile = promisify(execFileCallback)
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/

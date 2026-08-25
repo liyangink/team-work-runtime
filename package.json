@@ -33,7 +33,6 @@
     "packages/dsh-plugin/package.json",
     "packages/dsh-plugin/README.md",
     "runtime-v3/",
-    "runtime/",
     "policy/",
     "workflow/definitions/",
     "team-work/policies/",

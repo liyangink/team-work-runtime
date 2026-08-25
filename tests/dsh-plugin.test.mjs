@@ -49,6 +49,15 @@ test("I2 tw 工具解析：twBin config 优先；projectRoot 三级链", () => {
   assert.equal(resolveProjectRoot({}, {}), process.cwd())
 })
 
+test("I2 tw 工具 render 契约：必须返回 content 块数组（纯字符串致宿主 commit 崩溃——实机两崩铁证）", async () => {
+  const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
+  const def = twToolDefinition({})
+  const rendered = def.output.render({}, { ok: true, task: "t" })
+  assert.ok(Array.isArray(rendered), "render 返回数组")
+  assert.equal(rendered[0]?.type, "text")
+  assert.equal(typeof rendered[0]?.text, "string")
+  assert.doesNotThrow(() => rendered.some((b) => b.type === "image"), "宿主 commit 的 .some 调用形态必须可用")
+})
 test("I2 tw 工具失败路径：超时 kill 返回失败卡；输出不可解析返回 UNPARSEABLE", async () => {
   const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
   const def = twToolDefinition({ twBin: "/nonexistent/tw.mjs" })
@@ -79,7 +88,8 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   // 宿主真实契约（SetupRegistry.apply 源码）：contribution(childCtx) 同步调用、返回值直接存为 disposer、
     // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
   const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
-    readFile: async () => JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }),
+    readFileSync: () => JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }),
+    readFile: async () => { throw new Error("已有 hint 不应退化到异步首读") },
     installerNow: () => fakeInstallChecked,
     pollMs: 5,
   })
@@ -89,9 +99,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   assert.equal(installs.length, 1, "install 在 contribution 同步段完成（监听器在场——F2 契约）")
   assert.equal(providerAtInstall, "UNDEFINED", "注册时刻 current=undefined（null 对象会清空宿主模型选择）")
   const selection = installs[0].selection
-  // hint 迟到补读（自循环）：首轮读未命中 → Lead agent-map 写入 → 下轮命中 → 写 selection.current
-  await new Promise((r) => setTimeout(r, 30))
-  assert.equal(selection.current?.model, "m", "hint 补写命中（effort→reasoningEffort）")
+  assert.equal(selection.current?.model, "m", "恢复时已有 hint → contribution 返回前同步生效")
   assert.equal(selection.current.reasoningEffort, "max")
   // disposer：清定时器 + 透传 install 的 disposer
   disposer()
@@ -101,6 +109,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   let readCount = 0
   const installsLate = []
   const contributionLate = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+    readFileSync: () => JSON.stringify({ modelHints: {} }),
     readFile: async () => {
       readCount += 1
       if (readCount < 2) return JSON.stringify({ modelHints: {} }) // 首轮：Lead 尚未 agent-map
@@ -126,11 +135,54 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   dispose2()
   // 无抛出即为通过（selection 保持 undefined——不干预）
 
-  // installer 同步解析失败 → 不注入（返回 undefined）
+  // installer 同步解析失败 → 不注入，但仍须返回宿主可释放的 no-op disposer
   const contribution3 = makeInjectContribution(ctx, {}, { installerNow: () => null })
   const before = installs.length
-  assert.equal(contribution3({ agent: { id: "child-3" } }), undefined, "无安装器 → 返回 undefined（不注入）")
+  const dispose3 = contribution3({ agent: { id: "child-3" } })
+  assert.equal(typeof dispose3, "function", "无安装器 → 仍返回 disposer（宿主释放时会无条件调用）")
+  assert.doesNotThrow(() => dispose3(), "no-op disposer 可安全释放")
   assert.equal(installs.length, before, "无安装器 → install 不被调")
+
+  const disposeDisabled = makeInjectContribution(ctx, { injectionEnabled: false })({ agent: { id: "child-disabled" } })
+  assert.equal(typeof disposeDisabled, "function", "注入关闭 → 仍返回 disposer")
+  assert.doesNotThrow(() => disposeDisabled())
+
+  const disposeInvalid = makeInjectContribution(ctx, {}, { installerNow: () => { throw new Error("installer failed") } })({ agent: { id: "child-error" } })
+  assert.equal(typeof disposeInvalid, "function", "contribution 异常 → 仍返回 disposer")
+  assert.doesNotThrow(() => disposeInvalid())
+})
+
+test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安装器异常均留恢复指引", async () => {
+  const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
+  const warnings = []
+  const ctx = { logger: { warn: (message) => warnings.push(String(message)), info() {} } }
+  let reads = 0
+  const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+    readFileSync: () => "{损坏",
+    readFile: async () => {
+      reads += 1
+      const error = new Error("permission denied")
+      error.code = "EACCES"
+      throw error
+    },
+    installerNow: () => () => () => {},
+    pollMs: 2,
+    pollMaxMs: 8,
+  })
+  const dispose = contribution({ agent: { id: "child-diagnostic" } })
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  dispose()
+
+  assert.ok(reads > 0, "损坏同步快照后仍异步重试")
+  assert.ok(warnings.some((message) => message.includes("agents.json") && message.includes("继续补读")), "读错留痕并说明自动重试")
+  assert.ok(warnings.some((message) => message.includes("超时") && message.includes("agent-map")), "补读超时给出恢复指引")
+
+  const contributionInstallerError = makeInjectContribution(ctx, {}, {
+    installerNow: () => { throw new Error("installer failed") },
+  })
+  const disposer = contributionInstallerError({ agent: { id: "child-installer-error" } })
+  assert.equal(typeof disposer, "function")
+  assert.ok(warnings.some((message) => message.includes("安装器") && message.includes("installer failed")), "安装器异常可诊断")
 })
 
 test("I2 frontmatter 解析：name/description 提取与引号剥离", () => {

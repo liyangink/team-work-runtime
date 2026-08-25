@@ -6,10 +6,11 @@
 // installModelSelection 宿主语义（dsh-agent/lib/index.js 实证）：
 //   selection.current === undefined = 不干预（继承默认模型）；
 //   对象（哪怕 {provider:null}）会覆写 variables.provider/model——null 值杀 turn（实机铁证）。
-// 首轮时序（实机修正，见 phase3-plugin-plan §时序）：childId 在子代创建前不可预知，
-//   Lead 的 tw agent-map 写入晚于首 turn——hint 经自循环补读命中后【下轮请求】生效，
-//   首轮必为默认模型（设计边界，非缺陷）。
+// 时序（实机修正，见 phase3-plugin-plan §时序）：新建子代的 childId 在首条 prompt 前不可预知，
+//   故 fresh 首轮继承默认模型，Lead 的 tw agent-map 落盘后由自循环补读供下轮请求使用；
+//   cold-resume 的 hint 已存在，可在 contribution 返回前同步读入并供当前请求使用。
 import { readFile } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { matchProjectRoot } from "./settings.js"
@@ -36,35 +37,30 @@ export function agentsJsonPath(config, headerCwd) {
   return path.join(String(root), ".team-work", "platform", "agents.json")
 }
 
-// 安装器解析——双通道：
-//   同步通道（contribution 主路径）：createRequire + require（Node 22+ require(esm)；
-//     dsh-agent 模块图在宿主进程早已加载，require 仅取引用，无 IO）；
-//   异步通道（预解析兜底）：apply 时 fire-and-forget 动态 import 填充缓存，
-//     覆盖 require(esm) 不可用的旧 Node（engines >=18 场景）。两通道任一命中即缓存。
+// 安装器解析：插件 apply 通过动态 import 完成异步激活门槛，解析成功后才注册 setup，
+// 覆盖 Node >=18，首个子代不再依赖异步缓存竞态。同步 require 仅保留给直接调用
+// makeInjectContribution 且未显式注入 installerNow 的适配场景。
 let cachedInstaller = null
 export async function resolveInstaller(settings) {
   if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
-  try {
-    const mod = await import("@deepseek-ai/dsh-agent")
-    const fn = mod.installModelSelection ?? mod.default?.installModelSelection
-    if (typeof fn === "function") { cachedInstaller = fn; return fn }
-  } catch { /* flat fallback 不可达 → 走同步通道/放弃 */ }
+  const mod = await import("@deepseek-ai/dsh-agent")
+  const fn = mod.installModelSelection ?? mod.default?.installModelSelection
+  if (typeof fn === "function") { cachedInstaller = fn; return fn }
   return null
 }
 export function installerNow(settings) {
   if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
   if (cachedInstaller) return cachedInstaller
-  try {
-    const m = requireSync("@deepseek-ai/dsh-agent")
-    const fn = m.installModelSelection ?? m.default?.installModelSelection
-    if (typeof fn === "function") { cachedInstaller = fn; return fn }
-  } catch { /* 同步解析不可达 → 本子代不注入（apply 预解析已填缓存的下一子代起生效） */ }
+  const m = requireSync("@deepseek-ai/dsh-agent")
+  const fn = m.installModelSelection ?? m.default?.installModelSelection
+  if (typeof fn === "function") { cachedInstaller = fn; return fn }
   return null
 }
 
 // contribution 工厂：返回【同步函数】（宿主存其返回值为 disposer）。
 export function makeInjectContribution(ctx, settings, deps = {}) {
   const readFileFn = deps.readFile ?? readFile
+  const readFileSyncFn = deps.readFileSync ?? readFileSync
   const installerNowFn = deps.installerNow ?? installerNow
   const pollMs = deps.pollMs ?? 500
   const pollMaxMs = deps.pollMaxMs ?? 120000
@@ -73,13 +69,32 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
     let stopped = false
     let timer = null
     let disposeInstall = null
+    function cleanup() {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      if (typeof disposeInstall === "function") disposeInstall()
+    }
+    const warn = (message) => ctx.logger?.warn?.("team-work-dsh: " + message)
+    const describe = (error) => String(error?.message ?? error)
     try {
       const agent = childCtx?.agent
-      if (!agent?.id) return undefined
+      if (!agent?.id) {
+        warn("模型注入跳过：子代缺少 agent.id；请检查 DSH continuable setup 上下文")
+        return cleanup
+      }
       const config = snapshot() ?? {}
-      if (config.injectionEnabled === false) return undefined
-      const install = installerNowFn(settings)
-      if (!install) return undefined
+      if (config.injectionEnabled === false) return cleanup
+      let install
+      try {
+        install = installerNowFn(config)
+      } catch (error) {
+        warn("模型选择安装器解析失败，当前子代保持默认模型；修复依赖后重新创建或恢复子代：" + describe(error))
+        return cleanup
+      }
+      if (!install) {
+        warn("模型选择安装器不可用，当前子代保持默认模型；请检查 @deepseek-ai/dsh-agent 后重新创建或恢复子代")
+        return cleanup
+      }
       // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预
       const selection = { current: undefined, assembled: undefined }
       disposeInstall = install(childCtx, selection)
@@ -91,30 +106,52 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
       const file = agentsJsonPath({ projectRoot }, cwd)
       if (!file) return () => cleanup()
       const startedAt = Date.now()
-      const tick = () => {
+      let readIssueWarned = false
+      let timeoutWarned = false
+      const applyHint = (text) => {
+        const hint = hintForChild(JSON.parse(text), agent.id)
+        if (!hint) return false
+        selection.current = hint
+        ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 注入 " + hint.provider + "/" + hint.model)
+        return true
+      }
+      const warnReadIssue = (error) => {
+        if (readIssueWarned || error?.code === "ENOENT") return
+        readIssueWarned = true
+        warn("读取 agents.json 失败，将继续补读：" + describe(error))
+      }
+      const scheduleNext = (error) => {
+        if (stopped) return
+        if (error) warnReadIssue(error)
+        if (Date.now() - startedAt < pollMaxMs) {
+          timer = setTimeout(tick, pollMs)
+          return
+        }
+        if (!timeoutWarned) {
+          timeoutWarned = true
+          warn("等待 agents.json modelHint 超时，当前子代保持默认模型；请确认 tw agent-map 已为子代 " + agent.id + " 写入映射后重试请求")
+        }
+      }
+      try {
+        if (applyHint(readFileSyncFn(file, "utf8"))) return cleanup
+      } catch (error) {
+        warnReadIssue(error)
+      }
+      function tick() {
         if (stopped) return
         readFileFn(file, "utf8").then((text) => {
           if (stopped) return
-          const hint = hintForChild(JSON.parse(text), agent.id)
-          if (hint) {
-            selection.current = hint
-            ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 注入 " + hint.provider + "/" + hint.model)
-            return // 命中即停（一次性注入，幂等）
-          }
-          if (Date.now() - startedAt < pollMaxMs) timer = setTimeout(tick, pollMs)
-        }).catch(() => {
-          if (!stopped && Date.now() - startedAt < pollMaxMs) timer = setTimeout(tick, pollMs)
+          if (applyHint(text)) return // 命中即停（一次性注入，幂等）
+          scheduleNext()
+        }).catch((error) => {
+          scheduleNext(error)
         })
       }
       timer = setTimeout(tick, 0)
-      function cleanup() {
-        stopped = true
-        if (timer) clearTimeout(timer)
-        if (typeof disposeInstall === "function") disposeInstall()
-      }
       return cleanup
-    } catch {
-      return undefined
+    } catch (error) {
+      warn("模型注入初始化失败，当前子代保持默认模型；修复配置后重新创建或恢复子代：" + describe(error))
+      return cleanup
     }
   }
 }

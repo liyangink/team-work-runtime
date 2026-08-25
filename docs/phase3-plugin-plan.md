@@ -74,7 +74,7 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
 
 ### 2.3 skill 注册（B-F5 形状钉死）
 
-构建期把 skills/team-work-v3 全树拷入 dist/skill/；运行期 `ctx.skills.register({ name:"team-work-v3", description:<SKILL.md frontmatter>, content:<SKILL.md 全文>, resourceBase:{kind:"directory", path: dist/skill/references} })`。与 tw init 文件通道同源同版本（F7 防漂移：构建期同一次拷贝）。
+构建期把 skills/team-work-v3 全树拷入 dist/skill/；运行期 `ctx.skills.register({ name:"team-work", description:<SKILL.md frontmatter>, source:"team-work-runtime-dsh", content:<SKILL.md 全文>, resourceBase:{kind:"directory", path: dist/skill/references} })`。目录保留 v3 版本标识，注册名统一为 team-work；与 tw init 文件通道同源同版本（F7 防漂移：构建期同一次拷贝）。
 
 ## 3. client 徽标（src-client/badge.js → dist/client.js 工厂式 bundle，B-F6）
 
@@ -91,7 +91,7 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 | # | 功能 | 验证层 | 手段 |
 | --- | --- | --- | --- |
 | F-1 | 安装（profile 装载/插件挂载） | E2E | profile 手动装配 → dsh 会话内插件 apply 无错 |
-| F-2 | 安装后生效（skill 注册+tw 工具在场） | E2E | 成员会话枚举 skills 含 team-work-v3；工具面含 tw |
+| F-2 | 安装后生效（skill 注册+tw 工具在场） | E2E | 成员会话枚举 skills 含 team-work；工具面含 tw |
 | F-3 | 默认配置（零配置开箱） | E2E | 不写 dsh.json/config → 注入降级继承默认，徽标显示默认模型，任务全流程可走 |
 | F-4 | 自定义配置生效 | E2E | dsh.json 候选池 + config.projectRoot → 注入按池选择（多样性/家族去重可观察） |
 | F-5 | 插件注入生效（指定派发） | E2E | sessions.models RPC 断言 current = modelHint 的 provider/model/effort（A-F4） |
@@ -158,7 +158,7 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 
 ## 自复核记录（v2 增量）
 
-1. 两 blocker 的修法是否引入新问题？childId 主键：agent-map 在 Lead 拿到 subagentId 后调用；~~时序天然满足（注册在 spawn 后）~~**【2026-08-25 实机证伪修正】**：startContinuable 返回 ID 前首条 prompt 已被接受——agents.json 写入晚于子代首 turn，childId 注入【首轮必不生效】（首轮默认模型，自循环补读命中后下轮生效，见 inject.js 迟到补读）。此判断是纸面时序推演，未验完整链路；modelHints 以 childId 键，同 childId 重派（降级重开+重新 agent-map）自然覆盖 ✓；
+1. 两 blocker 的修法是否引入新问题？childId 主键：agent-map 在 Lead 拿到 subagentId 后调用；~~时序天然满足（注册在 spawn 后）~~**【2026-08-25 实机证伪修正】**：fresh 子代的 startContinuable 返回 ID 前首条 prompt 已被接受——agents.json 写入晚于首 turn，childId 注入【fresh 首轮必不生效】（首轮默认模型，自循环补读命中后下轮生效；cold-resume 已有 hint 则同步首读供当前请求使用）。此判断是纸面时序推演，未验完整链路；modelHints 以 childId 键，同 childId 重派（降级重开+重新 agent-map）自然覆盖 ✓；
 2. A-F1 自动化与 dispatch-plan 决策函数复用：需把 cli.mjs 内联的 modelHint 计算提取为可导出纯函数（实施第 2 步隐含，已写明"复用"）✓；
 3. 双评审冲突检查：A-F1（自动化）与 B-F1（childId 键）正交无冲突，合并后互为补全 ✓；
 4. v1 盲区自查：§0"全部已验证"的过度声明已修正为逐条依据；时序假设只验了"seed 先落"没验"contribution 何时执行"——教训：时序类事实必须验完整链路而非单点 ✓。

@@ -1,6 +1,7 @@
 // tw-tool.js — tw 原生工具：args 透传 CLI（CLI 即接口 P4：单层契约，无第二层 schema）
-// 平台事实（dsh-tools:2762-2790）：definition 需 parameters + output{schema, render}；
-// execute 返回值经 output.schema 校验后由 render 转模型可见文本。
+// 平台事实（dsh-tools 源码 + 官方 dsh-tool-bash 对照实证）：definition 需 parameters + output{schema, render}；
+// execute 返回值经 output.schema 校验后由 render 转模型可见内容——render 必须返回 content 块数组
+// [{type:"text",text}]（官方 bash 同形态），纯字符串会在宿主 commit 崩溃。
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { matchProjectRoot } from "./settings.js"
@@ -84,7 +85,10 @@ export function twToolDefinition(settings) {
     },
     output: {
       schema: { type: "object" },
-      render: (_params, card) => JSON.stringify(card, null, 2),
+      // 宿主 render 契约（dsh-tool-bash 384 行实证）：必须返回 content 块数组
+      // [{type:"text",text}]——纯字符串会导致宿主 commit 里 result.content.some 崩溃
+      // （TypeError → unhandled → 宿主进程退出，实机两崩铁证）。
+      render: (_params, card) => [{ type: "text", text: JSON.stringify(card, null, 2) }],
     },
   }
 }

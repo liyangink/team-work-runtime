@@ -10,7 +10,10 @@ export const name = "team-work-dsh"
 // F1（交叉审查①）：logger 是 ctx 内建属性非可注入服务——inject 含非服务名会导致 fiber INACTIVE（cordis 实验证实）
 export const inject = ["subagents", "skills", "tools"]
 
-export function apply(ctx, config = {}) {
+export async function apply(ctx, config = {}, deps = {}) {
+  const installSettings = deps.installPluginSettings ?? installPluginSettings
+  const resolveModelInstaller = deps.resolveInstaller ?? resolveInstaller
+  const registerSkill = deps.registerEmbeddedSkill ?? registerEmbeddedSkill
   // 全局配置 entry（settings 区段的 base 层初值）：settings 服务装载后由 source() 热覆写。
   // 注意：entry 不再是「运行时读取的权威值」——读取方统一走 installPluginSettings 返回的 getConfig thunk。
   const entry = {
@@ -20,21 +23,31 @@ export function apply(ctx, config = {}) {
   }
   // 0) 全局配置区段注册：同步拿 getConfig thunk（每次调用取最新 settings 快照），注册 fire-and-forget。
   //    getConfig 供 inject / tw-tool 在消费时刻读 source() 现值——深冻结快照只读。
-  const getConfig = installPluginSettings(ctx, entry)
-  // 安装器预解析（fire-and-forget）：contribution 同步段以 require 直取为主路径，
-  // 此处异步预解析填充缓存兜底（Node <22 无 require(esm) 的环境，第二个子代起生效）。
-  resolveInstaller(getConfig()).catch(() => {})
+  const getConfig = installSettings(ctx, entry)
+  // 激活门槛：先解析安装器，再开放 continuable setup。Cordis 会等待 async apply，
+  // 因此 Node 18/20 的动态 import 也不会出现“首个子代错过、第二个才生效”的竞态。
+  let resolvedInstaller = null
+  try {
+    resolvedInstaller = await resolveModelInstaller(getConfig())
+    if (typeof resolvedInstaller !== "function") {
+      ctx.logger?.warn?.("team-work-dsh: 模型选择安装器不可用；注入保持关闭，请检查 @deepseek-ai/dsh-agent 后刷新插件")
+    }
+  } catch (error) {
+    ctx.logger?.warn?.("team-work-dsh: 模型选择安装器解析失败；注入保持关闭，修复依赖后刷新插件：" + String(error?.message ?? error))
+  }
   // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）
   //    injectionEnabled 判定移入 contribution 闭包内（按 getConfig() 现值），使关/开热生效：
   //    setup 常驻，子代创建时若快照 injectionEnabled === false 则不注入。
   try {
-    ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, getConfig))
+    ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, getConfig, {
+      installerNow: () => resolvedInstaller,
+    }))
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: 模型注入注册失败：" + String(error?.message ?? error))
   }
   // 2) skill 注册（构建期内嵌 dist/skill/；失败不阻塞——tw init 文件通道为兜底）
   try {
-    registerEmbeddedSkill(ctx, config)
+    await registerSkill(ctx, config)
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: skill 注册未启用（可用 tw init 文件通道兜底）：" + String(error?.message ?? error))
   }

@@ -4,7 +4,7 @@ team-work-runtime 的 DSH 平台绑定插件。
 
 ## 功能
 
-- **成员模型/effort 注入**：continuable 子代理（后台 subagent）创建/恢复时，按 `.team-work/platform/agents.json` 的 modelHints（`tw agent-map` 自动落盘）注入 provider/model/reasoningEffort——tier→模型映射直达团队成员；
+- **成员模型/effort 注入**：continuable 子代理（后台 subagent）创建/恢复时，按 `.team-work/platform/agents.json` 的 modelHints（`tw agent-map` 自动落盘）注入 provider/model/reasoningEffort。恢复时已有 hint 会在当前请求前同步生效；新建子代因 ID 在首条 prompt 后才返回，首轮继承默认模型，agent-map 落盘并被补读命中后的下一请求生效；
 - **skill 注册**：team-work 判断指引内嵌（与 `tw init` 文件通道同源同版本，后者为无插件环境兜底）；
 - **tw 原生工具**：成员直接调用 `tw` 工具（args 透传 CLI），无需 PATH；
 - **模型席位徽标**：子代理会话显示实际执行的 provider/model · 推理等级（注入效果肉眼可核）。
@@ -91,5 +91,5 @@ team-work-dsh:
 ## 边界
 
 - 注入仅覆盖 continuable 子代理（workflow 一次性子代不可达——恰为只读廉价扇出场景）；
-- 注入失败逐级静默降级为继承默认模型（不阻塞任务）；
+- 注入失败逐级降级为继承默认模型（不阻塞任务），同时在宿主日志记录原因、重试状态与恢复指引；
 - 徽标仅在线子代理会话显示。

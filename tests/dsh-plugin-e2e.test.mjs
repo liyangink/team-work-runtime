@@ -31,7 +31,7 @@ test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + �
   const fiber = ctx.effect(() => plugin.apply(ctx, {}), "e2e-a: apply")
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(events.setups.length, 1, "registerContinuableSetup 被调")
-  assert.ok(events.registered.some(([kind, name]) => kind === "skill" && name === "team-work") || events.registered.filter(([k]) => k === "skill").length >= 0, "skill 注册路径被调（无 dist 时静默降级也算通过装载验证）")
+  assert.ok(events.registered.some(([kind, name]) => kind === "skill" && name === "team-work"), "skill 必须以 team-work 注册")
   assert.ok(events.registered.some(([kind, name]) => kind === "tool" && name === "tw"), "tw 工具注册被调")
   const twReg = events.registered.find(([kind, name]) => kind === "tool" && name === "tw")
   assert.equal(twReg[2], true, "output.render 在场（F4 形状）")
@@ -43,6 +43,35 @@ test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + �
   const builtinCtxProps = ["logger", "events", "effect", "provide", "inject"]
   for (const name2 of plugin.inject) assert.ok(!builtinCtxProps.includes(name2), "inject 不含 ctx 内建属性：" + name2)
   fiber?.()
+})
+
+test("E2E-A：插件激活等待安装器解析完成后才开放 continuable setup", async () => {
+  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const setups = []
+  const installs = []
+  let finishResolve
+  const installerReady = new Promise((resolve) => { finishResolve = resolve })
+  const ctx = {
+    subagents: { registerContinuableSetup(contribution) { setups.push(contribution) } },
+    skills: { register() {} },
+    tools: { register() {} },
+    logger: { warn() {}, info() {} },
+  }
+  const activation = plugin.apply(ctx, { injectionEnabled: true }, {
+    resolveInstaller: () => installerReady,
+    registerEmbeddedSkill: async () => {},
+    installPluginSettings: (_ctx, entry) => () => entry,
+  })
+
+  assert.equal(setups.length, 0, "安装器尚未解析时不得提前开放 setup")
+  finishResolve((_childCtx, selection) => { installs.push(selection); return () => {} })
+  await activation
+  assert.equal(setups.length, 1, "安装器就绪后才注册 setup")
+
+  const dispose = setups[0]({ agent: { id: "child-ready" } })
+  assert.equal(installs.length, 1, "首个子代同步安装 listener，不依赖第二个子代缓存")
+  assert.equal(typeof dispose, "function")
+  dispose()
 })
 
 test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真文件）", async () => {
@@ -65,8 +94,8 @@ test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真�
   // 宿主真实契约：同步调用、不 await（返回 disposer）
   const disposer = contribution({ agent: { id: "child-real", session: { header: { cwd: proj } } } })
   assert.equal(typeof disposer, "function", "contribution 返回 disposer")
-  await new Promise((r) => setTimeout(r, 30))
   assert.equal(installs.length, 1)
-  assert.equal(installs[0].current.model, "model-demo", "真文件链路补写生效")
+  assert.equal(installs[0].current.model, "model-demo", "恢复时已有 hint 在 contribution 返回前生效")
   assert.equal(installs[0].current.reasoningEffort, "max", "effort 映射链")
+  disposer()
 })

@@ -25,7 +25,7 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   }
 })
 
-test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组，并把未列目录模型作为警告", async () => {
+test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组，并依据目录热更新", async () => {
   const registrations = []
   const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
@@ -56,7 +56,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
     revision: 1,
     value: {
       tiers: {
-        junior: { provider: "provider-a", model: "manual-model", family: "family-a" },
+        junior: { provider: "provider-a", model: "catalog-model", family: "family-a" },
         senior: [{ provider: "provider-a", model: "catalog-model" }],
         expert: [{ provider: "provider-a", model: "catalog-model" }],
       },
@@ -92,7 +92,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
           },
           async models() {
             apiCalls.push("models")
-            return { result: { ok: true, value: { groups: [{ id: "provider-a", name: "Provider A", models: [{ id: "catalog-model", name: "Catalog model", reasoning: { efforts: [{ id: "high", name: "High" }] } }] }], failures: [{ provider: "provider-b", message: "暂不可用" }] } } }
+            return { result: { ok: true, value: { groups: [{ id: "provider-a", name: "Provider A", models: [{ id: "catalog-model", name: "Catalog model", reasoning: { efforts: [{ id: "high", name: "High" }] } }, { id: "catalog-model-two", name: "Catalog model two" }] }], failures: [{ provider: "provider-b", message: "暂不可用" }] } } }
           },
         },
       },
@@ -120,8 +120,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
   const tree = render()
   assert.deepEqual(apiCalls.sort(), ["models", "providers"], "卡片读取 provider 目录与模型目录")
   assert.match(JSON.stringify(tree), /低成本/, "三档中文说明可见")
-  assert.match(JSON.stringify(tree), /目录未列出该模型/, "目录外模型仅告警，不当作不可保存")
-  assert.match(JSON.stringify(tree), /部分 Provider 的模型目录不可用/, "模型目录部分失败保持 advisory，不阻止配置卡")
+  assert.match(JSON.stringify(tree), /部分 Provider 的模型目录不可用/, "与当前候选无关的目录失败应明确显示")
 
   const find = (node, predicate) => {
     if (!node || typeof node !== "object") return null
@@ -138,7 +137,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
   assert.deepEqual(JSON.parse(JSON.stringify(writes)), [{
     field: "tiers",
     value: {
-      junior: [{ provider: "provider-a", model: "manual-model", family: "family-a" }],
+      junior: [{ provider: "provider-a", model: "catalog-model", family: "family-a" }],
       senior: [{ provider: "provider-a", model: "catalog-model" }],
       expert: [{ provider: "provider-a", model: "catalog-model" }],
     },
@@ -148,7 +147,7 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
     ...settingsSnapshot,
     revision: 3,
     value: { tiers: {
-      junior: [{ provider: "provider-a", model: "hot-updated-model" }],
+      junior: [{ provider: "provider-a", model: "catalog-model-two" }],
       senior: [{ provider: "provider-a", model: "catalog-model" }],
       expert: [{ provider: "provider-a", model: "catalog-model" }],
     } },
@@ -157,10 +156,21 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
   render()
   for (const effect of effects) effect()
   const hotTree = render()
-  assert.match(JSON.stringify(hotTree), /hot-updated-model/, "scope 订阅到外部 settings 更新后热更新候选行")
+  assert.match(JSON.stringify(hotTree), /catalog-model-two/, "scope 订阅到外部 settings 更新后热更新候选行")
+
+  settingsSnapshot = {
+    ...settingsSnapshot,
+    revision: 4,
+    value: {},
+  }
+  scopeSubscriber()
+  render()
+  for (const effect of effects) effect()
+  const emptyTree = render()
+  assert.match(JSON.stringify(emptyTree), /Provider（active，必填）/, "首次空配置也能打开卡片并填写三档候选")
 })
 
-test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，active Provider 仍可保存已有目录外模型", async () => {
+test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，阻止保存并给出可恢复原因", async () => {
   const registrations = []
   const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
@@ -249,11 +259,117 @@ test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，active Provider �
   }
   const save = find(tree, (node) => node.props?.["data-tw-action"] === "save-tiers")
 
-  assert.match(JSON.stringify(tree), /模型目录读取失败/, "模型目录故障须明确显示为 advisory 提示")
-  assert.match(JSON.stringify(tree), /目录未列出该模型/, "目录不可用时仍保留目录外模型的非阻断警告")
-  assert.equal(save?.props?.disabled, false, "Provider 已确认 active 时，模型目录故障不得禁用保存")
+  assert.match(JSON.stringify(tree), /模型目录读取失败/, "模型目录故障须明确显示")
+  assert.match(JSON.stringify(tree), /请恢复.*模型目录/, "模型目录故障须提供恢复指引")
+  assert.equal(save?.props?.disabled, true, "模型目录 RPC 被拒绝时必须禁用保存")
   await save.props.onClick()
-  assert.equal(writes.length, 1, "Provider 已确认 active 时，模型目录 RPC 拒绝不得阻止保存")
+  assert.equal(writes.length, 0, "模型目录 RPC 拒绝必须阻止写入")
+})
+
+test("I5 Web 插件配置卡：候选必须通过 Provider、模型目录与 effort 的硬校验", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const hookState = []
+  let hookIndex = 0
+  let effects = []
+  const React = {
+    createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.flat(Infinity) } } },
+    useState(initial) {
+      const index = hookIndex++
+      if (!(index in hookState)) hookState[index] = typeof initial === "function" ? initial() : initial
+      return [hookState[index], (next) => { hookState[index] = typeof next === "function" ? next(hookState[index]) : next }]
+    },
+    useEffect(effect) { hookIndex += 1; effects.push(effect) },
+  }
+  const writes = []
+  const scope = {
+    getSnapshot() {
+      return {
+        status: "ready",
+        writable: true,
+        revision: 1,
+        value: { tiers: {
+          junior: [
+            { provider: "", model: "catalog-model" },
+            { provider: "provider-inactive", model: "catalog-model" },
+            { provider: "provider-a", model: "outside-catalog" },
+            { provider: "provider-a", model: "catalog-model", effort: "unsupported" },
+          ],
+          senior: [{ provider: "provider-b", model: "anything" }],
+          expert: [{ provider: "provider-c", model: "anything" }],
+        } },
+      }
+    },
+    subscribe() { return () => {} },
+    async set(field, value) { writes.push({ field, value }) },
+  }
+  const slots = []
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    settingsScope: { bind() { return scope } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { slots.push({ options, component }); return () => {} },
+    },
+    connection: { api: { llm: {
+      async providers() {
+        return { result: { ok: true, value: { providers: [
+          { provider: "provider-a", active: true },
+          { provider: "provider-b", active: true },
+          { provider: "provider-c", active: true },
+          { provider: "provider-inactive", active: false },
+        ] } } }
+      },
+      async models() {
+        return { result: { ok: true, value: {
+          groups: [{ id: "provider-a", models: [{ id: "catalog-model", reasoning: { efforts: [{ id: "high" }] } }] }],
+          failures: [{ provider: "provider-b", message: "目录服务不可用" }],
+        } } }
+      },
+    } } },
+    logger: { warn() {} },
+  })
+
+  const card = slots.find(({ options }) => options.name === "settings.plugin.item")
+  const props = card.options.inject()
+  const render = () => {
+    hookIndex = 0
+    effects = []
+    return card.component(props)
+  }
+  render()
+  for (const effect of effects) effect()
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const tree = render()
+  const text = JSON.stringify(tree)
+  const find = (node, predicate) => {
+    if (!node || typeof node !== "object") return null
+    if (predicate(node)) return node
+    for (const child of node.props?.children ?? []) {
+      const found = find(child, predicate)
+      if (found) return found
+    }
+    return null
+  }
+  const save = find(tree, (node) => node.props?.["data-tw-action"] === "save-tiers")
+
+  assert.match(text, /Provider 为必填项/, "Provider 为空时须阻止保存")
+  assert.match(text, /Provider 未处于 active 状态/, "inactive Provider 须阻止保存")
+  assert.match(text, /模型不在该 Provider 的可验证目录中/, "目录已成功读取时模型必须真实存在")
+  assert.match(text, /推理等级不在该模型公开的选项中/, "公开非空 effort 列表时填写值必须命中")
+  assert.match(text, /Provider 模型目录读取失败.*请恢复该 Provider 的模型目录/, "候选 Provider 的目录失败须有恢复指引")
+  assert.match(text, /没有可验证的模型目录.*请恢复该 Provider 的模型目录/, "没有该 Provider 目录时须有恢复指引")
+  assert.equal(save?.props?.disabled, true, "任一候选不可验证时必须禁用保存")
+  await save.props.onClick()
+  assert.equal(writes.length, 0, "任一候选不可验证时不得写入 settings")
 })
 
 test("I4 模型席位声明回收时同步释放徽标注册", async () => {

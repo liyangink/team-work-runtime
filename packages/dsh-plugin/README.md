@@ -78,8 +78,8 @@ team-work-dsh:
 
 - **档位说明**：junior 用于低成本探索与常规辅助；senior 用于常规实现与复核；expert 用于核心场景与技术裁决。
 - **候选池兼容**：每档可读取旧的单个候选对象，也可使用候选数组。Web 卡片统一按“候选行”编辑，下一次保存会写为数组。已有的 `family` 会保留；未填写时由运行时推导，不强制暴露为 UI 字段。
-- **目录校验**：卡片读取 `llm.providers` 与 `llm.models`。Provider 必须已列出且处于 active，否则不能保存；模型为必填。Provider 列表不可用时，卡片不能保存，因为无法完成这项硬校验。模型目录没有列出某个模型，或仅模型目录读取失败但 Provider 已确认 active 时，只给出警告并允许保留/保存，因为目录是 advisory，实际可用性由适配器的运行边界裁决。模型公开且列出非空 reasoning effort 选项时，填写的 effort 必须属于其选项；没有该元数据时 effort 可省略，也不会因目录未知而额外拒绝。
-- **失败与恢复**：Provider 列表或 settings 只读、保存异常都会在卡片中显示。恢复服务或修正配置后可直接重试；不会清空最后一个有效配置。
+- **目录校验**：卡片读取 `llm.providers` 与 `llm.models`。Provider 与模型均为必填，且 Provider 必须已列出并处于 active。保存前，每个候选 Provider 都必须拥有读取成功的模型目录，且所选模型必须实际列在其中；模型 RPC 整体失败、候选 Provider 的目录失败、缺少该 Provider 目录或模型未列出时，卡片都会阻止保存。模型公开且列出非空 reasoning effort 选项时，填写的 effort 必须属于其选项；没有该元数据时 effort 仍可省略。
+- **失败与恢复**：Provider 列表、模型目录或 settings 只读、保存异常都会在卡片中显示。恢复对应服务，或从可验证目录中选择模型后可直接重试；不会清空最后一个有效配置。
 - **旧键迁移**：`injectionEnabled`、`projectRoots`、`twBin` 已完全失效，不再由 schema、运行入口、注入链或工具链读取。注册 helper 没有安全的迁移写入句柄，因此插件不会自动改写用户的 settings 文档；如旧键仍留在原始文件中，可在确认后手动删除。
 - **工作目录**：模型注入与 `tw` 工具只使用当前子会话的 cwd；没有 cwd 时返回可诊断的 unresolved 卡片，而不会猜测或跨项目寻找目录。
 

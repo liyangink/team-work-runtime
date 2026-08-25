@@ -1,6 +1,6 @@
 # Phase 3 插件验收证据（F-1..F-12 状态快照）
 
-> **全局配置迁移**：tier→模型的唯一配置源现为 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）。项目 `.team-work/platform/dsh.json` 不再读取或创建，可手动删除；`.team-work/platform/agents.json` 继续保存 child 映射与 modelHint 快照。`injectionEnabled`、`projectRoots`、`twBin` 已从 schema 与运行链移除，不保留兼容读取。
+> **全局配置迁移**：tier→模型的唯一配置源现为 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）。项目 `.team-work/platform/dsh.json` 不再读取或创建，可手动删除；`.team-work/platform/agents.json` 继续保存 child 映射与 modelHint 快照。`injectionEnabled`、`projectRoots`、`twBin` 已从 schema 与运行链移除，不保留兼容读取。Web 保存同时硬校验：Provider active、每个候选 Provider 的模型目录可验证、模型实际在目录中；模型 RPC 整体失败、候选 Provider 目录失败或缺少目录都会阻止保存并显示恢复指引，公开非空 effort 列表中的填写值也必须命中。
 
 自动层覆盖其可验证范围（完整自动套件 + 构建链 + C1 实机 boot 链 + 隔离 Web 实例）。F-5/F-7/F-12 仍需用户在带凭据的真实会话中确认，不能由本快照宣称完成。逐项证据：
 

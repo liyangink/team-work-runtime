@@ -59,6 +59,9 @@ other-section:
   ignored: true
 team-work-dsh:
   # 此区段是 runtime 的唯一模型配置来源
+  injectionEnabled: true # 旧根键由插件迁移；runtime 不将其作为 tier
+  projectRoots: [legacy-root]
+  twBin: legacy-tw
   tiers:
     junior: { provider: "vendor-one", model: 'model-one' } # 行尾注释
     senior:
@@ -113,6 +116,40 @@ test("全局 settings：provider/model 必填，损坏项与缺失文件都不�
   const missing = await resolveTiers({ settingsFile: path.join(tmpdir(), `no-global-settings-${Date.now()}.yaml`) })
   for (const tier of TIERS) assert.equal(missing.tiers[tier].source, "unresolved")
   assert.match(missing.warnings.join("\n"), /未找到全局 DSH settings/)
+})
+
+test("全局 settings：未知档位使映射 MAP_INVALID，models 显示且 dispatch-plan 阻断", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "unknown-tier")
+  await setSettings(`
+team-work-dsh:
+  tiers:
+    junior: { provider: vendor-junior, model: model-junior }
+    senior: { provider: vendor-senior, model: model-senior }
+    expert: { provider: vendor-expert, model: model-expert }
+    legacy: { provider: vendor-legacy, model: model-legacy }
+`)
+  try {
+    const resolved = await resolveTiers()
+    for (const tier of TIERS) assert.equal(resolved.tiers[tier].source, "unresolved")
+    assert.match(resolved.warnings.join("\n"), /MAP_INVALID/)
+    assert.match(resolved.warnings.join("\n"), /未知档位.*legacy/)
+    assert.match(resolved.warnings.join("\n"), /只允许 junior、senior、expert/)
+
+    const models = await call(["models"])
+    assert.match(models.warnings.join("\n"), /MAP_INVALID/)
+    assert.match(models.warnings.join("\n"), /未知档位.*legacy/)
+
+    const plan = await call(["dispatch-plan", "--task", "unknown-tier", "--writable", "R.md:code-review", "--json"])
+    assert.equal(plan.stop, "blocked")
+    assert.equal(plan.card.status, "blocked")
+    assert.match(plan.warnings.join("\n"), /MAP_INVALID/)
+    const task = await loadTask(root, "unknown-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
+  } finally {
+    await setSettings(BASE_SETTINGS)
+  }
 })
 
 test("settings 路径优先级：显式 > DSH_SETTINGS > DSH_HOME，并由 models/dispatch-plan 共用", async () => {

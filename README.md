@@ -32,7 +32,7 @@ tw archive --task audit-q3
 
 ## 平台绑定
 
-- **DSH**：唯一 skill（`skills/team-work-v3/`，含拓扑/成本/场景指导）+ `tw` CLI + 后台 subagent 派发 + `team-work-runtime-dsh` 插件包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active；模型目录与 effort 只在可获得相应目录元数据时校验。项目 `dsh.json` 已废弃且不会被读取/创建，`agents.json` 仍是项目内 child 映射与模型快照事实。插件的自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
+- **DSH**：唯一 skill（`skills/team-work-v3/`，含拓扑/成本/场景指导）+ `tw` CLI + 后台 subagent 派发 + `team-work-runtime-dsh` 插件包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active，且该 Provider 的模型目录必须可验证并实际列出所选模型；模型 RPC 整体失败、候选 Provider 的目录失败或缺少该 Provider 目录时都会阻止保存并给出恢复指引。模型公开非空 effort 列表时，填写值必须命中该列表。项目 `dsh.json` 已废弃且不会被读取/创建，`agents.json` 仍是项目内 child 映射与模型快照事实。插件的自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
 - **OpenCode**：v2 插件已删除；待核心稳定后按规约 §4 seam 另起薄适配器。
 - OpenSpec Provider 保留，作为门禁路由检查范本。
 
@@ -42,4 +42,4 @@ tw archive --task audit-q3
 npm test          # v3 核心、插件、E2E 与仓库契约
 ```
 
-当前完整自动套件为 114 项（113 通过；1 项仅在宿主提供 Schemastery 时执行）；实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。
+完整自动套件覆盖 v3 核心、插件、E2E 与仓库契约；宿主提供可解析的 Schemastery 依赖时，另执行对应的 settings schema 回归。实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。

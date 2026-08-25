@@ -180,30 +180,33 @@ var factory = function (require) {
       role: "status",
       style: { color: "#666" },
     }, snapshot.status === "loading" ? "正在读取全局设置…" : "全局设置当前不可用。")
+    var serializedDraft = serializeTiers(draft)
+    var saveValidationError = validateForSave(serializedDraft, catalog)
     var catalogStatus = catalog.status === "loading" ? h("p", {
       role: "status",
       style: { color: "#666" },
     }, "正在读取 Provider 列表…") : (catalog.modelStatus === "loading" ? h("p", {
       role: "status",
       style: { color: "#666" },
-    }, "正在读取模型目录；已确认 active 的 Provider 可继续保存。") : null)
+    }, "正在读取模型目录；目录完成加载后才可验证并保存。") : null)
     var catalogError = catalog.status === "error" ? h("p", {
       role: "alert",
       style: { color: "#b42318" },
     }, "Provider 列表读取失败：" + catalog.error) : (catalog.modelStatus === "error" ? h("p", {
-      role: "status",
-      style: { color: "#8a5b00" },
-    }, "模型目录读取失败（仅影响目录建议，不阻止保存）：" + catalog.modelError) : null)
+      role: "alert",
+      style: { color: "#b42318" },
+    }, "模型目录读取失败：" + catalog.modelError + "。请恢复模型目录服务后重试。") : null)
     var failureText = catalog.failures.length > 0 ? h("p", {
-      style: { color: "#8a5b00" },
-    }, "部分 Provider 的模型目录不可用；已有模型会保留，运行时由适配器裁决。") : null
+      role: "alert",
+      style: { color: "#b42318" },
+    }, "部分 Provider 的模型目录不可用；选择受影响的 Provider 前请恢复其模型目录后重试。") : null
 
     return h("section", {
       "data-tw-settings": "tiers",
       style: { display: "grid", gap: "12px" },
     },
     h("h3", null, "团队档位模型"),
-    h("p", null, "为 junior、senior、expert 配置候选模型。Provider 必须处于 active；模型目录未列出时仅提示，不会据此拒绝保存。"),
+    h("p", null, "为 junior、senior、expert 配置候选模型。Provider 必须处于 active；每个候选都必须能在该 Provider 的可验证模型目录中找到。"),
     status,
     catalogStatus,
     catalogError,
@@ -217,7 +220,7 @@ var factory = function (require) {
       type: "button",
       "data-tw-action": "save-tiers",
       onClick: save,
-      disabled: snapshot.status !== "ready" || snapshot.writable === false || catalog.status !== "ready",
+      disabled: snapshot.status !== "ready" || snapshot.writable === false || !!saveValidationError,
     }, "保存配置"))
   }
 
@@ -249,7 +252,7 @@ var factory = function (require) {
     var activeProviders = catalog.providers.filter(function (provider) { return provider.active === true })
     var models = modelsFor(catalog, candidate.provider)
     var efforts = effortsFor(catalog, candidate.provider, candidate.model)
-    var warning = modelWarning(catalog, candidate.provider, candidate.model)
+    var warning = candidateValidationError(catalog, candidate, "当前候选")
     return h("div", {
       key: tier + "-" + index,
       "data-tw-candidate": tier + "-" + index,
@@ -450,7 +453,6 @@ var factory = function (require) {
   }
 
   function validateForSave(tiers, catalog) {
-    if (catalog.status !== "ready") return "模型目录尚不可用，无法确认 Provider 是否处于 active。"
     for (var tierIndex = 0; tierIndex < TIER_ORDER.length; tierIndex += 1) {
       var tier = TIER_ORDER[tierIndex]
       var candidates = tiers[tier]
@@ -458,15 +460,8 @@ var factory = function (require) {
       for (var index = 0; index < candidates.length; index += 1) {
         var candidate = candidates[index]
         var label = tier + " 第 " + (index + 1) + " 个候选"
-        if (!candidate.provider) return label + " 的 Provider 为必填项。"
-        if (!candidate.model) return label + " 的模型为必填项。"
-        var provider = catalog.providers.find(function (item) { return item.provider === candidate.provider })
-        if (!provider || provider.active !== true) return label + " 的 Provider 未处于 active 状态。"
-        var model = modelFor(catalog, candidate.provider, candidate.model)
-        var knownEfforts = model && model.reasoning && Array.isArray(model.reasoning.efforts) ? model.reasoning.efforts : null
-        if (candidate.effort && knownEfforts && knownEfforts.length > 0 && !knownEfforts.some(function (effort) { return effort.id === candidate.effort })) {
-          return label + " 的推理等级不在该模型公开的选项中。"
-        }
+        var reason = candidateValidationError(catalog, candidate, label)
+        if (reason) return reason
       }
     }
     return null
@@ -486,12 +481,38 @@ var factory = function (require) {
     return item && item.reasoning && Array.isArray(item.reasoning.efforts) ? item.reasoning.efforts : []
   }
 
-  function modelWarning(catalog, provider, model) {
-    if (catalog.status !== "ready" || !provider || !model) return null
-    if (!modelFor(catalog, provider, model)) {
-      return "目录未列出该模型；这只是提示，实际可用性由适配器在运行时裁决。"
+  function candidateValidationError(catalog, candidate, label) {
+    var providerId = String(candidate && candidate.provider || "").trim()
+    var modelId = String(candidate && candidate.model || "").trim()
+    var effortId = String(candidate && candidate.effort || "").trim()
+    if (!providerId) return label + " 的 Provider 为必填项。"
+    if (!modelId) return label + " 的模型为必填项。"
+    if (catalog.status !== "ready") return label + " 无法确认 Provider 是否处于 active 状态；请恢复 Provider 列表后重试。"
+    var provider = catalog.providers.find(function (item) { return item.provider === providerId })
+    if (!provider || provider.active !== true) return label + " 的 Provider 未处于 active 状态。"
+    if (catalog.modelStatus !== "ready") {
+      if (catalog.modelStatus === "loading") return label + " 正在等待模型目录；目录加载完成后再保存。"
+      return label + " 的模型目录不可用；请恢复模型目录后重试。"
+    }
+    var failure = catalogFailureFor(catalog, providerId)
+    if (failure) return label + " 的 Provider 模型目录读取失败：" + failure + "。请恢复该 Provider 的模型目录后重试。"
+    var group = catalog.groups.find(function (item) { return item && item.id === providerId && Array.isArray(item.models) })
+    if (!group) return label + " 的 Provider 没有可验证的模型目录；请恢复该 Provider 的模型目录后重试。"
+    var model = modelFor(catalog, providerId, modelId)
+    if (!model) return label + " 的模型不在该 Provider 的可验证目录中；请选择目录内模型后重试。"
+    var knownEfforts = model.reasoning && Array.isArray(model.reasoning.efforts) ? model.reasoning.efforts : null
+    if (effortId && knownEfforts && knownEfforts.length > 0 && !knownEfforts.some(function (effort) { return effort.id === effortId })) {
+      return label + " 的推理等级不在该模型公开的选项中。"
     }
     return null
+  }
+
+  function catalogFailureFor(catalog, providerId) {
+    var failure = catalog.failures.find(function (item) {
+      return item && (item.provider === providerId || item.providerId === providerId || item.id === providerId)
+    })
+    if (!failure) return ""
+    return String(failure.message || failure.error || "模型目录请求失败")
   }
 
   function listId(kind, tier, index) {

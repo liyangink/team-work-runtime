@@ -346,8 +346,12 @@ export function validateTierSettings(rawTiers, { file = "~/.dsh/settings.yaml" }
     for (const tier of TIERS) tiers[tier] = unresolvedTier()
     return { tiers, warnings }
   }
-  for (const key of Object.keys(rawTiers)) {
-    if (!TIERS.includes(key)) warnings.push(`${CONFIG_PATH} 含未知档位 ${JSON.stringify(key)}；仅使用 ${TIERS.join(" / ")}`)
+  const unknownTiers = Object.keys(rawTiers).filter((key) => !TIERS.includes(key))
+  if (unknownTiers.length) {
+    // tier 名称是闭集；未知键表示整份映射的意图无法判定，不能带着部分有效候选继续派发。
+    warnings.push(`MAP_INVALID：${CONFIG_PATH} 含未知档位 ${unknownTiers.map((tier) => JSON.stringify(tier)).join("、")}；只允许 ${TIERS.join("、")}；${configurationHint(file)}`)
+    for (const tier of TIERS) tiers[tier] = unresolvedTier()
+    return { tiers, warnings }
   }
   for (const tier of TIERS) {
     if (!(tier in rawTiers)) {

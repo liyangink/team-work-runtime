@@ -112,6 +112,30 @@ test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可
   disposePlugin()
 })
 
+test("E2E-A：安装器解析不 settle 时超时降级，不阻塞插件激活", async () => {
+  const plugin = await import("../packages/dsh-plugin/src/index.js")
+  const setups = []
+  const warnings = []
+  const ctx = {
+    subagents: { registerContinuableSetup(contribution) { setups.push(contribution); return () => {} } },
+    skills: { register() {} },
+    tools: { register() {} },
+    logger: { warn(message) { warnings.push(String(message)) }, info() {} },
+  }
+  const disposePlugin = await plugin.apply(ctx, {}, {
+    resolveInstaller: () => new Promise(() => {}),
+    installerResolveTimeoutMs: 5,
+    installerRetryMs: 1000,
+    registerEmbeddedSkill: async () => {},
+    installPluginSettings: (_ctx, entry) => () => entry,
+  })
+
+  assert.equal(setups.length, 1, "解析超时后仍开放降级 setup")
+  assert.ok(warnings.some((message) => message.includes("解析超时") && message.includes("后台会继续重试")), "超时可诊断并说明恢复路径")
+  assert.equal(typeof disposePlugin, "function")
+  disposePlugin()
+})
+
 test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真文件）", async () => {
   const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
   const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises")

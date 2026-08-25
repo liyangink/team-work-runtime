@@ -25,6 +25,13 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   }
 })
 
+test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {
+  for (const file of ["../package.json", "../packages/dsh-plugin/package.json"]) {
+    const metadata = JSON.parse(await readFile(new URL(file, import.meta.url), "utf8"))
+    assert.equal(metadata.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", file + " 必须声明直接导入的宿主模型选择包")
+  }
+})
+
 test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/损坏输入）", () => {
   const agents = { mappings: { w1: "child-a" }, modelHints: { "child-a": { provider: "p", model: "m", effort: "high" }, "child-b": { provider: "p", model: "m" }, "child-c": { provider: "", model: "m" } } }
   assert.deepEqual(hintForChild(agents, "child-a"), { provider: "p", model: "m", reasoningEffort: "high" }, "effort 映射为 reasoningEffort")

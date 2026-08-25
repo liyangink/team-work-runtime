@@ -74,6 +74,7 @@ team-work-dsh:
 - **多项目最长前缀匹配**：子代理的 `cwd` 同时命中多个 `projectRoots[].path` 前缀时，取 path 最长（最深）的那一项，作为该项目的工作目录与 twBin 覆盖来源；无任何前缀命中时不启用项目级覆盖（退回全局 `twBin` 与默认工作目录）。
 - **覆盖链（twBin）**：命中项 `twBin` > 全局 `twBin` > `require.resolve('team-work-runtime/bin/tw.mjs')` > PATH 的 `tw`。
 - **降级行为**：宿主无 settings 服务（import 失败）时静默跳过区段注册，插件以 entry config 初值照常装载，其余功能不受影响。
+- **安装器恢复**：单次模型选择安装器解析最多等待 5 秒；失败或超时后插件保持默认模型并每 5 秒后台重试，解析恢复后新建/恢复的子代理重新获得注入。直接使用的 `@deepseek-ai/dsh-agent` 已声明为 peer，依赖版本发生变化后需刷新插件。
 - **热生效**：区段注册后注入与 tw 工具在每次子代理创建、每次工具调用时按最新 settings 快照读配置——injectionEnabled / projectRoots / twBin 改动无需重启即生效。entry 仅作初值（base 层）与无服务时的回退。
 - **契约要点**：setSource 收到的是「返回当前值的 thunk」（非值），读取方每次现调 source() 取新快照；schema 必须是 schemastery z.object(...) 可调用对象（服务端执行 schema(mergeLayers(base, section))，裸对象会抛 TypeError），故本实现动态 import @deepseek-ai/schemastery 构造真 schema，任一动态 import 失败则整段不注册。
 - **开关语义**：injectionEnabled: false 不注销 setup，而是在子代理创建时刻跳过注入（消费时刻判定），关闭/重开均即时生效。twBin 缺省回退到 peer 依赖解析与 PATH；projectRoots 缺省为空数组（不启用项目级覆盖）。matchProjectRoot 统一补尾斜杠做前缀比较，/a/b 不误命中 /a/bc。

@@ -92,7 +92,7 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
         return cleanup
       }
       if (!install) {
-        warn("模型选择安装器不可用，当前子代保持默认模型；请检查 @deepseek-ai/dsh-agent 后重新创建或恢复子代")
+        warn("模型选择安装器不可用，当前子代保持默认模型；请检查 @deepseek-ai/dsh-agent，等待后台重试成功后重新创建或恢复子代（依赖版本变更后需刷新插件）")
         return cleanup
       }
       // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预

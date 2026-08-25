@@ -5,7 +5,7 @@ team-work-runtime 的 DSH 平台绑定插件。
 ## 功能
 
 - **成员模型/effort 注入**：continuable 子代理（后台 subagent）创建/恢复时，按 `.team-work/platform/agents.json` 的 modelHints（`tw agent-map` 自动落盘）注入 provider/model/reasoningEffort——tier→模型映射直达团队成员；
-- **skill 注册**：team-work-v3 判断指引内嵌（与 `tw init` 文件通道同源同版本，后者为无插件环境兜底）；
+- **skill 注册**：team-work 判断指引内嵌（与 `tw init` 文件通道同源同版本，后者为无插件环境兜底）；
 - **tw 原生工具**：成员直接调用 `tw` 工具（args 透传 CLI），无需 PATH；
 - **模型席位徽标**：子代理会话显示实际执行的 provider/model · 推理等级（注入效果肉眼可核）。
 

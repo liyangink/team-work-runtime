@@ -1,7 +1,7 @@
 // index.js — host 插件入口：成员模型/effort 注入 + skill 注册 + tw 原生工具 + 全局配置接线
 // 平台事实（docs/phase3-plugin-plan.md §0）：三项均为官方插件 API；
 // 失败语义全部静默降级（不注入/不注册不阻塞宿主），错误经 ctx.logger.warn 留痕。
-import { makeInjectContribution } from "./inject.js"
+import { makeInjectContribution, resolveInstaller } from "./inject.js"
 import { twToolDefinition } from "./tw-tool.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 import { installPluginSettings } from "./settings.js"
@@ -21,6 +21,9 @@ export function apply(ctx, config = {}) {
   // 0) 全局配置区段注册：同步拿 getConfig thunk（每次调用取最新 settings 快照），注册 fire-and-forget。
   //    getConfig 供 inject / tw-tool 在消费时刻读 source() 现值——深冻结快照只读。
   const getConfig = installPluginSettings(ctx, entry)
+  // 安装器预解析（fire-and-forget）：contribution 同步段以 require 直取为主路径，
+  // 此处异步预解析填充缓存兜底（Node <22 无 require(esm) 的环境，第二个子代起生效）。
+  resolveInstaller(getConfig()).catch(() => {})
   // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）
   //    injectionEnabled 判定移入 contribution 闭包内（按 getConfig() 现值），使关/开热生效：
   //    setup 常驻，子代创建时若快照 injectionEnabled === false 则不注入。

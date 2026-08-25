@@ -1,14 +1,20 @@
-// inject.js — continuable 子代模型注入：childId 寻址 agents.json 的 modelHints
-// 时序契约（交叉审查① F2）：installModelSelection 必须在 contribution 同步段注册——
-// 官方路径（dsh-headless/dsh-host-apiproxy）均在 Agent setup 同步注册，其监听器
-// （system-prompt/assemble + agent/request）必须先于首次 request 就位；本实现同步预注册
-// selection 对象、hint 异步补读写入 selection.current——listener 任意时刻在场，
-// 最坏首轮用默认模型（不劣化、不失效）。
-// installModelSelection 获取（F3）：settings.installModelSelection 直传引用（宿主 ctx 取，最稳）→
-// 裸 import("@deepseek-ai/dsh-agent")（profile flat fallback，当前环境实证可行）→ 放弃注入。
+// inject.js — continuable 子代模型注入（同步 contribution 契约版）
+// 宿主契约（dsh-subagent SetupRegistry.apply 源码实证）：
+//   contribution(childCtx) 同步调用，返回值【直接存为 disposer，不 await】——
+//   async contribution = Promise 被当 disposer + 同步段在首个 await 让出，
+//   install 真正执行可能晚于子代首请求（监听器迟到）。故本实现为同步函数。
+// installModelSelection 宿主语义（dsh-agent/lib/index.js 实证）：
+//   selection.current === undefined = 不干预（继承默认模型）；
+//   对象（哪怕 {provider:null}）会覆写 variables.provider/model——null 值杀 turn（实机铁证）。
+// 首轮时序（实机修正，见 phase3-plugin-plan §时序）：childId 在子代创建前不可预知，
+//   Lead 的 tw agent-map 写入晚于首 turn——hint 经自循环补读命中后【下轮请求】生效，
+//   首轮必为默认模型（设计边界，非缺陷）。
 import { readFile } from "node:fs/promises"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { matchProjectRoot } from "./settings.js"
+
+const requireSync = createRequire(import.meta.url)
 
 // 纯函数：从 agents.json 内容解析某 childId 的注入决策（单测直接覆盖）
 export function hintForChild(agentsJson, childId) {
@@ -30,54 +36,85 @@ export function agentsJsonPath(config, headerCwd) {
   return path.join(String(root), ".team-work", "platform", "agents.json")
 }
 
-// installModelSelection 解析（可注入依赖，F7 提纯：单测传 fake）
+// 安装器解析——双通道：
+//   同步通道（contribution 主路径）：createRequire + require（Node 22+ require(esm)；
+//     dsh-agent 模块图在宿主进程早已加载，require 仅取引用，无 IO）；
+//   异步通道（预解析兜底）：apply 时 fire-and-forget 动态 import 填充缓存，
+//     覆盖 require(esm) 不可用的旧 Node（engines >=18 场景）。两通道任一命中即缓存。
+let cachedInstaller = null
 export async function resolveInstaller(settings) {
   if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
   try {
     const mod = await import("@deepseek-ai/dsh-agent")
-    if (typeof mod.installModelSelection === "function") return mod.installModelSelection
-  } catch { /* flat fallback 不可达 → 放弃注入 */ }
+    const fn = mod.installModelSelection ?? mod.default?.installModelSelection
+    if (typeof fn === "function") { cachedInstaller = fn; return fn }
+  } catch { /* flat fallback 不可达 → 走同步通道/放弃 */ }
+  return null
+}
+export function installerNow(settings) {
+  if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
+  if (cachedInstaller) return cachedInstaller
+  try {
+    const m = requireSync("@deepseek-ai/dsh-agent")
+    const fn = m.installModelSelection ?? m.default?.installModelSelection
+    if (typeof fn === "function") { cachedInstaller = fn; return fn }
+  } catch { /* 同步解析不可达 → 本子代不注入（apply 预解析已填缓存的下一子代起生效） */ }
   return null
 }
 
+// contribution 工厂：返回【同步函数】（宿主存其返回值为 disposer）。
 export function makeInjectContribution(ctx, settings, deps = {}) {
   const readFileFn = deps.readFile ?? readFile
-  const resolveInstallerFn = deps.resolveInstaller ?? resolveInstaller
-  // settings 可为对象（快照）或函数（getConfig thunk，返回最新 settings 快照）。
+  const installerNowFn = deps.installerNow ?? installerNow
+  const pollMs = deps.pollMs ?? 500
+  const pollMaxMs = deps.pollMaxMs ?? 120000
   const snapshot = () => (typeof settings === "function" ? settings() : settings)
-  return async (childCtx) => {
+  return function contribution(childCtx) {
+    let stopped = false
+    let timer = null
+    let disposeInstall = null
     try {
       const agent = childCtx?.agent
-      if (!agent?.id) return
-      // 每次子代创建按 getConfig() 现值判定开关（热生效）：关闭则不注入，开启才继续。
+      if (!agent?.id) return undefined
       const config = snapshot() ?? {}
-      if (config.injectionEnabled === false) return
-      const install = await resolveInstallerFn(settings)
-      if (!install) return // 解析不到安装器 → 不注入（继承默认）
-      // 同步预注册（F2 核心）：selection.current 初始必须 undefined——宿主语义里
-      // undefined = 不干预（继承默认模型），而 {provider:null} 会把 variables.provider/model
-      // 覆写成 null → 子代 no provider/model 直接 turn error（实机两例铁证）。
-      // hint 异步就绪后赋值完整对象才参与覆盖。
+      if (config.injectionEnabled === false) return undefined
+      const install = installerNowFn(settings)
+      if (!install) return undefined
+      // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预
       const selection = { current: undefined, assembled: undefined }
-      install(childCtx, selection)
-      // 项目根：config.projectRoots 最长前缀命中 → config.projectRoot 兜底 → header.cwd
+      disposeInstall = install(childCtx, selection)
+      // 迟到 hint 自循环补读：childId 派生时序晚于 agents.json 写入（Lead agent-map 在 spawn 后），
+      // 命中即写 selection.current（下轮请求生效）并停；超时（pollMaxMs）静默停。
       const cwd = agent?.session?.header?.cwd
       const hit = matchProjectRoot(config?.projectRoots, cwd)
       const projectRoot = hit?.path ?? config?.projectRoot
       const file = agentsJsonPath({ projectRoot }, cwd)
-      if (!file) return
-      // hint 异步补读：就绪后覆写 selection.current，本轮或下轮请求生效（最坏首轮默认）
-      readFileFn(file, "utf8")
-        .then((text) => {
+      if (!file) return () => cleanup()
+      const startedAt = Date.now()
+      const tick = () => {
+        if (stopped) return
+        readFileFn(file, "utf8").then((text) => {
+          if (stopped) return
           const hint = hintForChild(JSON.parse(text), agent.id)
           if (hint) {
             selection.current = hint
             ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 注入 " + hint.provider + "/" + hint.model)
+            return // 命中即停（一次性注入，幂等）
           }
+          if (Date.now() - startedAt < pollMaxMs) timer = setTimeout(tick, pollMs)
+        }).catch(() => {
+          if (!stopped && Date.now() - startedAt < pollMaxMs) timer = setTimeout(tick, pollMs)
         })
-        .catch(() => { /* 文件不存在/损坏 → 保持默认 */ })
+      }
+      timer = setTimeout(tick, 0)
+      function cleanup() {
+        stopped = true
+        if (timer) clearTimeout(timer)
+        if (typeof disposeInstall === "function") disposeInstall()
+      }
+      return cleanup
     } catch {
-      /* 同步异常 → 不注入 */
+      return undefined
     }
   }
 }

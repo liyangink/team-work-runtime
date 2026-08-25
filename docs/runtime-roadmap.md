@@ -67,6 +67,7 @@
 - 剩余：npm 正式发布（本地 pack 已验证）；写边界平台 hook 不做（用户裁决：skill 规范承载，派单边界声明已落地）；
 - **台账（2026-08-25 复盘，记录待批不实施）**：① runtime 引导缺口——writable 形状校验应前移到 run 派发时（目录粒度警告、kind 不在阶段合同当场拒绝），DISPATCH_INPUT_REQUIRED 提示补文件级语义；② 归档 manifest 应保留 deliver 的 paths/digest 明细（当前 completed 归档精简后 P1 重算不完全成立）；③ Lead 纪律拟固化进 skill：派单禁伪代码级注入、"已验证"断言逐条真验、归档重开后新成员核验自交；④ skill 装载故障：宿主 skill 工具对仓库内 team-work-v3 报 "loaded skill source must be a string"（平台侧或 skill 资源形态问题，待查）；⑤ 后台 continuable 子代死亡根因见下条（已修）。
 - **注入致命 bug 修复（2026-08-25，实机铁证）**：inject.js selection 占位值 `{provider:null, model:null}` 违背宿主语义——installModelSelection 里 `selected === undefined` 才是不干预（继承默认），null 对象会把 variables.provider/model 覆写为 null → 子代 no provider/model 直接 turn error（两个后台子代无遗言死亡的根因；前台子代未登记 modelHints 未触发注入所以存活）。修复：占位改 undefined，hint 就绪才赋值完整对象；守护测试同步改判 undefined 语义。注意：此前"F-5 注入侧证"结论作废——当时 3 个前台子代正常恰因未注入。
+- **注入修复补全（2026-08-25 二轮复核，94aa091 定性为部分修复）**：独立复核发现三处残留——① contribution 必须是同步函数（宿主 SetupRegistry.apply 把返回值直接存为 disposer、不 await；async contribution 同步段在首个 await 让出，install 晚于首请求）；② childId 首轮不可预知（agent-map 在 spawn 后调用，而 startContinuable 返回 ID 前首 prompt 已被接受）——首轮必为默认模型，靠自循环补读（500ms 间隔/120s 上限，命中即停）在 Lead 写入 hint 后的下轮请求生效；③ 测试曾用 await contribution() 掩盖同步契约——已改为不 await 直接断言同步效果 + 迟到写入用例。安装器解析改双通道（contribution 同步段 createRequire 直取——Node 22+ require(esm) 实测可行；apply 时异步预解析填缓存兜底旧 Node）。skill 注册名改 team-work（目录/路径不变）；skill-embed 补 source 字段。根包 0.2.0-beta.3 / 插件 0.1.0-beta.5。
 - `e2eTemplate` 物化已实施（run 路由 → e2e 阶段 → 三包依赖链，E2E-B F-11 验证）。
 
 ## v1 Phase 0：规则冻结

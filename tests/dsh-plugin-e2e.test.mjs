@@ -31,7 +31,7 @@ test("E2E-A：cordis 真实装载——inject 服务解析 + apply 三注册 + �
   const fiber = ctx.effect(() => plugin.apply(ctx, {}), "e2e-a: apply")
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(events.setups.length, 1, "registerContinuableSetup 被调")
-  assert.ok(events.registered.some(([kind, name]) => kind === "skill" && name === "team-work-v3") || events.registered.filter(([k]) => k === "skill").length >= 0, "skill 注册路径被调（无 dist 时静默降级也算通过装载验证）")
+  assert.ok(events.registered.some(([kind, name]) => kind === "skill" && name === "team-work") || events.registered.filter(([k]) => k === "skill").length >= 0, "skill 注册路径被调（无 dist 时静默降级也算通过装载验证）")
   assert.ok(events.registered.some(([kind, name]) => kind === "tool" && name === "tw"), "tw 工具注册被调")
   const twReg = events.registered.find(([kind, name]) => kind === "tool" && name === "tw")
   assert.equal(twReg[2], true, "output.render 在场（F4 形状）")
@@ -59,9 +59,12 @@ test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真�
   // fake installer 捕获 selection（完整链：路径解析→真文件读取→hintForChild→补写）
   const installs = []
   const contribution = makeInjectContribution({ logger: { info() {} } }, { projectRoot: proj }, {
-    resolveInstaller: async () => (ctx2, sel) => installs.push(sel),
+    installerNow: () => (ctx2, sel) => installs.push(sel), // 同步契约：contribution 同步段直取安装器
+    pollMs: 5,
   })
-  await contribution({ agent: { id: "child-real", session: { header: { cwd: proj } } } })
+  // 宿主真实契约：同步调用、不 await（返回 disposer）
+  const disposer = contribution({ agent: { id: "child-real", session: { header: { cwd: proj } } } })
+  assert.equal(typeof disposer, "function", "contribution 返回 disposer")
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(installs.length, 1)
   assert.equal(installs[0].current.model, "model-demo", "真文件链路补写生效")

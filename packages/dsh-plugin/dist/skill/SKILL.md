@@ -1,5 +1,5 @@
 ---
-name: team-work-v3
+name: team-work
 description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱动多智能体研发工作流。用户要求代码审查、方案设计、实现、测试或任何阶段性团队协作时使用；Lead 依据本 skill 判断阶段入口、组团与审查强度。
 ---
 

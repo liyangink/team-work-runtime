@@ -158,7 +158,7 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 
 ## 自复核记录（v2 增量）
 
-1. 两 blocker 的修法是否引入新问题？childId 主键：agent-map 在 Lead 拿到 subagentId 后调用，时序天然满足（注册在 spawn 后）；modelHints 以 childId 键，同 childId 重派（降级重开+重新 agent-map）自然覆盖 ✓；
+1. 两 blocker 的修法是否引入新问题？childId 主键：agent-map 在 Lead 拿到 subagentId 后调用；~~时序天然满足（注册在 spawn 后）~~**【2026-08-25 实机证伪修正】**：startContinuable 返回 ID 前首条 prompt 已被接受——agents.json 写入晚于子代首 turn，childId 注入【首轮必不生效】（首轮默认模型，自循环补读命中后下轮生效，见 inject.js 迟到补读）。此判断是纸面时序推演，未验完整链路；modelHints 以 childId 键，同 childId 重派（降级重开+重新 agent-map）自然覆盖 ✓；
 2. A-F1 自动化与 dispatch-plan 决策函数复用：需把 cli.mjs 内联的 modelHint 计算提取为可导出纯函数（实施第 2 步隐含，已写明"复用"）✓；
 3. 双评审冲突检查：A-F1（自动化）与 B-F1（childId 键）正交无冲突，合并后互为补全 ✓；
 4. v1 盲区自查：§0"全部已验证"的过度声明已修正为逐条依据；时序假设只验了"seed 先落"没验"contribution 何时执行"——教训：时序类事实必须验完整链路而非单点 ✓。

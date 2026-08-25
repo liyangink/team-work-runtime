@@ -63,50 +63,73 @@ test("I2 tw 工具失败路径：超时 kill 返回失败卡；输出不可解�
   assert.equal(typeof card2, "object")
 })
 
-test("I2 注入链提纯（F7）：同步预注册 install + hint 异步补写 selection.current；读失败静默", async () => {
-  const { makeInjectContribution, hintForChild } = await import("../packages/dsh-plugin/src/inject.js")
-  const calls = []
+test("I2 注入链（同步 contribution 契约）：install 同步在场 + undefined 占位 + hint 迟到补读 + disposer 语义", async () => {
+  const { makeInjectContribution } = await import("../packages/dsh-plugin/src/inject.js")
   const installs = []
-  const fakeInstall = (ctx, selection) => { installs.push({ ctx, selection }) }
-  const fakeRead = async (file) => {
-    calls.push(file)
-    return JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } })
-  }
+  let installDisposers = 0
+  const fakeInstall = (ctx, selection) => { installs.push({ ctx, selection }); return () => { installDisposers += 1 } }
   const ctx = { logger: { info() {} } }
-  let providerAtInstall = "UNSET"
+  let providerAtInstall = "NOT_CALLED"
   const fakeInstallChecked = (childCtx2, selection) => {
-    // 注册时刻的快照：current 必须是 undefined（宿主语义：undefined=不干预继承默认；
+    // 注册时刻快照：current 必须是 undefined（宿主语义：undefined=不干预继承默认；
     // {provider:null} 会覆写 variables → 子代 no provider/model 直接 turn error——实机铁证）
     providerAtInstall = selection.current === undefined ? "UNDEFINED" : String(selection.current.provider)
-    fakeInstall(childCtx2, selection)
+    return fakeInstall(childCtx2, selection)
   }
+  // 宿主真实契约（SetupRegistry.apply 源码）：contribution(childCtx) 同步调用、返回值直接存为 disposer、
+    // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
   const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
-    readFile: fakeRead,
-    resolveInstaller: async () => fakeInstallChecked,
+    readFile: async () => JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }),
+    installerNow: () => fakeInstallChecked,
+    pollMs: 5,
   })
   const childCtx = { agent: { id: "child-1", session: { header: { cwd: "/x" } } } }
-  await contribution(childCtx)
-  // 同步预注册：install 已被调用（监听器在场——F2 契约）；注册时刻占位为空（补读未发生）
-  assert.equal(installs.length, 1, "install 同步预注册")
-  assert.equal(providerAtInstall, "UNDEFINED", "注册时刻 current=undefined（不干预语义；null 对象会清空宿主模型选择）")
+  const disposer = contribution(childCtx) // 不 await——同步契约
+  assert.equal(typeof disposer, "function", "contribution 返回 disposer（宿主直接存储该返回值）")
+  assert.equal(installs.length, 1, "install 在 contribution 同步段完成（监听器在场——F2 契约）")
+  assert.equal(providerAtInstall, "UNDEFINED", "注册时刻 current=undefined（null 对象会清空宿主模型选择）")
   const selection = installs[0].selection
-  // 异步补读：selection.current 被覆写为 hint
-  await new Promise((r) => setTimeout(r, 20))
-  assert.equal(selection.current.model, "m", "hint 异步补写")
+  // hint 迟到补读（自循环）：首轮读未命中 → Lead agent-map 写入 → 下轮命中 → 写 selection.current
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(selection.current?.model, "m", "hint 补写命中（effort→reasoningEffort）")
   assert.equal(selection.current.reasoningEffort, "max")
-  // 读失败静默：selection 保持
+  // disposer：清定时器 + 透传 install 的 disposer
+  disposer()
+  assert.equal(installDisposers, 1, "disposer 透传 install 清理")
+
+  // 迟到写入场景：首次读无 hint，第二次读才命中（真实时序：agent-map 晚于子代创建）
+  let readCount = 0
+  const installsLate = []
+  const contributionLate = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+    readFile: async () => {
+      readCount += 1
+      if (readCount < 2) return JSON.stringify({ modelHints: {} }) // 首轮：Lead 尚未 agent-map
+      return JSON.stringify({ modelHints: { "child-late": { provider: "p2", model: "m2" } } })
+    },
+    installerNow: () => (c, s) => { installsLate.push(s) },
+    pollMs: 5,
+  })
+  const disposeLate = contributionLate({ agent: { id: "child-late", session: { header: { cwd: "/x" } } } })
+  assert.equal(installsLate[0].current, undefined, "首读未命中：不注入（继承默认）")
+  await new Promise((r) => setTimeout(r, 30))
+  assert.equal(installsLate[0].current?.model, "m2", "第二次读命中：hint 补写生效（下轮请求注入）")
+  disposeLate()
+
+  // 读失败静默（超时窗口内重试，无抛出）
   const contribution2 = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
     readFile: async () => { throw new Error("enoent") },
-    resolveInstaller: async () => fakeInstall,
+    installerNow: () => fakeInstall,
+    pollMs: 5, pollMaxMs: 20,
   })
-  const installs2 = []
-  await contribution2({ agent: { id: "child-2", session: { header: { cwd: "/x" } } } })
-  await new Promise((r) => setTimeout(r, 20))
-  // 无抛出即为通过（selection 保持占位）
-  // installer 解析失败 → 不注入
-  const contribution3 = makeInjectContribution(ctx, {}, { resolveInstaller: async () => null })
+  const dispose2 = contribution2({ agent: { id: "child-2", session: { header: { cwd: "/x" } } } })
+  await new Promise((r) => setTimeout(r, 40))
+  dispose2()
+  // 无抛出即为通过（selection 保持 undefined——不干预）
+
+  // installer 同步解析失败 → 不注入（返回 undefined）
+  const contribution3 = makeInjectContribution(ctx, {}, { installerNow: () => null })
   const before = installs.length
-  await contribution3({ agent: { id: "child-3" } })
+  assert.equal(contribution3({ agent: { id: "child-3" } }), undefined, "无安装器 → 返回 undefined（不注入）")
   assert.equal(installs.length, before, "无安装器 → install 不被调")
 })
 

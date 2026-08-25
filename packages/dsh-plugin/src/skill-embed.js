@@ -46,7 +46,7 @@ export async function registerEmbeddedSkill(ctx, config) {
   if (md === undefined) throw new Error("skill 内容不可达（候选：" + candidates.join(", ") + "）")
   const fm = parseFrontmatter(md)
   ctx.skills.register({
-    name: fm.name || "team-work-v3",
+    name: fm.name || "team-work",
     description: fm.description || "team-work 多智能体研发工作流",
     // 宿主 validateCandidate 契约：source 必须是 string（runtimeCandidate 原样透传，
     // 缺省 undefined 在消费侧抛 "source must be a string"——skill 工具装载即失败）

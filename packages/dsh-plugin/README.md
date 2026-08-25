@@ -44,7 +44,7 @@ node scripts/uninstall-local.mjs              # 卸载
 ```bash
 dsh plugin --profile web add github:<owner>/team-work-runtime
 ```
-仓库根是集合载体（根清单不带 `dsh` 声明）：装载方扫描子目录，把 `packages/dsh-plugin` 识别为独立插件按 `#path:` 安装——**插件构建产物（dist）已随 git 分发**，源码通道无需执行构建。未来多平台绑定=新增 `packages/<平台>` 子目录（带独立 package.json + `dsh` 声明），同一仓库根自动收录。
+仓库根是集合载体（根清单不带 `dsh` 声明）：装载方扫描子目录，把 `packages/dsh-plugin` 识别为独立插件按 `#path:` 安装。**插件免构建**：入口直载 `src/`（client 徽标源文件自带工厂装载形态，skill 运行期直读仓库 `skills/team-work-v3`）——git 只携带源码，无构建产物。未来多平台绑定=新增 `packages/<平台>` 子目录（独立 package.json + `dsh` 声明），同一仓库根自动收录。
 
 **方式五：npm 正式发布后**
 ```bash

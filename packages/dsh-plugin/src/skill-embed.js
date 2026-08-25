@@ -25,8 +25,25 @@ export function parseFrontmatter(text) {
 }
 
 export async function registerEmbeddedSkill(ctx, config) {
-  const skillDir = config?.skillDir ?? path.join(here, "..", "dist", "skill")
-  const md = await readFile(path.join(skillDir, "SKILL.md"), "utf8")
+  // skill 内容多候选解析（免构建分发）：
+  //  1) 显式 config.skillDir；
+  //  2) 仓库 skills/team-work-v3（git 源码/根包通道——src/../../.. 恰为仓库根或已装主包根）；
+  //  3) 包内 dist/skill（插件单包 npm 通道，构建期拷贝）。
+  const candidates = config?.skillDir
+    ? [config.skillDir]
+    : [path.join(here, "..", "..", "..", "skills", "team-work-v3"), path.join(here, "..", "dist", "skill")]
+  let skillDir = candidates[0]
+  let md
+  for (const dir of candidates) {
+    try {
+      md = await readFile(path.join(dir, "SKILL.md"), "utf8")
+      skillDir = dir
+      break
+    } catch {
+      // 试下一候选
+    }
+  }
+  if (md === undefined) throw new Error("skill 内容不可达（候选：" + candidates.join(", ") + "）")
   const fm = parseFrontmatter(md)
   ctx.skills.register({
     name: fm.name || "team-work-v3",

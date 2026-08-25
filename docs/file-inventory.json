@@ -50,7 +50,6 @@
     "scripts/e2e-smoke.mjs",
     "scripts/e2e-c1.mjs",
     "packages/dsh-plugin/cordis.patch.yml",
-    "packages/dsh-plugin/dist/",
     "docs/phase3-plugin-plan.md",
     "docs/phase3-acceptance.md",
     "docs/pre-phase3-plan.md",

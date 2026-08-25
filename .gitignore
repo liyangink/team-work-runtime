@@ -5,4 +5,5 @@ node_modules/
 # 插件包构建产物（npm pack 输出）
 packages/dsh-plugin/*.tgz
 
-# 插件 dist 随仓库分发（市场 git 源码安装不执行构建脚本，产物必须随 git 携带）
+# 插件构建产物（仅 skill 拷贝，服务插件单包 npm 通道；git/根包通道免构建直载 src）
+packages/dsh-plugin/dist/

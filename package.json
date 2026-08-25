@@ -27,7 +27,8 @@
   },
   "files": [
     "bin/",
-    "packages/dsh-plugin/dist/",
+    "packages/dsh-plugin/src/",
+    "packages/dsh-plugin/src-client/",
     "packages/dsh-plugin/cordis.patch.yml",
     "packages/dsh-plugin/package.json",
     "packages/dsh-plugin/README.md",

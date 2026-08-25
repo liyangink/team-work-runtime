@@ -57,7 +57,7 @@ test("E2E-A：插件激活等待安装器解析完成后才开放 continuable se
     tools: { register() {} },
     logger: { warn() {}, info() {} },
   }
-  const activation = plugin.apply(ctx, { injectionEnabled: true }, {
+  const activation = plugin.apply(ctx, {}, {
     resolveInstaller: () => installerReady,
     registerEmbeddedSkill: async () => {},
     installPluginSettings: (_ctx, entry) => () => entry,
@@ -68,7 +68,7 @@ test("E2E-A：插件激活等待安装器解析完成后才开放 continuable se
   await activation
   assert.equal(setups.length, 1, "安装器就绪后才注册 setup")
 
-  const dispose = setups[0]({ agent: { id: "child-ready" } })
+  const dispose = setups[0]({ agent: { id: "child-ready", session: { header: { cwd: "/tmp" } } } })
   assert.equal(installs.length, 1, "首个子代同步安装 listener，不依赖第二个子代缓存")
   assert.equal(typeof dispose, "function")
   dispose()
@@ -86,7 +86,7 @@ test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可
     tools: { register() {} },
     logger: { warn(message) { warnings.push(String(message)) }, info() {} },
   }
-  const disposePlugin = await plugin.apply(ctx, { injectionEnabled: true }, {
+  const disposePlugin = await plugin.apply(ctx, {}, {
     resolveInstaller: async () => {
       resolveCalls += 1
       if (resolveCalls === 1) throw new Error("dependency unavailable")
@@ -98,13 +98,13 @@ test("E2E-A：安装器首次解析失败后后台重试，恢复后的子代可
   })
 
   assert.equal(setups.length, 1, "首次失败仍注册可降级 setup")
-  const disposeBeforeRecovery = setups[0]({ agent: { id: "child-before-recovery" } })
+  const disposeBeforeRecovery = setups[0]({ agent: { id: "child-before-recovery", session: { header: { cwd: "/tmp" } } } })
   assert.equal(installs.length, 0, "安装器不可用时继承默认模型")
   disposeBeforeRecovery()
 
   await new Promise((resolve) => setTimeout(resolve, 15))
   assert.ok(resolveCalls >= 2, "后台重新解析安装器")
-  const disposeAfterRecovery = setups[0]({ agent: { id: "child-after-recovery" } })
+  const disposeAfterRecovery = setups[0]({ agent: { id: "child-after-recovery", session: { header: { cwd: "/tmp" } } } })
   assert.equal(installs.length, 1, "安装器恢复后，新子代同步安装 listener")
   disposeAfterRecovery()
   assert.ok(warnings.some((message) => message.includes("dependency unavailable")), "首次失败原因留痕")
@@ -149,7 +149,7 @@ test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真�
   }))
   // fake installer 捕获 selection（完整链：路径解析→真文件读取→hintForChild→补写）
   const installs = []
-  const contribution = makeInjectContribution({ logger: { info() {} } }, { projectRoot: proj }, {
+  const contribution = makeInjectContribution({ logger: { info() {} } }, {
     installerNow: () => (ctx2, sel) => installs.push(sel), // 同步契约：contribution 同步段直取安装器
     pollMs: 5,
   })

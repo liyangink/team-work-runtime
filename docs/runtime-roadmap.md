@@ -11,7 +11,7 @@
 - 预算终核（DoD #3）：实现 979 行 ≤3k；断言测试 599 行（复核修复后现状：实现 1059 行、断言 678 行、42/42 测试绿，比率 0.64 略超 0.6，为并发安全与恢复闭环的增量）；
 - 旧实现清理（2026-08-21，用户批准）：v2 Runtime 状态机、OpenCode PlatformPlugin、installer、v2 skills/schemas/测试/文档已全部删除（Git 历史可恢复）；保留件仅 persistence 原语、workflow 定义、team-work policy、OpenSpec provider、policy kernel；package.json 零运行时依赖，bin 只剩 `tw`。
 - **交叉复核与修复（2026-08-21，双 subagent 独立审计）**：修复两个实证竞态——并发 deliver 丢登记（读-算-写整体入任务锁）、并发/重复 run 双派发（derive 增加在途波次检查：派发未交付=等待态）；补 I8 恢复闭环 `tw restore`（快照恢复死代码激活）；project.json 版本标记显式化；部分失败孤儿快照消除（先读全部再写）。文档对齐：charter §5 与实现一致（gates/runtime.json 删除、decisions 单文件、journal 七事件、reviews 入 manifest）、route 补进工具面（九命令）、§6.2 文件名纠正。遗留已知项：cmdRun 职责集中（重构候选）、checks 平台对账待 DSH 绑定层、成员越级模型调用治理待插件 hook。
-- **v3.2 第一批（团队拓扑找回）已完成**（关键提交 `14a82a2`–`5dc1429`）：波次机波组化（多包 produce/respond 波带 owners、DAG 分层派发与依赖解锁、按包计轮、challenger findings 带包归属选择性重派、聚合裁决新鲜度、reviewedPackages 评审覆盖快照）、`tw plan` 包定义登记与调用内机械验收、continuation 增量续派、`tw agent-map` 派单映射、选人候选池（dsh.json 档位候选数组 + 族去重 + effort 预留）、risk 升档、wait-inflight 卡内嵌 inflight 数组、标签规范。真实多包 E2E（topo-e2e，已归档）全链路实测并揪出修复 4 个真缺陷（组合评审缺制品清单、inflight 重建丢 scope、respond 派单丢 Expert 裁决原因、路由 blocker 被人工门淹没死循环），三份双重核验产物 `docs/M-store.md`/`M-intake.md`/`M-overview.md`；测试 76/76 绿（新增 topology 波组集成 + core 波组专项 + fixtures 包化构造器）。Phase 3 前置研究就绪（`ctx.subagents.registerContinuableSetup` 注入通道、子代上下文内派单寻址、模型席位徽标方案），尚未实施。遗留台账 6 项与规划项见 §v3.1 与 charter §8。
+- **v3.2 团队拓扑与全局选模已完成**：波次机波组化（多包 produce/respond 波带 owners、DAG 分层派发与依赖解锁、按包计轮、challenger findings 带包归属选择性重派、聚合裁决新鲜度、reviewedPackages 评审覆盖快照）、`tw plan` 机械验收、continuation 增量续派、`tw agent-map` 派单映射、候选池、同波家族多样性、可选 effort、risk 升档、wait-inflight 卡与标签规范均已实施。tier→模型的唯一配置源改为 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）：兼容单对象或数组，provider/model 必填，family/effort 可选；无完整三档时 dispatch-plan 返回可恢复 blocked 卡。项目 `.team-work/platform/dsh.json` 不读取、不创建，遗留文件可手动删除；`.team-work/platform/agents.json` 继续保存项目运行时映射与 modelHint 快照。全局配置热变只影响后续波次，已派发波次不重选。
 
 下列 Phase 0–3 仅记录 v1 历史基线，Phase 4 记录迁移前的平台能力；它们用于追溯可复用的不变量，不再代表当前结构或后续实施计划。当前实现与验收状态以 v3 里程碑为准（见上文 v3.2 第一批记录）。
 
@@ -36,6 +36,8 @@
 
 ## v3.1 DSH 适配：编排引擎与成本映射（规划 2026-08-21 第二稿，修正两处认知偏差）
 
+> **迁移说明（当前实现）**：本节保留最初方案与平台调研，不能把其中的项目 `dsh.json`、`agent-default`、`projectRoots` 或 `twBin` 叙述当作当前行为。现在唯一的 tier→模型配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，由 DSH Web“插件配置”页管理；`injectionEnabled`、`projectRoots`、`twBin` 已从 schema 和运行链移除且不兼容读取。注入和 `tw` 工具只以子会话 cwd 定位项目的 `agents.json`，该文件仍是运行时映射事实。遗留 YAML 键和项目 `dsh.json` 可由用户手动删除。
+
 ### 设计原则（修正稿）
 
 1. **团队拓扑在平台层编排，不在 runtime 重建**：DSH 的 workflow 编排工具（`agent(prompt, opts)` / `pipeline(items, ...stages)` / `parallel(thunks)` / 结构化 `schema` 结果）是拓扑执行引擎。runtime 只提供**波次事实**（`tw dispatch-plan`）与**验收**（deliver/review/gate），不实现派发循环与 DAG 调度——E2E 时"Lead 手动逐个 subagent"是权宜形态，目标形态是编排脚本一次驱动整段房间（从当前波次到下一扇门）。
@@ -46,7 +48,7 @@
 ### Phase 1：编排绑定（目标形态，待实测）
 
 1. **`tw dispatch-plan --task <name>`**（runtime 侧新增）：输出当前可派发波次的机器可读描述 `[{dispatchKey, role, tier, kind, round, prompt, writable[], dependsOn[]}]`——编排脚本的唯一输入；波次推进逻辑（waves.mjs 纯函数）不变，门与人工门语义不变。
-2. **tier→模型映射配置** `.team-work/platform/dsh.json`：`{tiers: {junior: {provider?, model}, senior: {...}, expert: {...}}, defaults}`；`tw init` 生成模板。角色消费档位：Owner 用场景 `ownerTier`，**Challenger 用场景 `challengerTier`（默认 senior）**，Expert 用 expert。示例：junior→廉价快速模型，senior→强推理中价模型，expert→旗舰模型。**只读子派单（原 v2 助手）= junior 档 + writable 为空 + parallel() 并行**，不设专属角色。
+2. **tier→模型配置（当前实现）**：DSH 全局 settings 的 `team-work-dsh.tiers` 是唯一来源，DSH Web“插件配置”页负责编辑。`junior`、`senior`、`expert` 必须同时完整；每档兼容单个候选对象或候选数组，provider/model 非空必填，family/effort 可选。运行时按候选池并在同波优先不同 family 挑选，dispatch-plan 写入精确 modelHint 快照；`tw init` 只安装 skill，不生成映射。角色消费档位：Owner 用场景 `ownerTier`，**Challenger 用场景 `challengerTier`（默认 senior）**，Expert 用 expert。**只读子派单（原 v2 助手）= junior 档 + writable 为空 + parallel() 并行**，不设专属角色。
 3. **编排脚本模板**（skill references 提供，Lead 经 workflow 工具执行）：读映射 + dispatch-plan → 循环 {并行派发无依赖波次（`agent(prompt, modelByTier[tier])`，成员在 agent 内调 `tw deliver/review --key`）→ `tw run` 消费推进} 直到 gate/awaiting-user 返回卡片。
 4. **review 复杂拓扑模板**：八视角 Owner → 并行多 Challenger（`parallel`，按视角分组）→ Expert 裁决 → 门；重派轮在脚本内闭环（rework 波次由 dispatch-plan 顺序导出）。
 5. skill 投递：`tw init` 安装到项目 `.dsh/skills/`（DSH filesystem provider 扫描该根）。
@@ -62,7 +64,7 @@
 
 - **packages/dsh-plugin 已实现**（六段增量 I1-I6，双轴方案评审 16 findings + 三轮交叉审查全处置）：host 插件（inject:["subagents","skills","tools"]——childId 寻址 agents.json modelHints 注入 installModelSelection 同步预注册+异步补读；skill 构建期内嵌注册；tw 原生工具 args 透传 + timeoutMs + output.render）+ client 徽标（React 组件、仅 addressed 子代理、会话真实 requestConfig 优先 + sessions.models 兜底）+ 构建链（build.mjs：skill 拷贝/CJS 工厂 bundle/npm pack 双向断言"不多不少"）+ bundle 装载协议（dsh.bundle.patch + 入口 patch，C1 实机发现补齐）；
 - **注入寻址（v2 评审后定稿）**：childId 主键（childCtx.agent.id 直查 modelHints——时序证伪了 seed 文本解析）+ agent-map 自动落盘（P4：零手动转录）；隔离性源码证实（每子代独立 session/agent/ctx）；
-- **验收状态（功能矩阵 F-1..F-12）**：F-1..F-4/F-6/F-8..F-11 全自动验证通过（E2E-A 真实 cordis 装载层 + E2E-B runtime 全功能矩阵 + C1 实机宿主 boot 链 dump-config + 隔离 web 实例启动零 error）；**F-5/F-7/F-12（真实 LLM 注入/effort 进 header/徽标显示）待用户实机确认**（需带凭据真实会话创建 subagent——插件安装后参照插件 README"实机验证"节）；
+- **验收状态（功能矩阵 F-1..F-12）**：F-1..F-4/F-6/F-8..F-11 已由自动层验证（E2E-A cordis 装载层 + E2E-B runtime 功能矩阵 + C1 实机宿主 boot 链 dump-config + 隔离 Web 实例）；**F-5/F-7/F-12（真实 LLM 注入、effort header、徽标最终位置与样式）仍待用户以带凭据的真实会话确认**（插件 README“实机验证”节）。
 - **客户端启动回归修复（2026-08-25）**：根包市场通道实机刷新暴露 client 工厂误用 Node `(module, exports)` 形态，导致 `factory(require)` 返回 `undefined`；修正为直接返回 Cordis 插件导出，并移除把内建 `logger` 误声明为注入服务的第二层 pending blocker。新增工厂协议回归测试，隔离 web profile 已验证完整进入主界面且控制台零错误；根包/独立插件包版本分别推进到 `0.2.0-beta.2`/`0.1.0-beta.3`；
 - **子代理模型徽标修复（2026-08-25）**：实机暴露席位不显示真实模型/effort。根因四项：RPC 漏解 `result.value`；动态插件抢占 `single` 模型席位且父会话 inject 返回 null 会使条目退席；只拉取一次导致运行中选择变化不刷新；addressed 子代理在部分宿主不开放 models RPC。修复为追加到相邻 `conversation.input.right`、inject 恒返对象、声明 connection 生命周期、运行状态切换刷新，并优先显示会话最新真实 requestConfig（RPC 仅兜底）；6 项 I4 行为测试覆盖工厂/释放、显示、父会话隔离、刷新与 RPC 真拒绝降级。根包/独立插件包版本推进到 `0.2.0-beta.8`/`0.1.0-beta.9`；UI 位置与样式仍待用户安装包后实机过目；
 - 剩余：npm 正式发布（本地 pack 已验证）；写边界平台 hook 不做（用户裁决：skill 规范承载，派单边界声明已落地）；

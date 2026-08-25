@@ -3,24 +3,35 @@
 //       F-9（升档卡）/F-10（八视角形态全流程）/F-11（e2eTemplate 物化）
 // F-5/F-7（注入/effort 实机）与 F-12（徽标）留真实 dsh 环境人工/半自动确认（E2E-C）。
 import assert from "node:assert/strict"
-import { writeFile, mkdir, readFile } from "node:fs/promises"
+import { writeFile, mkdir, readFile, access } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
-import { loadTask } from "../runtime-v3/store.mjs"
 import { makeProject, caller } from "./support/v3-fixtures.mjs"
 
-test("E2E-B F-3：零配置开箱——无 dsh.json 无插件，任务全流程照常（映射 unresolved 不阻塞）", async () => {
+const settingsFile = path.join(tmpdir(), `tw-e2e-b-tiers-${process.pid}-${Date.now()}.yaml`)
+const BASE_SETTINGS = `
+team-work-dsh:
+  tiers:
+    junior: { provider: e2e-junior, model: e2e-junior }
+    senior: { provider: e2e-senior, model: e2e-senior }
+    expert: { provider: e2e-expert, model: e2e-expert }
+`
+await writeFile(settingsFile, BASE_SETTINGS)
+process.env.DSH_SETTINGS = settingsFile
+
+test("E2E-B F-3：无项目 dsh.json、无插件时，全局 tier 配置可完成派发与交付", async () => {
   const root = await makeProject()
-  // 不写 platform/dsh.json（零配置）
   const call = caller(root)
   await call(["open", "--name", "f3", "--objective", "全流程", "--entry", "code-review"])
-  const d = await call(["run", "--task", "f3", "--writable", "R.md:code-review"])
-  assert.equal(d.ok, true, "零配置派发正常")
+  const plan = await call(["dispatch-plan", "--task", "f3", "--writable", "R.md:code-review", "--json"])
+  assert.equal(plan.ok, true)
+  assert.equal(plan.waves[0].modelHint.model, "e2e-junior")
+  assert.equal(await access(path.join(root, ".team-work", "platform", "dsh.json")).then(() => true, () => false), false)
   await writeFile(path.join(root, "R.md"), "x")
-  const dv = await call(["deliver", "--task", "f3", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const dv = await call(["deliver", "--task", "f3", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   assert.equal(dv.accepted, true)
 })
 
@@ -123,33 +134,39 @@ test("E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → �
   assert.equal(w2.dispatches[0].package, "execution", "依赖解锁第二包")
 })
 
-test("E2E-B F-6/F-4：双任务并发 agent-map 数据隔离 + 自定义映射生效", async () => {
+test("E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 全局候选池生效", async () => {
   const root = await makeProject()
-  // 自定义映射（F-4）：junior 池带两个不同家族候选
-  const mapFile = path.join(root, ".team-work", "platform", "dsh.json")
-  await mkdir(path.dirname(mapFile), { recursive: true })
-  await writeFile(mapFile, JSON.stringify({ tiers: { junior: [
-    { provider: "prov-a", model: "fam-one", family: "one" },
-    { provider: "prov-b", model: "fam-two", family: "two" },
-  ], senior: [{ provider: "prov-c", model: "sen-m", family: "c" }], expert: [{ provider: "prov-d", model: "exp-m", family: "d" }] }, defaults: null }))
-  const call = caller(root)
-  for (const name of ["iso-a", "iso-b"]) {
-    await call(["open", "--name", name, "--objective", "o", "--entry", "code-review"])
-    await call(["run", "--task", name, "--writable", name + ".md:code-review"])
+  await writeFile(settingsFile, `
+team-work-dsh:
+  tiers:
+    junior:
+      - provider: pool-a
+        model: fam-one
+        family: one
+      - provider: pool-b
+        model: fam-two
+        family: two
+    senior: { provider: pool-senior, model: sen-m }
+    expert: { provider: pool-expert, model: exp-m }
+`)
+  try {
+    const call = caller(root)
+    const plans = {}
+    for (const name of ["iso-a", "iso-b"]) {
+      await call(["open", "--name", name, "--objective", "o", "--entry", "code-review"])
+      plans[name] = await call(["dispatch-plan", "--task", name, "--writable", name + ".md:code-review", "--json"])
+    }
+    const keyA = plans["iso-a"].waves[0].dispatchKey
+    const keyB = plans["iso-b"].waves[0].dispatchKey
+    const ra = await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
+    const rb = await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
+    assert.equal(ra.modelHint.model, "fam-one", "F-4 全局池首选")
+    assert.equal(rb.modelHint.model, "fam-one", "不同波次各自从首选开始")
+    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+    assert.equal(agents.modelHints["child-A1"].model, "fam-one")
+    assert.equal(agents.modelHints["child-B1"].model, "fam-one")
+    assert.notEqual(agents.mappings[keyA], agents.mappings[keyB], "F-6 双任务映射分键不串")
+  } finally {
+    await writeFile(settingsFile, BASE_SETTINGS)
   }
-  // 各任务登记不同 child（F-6 隔离：modelHints 按 childId 分键）
-  const ja = await call(["agent-map", "--task", "iso-a", "--key", "w2-aaa", "--agent", "child-A1"])
-  // w2-aaa 不是 iso-a 的 key（各自任务的 key 不同）——先取真实 key
-  const taskA = await loadTask(root, "iso-a", { workflow: { stages: [{ id: "code-review", teamScene: "code-review" }] }, policy: {} })
-  const keyA = taskA.journal.filter((e) => e.type === "dispatched").at(-1).detail.key
-  const taskB = await loadTask(root, "iso-b", { workflow: { stages: [{ id: "code-review", teamScene: "code-review" }] }, policy: {} })
-  const keyB = taskB.journal.filter((e) => e.type === "dispatched").at(-1).detail.key
-  const ra = await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
-  const rb = await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
-  assert.equal(ra.modelHint.model, "fam-one", "F-4 自定义池首选")
-  assert.equal(rb.modelHint.model, "fam-one", "同档同首选")
-  const agents = JSON.parse(await readFile(mapFile.replace("dsh.json", "agents.json"), "utf8"))
-  assert.equal(agents.modelHints["child-A1"].model, "fam-one")
-  assert.equal(agents.modelHints["child-B1"].model, "fam-one")
-  assert.notEqual(agents.mappings[keyA], agents.mappings[keyB], "F-6 双任务映射分键不串")
 })

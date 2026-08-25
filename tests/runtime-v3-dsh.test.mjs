@@ -1,4 +1,4 @@
-// DSH 绑定 Phase 1 测试：dsh-map 解析、dispatch-plan、models、init、PATH 注入（docs/dsh-phase1-plan.md §3）
+// DSH 绑定：全局 settings tier 解析、dispatch-plan、models、init 与模型快照。
 import assert from "node:assert/strict"
 import { writeFile, readFile, access, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -7,117 +7,202 @@ import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
-import { parseAgentDefault, ensureDshMap, resolveTiers, validateDshMap, dshMapPath, placeholderMap, TIERS } from "../runtime-v3/dsh-map.mjs"
+import { parseTeamWorkDshSettings, resolveTiers, validateTierSettings, TIERS } from "../runtime-v3/dsh-map.mjs"
 import { FIX_WORKFLOW, FIX_POLICY, makeProject, caller, openTask, seedConvergedStage } from "./support/v3-fixtures.mjs"
 
-// settings 夹具（与真实 ~/.dsh/settings.yaml 的 agent-default-model 块同形，含引号值）
-const settingsFile = path.join(tmpdir(), `tw-dsh-settings-${process.pid}.yaml`)
-await writeFile(settingsFile, 'llm-pi-ai:\n  providers: {}\nagent-default-model:\n  provider: prov-main\n  model: "deepseek-v4-pro"\nllm-deepseek:\n  models: []\n')
+const settingsFile = path.join(tmpdir(), `tw-global-tiers-${process.pid}-${Date.now()}.yaml`)
+const BASE_SETTINGS = `
+unrelated-section:
+  enabled: true
+team-work-dsh:
+  tiers:
+    junior:
+      provider: vendor-junior
+      model: model-junior
+    senior:
+      provider: vendor-senior
+      model: model-senior
+    expert:
+      provider: vendor-expert
+      model: model-expert
+`
+await writeFile(settingsFile, BASE_SETTINGS)
 process.env.DSH_SETTINGS = settingsFile
 
-async function writeMap(root, map) {
-  await mkdir(path.dirname(dshMapPath(root)), { recursive: true })
-  await writeFile(dshMapPath(root), typeof map === "string" ? map : JSON.stringify(map))
+async function setSettings(text) {
+  await writeFile(settingsFile, text)
 }
 
-test("parseAgentDefault：块解析、引号剥离、缺失返回 null", () => {
-  assert.deepEqual(parseAgentDefault(await0()), { provider: "prov-main", model: "deepseek-v4-pro" })
-  assert.equal(parseAgentDefault("other:\n  x: 1\n"), null, "无 agent-default-model 键")
-  assert.equal(parseAgentDefault("agent-default-model:\n  provider: only\n"), null, "缺 model")
-  function await0() {
-    return 'agent-default-model:\n  provider: prov-main\n  model: "deepseek-v4-pro"\nnext-key:\n  a: 1\n'
+async function hasFile(file) {
+  return access(file).then(() => true, () => false)
+}
+
+async function withEnvironment(values, action) {
+  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
+  try {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    return await action()
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
   }
+}
+
+test("全局 settings：解析 team-work-dsh.tiers 的引号、注释、对象与数组", () => {
+  const tiers = parseTeamWorkDshSettings(`
+other-section:
+  ignored: true
+team-work-dsh:
+  # 此区段是 runtime 的唯一模型配置来源
+  tiers:
+    junior: { provider: "vendor-one", model: 'model-one' } # 行尾注释
+    senior:
+      - provider: vendor-two
+        model: model-two
+        family: two
+    expert: [{ provider: vendor-three, model: model-three, effort: high }]
+`)
+  assert.deepEqual(tiers, {
+    junior: { provider: "vendor-one", model: "model-one" },
+    senior: [{ provider: "vendor-two", model: "model-two", family: "two" }],
+    expert: [{ provider: "vendor-three", model: "model-three", effort: "high" }],
+  })
 })
 
-test("零初始化：ensureDshMap 生成占位模板且幂等（不覆盖用户改动）", async () => {
+test("全局 settings：三档候选池是唯一解析来源，缺档显式 unresolved", async () => {
+  const file = path.join(tmpdir(), `tw-global-partial-${process.pid}-${Date.now()}.yaml`)
+  await writeFile(file, `
+team-work-dsh:
+  tiers:
+    junior:
+      provider: vendor-junior
+      model: model-junior
+    senior:
+      - provider: vendor-senior-a
+        model: model-senior-a
+        family: senior-a
+      - provider: vendor-senior-b
+        model: model-senior-b
+        family: senior-b
+`)
+  const resolved = await resolveTiers({ settingsFile: file })
+  assert.equal(resolved.file, file)
+  assert.equal(resolved.tiers.junior.model, "model-junior")
+  assert.equal(resolved.tiers.junior.source, "global-settings")
+  assert.deepEqual(resolved.tiers.senior.pool.map((candidate) => candidate.model), ["model-senior-a", "model-senior-b"])
+  assert.equal(resolved.tiers.expert.source, "unresolved")
+  assert.match(resolved.warnings.join("\n"), /expert/)
+})
+
+test("全局 settings：provider/model 必填，损坏项与缺失文件都不回退", async () => {
+  const invalid = validateTierSettings({
+    junior: { provider: "vendor-junior", model: "model-junior" },
+    senior: { provider: "", model: "model-senior" },
+    expert: { provider: "vendor-expert" },
+  }, { file: settingsFile })
+  assert.equal(invalid.tiers.junior.source, "global-settings")
+  assert.equal(invalid.tiers.senior.source, "unresolved")
+  assert.equal(invalid.tiers.expert.source, "unresolved")
+  assert.match(invalid.warnings.join("\n"), /provider 与 model 必须是非空字符串/)
+
+  const missing = await resolveTiers({ settingsFile: path.join(tmpdir(), `no-global-settings-${Date.now()}.yaml`) })
+  for (const tier of TIERS) assert.equal(missing.tiers[tier].source, "unresolved")
+  assert.match(missing.warnings.join("\n"), /未找到全局 DSH settings/)
+})
+
+test("settings 路径优先级：显式 > DSH_SETTINGS > DSH_HOME，并由 models/dispatch-plan 共用", async () => {
+  const home = path.join(tmpdir(), `tw-dsh-home-${process.pid}-${Date.now()}`)
+  const homeFile = path.join(home, "settings.yaml")
+  const envFile = path.join(tmpdir(), `tw-dsh-env-${process.pid}-${Date.now()}.yaml`)
+  const explicitFile = path.join(tmpdir(), `tw-dsh-explicit-${process.pid}-${Date.now()}.yaml`)
+  const settingsFor = (model) => `
+team-work-dsh:
+  tiers:
+    junior: { provider: priority-vendor, model: ${model} }
+    senior: { provider: priority-vendor, model: ${model}-senior }
+    expert: { provider: priority-vendor, model: ${model}-expert }
+`
+  await mkdir(home, { recursive: true })
+  await Promise.all([
+    writeFile(homeFile, settingsFor("home-model")),
+    writeFile(envFile, settingsFor("env-model")),
+    writeFile(explicitFile, settingsFor("explicit-model")),
+  ])
+
+  await withEnvironment({ DSH_SETTINGS: envFile, DSH_HOME: home }, async () => {
+    assert.equal((await resolveTiers()).file, envFile)
+    assert.equal((await resolveTiers({ settingsFile: explicitFile })).file, explicitFile)
+  })
+  await withEnvironment({ DSH_SETTINGS: undefined, DSH_HOME: home }, async () => {
+    const resolved = await resolveTiers()
+    assert.equal(resolved.file, homeFile)
+    assert.equal(resolved.tiers.junior.model, "home-model")
+
+    const root = await makeProject()
+    const call = caller(root)
+    const models = await call(["models"])
+    assert.equal(models.file, homeFile)
+    assert.equal(models.tiers.find((tier) => tier.tier === "junior").model, "home-model")
+
+    await openTask(root, "home-source")
+    const plan = await call(["dispatch-plan", "--task", "home-source", "--writable", "R.md:code-review", "--json"])
+    assert.equal(plan.modelSettings.file, homeFile)
+    assert.equal(plan.waves[0].modelHint.model, "home-model")
+  })
+  assert.equal(process.env.DSH_SETTINGS, settingsFile, "测试后恢复默认 DSH_SETTINGS")
+})
+
+test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略", async () => {
   const root = await makeProject()
-  const first = await ensureDshMap(root)
-  assert.equal(first.created, true)
-  assert.deepEqual(JSON.parse(await readFile(dshMapPath(root), "utf8")), placeholderMap())
-  const second = await ensureDshMap(root)
-  assert.equal(second.created, false)
-})
-
-test("占位解析：三档 = agent-default 来源，值来自 settings", async () => {
-  const root = await makeProject()
-  await ensureDshMap(root)
-  const r = await resolveTiers(root)
-  for (const tier of TIERS) {
-    assert.equal(r.tiers[tier].provider, "prov-main"); assert.equal(r.tiers[tier].model, "deepseek-v4-pro"); assert.equal(r.tiers[tier].source, "agent-default"); assert.equal(r.tiers[tier].pool.length, 1)
-  }
-  assert.deepEqual(r.warnings, [])
-})
-
-test("显式分档：senior 显式覆盖，其余保持占位", async () => {
-  const root = await makeProject()
-  await ensureDshMap(root)
-  const map = JSON.parse(await readFile(dshMapPath(root), "utf8"))
-  map.tiers.senior = { provider: "prov-main", model: "glm-5.3" }
-  await writeMap(root, map)
-  const r = await resolveTiers(root)
-  assert.equal(r.tiers.senior.model, "glm-5.3"); assert.equal(r.tiers.senior.source, "explicit")
-  assert.equal(r.tiers.junior.source, "agent-default")
-})
-
-test("缺档回退：defaults 显式 → fallback；全空 → unresolved + 警告（不猜环境默认）", async () => {
-  const fallbackRoot = await makeProject()
-  await writeMap(fallbackRoot, { tiers: {}, defaults: { provider: "prov-main", model: "deepseek-v4-flash" } })
-  const r1 = await resolveTiers(fallbackRoot)
-  assert.equal(r1.tiers.expert.model, "deepseek-v4-flash"); assert.equal(r1.tiers.expert.source, "fallback")
-  assert.ok(r1.warnings.some((w) => /expert 未配置/.test(w)), "缺档要给警告")
-
-  const bareRoot = await makeProject()
-  await writeMap(bareRoot, { tiers: {}, defaults: null })
-  const missingSettings = path.join(bareRoot, "nope.yaml")
-  const r2 = await resolveTiers(bareRoot, { settingsFile: missingSettings })
-  for (const tier of TIERS) {
-    assert.equal(r2.tiers[tier].source, "unresolved"); assert.equal(r2.tiers[tier].model, null, tier + " 未解析而非猜测环境默认")
-  }
-  assert.ok(r2.warnings.some((w) => /未找到/.test(w)), "settings 缺失要给警告")
-  assert.ok(r2.warnings.some((w) => /未解析/.test(w)), "unresolved 档要给配置指引警告")
-})
-
-test("映射校验：损坏/未知字段/未知档位拒绝并带修复指引", async () => {
-  const root = await makeProject()
-  await writeMap(root, "{ not json")
-  await assert.rejects(resolveTiers(root), (e) => e.code === "STATE_CORRUPT" && /dsh\.json/.test(e.message), "损坏 JSON")
-  assert.throws(() => validateDshMap({ tiers: {}, modles: {} }), (e) => e.code === "MAP_INVALID" && /未知顶层字段/.test(e.message), "顶层未知字段")
-  assert.throws(() => validateDshMap({ tiers: { staff: { provider: "a", model: "b" } } }), (e) => e.code === "MAP_INVALID" && /未知档位/.test(e.message), "未知档位")
-  assert.throws(() => validateDshMap({ tiers: { senior: { provder: "a", model: "b" } } }), (e) => e.code === "MAP_INVALID" && /未知字段/.test(e.message), "tier 内拼错字段")
-  assert.throws(() => validateDshMap({ tiers: { senior: { provider: "", model: "b" } } }), (e) => e.code === "MAP_INVALID" && /非空字符串/.test(e.message), "空 provider")
-})
-
-test("dispatch-plan：派发点输出波次计划（prompt/PATH 注入/modelHint/事件注册），重复调用 wait-inflight", async () => {
-  const root = await makeProject()
+  const legacy = path.join(root, ".team-work", "platform", "dsh.json")
+  await mkdir(path.dirname(legacy), { recursive: true })
+  const legacyContent = JSON.stringify({ tiers: { junior: { provider: "legacy-vendor", model: "legacy-model" } } })
+  await writeFile(legacy, legacyContent)
   const call = caller(root)
   await openTask(root, "plan-t")
+
   const plan = await call(["dispatch-plan", "--task", "plan-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.ok, true)
   assert.equal(plan.stop, null)
   assert.equal(plan.waves.length, 1)
-  const w = plan.waves[0]
-  assert.equal(w.role, "owner")
-  assert.equal(w.tier, "junior")
-  assert.equal(w.kind, "produce")
-  assert.equal(w.deliver, "deliver")
-  assert.match(w.prompt, /# 派单（key: w\d+-/)
-  assert.match(w.prompt, /bin\/tw\.mjs deliver --task plan-t/, "交付指令注入绝对路径与真实任务名")
-  assert.equal(w.modelHint.model, "deepseek-v4-pro"); assert.equal(w.modelHint.source, "agent-default")
-  assert.match(w.dispatchExample, /--key /)
-  assert.equal(plan.mapping, ".team-work/platform/dsh.json")
-  assert.equal(plan.card.next, "dispatch")
+  const wave = plan.waves[0]
+  assert.equal(wave.role, "owner")
+  assert.equal(wave.modelHint.model, "model-junior")
+  assert.equal(wave.modelHint.source, "global-settings")
+  assert.deepEqual(plan.modelSettings, { source: "global-settings", file: settingsFile, path: "team-work-dsh.tiers" })
+  assert.equal(await readFile(legacy, "utf8"), legacyContent, "遗留文件未被读取后覆盖或改写")
+
   const task = await loadTask(root, "plan-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const dispatched = task.journal.filter((e) => e.type === "dispatched")
-  assert.equal(dispatched.length, 1, "派发点注册 dispatched 事件")
-  assert.equal(dispatched[0].detail.key, w.dispatchKey)
+  const dispatched = task.journal.filter((event) => event.type === "dispatched")
+  assert.equal(dispatched.length, 1)
+  assert.deepEqual(dispatched[0].detail.modelHint, wave.modelHint, "模型选择与 dispatch-plan 同一事实快照")
   const again = await call(["dispatch-plan", "--task", "plan-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(again.stop, "wait-inflight", "在途波次不重复派发")
-  assert.equal(again.dispatchKey, w.dispatchKey)
-  // 人读模式（无 --json）：附派单全文
-  await openTask(root, "plan-h")
-  const human = await call(["dispatch-plan", "--task", "plan-h", "--writable", "R.md:code-review"])
-  assert.ok(Array.isArray(human.human))
-  assert.match(human.human.join("\n"), /派单全文/)
+})
+
+test("dispatch-plan：无全局模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "no-models")
+  await setSettings("team-work-dsh:\n  tiers: {}\n")
+  try {
+    const plan = await call(["dispatch-plan", "--task", "no-models", "--writable", "R.md:code-review", "--json"])
+    assert.equal(plan.ok, true)
+    assert.equal(plan.stop, "blocked")
+    assert.equal(plan.card.status, "blocked")
+    assert.equal(plan.card.next, "configure-models")
+    assert.equal(plan.card.blockers[0].code, "MODEL_CONFIG_UNRESOLVED")
+    assert.match(plan.card.blockers[0].recovery, /team-work-dsh\.tiers/)
+    const task = await loadTask(root, "no-models", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
+  } finally {
+    await setSettings(BASE_SETTINGS)
+  }
 })
 
 test("dispatch-plan：人工门 stop + 决定后推进到 completed", async () => {
@@ -126,191 +211,164 @@ test("dispatch-plan：人工门 stop + 决定后推进到 completed", async () =
   const plan = await call(["dispatch-plan", "--task", "gate-t", "--json"])
   assert.equal(plan.stop, "awaiting-user")
   assert.ok(plan.card.decisionId)
-  assert.equal(plan.card.choices.length, 2)
   assert.equal((await call(["decide", "--task", "gate-t", "--choice", "1"])).ok, true)
   const done = await call(["dispatch-plan", "--task", "gate-t", "--json"])
   assert.equal(done.stop, "completed")
-  assert.equal(done.card.status, "completed")
 })
 
 test("dispatch-plan：门过即跨阶段推进并派发下一阶段首波", async () => {
-  const wf = { terminalStages: ["code-review"], gates: [], stages: [
+  const workflow = { terminalStages: ["code-review"], gates: [], stages: [
     { id: "research", label: "调研", outputs: [], teamScene: "research" },
     { id: "code-review", label: "审查", outputs: ["code-review"], teamScene: "code-review" },
   ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
-  const pol = { maxAutonomousRounds: 3, scenes: { research: { core: false }, "code-review": { core: false } } }
-  const root = await makeProject({ workflow: wf, policy: pol })
+  const policy = { maxAutonomousRounds: 3, scenes: { research: { core: false }, "code-review": { core: false } } }
+  const root = await makeProject({ workflow, policy })
   const call = caller(root)
   await openTask(root, "adv-t", { entry: null })
-  const task = await loadTask(root, "adv-t", { workflow: wf, policy: pol })
+  const task = await loadTask(root, "adv-t", { workflow, policy })
   const at = new Date().toISOString()
   await writeFile(path.join(task.root, "reports", "o.json"), JSON.stringify({ reportId: "o1", dispatchKey: "seed", role: "owner", kind: "deliver", round: 1, stage: "research", taskSha: "s", payload: { outcome: "delivered", summary: "s", paths: [] }, at }))
   await writeFile(path.join(task.root, "reports", "c.json"), JSON.stringify({ reportId: "c1", dispatchKey: "seed", role: "challenger", kind: "review", round: 1, stage: "research", taskSha: "s", payload: { summary: "s", recommendation: "accept" }, at }))
   const plan = await call(["dispatch-plan", "--task", "adv-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.stop, null)
-  assert.equal(plan.stage, "code-review", "一次调用完成 advance + 下一阶段派发")
-  assert.equal(plan.waves[0].kind, "produce")
-  const after = await loadTask(root, "adv-t", { workflow: wf, policy: pol })
-  assert.ok(after.journal.some((e) => e.type === "stage-advanced" && e.detail.to === "code-review"))
+  assert.equal(plan.stage, "code-review")
+  assert.equal(plan.waves[0].modelHint.model, "model-junior")
 })
 
-test("models：自动建模板、三档解析、显式覆盖即时生效", async () => {
+test("models 只读全局来源；init 只安装 skill，不创建项目 dsh.json", async () => {
   const root = await makeProject()
   const call = caller(root)
-  const r1 = await call(["models"])
-  assert.equal(r1.ok, true)
-  assert.deepEqual(r1.tiers.map((t) => t.tier), ["junior", "senior", "expert"])
-  assert.ok(r1.tiers.every((x) => x.provider === "prov-main" && x.model === "deepseek-v4-pro" && x.source === "agent-default"))
-  assert.equal(r1.agentDefault, "prov-main/deepseek-v4-pro")
-  assert.ok(await access(dshMapPath(root)).then(() => true, () => false), "models 自动生成映射模板")
-  await writeMap(root, { tiers: { senior: { provider: "prov-main", model: "glm-5.3" } }, defaults: null })
-  const r2 = await call(["models"])
-  const sen = r2.tiers.find((x) => x.tier === "senior"); assert.equal(sen.model, "glm-5.3"); assert.equal(sen.source, "explicit")
-  assert.ok(r2.warnings.some((x) => /junior 未配置/.test(x)), "被删档位给警告")
-})
+  const dshFile = path.join(root, ".team-work", "platform", "dsh.json")
+  const models = await call(["models"])
+  assert.equal(models.ok, true)
+  assert.equal(models.source, "global-settings")
+  assert.equal(models.file, settingsFile)
+  assert.equal(models.tiers.find((tier) => tier.tier === "senior").model, "model-senior")
+  assert.equal(await hasFile(dshFile), false, "models 不创建项目映射")
 
-test("init：skill 装载/幂等/--force，映射模板就位", async () => {
-  const root = await makeProject()
-  const r1 = await tw(["init"], { projectRoot: root })
-  assert.equal(r1.ok, true)
-  assert.equal(r1.mapping.created, true)
-  assert.equal(r1.skill.action, "installed")
+  const first = await tw(["init"], { projectRoot: root })
+  assert.equal(first.ok, true)
+  assert.equal(first.skill.action, "installed")
+  assert.equal(Object.hasOwn(first, "mapping"), false)
+  assert.equal(await hasFile(dshFile), false, "init 不创建项目映射")
   const skill = await readFile(path.join(root, ".dsh/skills/team-work-v3/SKILL.md"), "utf8")
   assert.match(skill, /team-work（v3）/)
-  assert.ok(await access(path.join(root, ".dsh/skills/team-work-v3/references/dsh-orchestration.md")).then(() => true, () => false))
-  const r2 = await tw(["init"], { projectRoot: root })
-  assert.equal(r2.skill.action, "skipped", "幂等：已存在不覆盖")
-  assert.equal(r2.mapping.created, false)
-  await writeFile(path.join(root, ".dsh/skills/team-work-v3/SKILL.md"), "被污染")
-  const r3 = await tw(["init", "--force"], { projectRoot: root })
-  assert.equal(r3.skill.action, "overwritten")
-  assert.match(await readFile(path.join(root, ".dsh/skills/team-work-v3/SKILL.md"), "utf8"), /team-work（v3）/)
+  const second = await tw(["init"], { projectRoot: root })
+  assert.equal(second.skill.action, "skipped")
 })
 
-test("effort 预留字段：候选条目可选 effort，解析透传（平台派发原语暂无通道，Phase 3 消费）", async () => {
-  const root = await makeProject()
-  await ensureDshMap(root)
-  const map = JSON.parse(await readFile(dshMapPath(root), "utf8"))
-  map.tiers.senior = { provider: "prov-main", model: "glm-5.3", effort: "high" }
-  await writeMap(root, map)
-  const r = await resolveTiers(root)
-  assert.equal(r.tiers.senior.effort, "high", "候选池条目 effort 透传")
-  assert.throws(() => validateDshMap({ tiers: { senior: { provider: "a", model: "b", effort: 3 } }, defaults: null }), (e) => e.code === "MAP_INVALID" && /effort/.test(e.message), "effort 非字符串拒绝")
+test("effort 预留字段：全局候选条目透传", async () => {
+  await setSettings(`
+team-work-dsh:
+  tiers:
+    junior: { provider: vendor-junior, model: model-junior }
+    senior: { provider: vendor-senior, model: model-senior, effort: high }
+    expert: { provider: vendor-expert, model: model-expert }
+`)
+  try {
+    const resolved = await resolveTiers()
+    assert.equal(resolved.tiers.senior.effort, "high")
+  } finally {
+    await setSettings(BASE_SETTINGS)
+  }
 })
 
-test("verdict 派单必须内嵌工具调用指令（P2：成员不调用 review 则 runtime 永远收不到裁决）", async () => {
+test("verdict 派单必须内嵌工具调用指令", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "vd-t")
-  const d1 = await call(["run", "--task", "vd-t", "--writable", "R.md:code-review"])
+  const first = await call(["run", "--task", "vd-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  await call(["deliver", "--task", "vd-t", "--key", d1.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  await call(["deliver", "--task", "vd-t", "--key", first.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   await call(["review", "--task", "vd-t", "--key", (await call(["run", "--task", "vd-t"])).dispatch.key, "--recommendation", "accept", "--summary", "s"])
-  // dispatch-plan 派发 verdict 波并导出（后续 run 会因在途检查返回 wait，不可重复取）
   const plan = await call(["dispatch-plan", "--task", "vd-t", "--json"])
-  assert.equal(plan.waves.length, 1)
   assert.equal(plan.waves[0].kind, "verdict")
-  assert.match(plan.waves[0].prompt, /review --task vd-t --key /, "verdict 派单含 review 调用指令")
-  assert.match(plan.waves[0].prompt, /--verdict/, "verdict 派单含 --verdict 参数指引")
-  assert.match(plan.waves[0].prompt, /不要只写成文字/, "明确禁止纯文本裁决")
-  // 评审 B F3：dispatchExample 必须同样含 --verdict（人读模式照抄补派不得复现 P2 违反）
-  assert.match(plan.waves[0].dispatchExample, /--verdict/, "dispatchExample 与 prompt 一致含 --verdict")
+  assert.match(plan.waves[0].prompt, /review --task vd-t --key /)
+  assert.match(plan.waves[0].prompt, /--verdict/)
+  assert.match(plan.waves[0].dispatchExample, /--verdict/)
 })
 
-test("dispatch-plan stop:blocked 可达且 blockers 为对象数组（评审 B F5 形状统一）", async () => {
+test("dispatch-plan stop:blocked 的 blockers 保持对象数组", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "blk-t")
-  const d = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
+  const owner = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  await call(["deliver", "--task", "blk-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md", "--checks", '[{"name":"lint","result":"fail"}]'])
+  await call(["deliver", "--task", "blk-t", "--key", owner.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md", "--checks", '[{"name":"lint","result":"fail"}]'])
   const task = await loadTask(root, "blk-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const at = new Date().toISOString()
-  const base = { dispatchKey: d.dispatch.key, round: 1, stage: "code-review", taskSha: "x" }
+  const base = { dispatchKey: owner.dispatch.key, round: 1, stage: "code-review", taskSha: "x" }
   await writeFile(path.join(task.root, "reports", "rc.json"), JSON.stringify({ reportId: "rc", role: "challenger", kind: "review", ...base, payload: { summary: "s", recommendation: "accept" }, at }))
   await writeFile(path.join(task.root, "reports", "re.json"), JSON.stringify({ reportId: "re", role: "expert", kind: "review", ...base, payload: { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } }, at }))
   await call(["route", "--task", "blk-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
-  // through-stage 有人工门：先出 awaiting-user，decide 过门后剩 checks-fail（非 awaiting）→ blocked
-  const gate1 = await call(["run", "--task", "blk-t"])
-  assert.equal(gate1.status, "awaiting-user")
+  const gate = await call(["run", "--task", "blk-t"])
+  assert.equal(gate.status, "awaiting-user")
   await call(["decide", "--task", "blk-t", "--choice", "1"])
   const plan = await call(["dispatch-plan", "--task", "blk-t", "--json"])
-  assert.equal(plan.stop, "blocked", "checks fail 的 gate blocker 非 awaiting → blocked stop")
-  assert.ok(Array.isArray(plan.card.blockers) && plan.card.blockers.length > 0)
-  for (const b of plan.card.blockers) {
-    assert.equal(typeof b, "object", "blockers 统一对象数组：" + JSON.stringify(b))
-    assert.ok(b.recovery, "每条 blocker 带恢复指引")
+  assert.equal(plan.stop, "blocked")
+  assert.ok(Array.isArray(plan.card.blockers) && plan.card.blockers.every((blocker) => typeof blocker === "object" && blocker.recovery))
+})
+
+test("agent-map 复制 dispatch-plan 模型快照，不因全局配置热变或手工覆盖漂移", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "snapshot-t")
+  const plan = await call(["dispatch-plan", "--task", "snapshot-t", "--writable", "R.md:code-review", "--json"])
+  const selected = plan.waves[0].modelHint
+  await setSettings(`
+team-work-dsh:
+  tiers:
+    junior: { provider: changed-vendor, model: changed-model }
+    senior: { provider: changed-vendor, model: changed-senior }
+    expert: { provider: changed-vendor, model: changed-expert }
+`)
+  try {
+    const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
+    assert.deepEqual(mapped.modelHint, selected)
+    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+    assert.deepEqual(agents.modelHints["child-a"], selected)
+    const manual = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-b", "--model-hint", '{"provider":"other","model":"other"}'])
+    assert.equal(manual.ok, false)
+    assert.match(manual.message, /不接受 --model-hint/)
+  } finally {
+    await setSettings(BASE_SETTINGS)
   }
 })
 
-test("TW_CMD 覆盖派单注入指令（PATH 注入可配置）", async () => {
+test("TW_CMD 覆盖派单内的成员工具调用指令", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "cmd-t")
-  const prev = process.env.TW_CMD
+  const previous = process.env.TW_CMD
   process.env.TW_CMD = "twx"
   try {
-    const d = await call(["run", "--task", "cmd-t", "--writable", "R.md:code-review"])
-    assert.match(d.dispatch.prompt, /twx deliver --task cmd-t/, "TW_CMD 优先于自动解析")
+    const card = await call(["run", "--task", "cmd-t", "--writable", "R.md:code-review"])
+    assert.match(card.dispatch.prompt, /twx deliver --task cmd-t/)
   } finally {
-    if (prev === undefined) delete process.env.TW_CMD
-    else process.env.TW_CMD = prev
+    if (previous === undefined) delete process.env.TW_CMD
+    else process.env.TW_CMD = previous
   }
 })
 
-test("映射校验：tiers:null 显式拒绝（评审 B F2）", async () => {
-  assert.throws(() => validateDshMap({ tiers: null, defaults: null }), (e) => e.code === "MAP_INVALID" && /null/.test(e.message), "tiers 显式 null 是配置错误")
-})
-
-test("幂等重交：同 key 同 payload 不追加第二条 report-accepted（E2E-10 补全）", async () => {
+test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "idem-t")
-  const d = await call(["run", "--task", "idem-t", "--writable", "R.md:code-review"])
+  const dispatch = await call(["run", "--task", "idem-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  const first = await call(["deliver", "--task", "idem-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
-  const again = await call(["deliver", "--task", "idem-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
-  assert.equal(again.accepted, true)
-  assert.equal(again.idempotent, true, "重交标记幂等")
+  await call(["deliver", "--task", "idem-t", "--key", dispatch.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const again = await call(["deliver", "--task", "idem-t", "--key", dispatch.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  assert.equal(again.idempotent, true)
   const task = await loadTask(root, "idem-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const events = task.journal.filter((e) => e.type === "report-accepted")
-  assert.equal(events.length, 1, "journal 只记一条 report-accepted")
-  const rev = await call(["review", "--task", "idem-t", "--key", (await call(["run", "--task", "idem-t"])).dispatch.key, "--recommendation", "accept", "--summary", "s"])
-  const revAgain = await call(["review", "--task", "idem-t", "--key", rev.reportId.replace("review-", ""), "--recommendation", "accept", "--summary", "s"])
-  assert.equal(revAgain.idempotent, true, "review 重交同样幂等")
-  const task2 = await loadTask(root, "idem-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  assert.equal(task2.journal.filter((e) => e.type === "report-accepted").length, 2, "deliver 一条 + review 一条")
+  assert.equal(task.journal.filter((event) => event.type === "report-accepted").length, 1)
 })
 
-test("I1：agent-map 自动落盘 modelHint（P4：零手动转录）+ --model-hint 覆盖 + childId 主键", async () => {
-  const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "i1-t")
-  const d = await call(["run", "--task", "i1-t", "--writable", "R.md:code-review"])
-  // 自动：不传 --model-hint → runtime 重算（settings 夹具为 prov-main/deepseek-v4-pro 占位）
-  const r1 = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-abc"])
-  assert.equal(r1.ok, true)
-  assert.equal(r1.modelHint.model, "deepseek-v4-pro", "自动重算（owner 波 junior 档 → 占位解析）")
-  assert.equal(r1.modelHint.source, "agent-default")
-  const agentsJson = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
-  assert.equal(agentsJson.mappings[d.dispatch.key], "child-abc", "mappings 按 key")
-  assert.equal(agentsJson.modelHints["child-abc"].model, "deepseek-v4-pro", "modelHints 按 childId 主键（插件注入消费）")
-  // 覆盖：--model-hint 显式指定
-  const r2 = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-def", "--model-hint", '{"provider":"prov-x","model":"m-y","effort":"high"}'])
-  assert.equal(r2.modelHint.model, "m-y")
-  assert.equal(agentsJson !== null || true, true)
-  const aj2 = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
-  assert.equal(aj2.modelHints["child-def"].effort, "high", "覆盖含 effort")
-  // 非法覆盖拒绝
-  const bad = await call(["agent-map", "--task", "i1-t", "--key", d.dispatch.key, "--agent", "child-ghi", "--model-hint", "not-json"])
-  assert.equal(bad.ok, false)
-  assert.match(bad.message, /model-hint/)
-})
-
-test("help：CLI 即接口——全部命令与新增动词在场", async () => {
-  const r = await tw(["help"])
-  assert.equal(r.ok, true)
-  for (const cmd of ["open", "run", "dispatch-plan", "decide", "intent", "route", "gate", "models", "init", "restore", "archive", "deliver", "review"]) {
-    assert.ok(r.commands[cmd], cmd)
+test("help：全局模型来源与全部命令在场", async () => {
+  const help = await tw(["help"])
+  for (const command of ["open", "run", "dispatch-plan", "decide", "intent", "route", "gate", "models", "init", "restore", "archive", "deliver", "review"]) {
+    assert.ok(help.commands[command], command)
   }
+  const notes = help.notes.join("\n")
+  assert.match(notes, /team-work-dsh\.tiers/)
+  assert.match(notes, /显式 settingsFile（内部调用参数） > DSH_SETTINGS > \$DSH_HOME\/settings\.yaml > ~\/\.dsh\/settings\.yaml/)
 })

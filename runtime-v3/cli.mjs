@@ -11,7 +11,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
-import { TIERS, UNRESOLVED, ensureDshMap, resolveTiers, dshMapPath, pickFromPool, computeModelHint } from "./dsh-map.mjs"
+import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -74,8 +74,8 @@ function fixHint(code) {
     DECISION_STALE: "读取最新卡片（tw run）后按其中的选项序号重新 decide",
     ENTRY_UNKNOWN: "--entry 必须是 workflow 声明的阶段之一",
     DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次）",
-    MAP_INVALID: "映射写法：{\"provider\":\"...\",\"model\":\"...\"} 显式分档，或 {\"use\":\"agent-default\"} 占位；档位 junior/senior/expert；删除 dsh.json 可自动重建",
-    STATE_CORRUPT: "控制文件损坏：映射文件可删除重建；任务事实在 reports/journal，可重推导",
+    MAP_INVALID: "在 DSH 全局 settings.yaml 的 team-work-dsh.tiers 配置 junior/senior/expert；每档提供非空 provider 与 model（可为候选数组）",
+    STATE_CORRUPT: "控制文件损坏：任务事实在 reports/journal，可重推导；遗留 dsh.json 不参与读取",
     LOCK_UNAVAILABLE: "任务锁被并发写者占用（成员交付/Lead 推进同时进行）：等几秒原样重试同一命令即可；崩溃进程的锁会被自动回收",
     LOCK_CORRUPT: "任务锁读取异常：崩溃残留的损坏锁会在约 10 秒后自动回收；持续失败且确认无并发写者时，可手动删除任务目录 locks/task.lock",
   })[code] ?? "运行 tw help 查看全部命令与参数"
@@ -305,7 +305,54 @@ async function ensureE2ePackages(task) {
   return true
 }
 
-async function runTransition({ projectRoot, name, writable, workflow, policy, task, state }) {
+function dispatchTiers(task, state, workflow, policy) {
+  const wave = state.next.wave
+  const stageDef = workflow.stages.find((stage) => stage.id === state.stage)
+  const scene = scenePolicy(policy, stageDef?.teamScene ?? 'implementation')
+  if (wave.role === 'owner') {
+    const owners = wave.owners?.length ? wave.owners : [{ package: null }]
+    return owners.map((owner) => ownerTierFor(task, scene, owner.package ?? null))
+  }
+  return [wave.role === 'challenger' ? scene.challengerTier : 'expert']
+}
+
+function modelConfigurationCard({ name, state, resolved, missing }) {
+  const summary = [...new Set(missing)].join('、')
+  return {
+    ok: true,
+    task: name,
+    stage: state.stage,
+    status: 'blocked',
+    next: 'configure-models',
+    blockers: [{
+      code: 'MODEL_CONFIG_UNRESOLVED',
+      message: `DSH 全局模型配置未解析：${summary}`,
+      recovery: `编辑 ${resolved.file} 的 team-work-dsh.tiers，补齐 junior、senior、expert 的 provider/model 后重试 tw dispatch-plan。`,
+    }],
+    note: '未写入派发事实；修复全局配置后可原样重试。',
+  }
+}
+
+function withModelHint(dispatch, selectModelHint) {
+  const modelHint = selectModelHint?.(dispatch.tier) ?? null
+  return modelHint ? { ...dispatch, modelHint } : dispatch
+}
+
+function dispatchedDetail(dispatch, wave, writable) {
+  return {
+    key: dispatch.key,
+    kind: wave.kind,
+    role: wave.role,
+    round: dispatch.round,
+    package: dispatch.package ?? null,
+    continuation: dispatch.continuation,
+    ...(dispatch.scope ? { scope: dispatch.scope } : {}),
+    writable,
+    ...(dispatch.modelHint ? { modelHint: dispatch.modelHint } : {}),
+  }
+}
+
+async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
 
   if (state.next.kind === 'dispatch') {
     if (!state.next.wave) {
@@ -359,19 +406,21 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         if (declined) {
           const tiersBackup = task.packages
           task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
-          const cardsD = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
+          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
           task.packages = tiersBackup
-          await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
+          await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
-      await appendEventsUnlocked(task, decls.map((d) => ({ type: 'dispatched', detail: { key: d.key, kind: wave.kind, role: wave.role, round: d.round, package: d.package, continuation: d.continuation, writable: d.writable } })))
-      const cards = decls.map((d) => dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch)
+      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
+      await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
-    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: { key, kind: wave.kind, role: wave.role, round: wave.round, package: null, continuation: wave.continuation ?? false, ...(wave.scope ? { scope: wave.scope } : {}), writable: [] } }])
-    return dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
+    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
+    const dispatch = withModelHint(card.dispatch, selectModelHint)
+    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
+    return { ...card, dispatch }
   }
 
   if (state.next.kind === "advance") {
@@ -667,38 +716,26 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
 async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  const task = await loadTask(projectRoot, name, { workflow, policy })
-  const dispatch = task.journal.find((e) => e.type === 'dispatched' && e.detail.key === key)
-  if (!dispatch) {
-    throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
-  }
-  await ensureDshMap(projectRoot) // 确保 platform/ 目录与映射环境存在（agent-map 可能是首个平台命令）
-  // I1/A-F1（P4）：modelHint 由 runtime 自动重算（与 dispatch-plan 同一决策函数），
-  // 以 childId 为主键落 modelHints——Lead 零手动转录；--model-hint 仅显式覆盖（测试/特殊场景）。
-  let hint = null
-  if (modelHint !== undefined) {
-    try { hint = JSON.parse(modelHint) } catch { throw fail('USAGE', '--model-hint 不是合法 JSON：{"provider":"...","model":"...","effort":"..."}') }
-    if (!hint.provider || !hint.model) throw fail('USAGE', '--model-hint 需要 provider 与 model 非空')
-  } else {
-    const resolved = await resolveTiers(projectRoot)
-    const stageScene = scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation')
-    const tier = dispatch.detail.role === 'owner'
-      ? ownerTierFor(task, stageScene, dispatch.detail.package ?? null)
-      : dispatch.detail.role === 'challenger' ? stageScene.challengerTier : 'expert'
-    hint = computeModelHint(resolved.tiers[tier], [])
-      ? ownerTierFor(task, scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation'), dispatch.detail.package ?? null)
-      : dispatch.detail.role === 'challenger'
-        ? scenePolicy(policy, task.workflow.stages.find((st) => st.id === deriveTask(task).stage)?.teamScene ?? 'implementation').challengerTier
-        : 'expert'
-    hint = computeModelHint(resolved.tiers[tier], [])
-  }
-  const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
-  const fallback = '{ "mappings": {}, "modelHints": {} }'
-  const current = JSON.parse(await readFile(file, 'utf8').catch(() => fallback))
-  current.mappings = { ...(current.mappings ?? {}), [key]: agent }
-  if (hint) current.modelHints = { ...(current.modelHints ?? {}), [agent]: hint }
-  await atomicJson(file, current)
-  return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并自动落盘该成员的模型注入决策（modelHints[childId]，插件注入消费）' : '已登记；同包同角色的续派波将携带 expectedAgentId' }
+  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择只能使用 dispatch-plan 已登记的全局配置快照')
+  const task0 = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
+    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const dispatch = task.journal.find((e) => e.type === 'dispatched' && e.detail.key === key)
+    if (!dispatch) {
+      throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
+    }
+    // dispatch-plan 在写 dispatched 事实时已持久化精确选中的 hint。这里绝不重新读配置或重选家族，
+    // 因此全局 settings 热更新、同波第二 Owner 的 diversity 选择都不会让 child 注入漂移。
+    const hint = dispatch.detail.modelHint?.provider && dispatch.detail.modelHint?.model ? dispatch.detail.modelHint : null
+    const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
+    const fallback = '{ "mappings": {}, "modelHints": {} }'
+    await mkdir(path.dirname(file), { recursive: true })
+    const current = JSON.parse(await readFile(file, 'utf8').catch(() => fallback))
+    current.mappings = { ...(current.mappings ?? {}), [key]: agent }
+    if (hint) current.modelHints = { ...(current.modelHints ?? {}), [agent]: hint }
+    await atomicJson(file, current)
+    return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并落盘 dispatch-plan 的模型快照（modelHints[childId]，插件注入消费）' : '已登记；该派单没有 dispatch-plan 模型快照（例如由 tw run 直接派发），成员将继承平台默认模型' }
+  })
 }
 
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
@@ -716,20 +753,29 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
     return { ok: true, task: name, stage: earlyState.stage, stop: "completed", waves: [], card }
   }
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
-    const warnings = []
-    const ensured = await ensureDshMap(projectRoot).catch((error) => ({ error }))
-    if (ensured.error) warnings.push(`映射模板生成失败（${ensured.error.message}）；按占位解析继续`)
-    const resolved = await resolveTiers(projectRoot)
-    warnings.push(...resolved.warnings)
+    const resolved = await resolveTiers()
+    const warnings = [...resolved.warnings]
     const planStop = (stop, card, extra = {}) => ({ ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra })
     for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
       const task = await loadTask(projectRoot, name, { workflow, policy })
       await ensureE2ePackages(task) // B：e2e 场景模板物化（幂等；advance 进入 e2e 后首轮生效）
       const state = deriveTask(task)
-      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
+      if (state.next.kind === 'dispatch' && state.next.wave) {
+        const unresolved = TIERS.filter((tier) => !resolved.tiers[tier]?.pool?.length)
+        const unexpected = dispatchTiers(task, state, workflow, policy).filter((tier) => !TIERS.includes(tier))
+        if (unresolved.length || unexpected.length) {
+          return planStop('blocked', modelConfigurationCard({ name, state, resolved, missing: [...unresolved, ...unexpected] }))
+        }
+      }
+      const usedFamilies = []
+      const selectModelHint = (tier) => {
+        const hint = computeModelHint(resolved.tiers[tier], usedFamilies)
+        if (hint?.family) usedFamilies.push(hint.family)
+        return hint
+      }
+      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
-        const usedFamilies = [] // 波内家族去重（v3.2 选人：同档多 owner 优先不同模型家族）
         const agentMaps = JSON.parse(await readFile(path.join(controlRoot(projectRoot), 'platform', 'agents.json'), 'utf8').catch(() => '{ "mappings": {} }')).mappings ?? {}
         // 同包同角色上一派发 key（expectedAgentId 推导源）
         // D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
@@ -741,10 +787,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         }
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
-          const tierRes = resolved.tiers[d.tier] ?? { ...UNRESOLVED }
-          if (!resolved.tiers[d.tier]) warnings.push('未知档位 ' + d.tier + '，标记未解析')
-          const hint = computeModelHint(tierRes, usedFamilies)
-          if (hint && hint.family) usedFamilies.push(hint.family)
+          const hint = d.modelHint
           const pkgDef = (task.packages ?? []).find((p) => p.id === d.package)
           const example = deliver === 'deliver'
             ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
@@ -758,7 +801,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员" } : {}), ...(hint?.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员" } : {}), ...(hint.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }
@@ -767,7 +810,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
           ok: true, task: name, stage: card.stage, stop: null,
           waves,
           card: { status: card.status, next: card.next },
-          mapping: path.relative(projectRoot, dshMapPath(projectRoot)),
+          modelSettings: { source: 'global-settings', file: resolved.file, path: 'team-work-dsh.tiers' },
           ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}),
         }
         if (!json) {
@@ -791,24 +834,20 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
 
 // models（§1.3）：映射解析结果展示——每档 provider/model + 来源 + 警告。无状态、不派发。
 async function cmdModels({ projectRoot }) {
-  const ensured = await ensureDshMap(projectRoot).catch((error) => ({ error }))
-  const resolved = await resolveTiers(projectRoot)
-  const warnings = [...resolved.warnings, ...(ensured.error ? [`映射模板生成失败（${ensured.error.message}）`] : [])]
+  const resolved = await resolveTiers()
   return {
     ok: true,
-    file: path.relative(projectRoot, dshMapPath(projectRoot)),
-    settings: resolved.agentDefault.file,
-    agentDefault: resolved.agentDefault.resolved ? `${resolved.agentDefault.resolved.provider}/${resolved.agentDefault.resolved.model}` : null,
+    source: 'global-settings',
+    file: resolved.file,
     tiers: TIERS.map((t) => ({ tier: t, ...resolved.tiers[t] })),
-    ...(warnings.length ? { warnings } : {}),
-    note: '分档：把任一档改为 {"provider":"...","model":"..."}；占位 {"use":"agent-default"} 解析为 DSH 主 agent 模型（agent-default-model）',
+    ...(resolved.warnings.length ? { warnings: resolved.warnings } : {}),
+    note: '只读全局 DSH settings：team-work-dsh.tiers 是唯一 tier→模型配置来源；本命令不会读取或创建项目 dsh.json。',
   }
 }
 
-// init（可选便捷命令，Phase 1 降级）：装载 skill 到 .dsh/skills/（DSH filesystem provider 扫描根）+ 确保映射模板。
+// init（可选便捷命令）：只装载 skill 到 .dsh/skills/（DSH filesystem provider 扫描根）。
 // 核心流程（安装 → open → run）不需要它。
 async function cmdInit({ projectRoot, force = false }) {
-  const mapInfo = await ensureDshMap(projectRoot)
   const src = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "team-work-v3")
   const dest = path.join(projectRoot, ".dsh", "skills", "team-work-v3")
   let skill
@@ -825,15 +864,10 @@ async function cmdInit({ projectRoot, force = false }) {
   } catch {
     skill = { installedTo: null, action: "unavailable", note: "skill 源不在本安装布局内（npm files 应含 skills/team-work-v3/）" }
   }
-  const resolved = await resolveTiers(projectRoot)
   return {
     ok: true,
-    mapping: { file: path.relative(projectRoot, mapInfo.file), created: mapInfo.created },
     skill,
-    agentDefault: resolved.agentDefault.resolved ? `${resolved.agentDefault.resolved.provider}/${resolved.agentDefault.resolved.model}` : null,
-    tiers: TIERS.map((t) => ({ tier: t, ...resolved.tiers[t] })),
-    ...(resolved.warnings.length ? { warnings: resolved.warnings } : {}),
-    note: "init 只是便捷命令：装载 Lead 判断指引 skill 并确保映射模板；核心流程安装后直接 tw open 即可",
+    note: "init 只是便捷命令：装载 Lead 判断指引 skill；模型配置只由全局 DSH settings 管理。",
   }
 }
 
@@ -843,7 +877,7 @@ function helpCard() {
     ok: true,
     commands: {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
-      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员映射（续派波自动携带 expectedAgentId）",
+      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员映射，并复用 dispatch-plan 的模型快照",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
       run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
@@ -851,8 +885,8 @@ function helpCard() {
       intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
       gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
-      models: "tw models：tier→模型映射解析结果（来源 explicit/agent-default/fallback/default）",
-      init: "tw init [--force]：可选——装载 skill 到 .dsh/skills/ 并确保映射模板",
+      models: "tw models：只读全局 DSH settings 中的 tier→模型解析结果",
+      init: "tw init [--force]：可选——只装载 skill 到 .dsh/skills/",
       restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
       archive: "tw archive --task <n>：归档（用户确认后；归档目录只读）",
       deliver: "成员交卷：tw deliver --task <n> --key <k> --outcome delivered --summary <一句话> --paths <路径...> [--checks <JSON>] [--unresolved <JSON>]",
@@ -860,7 +894,7 @@ function helpCard() {
     },
     notes: [
       "卡片即接口：按返回卡片行动，不预判步骤；拒绝输出自带修复指引",
-      "映射文件 .team-work/platform/dsh.json（缺失自动生成三档 agent-default 占位）；tier→模型在派发点生效",
+      "tier→模型唯一来源为 team-work-dsh.tiers；settings 路径优先级：显式 settingsFile（内部调用参数） > DSH_SETTINGS > $DSH_HOME/settings.yaml > ~/.dsh/settings.yaml；遗留项目 dsh.json 不读取也不创建",
     ],
   }
 }

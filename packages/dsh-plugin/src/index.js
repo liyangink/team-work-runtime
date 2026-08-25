@@ -16,16 +16,11 @@ export async function apply(ctx, config = {}, deps = {}) {
   const registerSkill = deps.registerEmbeddedSkill ?? registerEmbeddedSkill
   const installerRetryMs = deps.installerRetryMs ?? 5000
   const installerResolveTimeoutMs = deps.installerResolveTimeoutMs ?? 5000
-  // 全局配置 entry（settings 区段的 base 层初值）：settings 服务装载后由 source() 热覆写。
-  // 注意：entry 不再是「运行时读取的权威值」——读取方统一走 installPluginSettings 返回的 getConfig thunk。
-  const entry = {
-    projectRoots: Array.isArray(config?.projectRoots) ? config.projectRoots : [],
-    twBin: config?.twBin ?? null,
-    injectionEnabled: config?.injectionEnabled !== false,
-  }
-  // 0) 全局配置区段注册：同步拿 getConfig thunk（每次调用取最新 settings 快照），注册 fire-and-forget。
-  //    getConfig 供 inject / tw-tool 在消费时刻读 source() 现值——深冻结快照只读。
-  const getConfig = installSettings(ctx, entry)
+  // 全局配置 entry（settings 区段的 base 层初值）：空 tiers 代表尚未配置，不能猜测环境默认模型。
+  // settings 服务装载后，Web 配置卡经宿主 scope 取得最新深冻结快照。
+  const entry = { tiers: {} }
+  // 0) 全局配置区段注册：fire-and-forget，不阻断其他插件能力。
+  installSettings(ctx, entry)
   // 激活门槛：先解析安装器，再开放 continuable setup。Cordis 会等待 async apply，
   // 因此 Node 18/20 的动态 import 也不会出现“首个子代错过、第二个才生效”的竞态。
   let resolvedInstaller = null
@@ -43,7 +38,7 @@ export async function apply(ctx, config = {}, deps = {}) {
       }, installerResolveTimeoutMs)
       if (!initial) timeout.unref?.()
     })
-    const resolution = Promise.resolve().then(() => resolveModelInstaller(getConfig()))
+    const resolution = Promise.resolve().then(() => resolveModelInstaller())
     return Promise.race([resolution, deadline]).finally(() => clearTimeout(timeout))
   }
   const tryResolveInstaller = async (initial) => {
@@ -62,11 +57,10 @@ export async function apply(ctx, config = {}, deps = {}) {
     }
   }
   const installerReady = await tryResolveInstaller(true)
-  // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）
-  //    injectionEnabled 判定移入 contribution 闭包内（按 getConfig() 现值），使关/开热生效：
-  //    setup 常驻，子代创建时若快照 injectionEnabled === false 则不注入。
+  // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）。
+  //    注入只从子会话 cwd 下的任务目录读取映射，不依赖插件配置的项目寻址。
   try {
-    setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, getConfig, {
+    setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, {
       installerNow: () => resolvedInstaller,
     }))
     setupRegistered = true
@@ -89,9 +83,9 @@ export async function apply(ctx, config = {}, deps = {}) {
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: skill 注册未启用（可用 tw init 文件通道兜底）：" + String(error?.message ?? error))
   }
-  // 3) tw 原生工具（args 透传 CLI；output.render 渲染卡片；execute 内按 getConfig() 读最新配置）
+  // 3) tw 原生工具（args 透传 CLI；output.render 渲染卡片；工作目录来自调用子会话 cwd）
   try {
-    ctx.tools.register(twToolDefinition(getConfig))
+    ctx.tools.register(twToolDefinition())
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: tw 工具注册失败：" + String(error?.message ?? error))
   }

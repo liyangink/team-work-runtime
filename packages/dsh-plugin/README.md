@@ -54,39 +54,42 @@ dsh plugin add team-work-runtime-dsh
 生效：安装后**重启 dsh 会话**，由 bundle 层装载（插件的 bundle patch 是纯 insert 行，支持热挂载的宿主环境可免重启即时生效）。
 验证：`dsh --profile web --dump-config 2>/dev/null | grep "name: team-work-runtime-dsh"`（stdout 装配树命中 name 行即装载成功；**勿合并 stderr**——patch 未生效时 loader 的 "entry not found" warn 恰好也含插件名，曾造成误判）。
 
-## 配置（全局 settings.yaml）
+## 配置（DSH Web 的插件配置页）
 
-插件配置已全局化：经宿主 settings 服务（`@deepseek-ai/dsh-settings`）写入 `$DSH_HOME/settings.yaml` 并热生效，无需写插件 config。namespace 为 `team-work-dsh`。
+启动 DSH Web 后，在“插件配置”页打开 **team-work-dsh**。配置经宿主 settings 服务写入 `$DSH_HOME/settings.yaml`，namespace 为 `team-work-dsh`，保存后会热更新。
+
+首次安装时允许保持空配置（unresolved），以便先打开配置卡。开始保存时，`junior`、`senior`、`expert` 三档必须同时完整；每行都要求非空的 `provider` 与 `model`，`effort` 可省略。
 
 ```yaml
-# $DSH_HOME/settings.yaml
 team-work-dsh:
-  # projectRoots：项目根数组，每项一个项目；path 为绝对路径，命中决定注入寻址与 tw 工作目录
-  projectRoots:
-    - path: /path/to/project-a        # 项目 A 根目录
-      # twBin: /path/to/bin/tw.mjs     # 该项目专属 tw 入口（可选，覆盖全局 twBin）
-      # injectionEnabled: true         # 该项目是否启用模型注入（可选，默认 true）
-    - path: /path/to/project-a/sub     # 可嵌套——cwd 落在多级前缀时取最长前缀命中项
-  twBin: /path/to/bin/tw.mjs           # 全局 tw 入口（默认解析 peerDependencies 的 team-work-runtime，再兜底 PATH 的 tw）
-  injectionEnabled: true               # 全局注入开关（false 则不注入；消费时刻判定，热生效）
+  tiers:
+    junior:
+      - provider: <provider-id>
+        model: <model-id>
+        effort: <optional-effort-id>
+        family: <optional-model-family>
+    senior:
+      - provider: <provider-id>
+        model: <model-id>
+    expert:
+      - provider: <provider-id>
+        model: <model-id>
 ```
 
-- **多项目最长前缀匹配**：子代理的 `cwd` 同时命中多个 `projectRoots[].path` 前缀时，取 path 最长（最深）的那一项，作为该项目的工作目录与 twBin 覆盖来源；无任何前缀命中时不启用项目级覆盖（退回全局 `twBin` 与默认工作目录）。
-- **覆盖链（twBin）**：命中项 `twBin` > 全局 `twBin` > `require.resolve('team-work-runtime/bin/tw.mjs')` > PATH 的 `tw`。
-- **降级行为**：宿主无 settings 服务（import 失败）时静默跳过区段注册，插件以 entry config 初值照常装载，其余功能不受影响。
-- **安装器恢复**：单次模型选择安装器解析最多等待 5 秒；失败或超时后插件保持默认模型并每 5 秒后台重试，解析恢复后新建/恢复的子代理重新获得注入。直接使用的 `@deepseek-ai/dsh-agent` 已声明为 peer，依赖版本发生变化后需刷新插件。
-- **热生效**：区段注册后注入与 tw 工具在每次子代理创建、每次工具调用时按最新 settings 快照读配置——injectionEnabled / projectRoots / twBin 改动无需重启即生效。entry 仅作初值（base 层）与无服务时的回退。
-- **契约要点**：setSource 收到的是「返回当前值的 thunk」（非值），读取方每次现调 source() 取新快照；schema 必须是 schemastery z.object(...) 可调用对象（服务端执行 schema(mergeLayers(base, section))，裸对象会抛 TypeError），故本实现动态 import @deepseek-ai/schemastery 构造真 schema，任一动态 import 失败则整段不注册。
-- **开关语义**：injectionEnabled: false 不注销 setup，而是在子代理创建时刻跳过注入（消费时刻判定），关闭/重开均即时生效。twBin 缺省回退到 peer 依赖解析与 PATH；projectRoots 缺省为空数组（不启用项目级覆盖）。matchProjectRoot 统一补尾斜杠做前缀比较，/a/b 不误命中 /a/bc。
-- **项目级配置已移除**：原先插件 config 的 `projectRoot` / `twBin` / `injectionEnabled` 不再从项目 config 读取，统一由全局 settings.yaml 承载；`skillDir` 仍属构建项，暂不在 settings 区段暴露。
+- **档位说明**：junior 用于低成本探索与常规辅助；senior 用于常规实现与复核；expert 用于核心场景与技术裁决。
+- **候选池兼容**：每档可读取旧的单个候选对象，也可使用候选数组。Web 卡片统一按“候选行”编辑，下一次保存会写为数组。已有的 `family` 会保留；未填写时由运行时推导，不强制暴露为 UI 字段。
+- **目录校验**：卡片读取 `llm.providers` 与 `llm.models`。Provider 必须已列出且处于 active，否则不能保存；模型为必填。Provider 列表不可用时，卡片不能保存，因为无法完成这项硬校验。模型目录没有列出某个模型，或仅模型目录读取失败但 Provider 已确认 active 时，只给出警告并允许保留/保存，因为目录是 advisory，实际可用性由适配器的运行边界裁决。模型公开且列出非空 reasoning effort 选项时，填写的 effort 必须属于其选项；没有该元数据时 effort 可省略，也不会因目录未知而额外拒绝。
+- **失败与恢复**：Provider 列表或 settings 只读、保存异常都会在卡片中显示。恢复服务或修正配置后可直接重试；不会清空最后一个有效配置。
+- **旧键迁移**：`injectionEnabled`、`projectRoots`、`twBin` 已完全失效，不再由 schema、运行入口、注入链或工具链读取。注册 helper 没有安全的迁移写入句柄，因此插件不会自动改写用户的 settings 文档；如旧键仍留在原始文件中，可在确认后手动删除。
+- **工作目录**：模型注入与 `tw` 工具只使用当前子会话的 cwd；没有 cwd 时返回可诊断的 unresolved 卡片，而不会猜测或跨项目寻找目录。
 
-模型映射数据在项目侧 `.team-work/platform/dsh.json`（档位候选数组，参考主包 README；示例用公开模型名如 deepseek-v4-flash / glm-5.3）。
+`team-work-dsh.tiers` 是 tier→模型的唯一配置源：每档兼容单个候选对象或数组，运行时按候选顺序并在同波优先不同 family 选择，`effort` 可选。项目 `.team-work/platform/dsh.json` 已完全不再读取或创建；遗留文件不影响运行，可由用户手动删除。项目 `.team-work/platform/agents.json` 仍是运行时事实，保存 dispatchKey→childId 映射和已派发的 modelHint 快照。
 
 ## 实机验证（安装后确认注入生效）
 
 1. 安装后重启 dsh 会话；开一个后台 subagent 任务（`tw agent-map --task <名> --key <派单key> --agent <subagentId>` 已登记 modelHints 的）；
 2. **注入确认**：子代理会话的原生模型选择器旁显示注入的 provider/model（而非主会话默认）即注入生效——这也覆盖徽标功能确认；
-3. **effort 确认**：dsh.json 该档候选带 effort 字段时，席位显示"· 推理 <档位>"；若平台 request header 不落 effort（已知边界），注入仍生效于运行时选择；
+3. **effort 确认**：在 DSH Web“插件配置”页的 `team-work-dsh.tiers` 候选填写 effort 后，席位显示“· 推理 <档位>”；若平台 request header 不落 effort（已知边界），注入仍生效于运行时选择；
 4. 多任务并发时各子代理各显示各自注入（隔离确认）。
 
 ## 边界

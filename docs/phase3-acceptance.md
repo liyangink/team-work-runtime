@@ -1,13 +1,15 @@
-# Phase 3 插件验收证据（F-1..F-12 状态快照，2026-08-24）
+# Phase 3 插件验收证据（F-1..F-12 状态快照）
 
-自动验证全部通过（当前 116/116 测试 + 构建链 + 冒烟 + C1 实机 boot 链 + 隔离 web 实例）。逐项证据：
+> **全局配置迁移**：tier→模型的唯一配置源现为 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）。项目 `.team-work/platform/dsh.json` 不再读取或创建，可手动删除；`.team-work/platform/agents.json` 继续保存 child 映射与 modelHint 快照。`injectionEnabled`、`projectRoots`、`twBin` 已从 schema 与运行链移除，不保留兼容读取。
+
+自动层覆盖其可验证范围（完整自动套件 + 构建链 + C1 实机 boot 链 + 隔离 Web 实例）。F-5/F-7/F-12 仍需用户在带凭据的真实会话中确认，不能由本快照宣称完成。逐项证据：
 
 | # | 功能 | 状态 | 验证实体 |
 | --- | --- | --- | --- |
 | F-1 安装（装载） | ✅ 自动 | tests/dsh-plugin-e2e.test.mjs（真实 cordis 装载层）+ scripts/e2e-c1.mjs（实机 dsh boot 链：bundle→patch→loader，dump-config 装配树断言）。**rc.7 修正（2026-08-25）**：原 patch 写法 `- id + plugin:` 在 rc.7 的 applyEntryPatches 语义下是无 insert 的 override 行→warn 后静默跳过，插件从未装载；当年 C1 断言合并 stdout+stderr 把 "entry not found" warn 误判为命中。已改规范 insert 行（`- insert:` 子行 `{id, name:包名}`），断言改纯 stdout 判 id+name 双命中 |  |
 | F-2 安装后生效（三注册） | ✅ 自动 | 同上（apply 三注册真调用 + inject 恰三服务断言——F1 类 blocker 永久防线） |  |
-| F-3 默认配置零配置 | ✅ 自动 | tests/e2e-b-matrix.test.mjs F-3（无 dsh.json 无插件全流程） |  |
-| F-4 自定义配置 | ✅ 自动 | 同上 F-6/F-4（自定义池首选生效） |  |
+| F-3 全局配置基线 | ✅ 自动 | tests/e2e-b-matrix.test.mjs F-3（无项目 dsh.json、无插件；DSH 全局 tiers 完成派发与交付） |  |
+| F-4 自定义全局候选池 | ✅ 自动 | 同上 F-6/F-4（`team-work-dsh.tiers` 自定义池首选生效） |  |
 | F-5 注入（指定派发） | ⏳ 待用户实机 | 注入链纯函数 + 真文件补写（dsh-plugin-e2e 第二测）+ E2E-B agents.json 层；真实 LLM 注入断言需带凭据会话（README 实机验证节步骤 1-2） |  |
 | F-6 数据隔离 | ✅ 自动 | E2E-B F-6/F-4（双任务 modelHints 按 childId 分键不串） |  |
 | F-7 effort 链路 | ⏳ 待用户实机 | effort→reasoningEffort 映射链全测；进 request header 与否待实机（已知边界：不进也无损） |  |

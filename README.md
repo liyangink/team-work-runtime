@@ -32,14 +32,14 @@ tw archive --task audit-q3
 
 ## 平台绑定
 
-- **DSH（进行中）**：唯一 skill（`skills/team-work-v3/`，含拓扑/成本/场景指导）+ `tw` CLI + 后台 subagent 派发；真实任务 E2E 已验证（含人工门返工轮，五次成员交互零参数拒绝）。插件包（`dsh plugin add` 形态）规划中。
+- **DSH**：唯一 skill（`skills/team-work-v3/`，含拓扑/成本/场景指导）+ `tw` CLI + 后台 subagent 派发 + `team-work-runtime-dsh` 插件包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active；模型目录与 effort 只在可获得相应目录元数据时校验。项目 `dsh.json` 已废弃且不会被读取/创建，`agents.json` 仍是项目内 child 映射与模型快照事实。插件的自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
 - **OpenCode**：v2 插件已删除；待核心稳定后按规约 §4 seam 另起薄适配器。
 - OpenSpec Provider 保留，作为门禁路由检查范本。
 
 ## 开发
 
 ```bash
-npm test          # 38 项：v3 核心/intake/CLI/不变量 + 仓库契约
+npm test          # v3 核心、插件、E2E 与仓库契约
 ```
 
-实现：`runtime-v3/`（waves/gate/derive/store/intake/cli，约 1k 行）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。
+当前完整自动套件为 114 项（113 通过；1 项仅在宿主提供 Schemastery 时执行）；实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。

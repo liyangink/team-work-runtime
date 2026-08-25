@@ -1,6 +1,6 @@
 // v3.2 拓扑波组集成测试：tw plan 验收/重拆窗口/多包全链路/波组导出/inflight 重建
 import assert from "node:assert/strict"
-import { writeFile, readFile, mkdir } from "node:fs/promises"
+import { writeFile, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -14,6 +14,17 @@ const PKGS = JSON.stringify([
   { id: "intake", writable: ["I.md:code-review"], done: ["intake 结论"], dependsOn: [] },
   { id: "overview", writable: ["O.md:code-review"], done: ["汇总各包结论、解决冲突、不丢信息"], dependsOn: ["store", "intake"] },
 ])
+
+const settingsFile = path.join(tmpdir(), `tw-topology-tiers-${process.pid}-${Date.now()}.yaml`)
+const BASE_SETTINGS = `
+team-work-dsh:
+  tiers:
+    junior: { provider: topology-junior, model: topology-junior }
+    senior: { provider: topology-senior, model: topology-senior }
+    expert: { provider: topology-expert, model: topology-expert }
+`
+await writeFile(settingsFile, BASE_SETTINGS)
+process.env.DSH_SETTINGS = settingsFile
 
 test("tw plan：机械验收通过登记 packages.json + journal；重叠/成环/缺标准拒绝", async () => {
   const root = await makeProject()
@@ -477,19 +488,41 @@ test("候选池 + 家族去重：同档多 owner 派发优先不同模型家族"
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "pool-t")
-  // junior 池：两个不同家族候选
-  const mapFile = path.join(root, ".team-work", "platform", "dsh.json")
-  await mkdir(path.dirname(mapFile), { recursive: true })
-  await writeFile(mapFile, JSON.stringify({ tiers: { junior: [
-    { provider: "prov-a", model: "familyone-lite", family: "familyone" },
-    { provider: "prov-b", model: "familytwo-lite", family: "familytwo" },
-  ] }, defaults: null }))
-  await call(["plan", "--task", "pool-t", "--packages", PKGS])
-  const plan = await call(["dispatch-plan", "--task", "pool-t", "--json"])
-  assert.equal(plan.waves.length, 2, "首波两包（overview 依赖锁）")
-  const [m1, m2] = plan.waves.map((w) => w.modelHint)
-  assert.equal(m1.model, "familyone-lite")
-  assert.equal(m2.model, "familytwo-lite", "同档第二 owner 家族去重选第二候选")
-  assert.equal(m2.selectedBy, "diversity")
-})
+  // 全局 junior 池：两个不同家族候选；项目 dsh.json 不参与选择。
+  await writeFile(settingsFile, `
+team-work-dsh:
+  tiers:
+    junior:
+      - provider: pool-a
+        model: familyone-lite
+        family: familyone
+      - provider: pool-b
+        model: familytwo-lite
+        family: familytwo
+    senior: { provider: pool-senior, model: pool-senior }
+    expert: { provider: pool-expert, model: pool-expert }
+`)
+  try {
+    await call(["plan", "--task", "pool-t", "--packages", PKGS])
+    const plan = await call(["dispatch-plan", "--task", "pool-t", "--json"])
+    assert.equal(plan.waves.length, 2, "首波两包（overview 依赖锁）")
+    const [m1, m2] = plan.waves.map((wave) => wave.modelHint)
+    assert.equal(m1.model, "familyone-lite")
+    assert.equal(m2.model, "familytwo-lite", "同档第二 owner 家族去重选第二候选")
+    assert.equal(m2.selectedBy, "diversity")
 
+    // agent-map 必须复制该批 dispatch-plan 的精确快照，不能因重选又退回首候选。
+    const [first, second] = plan.waves
+    await Promise.all([
+      call(["agent-map", "--task", "pool-t", "--key", first.dispatchKey, "--agent", "child-one"]),
+      call(["agent-map", "--task", "pool-t", "--key", second.dispatchKey, "--agent", "child-two"]),
+    ])
+    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+    assert.equal(agents.mappings[first.dispatchKey], "child-one")
+    assert.equal(agents.mappings[second.dispatchKey], "child-two")
+    assert.deepEqual(agents.modelHints["child-one"], m1)
+    assert.deepEqual(agents.modelHints["child-two"], m2)
+  } finally {
+    await writeFile(settingsFile, BASE_SETTINGS)
+  }
+})

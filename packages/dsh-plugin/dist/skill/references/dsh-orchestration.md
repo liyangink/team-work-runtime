@@ -38,7 +38,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## risk 与选人
 
 - tw open --risk critical|high|normal（或 tw intent --risk 修订）：critical→expert Owner、high→senior（只升不降；challenger/expert 不变）。判断：不可逆/数据迁移/安全敏感/核心跨模块 → critical；常规 → normal；
-- 模型来自 .team-work/platform/dsh.json（tw models 查看）：档位可配候选数组（按性价比排序），同波多 owner 自动家族去重（多样性）；改映射下一波生效。
+- 模型只来自 DSH 全局 settings 的 `team-work-dsh.tiers`（`tw models` 查看来源）：可在 DSH Web 的“插件配置”页编辑；档位兼容单个候选对象或候选数组，同波多 owner 自动优先不同模型家族，`effort` 可选。每个候选必须有非空 provider/model；全局配置变化只影响后续 dispatch-plan，已派发波次沿用其记录的 modelHint 快照。项目 `.team-work/platform/dsh.json` 不参与读取或创建，遗留文件可手动删除；`agents.json` 仍是 child 映射与快照事实。
 
 ## 成员标签规范
 

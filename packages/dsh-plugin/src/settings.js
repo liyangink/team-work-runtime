@@ -1,40 +1,105 @@
-// settings.js — 插件配置全局化：经宿主 settings 服务落 $DSH_HOME/settings.yaml 热生效
-// 平台事实：宿主 settings 服务 = 动态 import('@deepseek-ai/dsh-settings') →
-// { installSettingsSection, settingsNamespace }；import 失败 = 宿主无 settings 服务，静默跳过保持现行为。
-// 参考样板：ntes-dsh-market/src/settings.ts 的 installMarketSettings（fire-and-forget + try/catch 降级）。
-//
-// installSettingsSection 真实契约（dsh-settings/lib/index.js:618）：
-//   installSettingsSection(ctx, ns, schema, entry, hooks)
-//   - hooks.setSource(current: () => T)：参数「返回当前值的 thunk」，须存储（source = current）后按需调用；
-//     service 内部调用 hooks.setSource(() => scope.get())——scope.get() 返回「深冻结」快照（deepFreeze(resolve(...))）。
-//   - schema：schemastery z<T> 可调用对象；service 解析时执行 schema(mergeLayers(base, section))，
-//     裸对象会被当函数调用抛 TypeError 且被外层 catch 吞掉。故必须用真实 z.object(...) 构造。
-//   - 读取方每次调 source() 取新快照（只读，不可 Object.assign 进深冻结对象）。
+// settings.js — DSH 全局档位配置：注册 settings 区段并向消费方提供热更新快照。
+// 宿主契约：@deepseek-ai/dsh-settings 的 installSettingsSection(ctx, ns, schema, entry, hooks)
+// 在 settings 服务可用时注册一个 schema；不可用时保留 entry，插件其他能力照常降级运行。
 
-export const SETTINGS_NS = 'team-work-dsh'
+export const SETTINGS_NS = "team-work-dsh"
+export const TIER_NAMES = Object.freeze(["junior", "senior", "expert"])
+export const TIER_DESCRIPTIONS = Object.freeze({
+  junior: "低成本的只读探索与常规辅助工作。",
+  senior: "常规实现、复核与需要稳定判断的工作。",
+  expert: "核心场景、技术裁决与高失败成本工作。",
+})
 
-// 纯函数：entries（形如 [{ path, twBin?, injectionEnabled? }]，path 绝对路径）中取最长前缀命中项。
-// 无 path 前缀匹配返回 null；空数组返回 null。
-// 分隔符边界：比较时统一给 path 补尾斜杠，target 前缀匹配——'/a/b' 不命中 '/a/bc'，
-// 末尾斜杠输入与相对路径输入行为见 tests/dsh-plugin.test.mjs。
-export function matchProjectRoot(projectRoots, cwd) {
-  if (!Array.isArray(projectRoots) || projectRoots.length === 0) return null
-  if (typeof cwd !== "string" || !cwd) return null
-  const target = cwd.endsWith("/") ? cwd : cwd + "/"
-  let best = null
-  for (const entry of projectRoots) {
-    if (!entry || typeof entry.path !== "string" || !entry.path) continue
-    const p = entry.path.endsWith("/") ? entry.path : entry.path + "/"
-    if (!target.startsWith(p)) continue
-    if (best === null || p.length > (best.path.endsWith("/") ? best.path : best.path + "/").length) {
-      best = entry
-    }
-  }
-  return best
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-// 是否为「模块/包不存在」类错误：宿主无该服务属正常形态，应静默降级；
-// 其余异常（导出缺失、包内抛错等）应留痕再降级。
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0
+}
+
+function fail(message) {
+  throw new TypeError("team-work-dsh tiers 无效：" + message)
+}
+
+function validateCandidate(value, label) {
+  if (!isPlainObject(value)) fail(label + " 必须是候选对象")
+  const allowed = new Set(["provider", "model", "effort", "family"])
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) fail(label + " 含未知字段 " + key)
+  }
+  if (!nonEmptyString(value.provider)) fail(label + ".provider 必须是非空字符串")
+  if (!nonEmptyString(value.model)) fail(label + ".model 必须是非空字符串")
+  if (value.effort !== undefined && !nonEmptyString(value.effort)) fail(label + ".effort 如填写必须是非空字符串")
+  if (value.family !== undefined && !nonEmptyString(value.family)) fail(label + ".family 如填写必须是非空字符串")
+}
+
+function validateTier(value, tier) {
+  if (Array.isArray(value)) {
+    if (value.length === 0) fail("tiers." + tier + " 的候选数组不能为空")
+    value.forEach((candidate, index) => validateCandidate(candidate, "tiers." + tier + "[" + index + "]"))
+    return
+  }
+  validateCandidate(value, "tiers." + tier)
+}
+
+// settings 服务的 validate 为同步钩子。空对象是首次配置的 unresolved 状态；一旦开始配置，
+// 三档必须齐全。单个候选对象保留为兼容输入，Web 卡片保存时统一写为候选数组。
+export function validateTiers(value) {
+  if (!isPlainObject(value)) fail("配置根必须是对象")
+  const tiers = value.tiers
+  if (tiers === undefined) return
+  if (!isPlainObject(tiers)) fail("tiers 必须是对象")
+  if (Object.keys(tiers).length === 0) return
+  for (const key of Object.keys(tiers)) {
+    if (!TIER_NAMES.includes(key)) fail("tiers 含未知档位 " + key)
+  }
+  for (const tier of TIER_NAMES) {
+    if (!Object.hasOwn(tiers, tier)) fail("tiers 一经配置必须同时包含 junior、senior、expert")
+    validateTier(tiers[tier], tier)
+  }
+}
+
+// Schemastery 会把 transform 回调的函数源码写进 schema.toJSON()，并在 Web 端用
+// new Function 重建。因此此函数必须完全自包含，不能引用本模块的校验辅助函数或常量。
+function serializedTiersTransform(value) {
+  const resolved = { tiers: value?.tiers ?? {} }
+  const tiers = resolved.tiers
+  const names = ["junior", "senior", "expert"]
+  const fail = (message) => {
+    throw new TypeError("team-work-dsh tiers 无效：" + message)
+  }
+  const isPlainObject = (item) => typeof item === "object" && item !== null && !Array.isArray(item)
+  const nonEmptyString = (item) => typeof item === "string" && item.trim().length > 0
+  const validateCandidate = (candidate, label) => {
+    if (!isPlainObject(candidate)) fail(label + " 必须是候选对象")
+    const allowed = new Set(["provider", "model", "effort", "family"])
+    for (const key of Object.keys(candidate)) {
+      if (!allowed.has(key)) fail(label + " 含未知字段 " + key)
+    }
+    if (!nonEmptyString(candidate.provider)) fail(label + ".provider 必须是非空字符串")
+    if (!nonEmptyString(candidate.model)) fail(label + ".model 必须是非空字符串")
+    if (candidate.effort !== undefined && !nonEmptyString(candidate.effort)) fail(label + ".effort 如填写必须是非空字符串")
+    if (candidate.family !== undefined && !nonEmptyString(candidate.family)) fail(label + ".family 如填写必须是非空字符串")
+  }
+  if (!isPlainObject(tiers)) fail("tiers 必须是对象")
+  if (Object.keys(tiers).length === 0) return resolved
+  for (const key of Object.keys(tiers)) {
+    if (!names.includes(key)) fail("tiers 含未知档位 " + key)
+  }
+  for (const tier of names) {
+    if (!Object.hasOwn(tiers, tier)) fail("tiers 一经配置必须同时包含 junior、senior、expert")
+    const candidates = tiers[tier]
+    if (Array.isArray(candidates)) {
+      if (candidates.length === 0) fail("tiers." + tier + " 的候选数组不能为空")
+      candidates.forEach((candidate, index) => validateCandidate(candidate, "tiers." + tier + "[" + index + "]"))
+    } else {
+      validateCandidate(candidates, "tiers." + tier)
+    }
+  }
+  return resolved
+}
+
 function isModuleNotFound(error) {
   const code = error?.code
   if (code === "ERR_MODULE_NOT_FOUND") return true
@@ -42,48 +107,47 @@ function isModuleNotFound(error) {
   return /Cannot find (module|package)/i.test(String(error?.message ?? ""))
 }
 
-// 缺失类错误留痕 vs 静默的公共出口：模块不存在静默，其他 warn 后均降级。
 function warnUnlessMissing(ctx, what, error) {
   if (isModuleNotFound(error)) return
   ctx.logger?.warn?.("team-work-dsh: settings 依赖不可用（" + what + "）：" + String(error?.message ?? error))
 }
 
-// 构造区段 schema（schemastery）：object 字段缺省即 optional，.default() 在缺省时填充。
-// 与 index.js entry / README settings.yaml 字段一一对应。
 function makeSchema(z) {
-  return z.object({
-    projectRoots: z.array(z.object({
-      path: z.string(),
-      twBin: z.string(),
-      injectionEnabled: z.boolean(),
-    })).default([]),
-    twBin: z.string(),
-    injectionEnabled: z.boolean().default(true),
-  })
+  const nonEmpty = (description) => z.string().required().min(1).description(description)
+  const candidate = z.object({
+    provider: nonEmpty("Provider 标识，必填。"),
+    model: nonEmpty("模型标识，必填。"),
+    effort: z.string().min(1).description("推理等级，可选。"),
+    family: z.string().min(1).description("模型家族，可选；未填写时由运行时推导。"),
+  }).description("一个可选模型候选。")
+  const tier = (name) => z.union([
+    candidate,
+    z.array(candidate).min(1),
+  ]).description(TIER_DESCRIPTIONS[name] + " 可填单个候选或候选数组。")
+  const section = z.object({
+    tiers: z.object({
+      junior: tier("junior"),
+      senior: tier("senior"),
+      expert: tier("expert"),
+    }).description("三个团队档位的模型候选池。首次配置前可保持为空。"),
+  }).description("team-work-dsh 的全局档位设置。")
+  // transform 同时剥离遗留键并校验三档完整性；回调可序列化后在 Web 客户端安全重建。
+  return z.transform(section, serializedTiersTransform)
 }
 
-// 注册插件配置区段：同步返回「读当前配置快照」的 thunk，内部 fire-and-forget 完成
-// settings 服务加载 + 区段注册。有服务时返回 source()（scope.get() 深冻结快照），
-// 无服务时永远返回 entry（配置初值，与未安装服务等价）。两个动态 import 任一失败
-// 整段降级（不注册、返回 entry），模块不存在静默、其他异常 warn 留痕。
-//
-// deps 可注入（单测不依赖真实 dsh 运行时）：
-//   deps.importSettings   —— 默认 () => import('@deepseek-ai/dsh-settings')
-//   deps.importSchemastery —— 默认 () => import('@deepseek-ai/schemastery')
+// 注册插件配置区段：同步返回读取当前快照的 thunk；内部异步装载 settings 服务。
+// 无服务或注册失败时返回 entry，避免可选设置能力阻断宿主插件。
 export function installPluginSettings(ctx, entry, deps = {}) {
   const importSettings = deps.importSettings ?? (() => import("@deepseek-ai/dsh-settings"))
   const importSchemastery = deps.importSchemastery ?? (() => import("@deepseek-ai/schemastery"))
-
-  // source thunk：无服务时返回 entry；服务装载后由 setSource 换成 scope.get()。
   let source = () => entry
 
-  // fire-and-forget：注册结果不影响主链路；子代注册不等 settings。
   void (async () => {
     let settingsMod
     try {
       settingsMod = await importSettings()
     } catch (error) {
-      warnUnlessMissing(ctx, "@deepseek-ai/dsh-settings", error) // 模块不存在（宿主无服务）→ 静默
+      warnUnlessMissing(ctx, "@deepseek-ai/dsh-settings", error)
       return
     }
     let z
@@ -96,13 +160,13 @@ export function installPluginSettings(ctx, entry, deps = {}) {
     try {
       const { installSettingsSection, settingsNamespace } = settingsMod
       if (typeof installSettingsSection !== "function" || typeof settingsNamespace !== "function") {
-        if (!isModuleNotFound(null)) ctx.logger?.warn?.("team-work-dsh: settings 模块缺少 installSettingsSection/settingsNamespace，跳过区段注册")
+        ctx.logger?.warn?.("team-work-dsh: settings 模块缺少 installSettingsSection/settingsNamespace，跳过区段注册")
         return
       }
       installSettingsSection(ctx, settingsNamespace(SETTINGS_NS), makeSchema(z), entry, {
-        // setSource 参数是 thunk（函数）：存储之，读取方每次调 source() 取最新快照。
         setSource: (current) => { source = current },
         onChange: () => {},
+        validate: validateTiers,
       })
     } catch (error) {
       ctx.logger?.warn?.("team-work-dsh: settings 区段注册失败：" + String(error?.message ?? error))

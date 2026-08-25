@@ -5,8 +5,8 @@ import test from "node:test"
 import vm from "node:vm"
 
 import { hintForChild, agentsJsonPath } from "../packages/dsh-plugin/src/inject.js"
-import { resolveTwBin, resolveProjectRoot } from "../packages/dsh-plugin/src/tw-tool.js"
-import { matchProjectRoot, installPluginSettings, SETTINGS_NS } from "../packages/dsh-plugin/src/settings.js"
+import { resolveTwExecutable, resolveChildCwd } from "../packages/dsh-plugin/src/tw-tool.js"
+import { installPluginSettings, SETTINGS_NS, TIER_DESCRIPTIONS } from "../packages/dsh-plugin/src/settings.js"
 import { parseFrontmatter } from "../packages/dsh-plugin/src/skill-embed.js"
 
 test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis 插件", async () => {
@@ -21,8 +21,239 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   for (const { factory } of registrations) {
     const plugin = factory(() => ({}))
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
-    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection"], "须声明模型查询使用的 connection；logger 是 ctx 内建属性")
+    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "settingsScope"], "须声明模型查询与全局 settingsScope；logger 是 ctx 内建属性")
   }
+})
+
+test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组，并把未列目录模型作为警告", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const hookState = []
+  let hookIndex = 0
+  let effects = []
+  const React = {
+    createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.flat(Infinity) } } },
+    useState(initial) {
+      const index = hookIndex++
+      if (!(index in hookState)) hookState[index] = typeof initial === "function" ? initial() : initial
+      return [hookState[index], (next) => { hookState[index] = typeof next === "function" ? next(hookState[index]) : next }]
+    },
+    useEffect(effect) { hookIndex += 1; effects.push(effect) },
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  const slotRegistrations = []
+  const bindings = []
+  const writes = []
+  const apiCalls = []
+  let settingsSnapshot = {
+    status: "ready",
+    writable: true,
+    revision: 1,
+    value: {
+      tiers: {
+        junior: { provider: "provider-a", model: "manual-model", family: "family-a" },
+        senior: [{ provider: "provider-a", model: "catalog-model" }],
+        expert: [{ provider: "provider-a", model: "catalog-model" }],
+      },
+    },
+  }
+  let scopeSubscriber
+  const scope = {
+    getSnapshot() { return settingsSnapshot },
+    subscribe(callback) { scopeSubscriber = callback; return () => {} },
+    async set(field, value) {
+      writes.push({ field, value })
+      settingsSnapshot = {
+        ...settingsSnapshot,
+        revision: settingsSnapshot.revision + 1,
+        value: { ...settingsSnapshot.value, [field]: value },
+      }
+      scopeSubscriber?.()
+    },
+  }
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    settingsScope: { bind(spec) { bindings.push(spec); return scope } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { slotRegistrations.push({ options, component }); return () => {} },
+    },
+    connection: {
+      api: {
+        llm: {
+          async providers() {
+            apiCalls.push("providers")
+            return { result: { ok: true, value: { providers: [{ provider: "provider-a", displayName: "Provider A", active: true }] } } }
+          },
+          async models() {
+            apiCalls.push("models")
+            return { result: { ok: true, value: { groups: [{ id: "provider-a", name: "Provider A", models: [{ id: "catalog-model", name: "Catalog model", reasoning: { efforts: [{ id: "high", name: "High" }] } }] }], failures: [{ provider: "provider-b", message: "暂不可用" }] } } }
+          },
+        },
+      },
+    },
+    logger: { warn() {} },
+  })
+
+  assert.equal(bindings.length, 1, "配置卡只绑定一次")
+  assert.equal(bindings[0]?.namespace, "team-work-dsh", "配置卡须绑定插件自己的全局 namespace")
+  const configCard = slotRegistrations.find(({ options }) => options.name === "settings.plugin.item")
+  assert.equal(configCard?.options?.key, "team-work-dsh", "插件配置页按 namespace key 派发卡片")
+  const props = configCard.options.inject()
+  assert.equal(props.scope, scope, "卡片通过 slot inject 接收已绑定 scope")
+
+  const render = () => {
+    hookIndex = 0
+    effects = []
+    return configCard.component(props)
+  }
+  render()
+  for (const effect of effects) effect()
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const tree = render()
+  assert.deepEqual(apiCalls.sort(), ["models", "providers"], "卡片读取 provider 目录与模型目录")
+  assert.match(JSON.stringify(tree), /低成本/, "三档中文说明可见")
+  assert.match(JSON.stringify(tree), /目录未列出该模型/, "目录外模型仅告警，不当作不可保存")
+  assert.match(JSON.stringify(tree), /部分 Provider 的模型目录不可用/, "模型目录部分失败保持 advisory，不阻止配置卡")
+
+  const find = (node, predicate) => {
+    if (!node || typeof node !== "object") return null
+    if (predicate(node)) return node
+    for (const child of node.props?.children ?? []) {
+      const found = find(child, predicate)
+      if (found) return found
+    }
+    return null
+  }
+  const save = find(tree, (node) => node.props?.["data-tw-action"] === "save-tiers")
+  assert.equal(typeof save?.props?.onClick, "function", "卡片提供保存操作")
+  await save.props.onClick()
+  assert.deepEqual(JSON.parse(JSON.stringify(writes)), [{
+    field: "tiers",
+    value: {
+      junior: [{ provider: "provider-a", model: "manual-model", family: "family-a" }],
+      senior: [{ provider: "provider-a", model: "catalog-model" }],
+      expert: [{ provider: "provider-a", model: "catalog-model" }],
+    },
+  }], "单对象回显后统一按候选数组保存，并保留 family")
+
+  settingsSnapshot = {
+    ...settingsSnapshot,
+    revision: 3,
+    value: { tiers: {
+      junior: [{ provider: "provider-a", model: "hot-updated-model" }],
+      senior: [{ provider: "provider-a", model: "catalog-model" }],
+      expert: [{ provider: "provider-a", model: "catalog-model" }],
+    } },
+  }
+  scopeSubscriber()
+  render()
+  for (const effect of effects) effect()
+  const hotTree = render()
+  assert.match(JSON.stringify(hotTree), /hot-updated-model/, "scope 订阅到外部 settings 更新后热更新候选行")
+})
+
+test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，active Provider 仍可保存已有目录外模型", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../packages/dsh-plugin/src-client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const hookState = []
+  let hookIndex = 0
+  let effects = []
+  const React = {
+    createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.flat(Infinity) } } },
+    useState(initial) {
+      const index = hookIndex++
+      if (!(index in hookState)) hookState[index] = typeof initial === "function" ? initial() : initial
+      return [hookState[index], (next) => { hookState[index] = typeof next === "function" ? next(hookState[index]) : next }]
+    },
+    useEffect(effect) { hookIndex += 1; effects.push(effect) },
+  }
+  let settingsSnapshot = {
+    status: "ready",
+    writable: true,
+    revision: 1,
+    value: { tiers: {
+      junior: [{ provider: "provider-a", model: "manual-model" }],
+      senior: [{ provider: "provider-a", model: "manual-model" }],
+      expert: [{ provider: "provider-a", model: "manual-model" }],
+    } },
+  }
+  const writes = []
+  const scope = {
+    getSnapshot() { return settingsSnapshot },
+    subscribe() { return () => {} },
+    async set(field, value) {
+      writes.push({ field, value })
+      settingsSnapshot = {
+        ...settingsSnapshot,
+        revision: settingsSnapshot.revision + 1,
+        value: { ...settingsSnapshot.value, [field]: value },
+      }
+    },
+  }
+  const slotRegistrations = []
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    settingsScope: { bind() { return scope } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { slotRegistrations.push({ options, component }); return () => {} },
+    },
+    connection: {
+      api: {
+        llm: {
+          async providers() {
+            return { result: { ok: true, value: { providers: [{ provider: "provider-a", active: true }] } } }
+          },
+          async models() {
+            return { result: { ok: false, error: { message: "模型目录服务暂不可用" } } }
+          },
+        },
+      },
+    },
+    logger: { warn() {} },
+  })
+
+  const card = slotRegistrations.find(({ options }) => options.name === "settings.plugin.item")
+  const props = card.options.inject()
+  const render = () => {
+    hookIndex = 0
+    effects = []
+    return card.component(props)
+  }
+  render()
+  for (const effect of effects) effect()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const tree = render()
+  const find = (node, predicate) => {
+    if (!node || typeof node !== "object") return null
+    if (predicate(node)) return node
+    for (const child of node.props?.children ?? []) {
+      const found = find(child, predicate)
+      if (found) return found
+    }
+    return null
+  }
+  const save = find(tree, (node) => node.props?.["data-tw-action"] === "save-tiers")
+
+  assert.match(JSON.stringify(tree), /模型目录读取失败/, "模型目录故障须明确显示为 advisory 提示")
+  assert.match(JSON.stringify(tree), /目录未列出该模型/, "目录不可用时仍保留目录外模型的非阻断警告")
+  assert.equal(save?.props?.disabled, false, "Provider 已确认 active 时，模型目录故障不得禁用保存")
+  await save.props.onClick()
+  assert.equal(writes.length, 1, "Provider 已确认 active 时，模型目录 RPC 拒绝不得阻止保存")
 })
 
 test("I4 模型席位声明回收时同步释放徽标注册", async () => {
@@ -267,18 +498,15 @@ test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/�
   assert.equal(hintForChild({ modelHints: "not-object" }, "a"), null, "modelHints 非对象")
 })
 
-test("I2 agents.json 路径解析：config 优先 → header.cwd 兜底 → 无则 null", () => {
-  assert.equal(agentsJsonPath({ projectRoot: "/proj" }, "/cwd"), "/proj/.team-work/platform/agents.json", "config 优先")
-  assert.equal(agentsJsonPath(null, "/cwd"), "/cwd/.team-work/platform/agents.json", "header.cwd 兜底")
-  assert.equal(agentsJsonPath(null, null), null, "两者皆无 → 不注入")
+test("I2 agents.json 路径解析：只使用子会话 cwd", () => {
+  assert.equal(agentsJsonPath("/cwd"), "/cwd/.team-work/platform/agents.json", "从子会话 cwd 定位")
+  assert.equal(agentsJsonPath(null), null, "无子会话 cwd → 不注入")
 })
 
-test("I2 tw 工具解析：twBin config 优先；projectRoot 三级链", () => {
-  assert.equal(resolveTwBin({ twBin: "/x/tw.mjs" }), "/x/tw.mjs", "config 显式")
-  assert.equal(typeof resolveTwBin({}), "string", "peerDep 解析或 PATH 兜底")
-  assert.equal(resolveProjectRoot({ projectRoot: "/p" }, { agent: { session: { header: { cwd: "/c" } } } }), "/p")
-  assert.equal(resolveProjectRoot({}, { agent: { session: { header: { cwd: "/c" } } } }), "/c")
-  assert.equal(resolveProjectRoot({}, {}), process.cwd())
+test("I2 tw 工具解析：可执行入口独立解析，工作目录只使用子会话 cwd", () => {
+  assert.equal(typeof resolveTwExecutable(), "string", "peerDep 解析或 PATH 兜底")
+  assert.equal(resolveChildCwd({ agent: { session: { header: { cwd: "/c" } } } }), "/c")
+  assert.equal(resolveChildCwd({}), null, "缺少子会话 cwd 时显式 unresolved")
 })
 
 test("I2 tw 工具 render 契约：必须返回 content 块数组（纯字符串致宿主 commit 崩溃——实机两崩铁证）", async () => {
@@ -290,18 +518,15 @@ test("I2 tw 工具 render 契约：必须返回 content 块数组（纯字符串
   assert.equal(typeof rendered[0]?.text, "string")
   assert.doesNotThrow(() => rendered.some((b) => b.type === "image"), "宿主 commit 的 .some 调用形态必须可用")
 })
-test("I2 tw 工具失败路径：超时 kill 返回失败卡；输出不可解析返回 UNPARSEABLE", async () => {
+test("I2 tw 工具失败路径：缺少子会话 cwd 返回可恢复失败卡", async () => {
   const { twToolDefinition } = await import("../packages/dsh-plugin/src/tw-tool.js")
-  const def = twToolDefinition({ twBin: "/nonexistent/tw.mjs" })
-  // 输出不可解析：twBin 指向 node + 一个输出纯文本的脚本（-e）
-  const def2 = twToolDefinition({ twBin: "-e", projectRoot: "/tmp" })
-  // 超时：定义级 timeoutMs 传极小值——通过 deps 注入不可（runTw 内部常量）——直接测 spawn 失败路径：
+  const def = twToolDefinition({})
   const card = await def.execute({ args: ["--version"] }, {})
-  assert.equal(card.ok, false, "twBin 不存在 → 失败卡（不抛出）")
-  assert.ok(card.code === "TW_SPAWN_FAILED" || card.code === "TW_OUTPUT_UNPARSEABLE" || card.ok === false, "失败码在场")
-  // 参数缺 args：execute 容错（空数组 → tw help 卡片或失败卡，不抛出）
-  const card2 = await def.execute({}, {})
-  assert.equal(typeof card2, "object")
+  assert.deepEqual(card, {
+    ok: false,
+    code: "TW_CWD_UNRESOLVED",
+    message: "无法确定当前子会话的工作目录；请在已打开项目的 DSH 会话中重试。",
+  })
 })
 
 test("I2 注入链（同步 contribution 契约）：install 同步在场 + undefined 占位 + hint 迟到补读 + disposer 语义", async () => {
@@ -319,7 +544,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   }
   // 宿主真实契约（SetupRegistry.apply 源码）：contribution(childCtx) 同步调用、返回值直接存为 disposer、
     // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
-  const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+  const contribution = makeInjectContribution(ctx, {
     readFileSync: () => JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }),
     readFile: async () => { throw new Error("已有 hint 不应退化到异步首读") },
     installerNow: () => fakeInstallChecked,
@@ -340,7 +565,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   // 迟到写入场景：首次读无 hint，第二次读才命中（真实时序：agent-map 晚于子代创建）
   let readCount = 0
   const installsLate = []
-  const contributionLate = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+  const contributionLate = makeInjectContribution(ctx, {
     readFileSync: () => JSON.stringify({ modelHints: {} }),
     readFile: async () => {
       readCount += 1
@@ -357,7 +582,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   disposeLate()
 
   // 读失败静默（超时窗口内重试，无抛出）
-  const contribution2 = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+  const contribution2 = makeInjectContribution(ctx, {
     readFile: async () => { throw new Error("enoent") },
     installerNow: () => fakeInstall,
     pollMs: 5, pollMaxMs: 20,
@@ -368,18 +593,14 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   // 无抛出即为通过（selection 保持 undefined——不干预）
 
   // installer 同步解析失败 → 不注入，但仍须返回宿主可释放的 no-op disposer
-  const contribution3 = makeInjectContribution(ctx, {}, { installerNow: () => null })
+  const contribution3 = makeInjectContribution(ctx, { installerNow: () => null })
   const before = installs.length
   const dispose3 = contribution3({ agent: { id: "child-3" } })
   assert.equal(typeof dispose3, "function", "无安装器 → 仍返回 disposer（宿主释放时会无条件调用）")
   assert.doesNotThrow(() => dispose3(), "no-op disposer 可安全释放")
   assert.equal(installs.length, before, "无安装器 → install 不被调")
 
-  const disposeDisabled = makeInjectContribution(ctx, { injectionEnabled: false })({ agent: { id: "child-disabled" } })
-  assert.equal(typeof disposeDisabled, "function", "注入关闭 → 仍返回 disposer")
-  assert.doesNotThrow(() => disposeDisabled())
-
-  const disposeInvalid = makeInjectContribution(ctx, {}, { installerNow: () => { throw new Error("installer failed") } })({ agent: { id: "child-error" } })
+  const disposeInvalid = makeInjectContribution(ctx, { installerNow: () => { throw new Error("installer failed") } })({ agent: { id: "child-error", session: { header: { cwd: "/x" } } } })
   assert.equal(typeof disposeInvalid, "function", "contribution 异常 → 仍返回 disposer")
   assert.doesNotThrow(() => disposeInvalid())
 })
@@ -389,7 +610,7 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
   const warnings = []
   const ctx = { logger: { warn: (message) => warnings.push(String(message)), info() {} } }
   let reads = 0
-  const contribution = makeInjectContribution(ctx, { projectRoot: "/proj" }, {
+  const contribution = makeInjectContribution(ctx, {
     readFileSync: () => "{损坏",
     readFile: async () => {
       reads += 1
@@ -401,7 +622,7 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
     pollMs: 2,
     pollMaxMs: 8,
   })
-  const dispose = contribution({ agent: { id: "child-diagnostic" } })
+  const dispose = contribution({ agent: { id: "child-diagnostic", session: { header: { cwd: "/x" } } } })
   await new Promise((resolve) => setTimeout(resolve, 25))
   dispose()
 
@@ -410,22 +631,22 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
   assert.ok(warnings.some((message) => message.includes("超时") && message.includes("读权限")), "权限错误超时后给出修复权限的恢复指引")
 
   const damagedWarnings = []
-  const damagedContribution = makeInjectContribution({ logger: { warn: (message) => damagedWarnings.push(String(message)) } }, { projectRoot: "/proj" }, {
+  const damagedContribution = makeInjectContribution({ logger: { warn: (message) => damagedWarnings.push(String(message)) } }, {
     readFileSync: () => "{损坏",
     readFile: async () => "{仍损坏",
     installerNow: () => () => () => {},
     pollMs: 2,
     pollMaxMs: 8,
   })
-  const disposeDamaged = damagedContribution({ agent: { id: "child-damaged" } })
+  const disposeDamaged = damagedContribution({ agent: { id: "child-damaged", session: { header: { cwd: "/x" } } } })
   await new Promise((resolve) => setTimeout(resolve, 25))
   disposeDamaged()
   assert.ok(damagedWarnings.some((message) => message.includes("超时") && message.includes("修复或删除损坏的 agents.json")), "损坏 JSON 超时后给出恢复有效文件的指引")
 
-  const contributionInstallerError = makeInjectContribution(ctx, {}, {
+  const contributionInstallerError = makeInjectContribution(ctx, {
     installerNow: () => { throw new Error("installer failed") },
   })
-  const disposer = contributionInstallerError({ agent: { id: "child-installer-error" } })
+  const disposer = contributionInstallerError({ agent: { id: "child-installer-error", session: { header: { cwd: "/x" } } } })
   assert.equal(typeof disposer, "function")
   assert.ok(warnings.some((message) => message.includes("安装器") && message.includes("installer failed")), "安装器异常可诊断")
 })
@@ -437,42 +658,7 @@ test("I2 frontmatter 解析：name/description 提取与引号剥离", () => {
   assert.equal(fm.description, "用 tw CLI 驱动多智能体研发工作流")
   assert.deepEqual(parseFrontmatter("无 frontmatter"), {})
 })
-test("I5 matchProjectRoot：最长前缀命中/无命中/空数组", () => {
-  const roots = [
-    { path: "/a" },
-    { path: "/a/b", twBin: "/deep/tw.mjs" },
-    { path: "/a/b/c" },
-  ]
-  // 最长前缀命中：cwd 落在多级前缀，取最深命中项（带 twBin 覆盖）
-  assert.deepEqual(matchProjectRoot(roots, "/a/b/c/app"), { path: "/a/b/c" }, "最长前缀命中")
-  assert.deepEqual(matchProjectRoot(roots, "/a/b/x"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "次深命中（保留附加字段）")
-  // 无 path 前缀匹配 → null
-  assert.equal(matchProjectRoot(roots, "/other/proj"), null, "无前缀命中 → null")
-  // 空数组 → null
-  assert.equal(matchProjectRoot([], "/a/b/c"), null, "空数组 → null")
-  assert.equal(matchProjectRoot(null, "/a/b/c"), null, "非数组 → null")
-})
-
-test("I5 matchProjectRoot 分隔符边界（Risk 4）：/a/b 不误命中 /a/bc、末尾斜杠、相对路径", () => {
-  const roots = [{ path: "/a/b", twBin: "/deep/tw.mjs" }]
-  // /a/b vs /a/bc：目录名边界不得前缀误命中
-  assert.equal(matchProjectRoot(roots, "/a/bc"), null, "/a/bc 不得命中 /a/b")
-  assert.equal(matchProjectRoot(roots, "/a/bc/x/y"), null, "/a/bc 子路径不得命中 /a/b")
-  assert.deepEqual(matchProjectRoot(roots, "/a/b/app"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "/a/b 正常命中")
-  // 末尾斜杠：cwd 与 path 带尾斜杠等价于不带
-  assert.deepEqual(matchProjectRoot(roots, "/a/b/"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "cwd 尾斜杠")
-  assert.deepEqual(matchProjectRoot([{ path: "/a/b/" }], "/a/b/app"), { path: "/a/b/" }, "path 尾斜杠")
-  assert.deepEqual(matchProjectRoot(roots, "/a/b/app/"), { path: "/a/b", twBin: "/deep/tw.mjs" }, "cwd 深路径尾斜杠")
-  // 相对路径输入：不越界匹配绝对 cwd（只按字符串前缀，相对对相对才可能命中）
-  assert.equal(matchProjectRoot(roots, "a/b"), null, "相对 cwd 不命中绝对 path")
-  assert.deepEqual(matchProjectRoot([{ path: "a/b" }], "a/b/x"), { path: "a/b" }, "相对对相对命中")
-  // 空 path / 非字符串 path / 缺 path 条目跳过（但其他有效条目仍参与命中）
-  assert.equal(matchProjectRoot([{ path: "" }], "/a/b"), null, "空 path 跳过")
-  assert.deepEqual(matchProjectRoot([{ path: "/a/b" }, {}], "/a/b/x"), { path: "/a/b" }, "缺 path 条目跳过，有效条目仍命中")
-  assert.deepEqual(matchProjectRoot([{ path: "/a/b/c", twBin: "/c" }, { path: "/a/b" }], "/a/b/x"), { path: "/a/b" }, "无效条目跳过不影响最长前缀")
-})
-
-test("I5 installPluginSettings 接线契约：setSource 收到 thunk、schema 为可调用函数", async () => {
+test("I5 全局 tiers 设置契约：允许 unresolved；一经配置必须三档完整且兼容候选数组", async () => {
   // 桩 installSettingsSection：断言三方——schema 是函数、setSource 是函数、hooks 形状在场。
   const calls = []
   let receivedSource = null
@@ -482,11 +668,30 @@ test("I5 installPluginSettings 接线契约：setSource 收到 thunk、schema �
     hooks.setSource((receivedSource = () => ({ seen: true })))
     hooks.onChange()
   }
+  const node = (kind, extra = {}) => ({
+    kind,
+    ...extra,
+    required() { this.requiredCalled = true; return this },
+    min(value) { this.minValue = value; return this },
+    description(value) { this.descriptionText = value; return this },
+  })
   const fakeZ = {
-    string: () => ({ default: () => void 0 }),
-    boolean: () => ({ default: () => void 0 }),
-    array: () => ({ default: () => void 0 }),
-    object: () => function (value) { return value ?? {} }, // z.object 返回可调用 schema
+    string: () => node("string"),
+    array: (inner) => node("array", { inner }),
+    union: (items) => node("union", { items }),
+    object: (shape) => {
+      const schema = function (value) { return value ?? {} }
+      schema.shape = shape
+      schema.description = function (value) { schema.descriptionText = value; return schema }
+      return schema
+    },
+    transform: (inner, callback) => {
+      const schema = function (value) { return callback(inner(value)) }
+      schema.inner = inner
+      schema.callback = callback
+      schema.toJSON = () => ({ type: "transform", inner: { type: "object", dict: inner.shape } })
+      return schema
+    },
   }
   const importSettings = async () => ({
     installSettingsSection: fakeInstallSettingsSection,
@@ -495,7 +700,7 @@ test("I5 installPluginSettings 接线契约：setSource 收到 thunk、schema �
   const importSchemastery = async () => ({ default: fakeZ })
 
   const ctx = { logger: { warn() {} } }
-  const entry = { projectRoots: [], twBin: null, injectionEnabled: true }
+  const entry = { tiers: {} }
   const getConfig = installPluginSettings(ctx, entry, { importSettings, importSchemastery })
 
   // fire-and-forget 注册需要一拍：让异步 IIFE 跑完
@@ -504,50 +709,156 @@ test("I5 installPluginSettings 接线契约：setSource 收到 thunk、schema �
   assert.equal(calls.length, 1, "installSettingsSection 被调用一次")
   assert.equal(calls[0].ns, SETTINGS_NS, "namespace 直传")
   assert.equal(typeof calls[0].schema, "function", "schema 必须是可调用函数（非裸对象，否则 service resolve 抛 TypeError）")
+  assert.deepEqual(Object.keys(calls[0].entry), ["tiers"], "入口初值只含 tiers")
+  assert.deepEqual(Object.keys(calls[0].schema.inner.shape), ["tiers"], "settings 区段只公开 tiers")
+  assert.doesNotMatch(JSON.stringify(calls[0].schema.toJSON()), /\b(injectionEnabled|projectRoots|twBin)\b/, "序列化 schema 不公开旧字段")
+  assert.deepEqual(calls[0].schema({
+    tiers: {},
+    injectionEnabled: false,
+    projectRoots: [],
+    twBin: "legacy-entry",
+  }), { tiers: {} }, "解析快照过滤遗留原始键，不再把它们交给消费链")
+  assert.throws(() => calls[0].schema({
+    tiers: { junior: { provider: "provider-a", model: "model-a" } },
+  }), /tiers.*一经配置/, "schema 直接解析也须拒绝不完整的 tiers，不能只依赖宿主 validate 钩子")
   assert.equal(typeof calls[0].hooks.setSource, "function", "hooks.setSource 在场")
+  assert.equal(typeof calls[0].hooks.validate, "function", "宿主同步 validate 在场")
   assert.equal(typeof receivedSource, "function", "setSource 收到的是 thunk（函数），非值")
   // setSource 存 thunk + 读值调 source()：getConfig() 返回服务端快照（非 entry Object.assign 残留）
   assert.deepEqual(getConfig(), { seen: true }, "getConfig 调 source() 取服务端快照")
+
+  assert.doesNotThrow(() => calls[0].hooks.validate({ tiers: {} }), "首次空配置保持 unresolved，以便 Web 卡片可见")
+  assert.throws(() => calls[0].hooks.validate({ tiers: { junior: { provider: "provider-a", model: "model-a" } } }), /tiers/, "只配置一档时拒绝半成品")
+  assert.doesNotThrow(() => calls[0].hooks.validate({
+    tiers: {
+      junior: { provider: "provider-a", model: "model-a" },
+      senior: [{ provider: "provider-b", model: "model-b", effort: "medium", family: "family-b" }],
+      expert: [{ provider: "provider-c", model: "model-c" }],
+    },
+  }), "单对象与候选数组均可兼容")
+  assert.throws(() => calls[0].hooks.validate({
+    tiers: {
+      junior: [{ provider: "", model: "model-a" }],
+      senior: [{ provider: "provider-b", model: "model-b" }],
+      expert: [{ provider: "provider-c", model: "model-c" }],
+    },
+  }), /provider/, "候选 provider 为空时拒绝")
+  assert.ok(TIER_DESCRIPTIONS.junior.includes("低成本"), "junior 有中文用途说明")
+  assert.ok(TIER_DESCRIPTIONS.senior.includes("常规"), "senior 有中文用途说明")
+  assert.ok(TIER_DESCRIPTIONS.expert.includes("核心"), "expert 有中文用途说明")
+})
+
+test("I5 真实 Schemastery：tiers schema rehydrate 后仍可执行空/完整/半成品与遗留键语义", async (t) => {
+  let z
+  try {
+    // 默认只解析 peer 依赖；测试环境可注入已安装模块 URL，不把开发机路径写进仓库。
+    const specifier = process.env.TEAM_WORK_SCHEMATERY_MODULE || "@deepseek-ai/schemastery"
+    const schemastery = await import(specifier)
+    z = schemastery.default ?? schemastery
+  } catch (error) {
+    if (error?.code === "ERR_MODULE_NOT_FOUND") {
+      t.skip("当前仓库未安装可解析的 @deepseek-ai/schemastery；DSH 宿主依赖环境会自动执行本测试")
+      return
+    }
+    throw error
+  }
+
+  let installed
+  installPluginSettings({ logger: { warn() {} } }, { tiers: {} }, {
+    importSettings: async () => ({
+      installSettingsSection(_ctx, _namespace, schema, _entry, hooks) { installed = { schema, hooks } },
+      settingsNamespace: (namespace) => namespace,
+    }),
+    importSchemastery: async () => ({ default: z }),
+  })
+  for (let attempt = 0; !installed && attempt < 10; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  assert.ok(installed, "真实 Schemastery 可用时必须注册 settings section")
+
+  const full = {
+    tiers: {
+      junior: { provider: "provider-a", model: "model-a" },
+      senior: [{ provider: "provider-b", model: "model-b", effort: "medium", family: "family-b" }],
+      expert: [{ provider: "provider-c", model: "model-c" }],
+    },
+  }
+  assert.deepEqual(installed.schema({}), { tiers: {} }, "空配置归一为 unresolved tiers")
+  assert.deepEqual(installed.schema(full), full, "真实 schema 接受三档完整的单对象/候选数组组合")
+  assert.throws(() => installed.schema({
+    tiers: { junior: { provider: "provider-a", model: "model-a" } },
+  }), /tiers.*一经配置/, "真实 schema 也必须拒绝缺少档位的半成品")
+
+  const serialized = installed.schema.toJSON()
+  const root = serialized.refs[serialized.uid]
+  const section = serialized.refs[root.inner]
+  const tiers = serialized.refs[section.dict.tiers]
+  assert.equal(root.type, "transform", "顶层仍是剥离未知遗留键的 transform")
+  assert.equal(typeof root.callback, "string", "transform 回调必须以源码字符串进入 JSON，供客户端重建")
+  assert.doesNotMatch(root.callback, /\bvalidateTiers\b/, "回调源码不得引用服务端模块闭包")
+  assert.equal(section.type, "object")
+  assert.deepEqual(Object.keys(section.dict), ["tiers"], "序列化区段只公开 tiers")
+  assert.equal(tiers.type, "object")
+  assert.deepEqual(Object.keys(tiers.dict), ["junior", "senior", "expert"], "三个档位均出现在 Web schema")
+
+  const rehydrated = new z(serialized)
+  assert.deepEqual(rehydrated({}), { tiers: {} }, "客户端重建后可执行空配置归一")
+  assert.deepEqual(rehydrated(full), full, "客户端重建后保留完整三档候选")
+  assert.throws(() => rehydrated({
+    tiers: { junior: { provider: "provider-a", model: "model-a" } },
+  }), /tiers.*一经配置/, "客户端重建后仍拒绝半成品")
+  assert.deepEqual(rehydrated({
+    tiers: {},
+    injectionEnabled: false,
+    projectRoots: [],
+    twBin: "legacy-entry",
+  }), { tiers: {} }, "客户端重建后继续剥离遗留键")
 })
 
 test("I5 installPluginSettings 降级：模块不存在静默、其他异常 warn、两 import 任一失败整段降级", async () => {
   // 模块不存在（ERR_MODULE_NOT_FOUND）→ 静默（无 warn）、getConfig 返回 entry
   const warnsNotFound = []
   const ctxNF = { logger: { warn: (...a) => warnsNotFound.push(a) } }
-  const g1 = installPluginSettings(ctxNF, { twBin: "/entry" }, {
+  const g1 = installPluginSettings(ctxNF, { tiers: {} }, {
     importSettings: async () => { const e = new Error("Cannot find package '@deepseek-ai/dsh-settings'"); e.code = "ERR_MODULE_NOT_FOUND"; throw e },
     importSchemastery: async () => { throw new Error("unreachable") },
   })
   await new Promise((r) => setTimeout(r, 10))
-  assert.deepEqual(g1(), { twBin: "/entry" }, "无服务 → getConfig 返回 entry")
+  assert.deepEqual(g1(), { tiers: {} }, "无服务 → getConfig 返回 entry")
   assert.equal(warnsNotFound.length, 0, "模块不存在 → 静默不 warn")
 
   // schemastery 缺失（其他异常非模块缺失）→ warn 留痕再降级
   const warnsOther = []
   const ctxO = { logger: { warn: (...a) => warnsOther.push(a) } }
-  const g2 = installPluginSettings(ctxO, { twBin: "/entry2" }, {
+  const g2 = installPluginSettings(ctxO, { tiers: {} }, {
     importSettings: async () => ({ installSettingsSection: () => {}, settingsNamespace: (n) => n }),
     importSchemastery: async () => { throw new Error("schemastery broken") },
   })
   await new Promise((r) => setTimeout(r, 10))
-  assert.deepEqual(g2(), { twBin: "/entry2" }, "schemastery 失败 → 整段降级返回 entry")
+  assert.deepEqual(g2(), { tiers: {} }, "schemastery 失败 → 整段降级返回 entry")
   assert.equal(warnsOther.length, 1, "非模块缺失异常 → warn 留痕一次")
 
   // installSettingsSection 本身抛错 → warn 留痕，getConfig 仍返回 entry（不阻断主链路）
   const warnsReg = []
   const ctxR = { logger: { warn: (...a) => warnsReg.push(a) } }
-  const g3 = installPluginSettings(ctxR, { injectionEnabled: false }, {
+  const g3 = installPluginSettings(ctxR, { tiers: {} }, {
     importSettings: async () => ({ installSettingsSection: () => { throw new Error("dup namespace") }, settingsNamespace: (n) => n }),
-    importSchemastery: async () => ({ default: { object: () => function () {}, array: () => ({ default: () => 0 }), string: () => ({}), boolean: () => ({ default: () => 0 }) } }),
+    importSchemastery: async () => ({ default: { object: () => function () {}, array: () => ({ min: () => ({}) }), union: () => ({}), string: () => ({ required: () => ({ min: () => ({}) }) }) } }),
   })
   await new Promise((r) => setTimeout(r, 10))
-  assert.deepEqual(g3(), { injectionEnabled: false }, "注册异常 → 返回 entry")
+  assert.deepEqual(g3(), { tiers: {} }, "注册异常 → 返回 entry")
   assert.equal(warnsReg.length, 1, "注册异常 warn 留痕一次")
 })
 
-test("I5 resolveTwBin 覆盖链：命中项 twBin > settings.twBin > peerDep 解析 > PATH", () => {
-  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, { twBin: "/hit/tw.mjs" }), "/hit/tw.mjs", "matchProjectRoot 命中项 twBin 最优先")
-  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, {}), "/settings/tw.mjs", "无命中项 → settings.twBin")
-  assert.equal(resolveTwBin({ twBin: "/settings/tw.mjs" }, null), "/settings/tw.mjs", "hit=null → settings.twBin")
-  assert.equal(typeof resolveTwBin({}, {}), "string", "皆无 → peerDep 解析或 PATH 兜底")
+test("I5 旧项目匹配与运行入口配置已彻底移除", async () => {
+  const files = [
+    "../packages/dsh-plugin/src/settings.js",
+    "../packages/dsh-plugin/src/index.js",
+    "../packages/dsh-plugin/src/inject.js",
+    "../packages/dsh-plugin/src/tw-tool.js",
+  ]
+  for (const file of files) {
+    const source = await readFile(new URL(file, import.meta.url), "utf8")
+    assert.doesNotMatch(source, /\b(injectionEnabled|projectRoots|twBin|matchProjectRoot)\b/, file + " 不得残留旧配置契约")
+  }
 })

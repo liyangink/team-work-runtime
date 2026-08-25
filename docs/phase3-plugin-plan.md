@@ -1,6 +1,8 @@
 # Phase 3 实施方案：team-work-runtime DSH 插件包（v2）
 
-状态：双轴交叉评审完成（意图轴 7 findings + 技术轴 9 findings，含 2 blocker），全部吸收；处置记录见文末。待实施。
+状态：历史实施方案（方案评审记录保留）；插件包已实施，当前验收状态见 [`phase3-acceptance.md`](phase3-acceptance.md)。
+
+> **迁移说明（当前实现）**：本方案中的项目 `dsh.json`、`config.projectRoot`、`config.twBin`、`injectionEnabled` 与 `projectRoots` 已被全局配置实现取代，不能作为当前接口使用。现在唯一的 tier→模型配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，DSH Web“插件配置”页负责编辑；候选单对象或数组均兼容，provider/model 必填，family/effort 可选。项目 `agents.json` 仍保存 childId 映射与派发 modelHint 快照。注入和 `tw` 工具只使用当前子会话 cwd，不读取旧键，也不保留兼容读取；遗留 YAML 键和项目 `dsh.json` 可手动删除。真实 LLM 注入与最终 Web UI 仍待用户实机确认。
 用户裁决固化：①写边界落 skill 规范；②tw 走 ctx.tools.register 原生工具（PATH 注入保留为 standalone 兜底）；③本仓库 packages/dsh-plugin 子目录，打包 npm pack 双向断言；④压轴 E2E（指定派发+数据隔离+八视角）。
 
 ## 0. 平台事实（逐条源码验证，v2 修订版）
@@ -38,17 +40,17 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
 
 ```
 数据流（v2 定稿：runtime 自动落盘，A-F1 修 P4）：
-  tw dispatch-plan 出波（modelHint 全决策：tier→池→家族去重→risk→effort）
+  tw dispatch-plan 出波（modelHint 全决策：全局 tier 池→家族去重→risk→effort，并在 dispatched 事实中快照）
   → Lead: tw agent-map --task <n> --key <k> --agent <childId>
-      runtime 内部自动重算该 key 的 modelHint（复用 dispatch-plan 同一函数）
+      runtime 只复制该 key 的已快照 modelHint，不因全局配置热变或家族重选漂移
       落盘 agents.json: { mappings:{k:childId}, modelHints:{<childId>:{provider,model,effort}} }
-      （--model-hint 参数仅作显式覆盖，常规流程零手动转录）
+      （不接受 --model-hint，常规流程零手动转录）
   → 插件 contribution(childCtx)：
       hint = modelHints[childCtx.agent.id]        // childId 直查，无文本解析
       hint && installModelSelection(childCtx, { current: { provider, model, reasoningEffort: effort } })
-  agents.json 定位：config.projectRoot 显式配置 → 兜底 childCtx.agent.session.header.cwd + "/.team-work/platform/agents.json"
-  失败语义（逐级静默降级）：无 config 无 header.cwd / 无 modelHints / 无此 childId → 不注入（继承 Lead 默认，不劣化现状）
-  边界注记（I1 实现确认）：agent-map 自动重算取该档池首选（单成员注册无波内上下文）——波内多样性仍以 dispatch-plan 输出为权威；Lead 需要精确多样性时用 --model-hint 覆盖（罕见）
+  agents.json 定位：childCtx.agent.session.header.cwd + "/.team-work/platform/agents.json"（只使用当前子会话 cwd）
+  失败语义（逐级静默降级）：无 cwd / 无 modelHints / 无此 childId → 不注入（继承 Lead 默认，不劣化现状）
+  边界注记：agent-map 从 dispatch-plan 快照复制，因而波内多样性与已派发选择保持精确一致。
 ```
 
 ### 2.2 tw 原生工具（tw-tool.js，B-F4/F7 修正形状）
@@ -59,7 +61,7 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
   description: "team-work CLI 桥：args 即 CLI 参数面（如 [\"deliver\",\"--task\",\"t1\",...]）",
   parameters: { type:"object", properties:{ args:{type:"array",items:{type:"string"}} }, required:["args"] },
   async execute(args, exec) {
-    卡片 = await spawn(process.execPath, [twBin(), ...args.args], { cwd: projectRoot(exec) })
+    卡片 = await spawn(process.execPath, [内置 tw 入口, ...args.args], { cwd: childSessionCwd(exec) })
     return 卡片                                   // JSON 对象（exit≠0 时含 code/message/fix）
   },
   output: {
@@ -68,9 +70,8 @@ files：`dist/`、`README.md`（src 不进发布——npm 包只交付运行产�
   }
 }
 ```
-- twBin()：config.twBin → require.resolve("team-work-runtime/bin/tw.mjs")（peerDep）→ PATH "tw"；
-- projectRoot(exec)：config.projectRoot → exec.agent.session.header.cwd → process.cwd()；
-- 派单 PATH 注入不退役（A-F3：runtime twCommand 维持 TW_CMD>bin 绝对路径>"tw" 现状，standalone 不回归）；skill 注明插件环境下成员可走原生 tw 工具，两条指令等价。
+- tw 入口由插件内置解析；工作目录只取 `exec.agent.session.header.cwd`，缺少 cwd 返回可恢复诊断卡，不猜测项目或回退旧配置；
+- `injectionEnabled`、`projectRoots`、`twBin` 已从 schema/运行链移除且不兼容读取；skill 注明插件环境下成员可走原生 tw 工具。
 
 ### 2.3 skill 注册（B-F5 形状钉死）
 
@@ -92,8 +93,8 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 | --- | --- | --- | --- |
 | F-1 | 安装（profile 装载/插件挂载） | E2E | profile 手动装配 → dsh 会话内插件 apply 无错 |
 | F-2 | 安装后生效（skill 注册+tw 工具在场） | E2E | 成员会话枚举 skills 含 team-work；工具面含 tw |
-| F-3 | 默认配置（零配置开箱） | E2E | 不写 dsh.json/config → 注入降级继承默认，徽标显示默认模型，任务全流程可走 |
-| F-4 | 自定义配置生效 | E2E | dsh.json 候选池 + config.projectRoot → 注入按池选择（多样性/家族去重可观察） |
+| F-3 | 全局配置基线 | E2E | 无项目 dsh.json、无插件时，DSH 全局 tiers 仍可完成派发与交付 |
+| F-4 | 自定义全局候选池 | E2E | `team-work-dsh.tiers` 的候选池在 dispatch-plan 生效（多样性/家族去重可观察） |
 | F-5 | 插件注入生效（指定派发） | E2E | 真实请求记录的 requestConfig = modelHint 的 provider/model/effort（addressed 子代理的 sessions.models 不作为必需证据） |
 | F-6 | 数据隔离（多任务并发） | E2E | 两任务同进程并发派发 → 各 childId 注入各自 modelHint，无串台 |
 | F-7 | effort 链路 | E2E | F-5 断言含 reasoningEffort 字段（若平台 header 不落，如实记录边界） |
@@ -105,7 +106,7 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 
 **六段增量（I1→I6），段内自审、段间复核、I2/I4/I6 交叉审查**：
 
-- **I1 runtime 基座**：modelHint 决策函数提取为纯函数导出 + agent-map 自动落盘（--model-hint 覆盖）+ 单测（自动/覆盖/无映射降级/并发写）。
+- **I1 runtime 基座**：modelHint 决策函数提取为纯函数导出 + dispatch-plan 快照 + agent-map 原子复制（不接受 `--model-hint`）+ 单测（无配置 blocked、快照不漂移、并发写）。
   自审：P4 合规复查（零手动转录）；复核：84 基线全绿 + 新增测试清单核对 F-4/F-5 的数据前提。
 - **I2 插件骨架（host）**：验证脚本（profile 装配最小插件）→ index/inject/tw-tool/skill-embed + inject 寻址纯函数单测（childId 查表/三级降级链/header.cwd 兜底）。
   自审：§0 API 形状逐条对照；**交叉审查 ①**（技术向：API 用法/降级链/错误处理）。
@@ -118,7 +119,7 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 - **I6 压轴 E2E（全功能）**：分层覆盖——自动层（node:test：E2E-A cordis 装载 / E2E-B runtime 全功能 / C1 实机 boot 链 + 隔离 web 实例启动）覆盖 F-1..F-4、F-6、F-8..F-11，并覆盖 F-12 的徽标行为；**F-5/F-7（真实 LLM 注入/effort header）及 F-12 的最终 UI 位置/样式需带凭据真实会话，归用户实机确认**（插件 README 实机验证节；注入链的纯函数与真文件层已自动验证）。
   **交叉审查 ③**（验收向：矩阵逐项覆盖核对/断言强度/失败路径是否真断言而非走过场）→ 修复 → 复跑至全绿 → 用户验收。
 
-**完成定义**：自动层全绿（E2E-A/B/C1 + 当前全量 116 测试）+ F-5/F-7 及 F-12 的 UI 位置/样式如实标注待用户实机（README 指引）+ 交叉审查③ findings 清零 + 文档同步（roadmap/AGENTS/charter/file-inventory/README/验收快照）。
+**完成定义（当前解释）**：自动层全绿（E2E-A/B/C1 与完整自动套件）+ F-5/F-7 及 F-12 的 UI 位置/样式如实标注待用户实机（README 指引）+ findings 清零 + 文档同步（roadmap/AGENTS/charter/README/验收快照）。
 
 ## 6. 风险与缓解（v2 更新）
 
@@ -141,8 +142,8 @@ owner 派单可写路径清单后追加："可写范围外的修改会被 delive
 | --- | --- | --- |
 | B-F1 注入时序证伪（contribution 早于 prompt） | blocker | §2.1 寻址改 childId 主键（childCtx.agent.id 直查 modelHints）——seed/文本解析全删 |
 | B-F4 tools.register 缺 output/字段名错 | blocker | §2.2 补 output{schema,render}，inputSchema→parameters |
-| A-F1 model-hint 手动转录违 P4 | major | agent-map 自动落盘（复用 dispatch-plan 决策函数），--model-hint 仅覆盖 |
-| A-F2 task-root 解析不成立 | major | §2.1 config.projectRoot → header.cwd 兜底（seed 解析已随 B-F1 删除） |
+| A-F1 model-hint 手动转录违 P4 | major | 当前实现由 dispatch-plan 写精确快照，agent-map 自动复制且拒绝 `--model-hint` |
+| A-F2 task-root 解析不成立 | major | 当前实现只使用子会话 header.cwd（seed 解析已随 B-F1 删除），不读 config.projectRoot |
 | A-F3 twCommand 退役致 standalone 回归 | major | 不退役（维持现状），skill 注明双指令等价 |
 | B-F6 badge 不能 .jsx 直载 | major | §3 构建工厂式 CJS bundle（esbuild） |
 | B-F7 execute 返回需 schema 校验+render | major | §2.2 output 段补齐（与 B-F4 合并处置） |

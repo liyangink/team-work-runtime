@@ -1,185 +1,402 @@
-// dsh-map.mjs — DSH 平台绑定：tier→模型映射（Phase 1）
-// 解析链（docs/dsh-phase1-plan.md §2）：tier 显式 {provider, model} → 占位 {"use":"agent-default"}
-// 解析为 DSH 主 agent 模型（~/.dsh/settings.yaml 的 agent-default-model）→ dsh.json defaults → 内置兜底；
-// 结果一律标注来源（explicit / agent-default / fallback / default）。
-// 派发时读取（波次粒度生效）；映射数据留项目 .team-work/platform/，不进 DSH profile。
-import { readFile, mkdir } from "node:fs/promises"
-import path from "node:path"
+// dsh-map.mjs — DSH 全局 settings 的 tier→模型解析。
+// Runtime 只读取 ~/.dsh/settings.yaml（DSH_SETTINGS 可覆盖）中的 team-work-dsh.tiers；
+// 项目 .team-work/platform/dsh.json 不是配置源，遗留文件由用户自行保留或删除。
+import { readFile } from "node:fs/promises"
 import os from "node:os"
-
-import { controlRoot, atomicJson, readJson } from "./store.mjs"
+import path from "node:path"
 
 export const TIERS = ["junior", "senior", "expert"]
-export const PLACEHOLDER = "agent-default"
-// 脱敏规则：不内置任何环境特定默认 provider；无法解析显式 unresolved（派发前需配置）
 export const UNRESOLVED = Object.freeze({ provider: null, model: null, source: "unresolved", pool: [] })
 
-const ENTRY_EXAMPLE = '写法：{"provider":"...","model":"..."} 显式分档，或 {"use":"agent-default"} 占位（解析为 DSH 主 agent 模型）；删除本文件可自动重建占位模板'
+const CONFIG_PATH = "team-work-dsh.tiers"
 
-// 家族去重挑选（v3.2 选人规则：同档优先不同模型家族；已用家族之外取序首位）
+function configurationHint(file) {
+  return `请在 ${file} 配置 ${CONFIG_PATH}.junior、${CONFIG_PATH}.senior、${CONFIG_PATH}.expert；每档为含非空 provider/model 的对象或候选数组。`
+}
+
+function unresolvedTier() {
+  return { ...UNRESOLVED, pool: [] }
+}
+
+function familyOf(model) {
+  return model.split("-")[0]
+}
+
+// 家族去重挑选（v3.2 选人规则：同档优先不同模型家族；已用家族之外取序首位）。
 export function pickFromPool(pool, usedFamilies = []) {
   if (!pool || pool.length === 0) return null
-  const fresh = pool.find((c) => !usedFamilies.includes(c.family))
+  const fresh = pool.find((candidate) => !usedFamilies.includes(candidate.family))
   const picked = fresh ?? pool[0]
   return { ...picked, selectedBy: fresh ? "diversity" : "first" }
 }
 
-// 单波 modelHint 决策（I1 提取为纯函数，dispatch-plan 与 agent-map 自动落盘共用）：
-// tier 档位池 → 波内家族去重 → effort 透传。返回 {provider, model, source, effort?} 或 null（未解析）。
-export function computeModelHint(tierRes, usedFamilies) {
-  if (!tierRes || !tierRes.pool || tierRes.pool.length === 0) return null
-  const picked = pickFromPool(tierRes.pool, usedFamilies)
-  const hint = picked ? { ...tierRes, ...picked } : tierRes
+// 单波 modelHint 决策：tier 候选池 → 波内家族去重 → effort 透传。
+// 解析失败的档位返回 null，由 dispatch-plan 在写入派发事实前给出可恢复 blocked 卡。
+export function computeModelHint(tierResolution, usedFamilies = []) {
+  if (!tierResolution?.pool?.length) return null
+  const picked = pickFromPool(tierResolution.pool, usedFamilies)
+  if (!picked) return null
   return {
-    provider: hint.provider, model: hint.model, source: hint.source,
-    ...(hint.family !== undefined ? { family: hint.family } : {}),
-    ...(picked?.selectedBy ? { selectedBy: picked.selectedBy } : {}),
-    ...(hint.effort !== undefined ? { effort: hint.effort } : {}),
+    provider: picked.provider,
+    model: picked.model,
+    source: tierResolution.source,
+    ...(picked.family !== undefined ? { family: picked.family } : {}),
+    ...(picked.selectedBy ? { selectedBy: picked.selectedBy } : {}),
+    ...(picked.effort !== undefined ? { effort: picked.effort } : {}),
   }
 }
 
-export function dshMapPath(projectRoot) {
-  return path.join(controlRoot(projectRoot), "platform", "dsh.json")
-}
-
-export function placeholderMap() {
-  const tier = () => ({ use: PLACEHOLDER })
-  return { tiers: { junior: tier(), senior: tier(), expert: tier() }, defaults: null }
-}
-
-// 零初始化：首次使用自动生成占位映射（安装 → open → run 即可工作；用户分档 = 改任一档为显式 {provider, model}）
-export async function ensureDshMap(projectRoot) {
-  const file = dshMapPath(projectRoot)
-  if (await readJson(file, { allowMissing: true })) return { created: false, file }
-  await mkdir(path.dirname(file), { recursive: true })
-  await atomicJson(file, placeholderMap())
-  return { created: true, file }
-}
-
-function invalid(message, fix) {
-  const error = new Error(message)
+function yamlSyntaxError(message) {
+  const error = new Error(`team-work-dsh 配置无法解析：${message}`)
   error.code = "MAP_INVALID"
-  error.card = { ok: false, code: "MAP_INVALID", message, fix }
   return error
 }
 
-// settings.yaml 只读 agent-default-model 一个块的两个标量（完整 YAML 解析不属于 runtime 职责；DSH_SETTINGS 供测试/覆盖）
-export function parseAgentDefault(text) {
-  const lines = text.split(/\r?\n/)
-  const idx = lines.findIndex((line) => /^agent-default-model:\s*$/.test(line))
-  if (idx === -1) return null
-  const found = {}
-  for (const line of lines.slice(idx + 1)) {
-    if (/^\S/.test(line)) break // 出现顶级键 = 块结束
-    const m = line.match(/^\s+(provider|model):\s*"?([^"\s]+)"?\s*$/)
-    if (m) found[m[1]] = m[2]
-  }
-  return found.provider && found.model ? { provider: found.provider, model: found.model } : null
-}
-
-export async function readAgentDefault({ settingsFile } = {}) {
-  const file = settingsFile ?? process.env.DSH_SETTINGS ?? path.join(os.homedir(), ".dsh", "settings.yaml")
-  const text = await readFile(file, "utf8").catch(() => null)
-  if (text === null) return { file, resolved: null, reason: `未找到 ${file}` }
-  const resolved = parseAgentDefault(text)
-  return { file, resolved, reason: resolved ? null : `${file} 没有 agent-default-model 配置` }
-}
-
-function validEntry(entry, label) {
-  if (entry == null) return null
-  // v3.2 候选池：档位值可为数组（按性价比排序；同档家族去重后取序）
-  if (Array.isArray(entry)) {
-    if (entry.length === 0) throw invalid(`${label} 候选数组不能为空`, ENTRY_EXAMPLE)
-    return entry.map((e) => validEntry(e, label)).filter(Boolean).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
-  }
-  if (typeof entry !== "object") throw invalid(`${label} 必须是对象或候选数组`, ENTRY_EXAMPLE)
-  const keys = Object.keys(entry)
-  if (keys.length === 0) throw invalid(`${label} 为空对象`, ENTRY_EXAMPLE)
-  if (keys.includes("use")) {
-    if (entry.use !== PLACEHOLDER) throw invalid(`${label} 的 use 只支持 "${PLACEHOLDER}"`, ENTRY_EXAMPLE)
-    if (keys.length > 1) throw invalid(`${label}：use 占位不能与 provider/model 混用`, ENTRY_EXAMPLE)
-    return { use: PLACEHOLDER }
-  }
-  for (const key of keys) {
-      // effort 可选（预留）：Lead 派发原语当前无通道下发（workflow agent 显式拒绝、subagent 无此参数），
-  // Phase 3 插件自建 session 时消费（底层 options.reasoningEffort 通道存在）；值须为非空字符串。
-  if (!["provider", "model", "family", "effort"].includes(key)) throw invalid(`${label} 含未知字段 "${key}"`, ENTRY_EXAMPLE)
-  }
-  if (typeof entry.provider !== "string" || !entry.provider.trim() || typeof entry.model !== "string" || !entry.model.trim()) {
-    throw invalid(`${label} 的 provider 与 model 必须是非空字符串`, ENTRY_EXAMPLE)
-  }
-  if (entry.effort !== undefined && (typeof entry.effort !== "string" || !entry.effort.trim())) {
-    throw invalid(`${label} 的 effort 必须是非空字符串（模型声明 reasoningEfforts 的档位键，如 high/max）`, ENTRY_EXAMPLE)
-  }
-  return { provider: entry.provider, model: entry.model, family: entry.family ?? entry.model.split("-")[0], ...(entry.effort !== undefined ? { effort: entry.effort } : {}) }
-}
-
-export function validateDshMap(map) {
-  if (typeof map !== "object" || map === null || Array.isArray(map)) {
-    throw invalid("dsh.json 顶层必须是对象", ENTRY_EXAMPLE)
-  }
-  for (const key of Object.keys(map)) {
-    if (!["tiers", "defaults"].includes(key)) throw invalid(`dsh.json 含未知顶层字段 "${key}"`, `只允许 tiers 与 defaults；${ENTRY_EXAMPLE}`)
-  }
-  if (map.tiers === null) throw invalid("tiers 不能为 null（不配置该键或用空对象 {} 表示三档全回退）", ENTRY_EXAMPLE)
-  const tiers = map.tiers ?? {}
-  if (typeof tiers !== "object" || Array.isArray(tiers)) throw invalid("tiers 必须是对象", ENTRY_EXAMPLE)
-  const out = { tiers: {}, defaults: null }
-  for (const tier of Object.keys(tiers)) {
-    if (!TIERS.includes(tier)) throw invalid(`未知档位 "${tier}"`, `档位只能是 ${TIERS.join(" / ")}；${ENTRY_EXAMPLE}`)
-    out.tiers[tier] = validEntry(tiers[tier], `档位 ${tier}`)
-  }
-  if (map.defaults != null) out.defaults = validEntry(map.defaults, "defaults")
-  return out
-}
-
-// 解析三档（内部按需可查任意档名；未知档位走 defaults/内置兜底并给警告）
-export async function resolveTiers(projectRoot, { settingsFile, map: mapOverride } = {}) {
-  const file = dshMapPath(projectRoot)
-  const raw = mapOverride !== undefined ? mapOverride : await readJson(file, { allowMissing: true })
-  const warnings = []
-  let map
-  if (raw === null) {
-    map = validateDshMap(placeholderMap())
-    warnings.push(`映射文件 ${path.relative(projectRoot, file) || file} 不存在，按占位（${PLACEHOLDER}）处理；tw dispatch-plan / tw models 会自动生成`)
-  } else {
-    map = validateDshMap(raw)
-  }
-  const agentDefault = await readAgentDefault({ settingsFile })
-  if (!agentDefault.resolved) {
-    warnings.push(`${agentDefault.reason}；占位档只能回退 defaults，仍无则该档未解析（unresolved），派发前需配置映射`)
-  }
-
-  const asPool = (resolved) => (Array.isArray(resolved) ? resolved : [resolved])
-  const resolveOne = (tier) => {
-    const entry = map.tiers[tier]
-    const d = map.defaults
-    if (entry && (Array.isArray(entry) || entry.provider)) {
-      const pool = asPool(entry).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
-      const top = pool[0]
-      return { pool, provider: top.provider, model: top.model, source: "explicit", ...(top.effort !== undefined ? { effort: top.effort } : {}) }
+function stripYamlComment(line) {
+  let quote = null
+  let escaped = false
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+    if (quote === '"') {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === quote) quote = null
+      continue
     }
-    if (entry?.use === PLACEHOLDER) {
-      if (agentDefault.resolved) {
-        const a = { ...agentDefault.resolved, family: agentDefault.resolved.model.split("-")[0] }
-        return { pool: [a], provider: a.provider, model: a.model, source: PLACEHOLDER }
+    if (quote === "'") {
+      if (char === "'" && line[i + 1] === "'") { i += 1; continue }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'") quote = char
+    else if (char === "#") return line.slice(0, i)
+  }
+  return line
+}
+
+function yamlLines(text) {
+  if (typeof text !== "string") throw yamlSyntaxError("settings 内容不是文本")
+  const lines = []
+  for (const [offset, raw] of text.split(/\r?\n/).entries()) {
+    if (/\t/.test(raw)) throw yamlSyntaxError(`第 ${offset + 1} 行使用了不支持的制表符缩进`)
+    const content = stripYamlComment(raw).trimEnd()
+    if (!content.trim()) continue
+    const indent = content.length - content.trimStart().length
+    lines.push({ indent, content: content.trimStart(), line: offset + 1 })
+  }
+  return lines
+}
+
+function yamlColon(text) {
+  let quote = null
+  let escaped = false
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
+    if (quote === '"') {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === quote) quote = null
+      continue
+    }
+    if (quote === "'") {
+      if (char === "'" && text[i + 1] === "'") { i += 1; continue }
+      if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'") quote = char
+    else if (char === ":") return i
+  }
+  return -1
+}
+
+function quotedYaml(text, start = 0) {
+  const quote = text[start]
+  let escaped = false
+  for (let i = start + 1; i < text.length; i += 1) {
+    const char = text[i]
+    if (quote === '"') {
+      if (escaped) { escaped = false; continue }
+      if (char === "\\") { escaped = true; continue }
+      if (char !== quote) continue
+      try {
+        return { value: JSON.parse(text.slice(start, i + 1)), end: i + 1 }
+      } catch {
+        throw yamlSyntaxError("双引号字符串转义无效")
       }
-      // 占位不可解析 → defaults（全局警告已给）
-    } else if (entry == null) {
-      warnings.push(`档位 ${tier} 未配置，回退 defaults`)
     }
-    if (d && (Array.isArray(d) || d.provider)) {
-      const pool = asPool(d).map((e) => ({ ...e, family: e.family ?? e.model.split("-")[0] }))
-      const top = pool[0]
-      return { pool, provider: top.provider, model: top.model, source: "fallback", ...(top.effort !== undefined ? { effort: top.effort } : {}) }
-    }
-    if (d?.use === PLACEHOLDER && agentDefault.resolved) {
-      const a = { ...agentDefault.resolved, family: agentDefault.resolved.model.split("-")[0] }
-      return { pool: [a], provider: a.provider, model: a.model, source: PLACEHOLDER }
-    }
-    warnings.push(`档位 ${tier} 未解析（无显式配置、占位不可解析、无 defaults）：派发前需配置映射或确认 DSH 主模型设置`)
-    return { ...UNRESOLVED, pool: [] }
+    if (char !== quote) continue
+    if (text[i + 1] === quote) { i += 1; continue }
+    return { value: text.slice(start + 1, i).replace(/''/g, "'"), end: i + 1 }
   }
-  const tiers = Object.fromEntries(TIERS.map((t) => [t, resolveOne(t)]))
-  return { file, map, agentDefault, tiers, warnings }
+  throw yamlSyntaxError("引号没有闭合")
+}
+
+function plainYamlScalar(value) {
+  const text = value.trim()
+  if (text === "null" || text === "~") return null
+  if (text === "true") return true
+  if (text === "false") return false
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return Number(text)
+  return text
+}
+
+function parseYamlFlow(text) {
+  let index = 0
+  const skip = () => { while (/\s/.test(text[index] ?? "")) index += 1 }
+  const parseKey = () => {
+    skip()
+    if (text[index] === '"' || text[index] === "'") {
+      const parsed = quotedYaml(text, index)
+      index = parsed.end
+      return parsed.value
+    }
+    const start = index
+    while (index < text.length && text[index] !== ":" && !/\s/.test(text[index])) index += 1
+    const key = text.slice(start, index)
+    if (!key) throw yamlSyntaxError("流式对象缺少键")
+    return key
+  }
+  const parseValue = () => {
+    skip()
+    const char = text[index]
+    if (char === "{") {
+      index += 1
+      const object = {}
+      skip()
+      if (text[index] === "}") { index += 1; return object }
+      while (true) {
+        const key = parseKey()
+        skip()
+        if (text[index] !== ":") throw yamlSyntaxError("流式对象的键后缺少冒号")
+        index += 1
+        object[key] = parseValue()
+        skip()
+        if (text[index] === "}") { index += 1; return object }
+        if (text[index] !== ",") throw yamlSyntaxError("流式对象字段之间缺少逗号")
+        index += 1
+      }
+    }
+    if (char === "[") {
+      index += 1
+      const array = []
+      skip()
+      if (text[index] === "]") { index += 1; return array }
+      while (true) {
+        array.push(parseValue())
+        skip()
+        if (text[index] === "]") { index += 1; return array }
+        if (text[index] !== ",") throw yamlSyntaxError("流式数组元素之间缺少逗号")
+        index += 1
+      }
+    }
+    if (char === '"' || char === "'") {
+      const parsed = quotedYaml(text, index)
+      index = parsed.end
+      return parsed.value
+    }
+    const start = index
+    while (index < text.length && !",}]".includes(text[index])) index += 1
+    const bare = text.slice(start, index).trim()
+    if (!bare) throw yamlSyntaxError("流式值为空")
+    return plainYamlScalar(bare)
+  }
+  const value = parseValue()
+  skip()
+  if (index !== text.length) throw yamlSyntaxError("流式值后有多余字符")
+  return value
+}
+
+function parseYamlValue(text) {
+  const value = text.trim()
+  if (!value) return null
+  if (value.startsWith("{") || value.startsWith("[")) return parseYamlFlow(value)
+  if (value.startsWith('"') || value.startsWith("'")) {
+    const parsed = quotedYaml(value)
+    if (value.slice(parsed.end).trim()) throw yamlSyntaxError("引号值后有多余字符")
+    return parsed.value
+  }
+  return plainYamlScalar(value)
+}
+
+function parseYamlKeyValue(text, line) {
+  const colon = yamlColon(text)
+  if (colon === -1) throw yamlSyntaxError(`第 ${line} 行缺少键值分隔冒号`)
+  const rawKey = text.slice(0, colon).trim()
+  if (!rawKey) throw yamlSyntaxError(`第 ${line} 行键为空`)
+  const key = (rawKey.startsWith('"') || rawKey.startsWith("'")) ? parseYamlValue(rawKey) : rawKey
+  if (typeof key !== "string" || !key) throw yamlSyntaxError(`第 ${line} 行键必须是字符串`)
+  return { key, value: text.slice(colon + 1).trim() }
+}
+
+function parseYamlBlock(lines, start, indent) {
+  const array = lines[start]?.content === "-" || lines[start]?.content.startsWith("- ")
+  const value = array ? [] : {}
+  let index = start
+  while (index < lines.length) {
+    const current = lines[index]
+    if (current.indent < indent) break
+    if (current.indent > indent) throw yamlSyntaxError(`第 ${current.line} 行缩进层级不连续`)
+    const isItem = current.content === "-" || current.content.startsWith("- ")
+    if (array !== isItem) throw yamlSyntaxError(`第 ${current.line} 行对象与数组不能混用`)
+    if (!array) {
+      const entry = parseYamlKeyValue(current.content, current.line)
+      index += 1
+      if (entry.value) value[entry.key] = parseYamlValue(entry.value)
+      else if (index < lines.length && lines[index].indent > indent) {
+        const child = parseYamlBlock(lines, index, lines[index].indent)
+        value[entry.key] = child.value
+        index = child.index
+      } else value[entry.key] = null
+      continue
+    }
+
+    const rest = current.content === "-" ? "" : current.content.slice(2).trim()
+    index += 1
+    if (!rest) {
+      if (index >= lines.length || lines[index].indent <= indent) throw yamlSyntaxError(`第 ${current.line} 行数组项缺少值`)
+      const child = parseYamlBlock(lines, index, lines[index].indent)
+      value.push(child.value)
+      index = child.index
+      continue
+    }
+    if (rest.startsWith("{") || rest.startsWith("[") || rest.startsWith('"') || rest.startsWith("'")) {
+      value.push(parseYamlValue(rest))
+      continue
+    }
+    const colon = yamlColon(rest)
+    if (colon === -1) {
+      value.push(parseYamlValue(rest))
+      continue
+    }
+    const first = parseYamlKeyValue(rest, current.line)
+    const item = {}
+    if (first.value) item[first.key] = parseYamlValue(first.value)
+    else if (index < lines.length && lines[index].indent > indent) {
+      const child = parseYamlBlock(lines, index, lines[index].indent)
+      item[first.key] = child.value
+      index = child.index
+    } else item[first.key] = null
+    if (index < lines.length && lines[index].indent > indent) {
+      const extra = parseYamlBlock(lines, index, lines[index].indent)
+      if (!extra.value || typeof extra.value !== "object" || Array.isArray(extra.value)) throw yamlSyntaxError(`第 ${current.line} 行数组对象的续行必须是对象`)
+      Object.assign(item, extra.value)
+      index = extra.index
+    }
+    value.push(item)
+  }
+  return { value, index }
+}
+
+// 只返回 DSH settings 中 team-work-dsh.tiers 的原始值；不解析、不依赖其他 settings 区段。
+export function parseTeamWorkDshSettings(text) {
+  const lines = yamlLines(text)
+  const sectionIndex = lines.findIndex((line) => line.indent === 0 && /^team-work-dsh\s*:/.test(line.content))
+  if (sectionIndex === -1) return null
+  const sectionLine = lines[sectionIndex]
+  const entry = parseYamlKeyValue(sectionLine.content, sectionLine.line)
+  if (entry.key !== "team-work-dsh") return null
+  let section
+  if (entry.value) section = parseYamlValue(entry.value)
+  else {
+    const children = []
+    for (let i = sectionIndex + 1; i < lines.length && lines[i].indent > sectionLine.indent; i += 1) children.push(lines[i])
+    if (!children.length) return null
+    const baseIndent = children[0].indent
+    const normalized = children.map((line) => ({ ...line, indent: line.indent - baseIndent }))
+    section = parseYamlBlock(normalized, 0, 0).value
+  }
+  if (!section || typeof section !== "object" || Array.isArray(section)) throw yamlSyntaxError("team-work-dsh 必须是对象")
+  return section.tiers ?? null
+}
+
+function normalizeCandidate(candidate, label) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) throw new Error(`${label} 必须是对象`)
+  for (const key of Object.keys(candidate)) {
+    if (!['provider', 'model', 'family', 'effort'].includes(key)) throw new Error(`${label} 含未知字段 ${JSON.stringify(key)}`)
+  }
+  if (typeof candidate.provider !== "string" || !candidate.provider.trim() || typeof candidate.model !== "string" || !candidate.model.trim()) {
+    throw new Error(`${label} 的 provider 与 model 必须是非空字符串`)
+  }
+  if (candidate.family !== undefined && (typeof candidate.family !== "string" || !candidate.family.trim())) {
+    throw new Error(`${label} 的 family 必须是非空字符串`)
+  }
+  if (candidate.effort !== undefined && (typeof candidate.effort !== "string" || !candidate.effort.trim())) {
+    throw new Error(`${label} 的 effort 必须是非空字符串`)
+  }
+  return {
+    provider: candidate.provider.trim(),
+    model: candidate.model.trim(),
+    family: candidate.family?.trim() || familyOf(candidate.model.trim()),
+    ...(candidate.effort !== undefined ? { effort: candidate.effort.trim() } : {}),
+  }
+}
+
+function normalizeTier(entry, tier) {
+  const candidates = Array.isArray(entry) ? entry : [entry]
+  if (!candidates.length) throw new Error(`档位 ${tier} 的候选数组不能为空`)
+  return candidates.map((candidate, index) => normalizeCandidate(candidate, `档位 ${tier} 的候选 ${index + 1}`))
+}
+
+// 静态配置校验不猜测回退：每个不可用档位都规范化为 unresolved，并附带可直接执行的修复提示。
+export function validateTierSettings(rawTiers, { file = "~/.dsh/settings.yaml" } = {}) {
+  const warnings = []
+  const tiers = {}
+  if (!rawTiers || typeof rawTiers !== "object" || Array.isArray(rawTiers)) {
+    warnings.push(`未找到有效的 ${CONFIG_PATH}；${configurationHint(file)}`)
+    for (const tier of TIERS) tiers[tier] = unresolvedTier()
+    return { tiers, warnings }
+  }
+  for (const key of Object.keys(rawTiers)) {
+    if (!TIERS.includes(key)) warnings.push(`${CONFIG_PATH} 含未知档位 ${JSON.stringify(key)}；仅使用 ${TIERS.join(" / ")}`)
+  }
+  for (const tier of TIERS) {
+    if (!(tier in rawTiers)) {
+      tiers[tier] = unresolvedTier()
+      warnings.push(`档位 ${tier} 未配置（unresolved）；${configurationHint(file)}`)
+      continue
+    }
+    try {
+      const pool = normalizeTier(rawTiers[tier], tier)
+      const top = pool[0]
+      tiers[tier] = {
+        pool,
+        provider: top.provider,
+        model: top.model,
+        source: "global-settings",
+        ...(top.effort !== undefined ? { effort: top.effort } : {}),
+      }
+    } catch (error) {
+      tiers[tier] = unresolvedTier()
+      warnings.push(`档位 ${tier} 无效（${error.message}，unresolved）；${configurationHint(file)}`)
+    }
+  }
+  return { tiers, warnings }
+}
+
+function settingsPath(settingsFile) {
+  const dshHome = process.env.DSH_HOME
+  return settingsFile
+    ?? process.env.DSH_SETTINGS
+    ?? (dshHome ? path.join(dshHome, "settings.yaml") : path.join(os.homedir(), ".dsh", "settings.yaml"))
+}
+
+// 全局唯一解析入口。文件缺失、YAML 损坏和静态校验失败均返回 unresolved，不读项目配置也不写配置文件。
+export async function resolveTiers({ settingsFile } = {}) {
+  const file = settingsPath(settingsFile)
+  let text
+  try {
+    text = await readFile(file, "utf8")
+  } catch (error) {
+    const base = validateTierSettings(null, { file })
+    const reason = error?.code === "ENOENT" ? `未找到全局 DSH settings：${file}` : `无法读取全局 DSH settings：${file}（${error.message}）`
+    return { file, tiers: base.tiers, warnings: [reason, ...base.warnings] }
+  }
+  try {
+    const rawTiers = parseTeamWorkDshSettings(text)
+    const resolved = validateTierSettings(rawTiers, { file })
+    return { file, ...resolved }
+  } catch (error) {
+    const base = validateTierSettings(null, { file })
+    return { file, tiers: base.tiers, warnings: [`${error.message}；${configurationHint(file)}`, ...base.warnings] }
+  }
 }

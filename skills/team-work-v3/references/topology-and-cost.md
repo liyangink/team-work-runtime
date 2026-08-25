@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 是什么 | 波次类型：owner 交付 / challenger 挑战 / expert 裁决 | 模型预算：junior / senior / expert |
 | 由谁定 | 波次机；**每轮每角色恰好一个成员**（结构事实，非用量限制） | 派发点：场景默认档 + 包 tier 覆盖 + risk 兜底 |
-| 对应工具 | deliver / review / review --verdict | dsh.json 候选池（同波家族去重挑选） |
+| 对应工具 | deliver / review / review --verdict | DSH 全局 `team-work-dsh.tiers` 候选池（同波家族去重挑选） |
 
 映射事实（policy 默认）：owner 波用场景默认档（junior 居多），包 tier 可覆盖（高于默认触发升档审批卡）；challenger 波固定 challengerTier（默认 senior——挑战是质量闸门，不随包降档）；裁决波固定 expert 档（核心场景最后一道闸）。
 
@@ -36,7 +36,7 @@
 
 - 哪些场景有裁决波由 policy `core: true` 决定（design/spec/design-review/spec-review/code-review/e2e）；
 - 并行成员数 = 当波包数，受 policy `concurrencySoftLimit`（4）约束；拆包多于该值时波次机自动分波推进；
-- 同波多 owner 自动家族去重选模（候选池序 + diversityWithinTier）；
+- 每档候选池来自全局 `team-work-dsh.tiers`：兼容单对象或数组，provider/model 必填，family 与 effort 可选；同波多 owner 自动家族去重选模（候选池序 + diversityWithinTier）。项目 `dsh.json` 已废弃，`agents.json` 只保留子代理映射与已派发快照；
 - 非 core 场景遇高风险事实冲突：用 risk/包 tier 升 owner 档 + 只读子派单采第二意见，不虚构"临时加裁决者"路径。
 
 ## 三轮收敛

@@ -13,7 +13,6 @@ import { readFile } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
-import { matchProjectRoot } from "./settings.js"
 
 const requireSync = createRequire(import.meta.url)
 
@@ -30,26 +29,23 @@ export function hintForChild(agentsJson, childId) {
   }
 }
 
-// agents.json 路径解析（纯函数导出供单测）：config 显式 → header.cwd 兜底（逻辑不变）
-export function agentsJsonPath(config, headerCwd) {
-  const root = config?.projectRoot ?? headerCwd
-  if (!root) return null
-  return path.join(String(root), ".team-work", "platform", "agents.json")
+// agents.json 路径解析（纯函数导出供单测）：只从子会话 cwd 定位。
+export function agentsJsonPath(headerCwd) {
+  if (typeof headerCwd !== "string" || !headerCwd) return null
+  return path.join(headerCwd, ".team-work", "platform", "agents.json")
 }
 
 // 安装器解析：插件 apply 通过动态 import 完成异步激活门槛，解析成功后才注册 setup，
 // 覆盖 Node >=18，首个子代不再依赖异步缓存竞态。同步 require 仅保留给直接调用
 // makeInjectContribution 且未显式注入 installerNow 的适配场景。
 let cachedInstaller = null
-export async function resolveInstaller(settings) {
-  if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
+export async function resolveInstaller() {
   const mod = await import("@deepseek-ai/dsh-agent")
   const fn = mod.installModelSelection ?? mod.default?.installModelSelection
   if (typeof fn === "function") { cachedInstaller = fn; return fn }
   return null
 }
-export function installerNow(settings) {
-  if (typeof settings?.installModelSelection === "function") return settings.installModelSelection
+export function installerNow() {
   if (cachedInstaller) return cachedInstaller
   const m = requireSync("@deepseek-ai/dsh-agent")
   const fn = m.installModelSelection ?? m.default?.installModelSelection
@@ -58,13 +54,12 @@ export function installerNow(settings) {
 }
 
 // contribution 工厂：返回【同步函数】（宿主存其返回值为 disposer）。
-export function makeInjectContribution(ctx, settings, deps = {}) {
+export function makeInjectContribution(ctx, deps = {}) {
   const readFileFn = deps.readFile ?? readFile
   const readFileSyncFn = deps.readFileSync ?? readFileSync
   const installerNowFn = deps.installerNow ?? installerNow
   const pollMs = deps.pollMs ?? 500
   const pollMaxMs = deps.pollMaxMs ?? 120000
-  const snapshot = () => (typeof settings === "function" ? settings() : settings)
   return function contribution(childCtx) {
     let stopped = false
     let timer = null
@@ -82,11 +77,15 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
         warn("模型注入跳过：子代缺少 agent.id；请检查 DSH continuable setup 上下文")
         return cleanup
       }
-      const config = snapshot() ?? {}
-      if (config.injectionEnabled === false) return cleanup
+      const cwd = agent?.session?.header?.cwd
+      const file = agentsJsonPath(cwd)
+      if (!file) {
+        warn("模型注入跳过：子会话缺少工作目录；请在已打开项目的 DSH 会话中创建子代")
+        return cleanup
+      }
       let install
       try {
-        install = installerNowFn(config)
+        install = installerNowFn()
       } catch (error) {
         warn("模型选择安装器解析失败，当前子代保持默认模型；修复依赖后重新创建或恢复子代：" + describe(error))
         return cleanup
@@ -100,11 +99,6 @@ export function makeInjectContribution(ctx, settings, deps = {}) {
       disposeInstall = install(childCtx, selection)
       // 迟到 hint 自循环补读：childId 派生时序晚于 agents.json 写入（Lead agent-map 在 spawn 后），
       // 命中即写 selection.current（下轮请求生效）并停；超时（pollMaxMs）静默停。
-      const cwd = agent?.session?.header?.cwd
-      const hit = matchProjectRoot(config?.projectRoots, cwd)
-      const projectRoot = hit?.path ?? config?.projectRoot
-      const file = agentsJsonPath({ projectRoot }, cwd)
-      if (!file) return () => cleanup()
       const startedAt = Date.now()
       let readIssueWarned = false
       let timeoutWarned = false

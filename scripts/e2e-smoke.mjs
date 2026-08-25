@@ -8,7 +8,7 @@
 //  S4 tw 工具真调（spawn 路径：open→gate 幂等）
 //  S5 注入链干跑（构造 agents.json + 直接调 inject.js 的 hintForChild——装载级验证留给 I6）
 import { execFile } from "node:child_process"
-import { mkdir, writeFile, readFile, cp, rm } from "node:fs/promises"
+import { mkdir, writeFile, readFile, cp, rm, symlink } from "node:fs/promises"
 import { promisify } from "node:util"
 import os from "node:os"
 import path from "node:path"
@@ -28,15 +28,13 @@ async function main() {
   const home = await mkdir(path.join(os.tmpdir(), "tw-dsh-smoke-" + Date.now()), { recursive: true }).then(() => path.join(os.tmpdir(), "tw-dsh-smoke-" + Date.now()))
   const profile = path.join(home, "profiles", "smoke")
   await mkdir(profile, { recursive: true })
-  await writeFile(path.join(profile, "package.json"), JSON.stringify({ name: "dsh-profile-smoke", private: true, "dsh.profile": { bundles: [] } }, null, 2))
+  await writeFile(path.join(profile, "package.json"), JSON.stringify({ name: "dsh-profile-smoke", private: true, dsh: { profile: { bundles: ["team-work-runtime-dsh"] } } }, null, 2))
   await writeFile(path.join(profile, "pnpm-workspace.yaml"), "packages:\n  - .\nnodeLinker: hoisted\n")
-  await writeFile(path.join(profile, "cordis.patch.yml"), [
-    "# smoke 装配：直接挂载插件源目录（file: 引用免 pnpm install）",
-    "plugins:",
-    "  team-work-dsh:",
-    "    path: " + path.join(repoRoot, "packages/dsh-plugin"),
-    "",
-  ].join("\n"))
+  // 用户层 patch 保持空数组；装载由 bundle 层承担：package.json 声明 bundles +
+  // 插件包自带纯 insert cordis.patch.yml + node_modules 按包名 symlink（loader 据名解析 main 入口）。
+  await writeFile(path.join(profile, "cordis.patch.yml"), "[]" + "\n")
+  await mkdir(path.join(profile, "node_modules"), { recursive: true })
+  await symlink(path.join(repoRoot, "packages/dsh-plugin"), path.join(profile, "node_modules", "team-work-runtime-dsh"), "dir")
   console.log("S2 OK 隔离 profile:", profile)
 
   // S3 dsh headless 装载验证（DSH_HOME 重定向；超时容错）

@@ -28,7 +28,8 @@ dsh plugin --profile web remove team-work-runtime-dsh
 node packages/dsh-plugin/build.mjs   # 先构建 dist
 dsh plugin --profile web add /绝对路径/team-work-runtime/packages/dsh-plugin
 ```
-注：pnpm 对目录依赖做的是拷贝而非链接——插件源码改动后需重跑 build 并重新 add（或改用方式三 symlink）。
+注：pnpm 11 对目录参数落的是 `link:` 依赖（node_modules 内符号链接到源目录）——build 后改动即时生效，**无需重新 add**（早先"目录=拷贝"的记录是旧版 pnpm 行为；tgz 通道才是拷贝语义，升级需重新 add）。
+另注：若同一 profile 还装有私有 registry 来源的包，remove 会清空包存储，重装时需带该 registry 标志（`--registry <来源>`）才能重新解析私有依赖。
 
 **方式三：仓库目录 symlink（开发期改动即时生效，免 pnpm）**
 ```bash
@@ -41,7 +42,8 @@ node scripts/uninstall-local.mjs              # 卸载
 dsh plugin add team-work-runtime-dsh
 ```
 
-所有方式安装后**重启 dsh 会话**生效；验证：`dsh --profile web --dump-config | grep team-work-dsh`（有命中即装载成功）。
+生效：插件的 bundle patch 是纯 insert 行——装有 ntes-dsh-market 的环境安装/启用时**可热挂载即时生效**（市场界面显示 live）；否则**重启 dsh 会话**后由 bundle 层生效。
+验证：`dsh --profile web --dump-config 2>/dev/null | grep "name: team-work-runtime-dsh"`（stdout 装配树命中 name 行即装载成功；**勿合并 stderr**——patch 未生效时 loader 的 "entry not found" warn 恰好也含插件名，曾造成误判）。
 
 ## 配置（可选）
 

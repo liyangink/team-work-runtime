@@ -16,7 +16,7 @@
 | `ctx.skills.register({name, description(必填), content(必填=SKILL.md 全文), whenToUse?, resourceBase?{kind:"directory"|"url"|"opaque"}, ...})`——references 经 resourceBase（directory=插件内打包目录） | dsh-skill:193-215/465-469 |
 | 徽标装载：client 插件须 `dsh.client.platform:"web"` + `exports["./client"]`，产物为 **window.__ModuleLoader__.load 工厂式 CJS bundle**（无运行时 JSX 转译）；slots.inject(slot,cb)+slots.register({name,locale,inject},Component)；单席位 slot "conversation.input.model"；RPC = ctx.get("connection").api.sessions.models({sessionId})→current{provider,model,reasoningEffort}；徽标显示注入后的运行时值（request/header waterfall 晚于 agent/request 注入） | dsh-client-modules + model-selection:774-793 + apiproxy:2580（用户调研+B 证实） |
 | profile 装载：$DSH_HOME/profiles/<name>（package.json bundles + pnpm-workspace + cordis.patch.yml），node_modules flat fallback 解析——本地验证脚本路径可行 | dsh-app-boot:284-406 |
-| **bundle 装载协议（C1 实机发现）**：插件作为 profile bundle 需 package.json 声明 `dsh.bundle.patch`（指向入口 patch 文件）+ patch 文件本体声明插件（`- id + plugin: ./dist/index.js`）——缺任一 dsh boot 拒绝装载（"declares no dsh.bundle"） | dsh-app-boot:549 + 实机 dump-config 验证 |
+| **bundle 装载协议（rc.7 实锤修正，原 C1 结论有误）**：package.json 声明 `dsh.bundle.patch`（缺则 boot 拒绝 "declares no dsh.bundle"）+ patch 文件须为**规范 insert 行**：`- insert:` 子行 `{id, name}`，`name`=npm 包名（loader 据此从 profile node_modules 解析 main 入口）。旧写法 `- id:` + `plugin: ./dist/index.js` 是无 `insert` 键的 override 行——目标 id 不存在时 `applyEntryPatches` warn 后**静默跳过**（插件从未装载）；当年 C1 断言合并 stdout+stderr，命中的恰是这条 warn，误判为装载成功 | cordis-plugin-include applyEntryPatches（装载与 dump-config 共用语义）+ ntes-dsh-market verify.ts 实测 |
 
 ## 1. 包结构与打包范围
 

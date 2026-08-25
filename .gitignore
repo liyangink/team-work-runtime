@@ -3,3 +3,6 @@ node_modules/
 .team-work/
 packages/dsh-plugin/dist/
 .npm-cache-tmp/
+# 插件包构建产物（npm pack 输出）
+packages/dsh-plugin/*.tgz
+

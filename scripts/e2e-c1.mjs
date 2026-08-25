@@ -41,13 +41,21 @@ async function main() {
     env: { ...process.env, DSH_HOME: home },
     timeout: 90000,
   }).catch((e) => ({ stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }))
-  const tree = String(stdout) + String(stderr)
-  if (!tree.includes("team-work-dsh")) {
-    console.error("FAIL: 装配树不含插件。输出：")
-    console.error(tree.slice(0, 800) || "(空)")
+  // 断言真装载：stdout 装配树须同时含 entry id 与包名行（旧断言合并 stderr，曾把
+  // "patch: entry not found" 的 warn 误判为装载成功——纯 stdout 才是装配树）。
+  const out = String(stdout)
+  if (!(out.includes("id: team-work-dsh") && out.includes("name: team-work-runtime-dsh"))) {
+    console.error("FAIL: 装配树不含插件 entry。stdout 片段：")
+    console.error(out.slice(0, 800) || "(空)")
+    console.error("stderr 片段（含 patch warn 时为 patch 行未生效）：")
+    console.error(String(stderr).slice(0, 400) || "(空)")
     process.exit(1)
   }
-  console.log("C1 OK 宿主装配树含 team-work-dsh（symlink 挂载 + dump-config）")
+  if (String(stderr).includes("team-work-dsh") && String(stderr).includes("not found")) {
+    console.error("FAIL: patch 行被判 not found（写法回退或 bundle 未收集）")
+    process.exit(1)
+  }
+  console.log("C1 OK 宿主装配树含 team-work-dsh entry（insert 行 + 按包名解析）")
   await rm(home, { recursive: true, force: true }).catch(() => {})
 }
 

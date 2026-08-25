@@ -1,3 +1,8 @@
-# team-work-runtime-dsh 的 loader patch：声明入口插件（bundle 装载协议）
-- id: team-work-dsh
-  plugin: ./dist/index.js
+# team-work-runtime-dsh 的 bundle patch：向 profile 插件层插入入口插件。
+# 行形状（rc.7 patch 语义）：`- insert:` 子行 {id, name}——name 必须是 npm 包名，
+# loader 据此从 profile node_modules 解析入口（package.json main → dist/index.js）；
+# id 是 loader entry id，供上层 patch 按 id 寻址覆盖/停用。
+# 保持纯 insert 行（无 config/表达式）以兼容市场插件热挂载（免重启即时生效）。
+- insert:
+    - id: team-work-dsh
+      name: team-work-runtime-dsh

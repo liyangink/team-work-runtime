@@ -4,7 +4,7 @@
 
 | # | 功能 | 状态 | 验证实体 |
 | --- | --- | --- | --- |
-| F-1 安装（装载） | ✅ 自动 | tests/dsh-plugin-e2e.test.mjs（真实 cordis 装载层）+ scripts/e2e-c1.mjs（实机 dsh boot 链：bundle→patch→loader，dump-config 装配树断言） |  |
+| F-1 安装（装载） | ✅ 自动 | tests/dsh-plugin-e2e.test.mjs（真实 cordis 装载层）+ scripts/e2e-c1.mjs（实机 dsh boot 链：bundle→patch→loader，dump-config 装配树断言）。**rc.7 修正（2026-08-25）**：原 patch 写法 `- id + plugin:` 在 rc.7 的 applyEntryPatches 语义下是无 insert 的 override 行→warn 后静默跳过，插件从未装载；当年 C1 断言合并 stdout+stderr 把 "entry not found" warn 误判为命中。已改规范 insert 行（`- insert:` 子行 `{id, name:包名}`），断言改纯 stdout 判 id+name 双命中 |  |
 | F-2 安装后生效（三注册） | ✅ 自动 | 同上（apply 三注册真调用 + inject 恰三服务断言——F1 类 blocker 永久防线） |  |
 | F-3 默认配置零配置 | ✅ 自动 | tests/e2e-b-matrix.test.mjs F-3（无 dsh.json 无插件全流程） |  |
 | F-4 自定义配置 | ✅ 自动 | 同上 F-6/F-4（自定义池首选生效） |  |

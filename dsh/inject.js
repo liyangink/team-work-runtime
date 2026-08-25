@@ -1,14 +1,15 @@
 // inject.js — continuable 子代模型注入（同步 contribution 契约版）
 // 宿主契约（dsh-subagent SetupRegistry.apply 源码实证）：
 //   contribution(childCtx) 同步调用，返回值【直接存为 disposer，不 await】——
-//   async contribution = Promise 被当 disposer + 同步段在首个 await 让出，
-//   install 真正执行可能晚于子代首请求（监听器迟到）。故本实现为同步函数。
+//   async contribution = Promise 被当 disposer + 同步段在首个 await 让出。
 // installModelSelection 宿主语义（dsh-agent/lib/index.js 实证）：
-//   selection.current === undefined = 不干预（继承默认模型）；
-//   对象（哪怕 {provider:null}）会覆写 variables.provider/model——null 值杀 turn（实机铁证）。
-// 时序（实机验证）：新建子代的 childId 在首条 prompt 前不可预知，
-//   故 fresh 首轮继承默认模型，Lead 的 tw agent-map 落盘后由自循环补读供下轮请求使用；
-//   cold-resume 的 hint 已存在，可在 contribution 返回前同步读入并供当前请求使用。
+//   selection.current === undefined = 不干预（继承默认模型）；对象覆写 variables.provider/model。
+// 寻址（方案 docs/dsh-tag-injection-plan.md v2）——两级：
+//   ① 标签寻址（主通道，首轮生效）：子代 label 机器段 = 阶段缩写·角色[@包]（skill 标签规范），
+//      派发时 runtime 已把该标签的 modelHint 快照写进 agents.json.tagHints；
+//      contribution 同步段读 session.events 的 subagent/descriptor 事件（seed 内，seq0）解析 label，
+//      命中即同步写 selection.current——首请求即注入。
+//   ② childId 补读（回退通道，兼容旧派单）：标签缺失/未命中时按现状自循环补读 modelHints[childId]。
 import { readFile } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -16,7 +17,31 @@ import path from "node:path"
 
 const requireSync = createRequire(import.meta.url)
 
-// 纯函数：从 agents.json 内容解析某 childId 的注入决策（单测直接覆盖）
+// 标签机器段正则（skill 标签规范固定表）：阶段缩写·角色[@包]
+export const LABEL_TAG_RE = /^(RES|DESIGN|SPEC|IMPL|TEST|CR|E2E|FIN)·(owner|chal|expert)(@[A-Za-z0-9_\-]+)?/
+
+// 纯函数：从子代 label 解析注入寻址键（标签机器段），不合法返回 null（三态判定）
+export function parseLabelTag(label) {
+  if (typeof label !== "string") return null
+  // 头锚定直接提取机器段（对简述分隔形态全容忍：规范" · "、手写"· "、无简述均兼容）
+  const m = LABEL_TAG_RE.exec(label.trim())
+  return m ? m[0] : null
+}
+
+// 纯函数：从 agents.json 内容解析某标签的注入决策（tagHints 键）
+export function hintForTag(agentsJson, tag) {
+  if (!agentsJson || typeof agentsJson !== "object" || typeof tag !== "string" || !tag) return null
+  const hint = agentsJson.tagHints?.[tag]
+  if (!hint || typeof hint !== "object") return null
+  if (typeof hint.provider !== "string" || !hint.provider || typeof hint.model !== "string" || !hint.model) return null
+  return {
+    provider: hint.provider,
+    model: hint.model,
+    ...(typeof hint.effort === "string" && hint.effort ? { reasoningEffort: hint.effort } : {}),
+  }
+}
+
+// 纯函数：从 agents.json 内容解析某 childId 的注入决策（补读通道，单测直接覆盖）
 export function hintForChild(agentsJson, childId) {
   if (!agentsJson || typeof agentsJson !== "object") return null
   const hint = agentsJson.modelHints?.[childId]
@@ -35,9 +60,7 @@ export function agentsJsonPath(headerCwd) {
   return path.join(headerCwd, ".team-work", "platform", "agents.json")
 }
 
-// 安装器解析：插件 apply 通过动态 import 完成异步激活门槛，解析成功后才注册 setup，
-// 覆盖 Node >=18，首个子代不再依赖异步缓存竞态。同步 require 仅保留给直接调用
-// makeInjectContribution 且未显式注入 installerNow 的适配场景。
+// 安装器解析（与既有实现一致）
 let cachedInstaller = null
 export async function resolveInstaller() {
   const mod = await import("@deepseek-ai/dsh-agent")
@@ -77,24 +100,6 @@ export function makeInjectContribution(ctx, deps = {}) {
         warn("模型注入跳过：子代缺少 agent.id；请检查 DSH continuable setup 上下文")
         return cleanup
       }
-      // 探针（标签寻址承重墙验证，实施时演化为正式诊断日志）：同步段 session 可见面
-      try {
-        const { appendFileSync } = requireSync("node:fs")
-        const evs = agent?.session?.events
-        const desc = Array.isArray(evs) ? evs.find((e) => e?.type === "subagent/descriptor") : null
-        appendFileSync("/tmp/tw-tag-probe.jsonl", JSON.stringify({
-          at: new Date().toISOString(),
-          agentId: agent.id,
-          eventsKind: Array.isArray(evs) ? "array:" + evs.length : typeof evs,
-          firstTypes: Array.isArray(evs) ? evs.slice(0, 3).map((e) => e?.type) : null,
-          descriptor: desc ? { label: desc.data?.label, mode: desc.data?.mode } : null,
-        }) + "\n")
-      } catch (error) {
-        try {
-          const { appendFileSync } = requireSync("node:fs")
-          appendFileSync("/tmp/tw-tag-probe.jsonl", JSON.stringify({ at: new Date().toISOString(), agentId: agent.id, probeError: String(error?.message ?? error) }) + "\n")
-        } catch { /* 探针自身失败静默 */ }
-      }
       const cwd = agent?.session?.header?.cwd
       const file = agentsJsonPath(cwd)
       if (!file) {
@@ -115,17 +120,37 @@ export function makeInjectContribution(ctx, deps = {}) {
       // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预
       const selection = { current: undefined, assembled: undefined }
       disposeInstall = install(childCtx, selection)
-      // 迟到 hint 自循环补读：childId 派生时序晚于 agents.json 写入（Lead agent-map 在 spawn 后），
-      // 命中即写 selection.current（下轮请求生效）并停；超时（pollMaxMs）静默停。
+      // ① 标签寻址（主通道）：descriptor 在 seed（seq0），同步段读 label 机器段查 tagHints。
+      let tagHit = false
+      const events = agent?.session?.events
+      const descriptor = Array.isArray(events) ? events.find((e) => e?.type === "subagent/descriptor") : null
+      const label = descriptor?.data?.label
+      const tag = parseLabelTag(label)
+      if (tag) {
+        try {
+          const hint = hintForTag(JSON.parse(readFileSyncFn(file, "utf8")), tag)
+          if (hint) {
+            selection.current = hint
+            tagHit = true
+            ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 标签注入 " + tag + " → " + hint.provider + "/" + hint.model)
+          } else {
+            warn("标签 " + tag + " 未在 tagHints 命中（派发快照缺失或已陈旧），降级 childId 补读")
+          }
+        } catch (error) {
+          warn("标签注入读取 agents.json 失败，降级 childId 补读：" + describe(error))
+        }
+      }
+      if (tagHit) return cleanup // 命中即锁死（与补读互斥——F-7）
+      // ② childId 补读（回退通道）
       const startedAt = Date.now()
       let readIssueWarned = false
       let timeoutWarned = false
       let lastReadError = null
-      const applyHint = (text) => {
+      const applyChildHint = (text) => {
         const hint = hintForChild(JSON.parse(text), agent.id)
         if (!hint) return false
         selection.current = hint
-        ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 注入 " + hint.provider + "/" + hint.model)
+        ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 补读注入 " + hint.provider + "/" + hint.model)
         return true
       }
       const warnReadIssue = (error) => {
@@ -159,7 +184,7 @@ export function makeInjectContribution(ctx, deps = {}) {
         }
       }
       try {
-        if (applyHint(readFileSyncFn(file, "utf8"))) return cleanup
+        if (applyChildHint(readFileSyncFn(file, "utf8"))) return cleanup
       } catch (error) {
         warnReadIssue(error)
       }
@@ -167,7 +192,7 @@ export function makeInjectContribution(ctx, deps = {}) {
         if (stopped) return
         readFileFn(file, "utf8").then((text) => {
           if (stopped) return
-          if (applyHint(text)) return // 命中即停（一次性注入，幂等）
+          if (applyChildHint(text)) return // 命中即停（一次性注入，幂等）
           lastReadError = null
           scheduleNext()
         }).catch((error) => {

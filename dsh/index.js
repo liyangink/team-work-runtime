@@ -56,7 +56,7 @@ export async function apply(ctx, config = {}, deps = {}) {
     }
   }
   const installerReady = await tryResolveInstaller(true)
-  // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；childId 寻址 modelHints）。
+  // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；标签寻址 tagHints 主通道，childId 补读回退）。
   //    注入只从子会话 cwd 下的任务目录读取映射，不依赖插件配置的项目寻址。
   try {
     setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, {

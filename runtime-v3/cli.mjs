@@ -13,6 +13,37 @@ import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 
+// 标签机器段构造（与 skill 标签规范固定表一致）：阶段缩写·角色缩写[@包]。
+// design/spec 的 review 阶段复用 DESIGN/SPEC 缩写（规范同阶段同缩写；无独立缩写）。
+const STAGE_ABBREV = { research: "RES", design: "DESIGN", "design-review": "DESIGN", spec: "SPEC", "spec-review": "SPEC", implementation: "IMPL", test: "TEST", "code-review": "CR", e2e: "E2E", finish: "FIN" }
+export function tagLabel(stageId, role, pkg) {
+  const ab = STAGE_ABBREV[stageId] ?? String(stageId)
+  const r = role === "challenger" ? "chal" : role
+  return ab + "·" + r + (pkg ? "@" + pkg : "")
+}
+
+// tagHints 落盘：dispatched 时把标签→modelHint 快照写入项目级 agents.json（P4 零转录）。
+// 项目级 owner 锁，跨任务并发派发不踩踏；写失败降级 warn 不阻塞派发。
+async function persistTagHints(projectRoot, entries) {
+  const valid = (entries ?? []).filter((e) => e && e.tag && e.hint && e.hint.provider && e.hint.model)
+  if (valid.length === 0) return
+  const file = path.join(projectRoot, ".team-work", "platform", "agents.json")
+  const lock = path.join(projectRoot, ".team-work", "platform", "locks", "agents.lock")
+  try {
+    await mkdir(path.dirname(lock), { recursive: true }) // 锁原语 open("wx") 不建父目录
+    await withOwnerLock(lock, async () => {
+      const current = await readJson(file).catch(() => ({}))
+      const tagHints = { ...(current?.tagHints ?? {}) }
+      for (const { tag, hint } of valid) {
+        tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }
+      }
+      current.tagHints = tagHints
+      await atomicJson(file, current)
+    })
+  } catch (error) {
+    console.warn("tagHints 落盘失败（不阻塞派发，插件将回退 childId 补读）：" + String(error?.message ?? error))
+  }
+}
 function collectList(argv, flag) {
   const out = []
   for (let i = 0; i < argv.length; i += 1) if (argv[i] === `--${flag}`) out.push(argv[i + 1])
@@ -419,17 +450,20 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
+          await persistTagHints(projectRoot, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
       const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
+      await persistTagHints(projectRoot, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
     const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
+    await persistTagHints(projectRoot, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), hint: dispatch.modelHint }])
     return { ...card, dispatch }
   }
 

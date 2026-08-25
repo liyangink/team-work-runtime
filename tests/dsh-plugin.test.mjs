@@ -42,7 +42,7 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   }
 })
 
-test("I5 Web 插件配置卡：继承 DSH 卡片形态并默认只显示插件名", async () => {
+test("I5 Web 插件配置卡：继承 DSH 标题与说明两行卡片形态", async () => {
   const registrations = []
   const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
   vm.runInNewContext(source, {
@@ -81,7 +81,9 @@ test("I5 Web 插件配置卡：继承 DSH 卡片形态并默认只显示插件�
 
   assert.equal(tree.type, "li", "配置项须呈现为与 DSH 内建插件一致的列表卡片")
   assert.equal(header?.props?.["aria-label"], "展开设置: team-work-runtime", "默认折叠并提供宿主一致的可访问名称")
-  assert.match(JSON.stringify(header), /team-work-runtime/, "折叠态只显示唯一插件制品名")
+  assert.match(JSON.stringify(header), /team-work-runtime/, "折叠态显示唯一插件制品名")
+  assert.match(JSON.stringify(header), /为子代理配置团队档位模型/, "折叠态显示与 DSH 原生卡片一致的一行说明")
+  assert.ok(findTree(header, (node) => node.props?.className === "tw-settings-head-text"), "标题与说明须使用宿主一致的纵向排版容器")
   assert.equal(findTree(tree, (node) => node.props?.["data-tw-tier"]), null, "折叠态不渲染具体配置项")
   assert.equal(hasInlineStyle(tree), false, "配置卡不得用内联样式绕过 DSH 主题与字体体系")
   const stylesheet = findTree(tree, (node) => node.type === "style" && node.props?.["data-tw-settings-style"] === "tiers")

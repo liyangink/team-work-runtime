@@ -7,7 +7,7 @@
 v1 的 tagAgents[标签]=childId 键缺任务身份——跨任务同标签覆盖会确定性地串会话（childId 任务特有，豁免不成立）。v2 改两级间接：
 - runtime 派发时写 pendingTags[标签] = dispatchKey（键=标签、值=key——覆盖语义正确：同标签最新派发 key 即续派目标）；
 - 插件贡献段标签命中后：读 pendingTags[标签] 得 key，写 mappings[key] = childId（复用现有映射面与 prevKeyOf 读径，读侧零改动）；
-- 跨任务安全性：mappings 键=key（任务作用域天然隔离）；残余窗口=两任务同标签并发且子代创建乱序（A 子代晚于 B 子代创建会写错 B.key，后又被 B 子代覆盖修正；仅 B 先创建、A 后创建的乱序残留），相较 v1 从确定性缺陷降为罕见窗口，且 send_message 失败有 fresh 重开降级链（F4）。
+- 跨任务安全性：mappings 键=key（任务作用域天然隔离）；残余窗口=两任务同标签并发且子代创建乱序（A 子代晚于 B 派发会写错 B.key——B 续派 expectedAgentId 指向 A 子代）。**自愈面收敛（评审 F-5）**：仅 A 子代已亡时 send_message 失败触发 fresh 重开自愈；A 存活时 send_message 会成功=静默跨任务串会话，需 agent-map 兜底纠错（真路径测试已如实断言该残余窗口行为）。
 
 ## 2. 方案
 
@@ -38,6 +38,10 @@ v1 的 tagAgents[标签]=childId 键缺任务身份——跨任务同标签覆�
 - 历史任务 mappings 不变（读侧零改动）；pendingTags 是新键不影响旧数据；
 - 残余乱序窗口（§1）为已知 risk 如实标注；
 - 跨任务同标签 pendingTags 覆盖语义正确（最新派发=续派目标）。
+
+## 4.1 恢复重跑契约（评审 F-9 文档化）
+
+续派链连续性依赖宿主契约：continuable 子代 cold-resume 时重跑 contribution（回填随之为新 key 落 mappings）。该契约由宿主 SetupRegistry 的 resume 分支保证（源码实证），本仓库以测试覆盖插件侧幂等；若某宿主版本不重跑，表现为后续波次 expectedAgentIdMissing 退化为 fresh 重开（丢会话连续性但不破坏正确性）。
 
 ## 5. 影响文件
 

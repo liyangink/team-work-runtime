@@ -78,32 +78,25 @@ export function installerNow() {
 }
 
 // 自动回填（方案 v2）：标签命中后把 mappings[派发key]=childId 写回项目 agents.json。
-// 有界重试（3 次 100ms，覆盖瞬时 LOCK_UNAVAILABLE 锁争用）；写失败 warn 降级（Lead 可 agent-map 兜底）。
+// 单次尝试（withOwnerLock 内部自旋约 2s 已覆盖瞬时锁争用）；写失败 warn 降级（Lead 可 agent-map 兜底）。
 async function backfillMapping(file, tag, childId, warn, isStopped) {
-  const dir = path.dirname(path.dirname(file)) // file=.team-work/platform/agents.json → 项目根
-  const lock = path.join(dir, ".team-work", "platform", "locks", "agents.lock")
-  const attempts = 3
-  for (let i = 0; i < attempts; i += 1) {
-    if (isStopped()) return // 写前已亡 → 跳过（该子代无续派资格）
-    try {
-      await mkdir(path.dirname(lock), { recursive: true })
-      await withOwnerLock(lock, async () => {
-        const current = (await readFile(file, "utf8").then((t) => JSON.parse(t)).catch(() => ({})))
-        const key = current?.pendingTags?.[tag]
-        if (!key) return // 无派发期望 → 不写（历史派单/竞态：runtime 尚未落盘）
-        if (current.mappings?.[key] === childId) return // 幂等
-        current.mappings = { ...(current.mappings ?? {}) }
-        current.mappings[key] = childId
-        await atomicJson(file, current)
-      })
-      return
-    } catch (error) {
-      if (i === attempts - 1) {
-        warn("自动回填 mappings 失败（可 tw agent-map 兜底）：" + String(error?.message ?? error))
-      } else {
-        await new Promise((r) => setTimeout(r, 100))
-      }
-    }
+  // file=<root>/.team-work/platform/agents.json：dirname(file) 即 platform 层，锁与 CLI 同路径（F-1 修正）
+  const lock = path.join(path.dirname(file), "locks", "agents.lock")
+  try {
+    await mkdir(path.dirname(lock), { recursive: true })
+    await withOwnerLock(lock, async () => {
+      if (isStopped()) return // 写时刻终检（贡献入口检查不足：fire-and-forget 启动时 stopped 必 false）
+      const current = (await readFile(file, "utf8").then((t) => JSON.parse(t)).catch(() => ({})))
+      const key = current?.pendingTags?.[tag]
+      if (!key) return // 无派发期望 → 不写（历史派单/竞态：runtime 尚未落盘）
+      if (current.mappings?.[key] === childId) return // 幂等
+      current.mappings = { ...(current.mappings ?? {}) }
+      current.mappings[key] = childId
+      await atomicJson(file, current)
+    })
+  } catch (error) {
+    // 单次尝试：withOwnerLock 内部已自旋约 2s 覆盖瞬时锁争用；剩余失败如实 warn（agent-map 兜底）
+    warn("自动回填 mappings 失败（可 tw agent-map 兜底）：" + String(error?.message ?? error))
   }
 }
 // contribution 工厂：返回【同步函数】（宿主存其返回值为 disposer）。

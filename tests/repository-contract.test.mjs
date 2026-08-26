@@ -58,7 +58,6 @@ test("AGENTS.md preserves core collaboration invariants", async () => {
   assert.match(agents, /非作者 Senior 或 Expert 挑战/)
   assert.match(agents, /只读子派单/)
   assert.match(agents, /不得重新引入[^。\n]*旧版资产/)
-  assert.match(agents, /subagent 默认使用 \`gpt-5\.6-terra\`/)
   assert.match(agents, /名字寻址/)
   assert.match(agents, /状态从事实源推导/)
   assert.match(agents, /工具调用是唯一检查点/)

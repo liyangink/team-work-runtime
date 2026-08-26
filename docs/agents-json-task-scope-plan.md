@@ -24,14 +24,16 @@
 
 ### 2.3 runtime（三个写入者全部已知 --task）
 
-- persistTagHints / agent-map / dispatch-plan 读写的 agents.json 路径改任务级（task.root 下）；锁用 task.lock（已有持锁上下文）；
+- persistTagHints / agent-map / dispatch-plan 读写的 agents.json 路径改任务级（task.root 下）；锁用 task.lock（已有持锁上下文）。归零机制表述（评审 R5 修正）：task.lock 只串行化单次写；残余窗口真正归零靠"派发（持锁写 tagHints/pendingTags）→ Lead 得卡 → 派子代（平台同步 materialize 创建完成）→ 回填"的时序事实——同任务串行 + 子代创建晚于派发锁释放；
 - 删除项目级 agents.lock 依赖与项目级文件逻辑。
 
 ### 2.4 插件（标签解析出任务名 → 任务级路径）
 
+- 事实源校验实现（评审 R6）：contribution 同步段 accessSync 任务目录；"目录在场但 agents.json 缺失/损坏"定义降级态=三态回退的②（warn + childId 补读尝试，同文件缺失则放弃）；
+
 - parseLabelTag 扩展：机器段解析出 {stage, role, pkg, task}（A 形态的 # 段）；
 - contribution 同步段：label 含任务名 → 定位 .team-work/tasks/<任务>/agents.json → tagHints 注入 + mappings 回填（原逻辑不变，路径换任务级）；
-- 无任务名标签（畸形/旧习惯）→ 三态回退的降级态（childId 补读已随文件迁移死亡——无任务名=无法定位文件=不注入，warn 指引）。
+- 无任务名标签（畸形/旧习惯）→ 无法定位任务级文件 → 不注入 + warn 指引（评审 R1 修正：有任务段但 tagHints 未命中时，同文件内 modelHints[childId] 补读仍有效；无任务段才是补读也失效的终态）。
 
 ## 3. 验证面
 
@@ -41,10 +43,21 @@
 
 ## 4. 硬切影响面
 
-- 现有真机/测试环境的项目级 agents.json 全部弃用（无需迁移）；
+- 现有真机/测试环境的项目级 agents.json 全部弃用（无需迁移）；归档语义（评审 R3）：task 归档/删除时任务级 agents.json 随任务目录走（rm taskRoot 即删）；硬切后既有在途任务续派首轮降级 expectedAgentIdMissing（一次性损失，接受——未发布）；
 - 测试 fixtures（v3-fixtures/makeProject 等）的 agents.json 路径断言全改；
 - 文档：README/skill（标签规范加 #任务名 段）/roadmap/方案 v2 全同步。
 
 ## 5. 影响文件
 
-runtime-v3/cli.mjs、dsh/inject.js、skills 标签规范、tests 多处、docs 三处。
+runtime-v3/cli.mjs、dsh/inject.js、skills 标签规范（含 :14 旧格式残留）、tests 多处（8 个文件显式项目级路径拼接 + 反转断言）、docs/README/AGENTS ≥7 处。
+## 6. 评审 findings 处置记录（2026-08-26）
+
+| # | 结论 | 处置 |
+| R1 补读措辞过度 | 有 task 段但 tagHints miss 时 modelHints[childId] 同文件仍补读 | §2.4 已修 |
+| R2 影响面低估 | ≥7 文档 + README + AGENTS 引用项目级 agents.json | 实施清单同步（§5） |
+| R3 归档语义未写 | rm taskRoot 随删；硬切后既有任务续派降级 expectedAgentIdMissing（一次性损失，接受） | §4 补 |
+| R4 测试缺项+断言反转 | 残余窗口断言必须反转（迁移后各归各）；补 cold-resume 解析/事实源校验/无 task 降级/归档语义/跨进程争用 | §3 扩 |
+| R5 归零机制过度简化 | task.lock 只串行化单次写，归零靠子代创建时序 | §2.3 已修 |
+| R6 目录在场但文件缺失降级未定义 | accessSync 目录校验 + 缺失降级态定义 | §2.4 已修 |
+| I1 commit 措辞 | 尾部截断先丢殿后段（任务段在殿后） | 表述统一 |
+| I2-I5 文档小修 | label 措辞/dsh-orchestration:14 旧格式残留/index.js:60 注释 | 实施清单 |

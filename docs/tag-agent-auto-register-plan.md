@@ -1,44 +1,44 @@
-# tagAgents 自动回填方案：消灭 agent-map 手工登记步骤
+# tagAgents 自动回填方案 v2：pendingTags + 插件回填 mappings（任务作用域化）
 
-状态：待自复核/交叉评审后实施。目标：插件在子代创建贡献段自动把「标签→childId」写回 agents.json，Lead 派完子代零登记；续派寻址（expectedAgentId）改按标签直查。
+状态：交叉评审 8 findings 全处置，待实施。
 
-## 1. 背景与现状（已核实事实）
+## 1. v1 到 v2 变化（评审 F1/F3 处置）
 
-- 标签寻址实施后，模型注入已在贡献同步段自动完成（tagHints 通道）；
-- agent-map 剩余唯一用途 = Lead 手工回填 key→childId（mappings），供续派 expectedAgentId 推导（cli.mjs:832-852：prevKeyOf 同包同角色找上一派发 key → 查 mappings）；
-- prevKeyOf 的匹配语义（同角色+同包）与标签键（阶段缩写·角色[@包]）同构——标签可直查，无需 key 中转；
-- 插件贡献段天然同时握有 childId（agent.id）与标签（descriptor.label）；插件包内可复用 runtime-v3/persistence 原子写原语（已装包布局核实）。
+v1 的 tagAgents[标签]=childId 键缺任务身份——跨任务同标签覆盖会确定性地串会话（childId 任务特有，豁免不成立）。v2 改两级间接：
+- runtime 派发时写 pendingTags[标签] = dispatchKey（键=标签、值=key——覆盖语义正确：同标签最新派发 key 即续派目标）；
+- 插件贡献段标签命中后：读 pendingTags[标签] 得 key，写 mappings[key] = childId（复用现有映射面与 prevKeyOf 读径，读侧零改动）；
+- 跨任务安全性：mappings 键=key（任务作用域天然隔离）；残余窗口=两任务同标签并发且子代创建乱序（A 子代晚于 B 子代创建会写错 B.key，后又被 B 子代覆盖修正；仅 B 先创建、A 后创建的乱序残留），相较 v1 从确定性缺陷降为罕见窗口，且 send_message 失败有 fresh 重开降级链（F4）。
 
 ## 2. 方案
 
-### 2.1 插件侧：贡献段 fire-and-forget 回填
+### 2.1 runtime（cli.mjs）
+- persistTagHints 同锁内追加写 pendingTags[tag] = key（entries 增带 key）；
+- 锁面统一（F2）：agent-map 的 agents.json 写入从 task.lock 改到项目级 agents.lock（读任务事实仍免锁/短锁，写共享文件统一 agents.lock——三路写入者 persistTagHints/插件/agent-map 互斥）；
+- dispatch-plan 续派导出：expectedAgentId 缺失时卡内加提示（指引 agent-map 兜底——F5b）。
 
-- 标签命中注入后，异步（不阻塞同步段）写 `tagAgents[标签] = childId` 进 agents.json：
-  - 原子写复用 runtime-v3/persistence 的 atomicJson + 项目级 owner 锁（与 persistTagHints 同锁文件，防踩踏）；
-  - 写失败降级 warn（不阻塞注入；续派寻址缺失时 Lead 仍可 agent-map 手工兜底）；
-  - 贡献段 stopped 检查（子代先亡则不写）；
-  - cold-resume 重跑贡献 → 重写同键幂等；同标签后写覆盖 = 最新子代胜出（换人 replace-owner 语义天然正确）。
+### 2.2 插件（dsh/inject.js）
+- 标签命中后 fire-and-forget：读 agents.json 的 pendingTags[tag] 得 key，写 mappings[key]=childId（atomicJson + agents.lock）；
+- 有界重试（F5a）：LOCK_UNAVAILABLE 重试 3 次（100ms 间隔），全部失败才 warn；
+- 写前 stopped 检查（防写前已亡）；死-后-写由 fresh 重开降级链自愈（F4 文档化）；
+- 无标签/未命中 → 现有回退链不变（F6：不写 pendingTags 消费）。
 
-### 2.2 runtime 侧：expectedAgentId 改标签直查
+### 2.3 skill 规程（F6/F7）
+- 条件化保留 agent-map：有标签且回填成功 → 无需登记；无标签/回填失败/换人纠错 → 仍需 agent-map（不整条删除）；
+- 标签规范统一（F7）：line 11 的旧格式（<任务>.<阶段>.owner@<包>）修正为与 line 47 一致（阶段·角色[@包] · 简述，无任务前缀）。
 
-- cli.mjs 续派导出处：`tagAgents[tagLabel(state.stage, d.role, d.package)]` 优先；未命中回退旧 `mappings[prevKeyOf(d)]`（兼容历史任务已登记数据）。
-- agent-map 命令保留（手动纠错/换人/平台异常兜底），不做删除。
+## 3. 验证面（F8 增补）
 
-### 2.3 skill 规程
-
-- 删除「开完立即 tw agent-map 登记」要求；标注：平台插件自动回填（tagAgents），agent-map 仅纠错/换人时用。
-
-## 3. 验证面
-
-- 单元：插件回填（桩 fs 断言 tagAgents 键值与幂等覆盖）；runtime expectedAgentId 标签直查（fixtures 续派场景）；旧 mappings fallback 不破；
-- E2E：真机派发→续派卡自动带 expectedAgentId（无需 agent-map）；冷 resume 重写幂等。
+- 单元：pendingTags 落盘/覆盖；插件回填写 mappings（含键正确性/stopped/重试/失败降级）；agent-map 锁面迁移不破既有测试；
+- 跨任务：两任务同标签并发派发+乱序创建——mappings 不串会话（key 隔离）断言；
+- 死-后-写降级：send_message 失败 → fresh 重开覆盖自愈的链路口径测试；
+- 锁并发：agents.lock 三写入者互斥（Promise.all 并发合并）。
 
 ## 4. 边界与兼容
 
-- 跨任务同标签覆盖：与 tagHints 同款语义（同标签同角色档位同源，边缘可接受，已豁免）；
-- 无标签子代不回填（回退通道不产生 tagAgents）；
-- 历史任务（已有 mappings）不受影响。
+- 历史任务 mappings 不变（读侧零改动）；pendingTags 是新键不影响旧数据；
+- 残余乱序窗口（§1）为已知 risk 如实标注；
+- 跨任务同标签 pendingTags 覆盖语义正确（最新派发=续派目标）。
 
 ## 5. 影响文件
 
-dsh/inject.js（回填）、runtime-v3/cli.mjs（推导改查）、skills 规程、tests 两处、README/roadmap。
+runtime-v3/cli.mjs、dsh/inject.js、skills 规程、tests 三处、README/roadmap、方案本文档。

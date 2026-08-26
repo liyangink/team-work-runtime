@@ -7,6 +7,17 @@ import path from "node:path"
 
 const DOT = String.fromCharCode(183)
 const { parseLabelTag, hintForTag, makeInjectContribution } = await import("../dsh/inject.js")
+// fire-and-forget 回填的轮询等待（替代固定 setTimeout——评审 R1：全量并发下 80ms 不够）
+async function pollUntil(fn, timeoutMs = 3000) {
+  const start = Date.now()
+  for (;;) {
+    const v = await fn()
+    if (v !== undefined && v !== null && v !== false) return v
+    if (Date.now() - start > timeoutMs) throw new Error("pollUntil 超时")
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
 
 test("parseLabelTag：{tag,task} 形态与三重防线", () => {
   assert.deepEqual(parseLabelTag("CR" + DOT + "owner@store" + DOT + " 模块说明 #demo-t"), { tag: "CR" + DOT + "owner@store", task: "demo-t" })
@@ -52,9 +63,11 @@ test("标签注入：任务段命中 → 首轮同步注入 + 回填 + 补读互
   assert.equal(installs.length, 1, "install 同步执行")
   assert.equal(installs[0].current.model, "m", "首轮即注入")
   assert.equal(installs[0].current.reasoningEffort, "max")
-  await new Promise((r) => setTimeout(r, 80))
   assert.equal(polled, 0, "标签命中锁死：补读不启动")
-  const d = JSON.parse(await readFile(file, "utf8"))
+  const d = await pollUntil(async () => {
+    const parsed = JSON.parse(await readFile(file, "utf8"))
+    return parsed.mappings?.["w2-x"] === "c1" ? parsed : null
+  })
   assert.equal(d.mappings["w2-x"], "c1", "回填任务级 mappings")
   disposer()
 })

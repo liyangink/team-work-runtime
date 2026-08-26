@@ -8,6 +8,15 @@ import path from "node:path"
 
 const { persistTagHints } = await import("../runtime-v3/cli.mjs")
 const { makeInjectContribution } = await import("../dsh/inject.js")
+async function pollUntil(fn, timeoutMs = 3000) {
+  const start = Date.now()
+  for (;;) {
+    const v = await fn()
+    if (v !== undefined && v !== null && v !== false) return v
+    if (Date.now() - start > timeoutMs) throw new Error("pollUntil 超时")
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
 const DOT = String.fromCharCode(183)
 
 test("pendingTags：任务级落盘标签到key，同标签续派覆盖为最新key", async () => {
@@ -37,11 +46,13 @@ test("插件回填：标签命中后任务级 mappings[key]=childId；无 pendin
   const childCtx = { agent: { id: "child-x", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner #demo-t" } }] } } }
   const disposer = contribution(childCtx)
   assert.equal(installs[0].current.model, "m", "标签注入")
-  await new Promise((r) => setTimeout(r, 120))
-  const d = JSON.parse(await rf(file, "utf8"))
+  const d = await pollUntil(async () => {
+    const parsed = JSON.parse(await rf(file, "utf8"))
+    return parsed.mappings?.["w2-abc"] === "child-x" ? parsed : null
+  })
   assert.equal(d.mappings["w2-abc"], "child-x", "回填任务级键")
   contribution(childCtx)
-  await new Promise((r) => setTimeout(r, 120))
+  await new Promise((r) => setTimeout(r, 200))
   const d3 = JSON.parse(await rf(file, "utf8"))
   assert.equal(d3.mappings["w2-abc"], "child-x", "幂等")
 })
@@ -66,9 +77,14 @@ test("跨任务隔离（迁移后窗口消灭）：两任务同标签各写各�
   const childB = { agent: { id: "child-B", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner #task-b" } }] } } }
   const da = contributionA(childA)
   const db = contributionB(childB)
-  await new Promise((r) => setTimeout(r, 150))
-  const ma = JSON.parse(await rf(path.join(ta, "agents.json"), "utf8"))
-  const mb = JSON.parse(await rf(path.join(tb, "agents.json"), "utf8"))
+  const ma = await pollUntil(async () => {
+    const parsed = JSON.parse(await rf(path.join(ta, "agents.json"), "utf8"))
+    return parsed.mappings?.["wA-1"] === "child-A" ? parsed : null
+  })
+  const mb = await pollUntil(async () => {
+    const parsed = JSON.parse(await rf(path.join(tb, "agents.json"), "utf8"))
+    return parsed.mappings?.["wB-1"] === "child-B" ? parsed : null
+  })
   assert.equal(ma.mappings["wA-1"], "child-A", "任务 A 各归各")
   assert.equal(mb.mappings["wB-1"], "child-B", "任务 B 各归各")
   assert.ok(!("wB-1" in (ma.mappings ?? {})), "A 文件无 B 键（窗口消灭实锤）")
@@ -87,7 +103,7 @@ test("stopped 检查：disposer 调用后回填不写（写时刻终检）", asy
   const childCtx = { agent: { id: "child-s", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner #demo-t" } }] } } }
   const disposer = contribution(childCtx)
   disposer()
-  await new Promise((r) => setTimeout(r, 150))
+  await new Promise((r) => setTimeout(r, 400)) // stopped 断言为"不写"：给足回填窗口后仍无键
   const d = JSON.parse(await rf(path.join(taskRoot, "agents.json"), "utf8"))
   assert.equal(d.mappings?.["w2-x"], undefined, "stopped 后回填被跳过")
 })

@@ -8,7 +8,7 @@ tw dispatch-plan --task <名> --json 取计划 → 对 waves[] 逐条：
 
 | wave 字段 | 动作 |
 | --- | --- |
-| 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label 按标签规范机器段 `阶段缩写·角色[@包] · 简述`（见下文标签规范节，机器段即注入寻址键）；prompt 原样转发；**无需 agent-map 登记**——插件按标签自动注入并回填续派映射（仅无标签/回填失败/换人纠错时才 agent-map） |
+| 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label 按标签规范 `阶段缩写·角色[@包] · 简述 #任务名`（见下文标签规范节，机器段+任务段即注入寻址键）；prompt 原样转发；**无需 agent-map 登记**——插件按标签自动注入并回填续派映射（仅无标签/回填失败/换人纠错时才 agent-map） |
 | continuation=true 且有 expectedAgentId | 对该 subagent send_message（消息 = wave.prompt 增量派单全文）；**不要开新 agent** |
 | continuation=true 但 send_message 失败/会话不可用 | 降级规程：按 prompt 全量新开 fresh subagent + 重新 agent-map（用户点名换人 replace-owner 走同一通道） |
 | role=challenger（scope=consolidation）| 单个 challenger subagent（label 按标签规范机器段 `阶段缩写·chal · 简述 #任务名`），组合制品视角 |
@@ -51,7 +51,7 @@ DSH 所有后台任务在**统一的子代理列表**混排，且侧栏从尾部
 - **@包**：多包任务才带；包 id 用自然短词（≤10 字符，如 store/intake/overview）——tw plan 对超 12 字符的包 id 给可读性警告；单包任务省略 @包；
 - **简述**：≤4 个中文词（8 半角字符），含包语义时可不带 @包。
 
-示例：`CR·owner@store · 模块说明`（19 字符）/ `CR·chal · 文档整合评审` / `IMPL·owner@api · 接口改造`
+示例：`CR·owner@store · 模块说明 #task-a` / `CR·chal · 文档整合评审 #task-a` / `IMPL·owner@api · 接口改造 #task-a`
 
 - 只读子派单前缀：`CR·RO · 并发扫描`（RO=read-only 一次性，非团队成员；只读子派单无需任务段）；
 - **简述不含 `#`**（任务段是唯一 ` #` 定界——简述里写 `#` 会被误解析为任务段候选，虽经目录存在性校验兜底，但可能撞上同名任务名）；

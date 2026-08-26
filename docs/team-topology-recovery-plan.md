@@ -2,7 +2,7 @@
 
 状态：历史 v3.2 方案与评审记录；拓扑能力已实施，配置部分已由全局 settings 取代。评审记录：
 
-> **迁移说明（当前实现）**：本方案早期所称项目 `.team-work/platform/dsh.json` 已不再是配置源。tier→模型唯一来自 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页），每档兼容单对象或候选数组，provider/model 必填，family/effort 可选；同波候选池优先不同 family。`.team-work/platform/agents.json` 仍是 dispatchKey→childId 与 modelHint 快照的项目运行事实。`injectionEnabled`、`projectRoots`、`twBin` 已移除且不兼容读取；注入和 `tw` 工具只以子会话 cwd 定位项目。
+> **迁移说明（当前实现）**：本方案早期所称项目 `.team-work/platform/dsh.json` 已不再是配置源。tier→模型唯一来自 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页），每档兼容单对象或候选数组，provider/model 必填，family/effort 可选；同波候选池优先不同 family。`.team-work/tasks/<任务>/agents.json` 仍是 dispatchKey→childId 与 modelHint 快照的项目运行事实。`injectionEnabled`、`projectRoots`、`twBin` 已移除且不兼容读取；注入和 `tw` 工具只以子会话 cwd 定位项目。
 
 - **评审 A（架构/规范轴，2026-08-24）**：无 blocker；F1–F9 全部吸收（见 §2 各条标注）——F1 DAG 分层派发、F2 按包计轮、F3 findings 包归属与无归属回退、F4 incumbent 降级规程、F5 continuation 基线锚定（agent-map）、F6 重拆窗口事实锚定、F7 整合 Owner=汇总包、F8 consolidation 聚合指纹；A1–A3/A6 判定合规（tw plan 仅机械验收、语义质量归 Lead；packages.json 为决策事实非平行权威；plan 验收即 P2 检查点）。
 - **评审 B（实现轴，2026-08-24，对象 73c8e92+c5623d5）**：无 blocker；F1 损坏锁回收（已修：超龄回收+竞态窗口重试+fixHint）、F3 verdict dispatchExample 缺 --verdict（已修+断言）两个 major；F2 tiers:null（已修）、F5 blocked 卡形状（已修统一对象数组带 recovery）、F6 幂等 registered 形状（已修补 digest）三个 minor；F4 wait-inflight 内嵌全文=本方案 §2.4 范围；review 幂等 findings 顺序敏感判定可接受（顺序即内容）；测试缺口补 5 项；62/62 绿。
@@ -42,7 +42,7 @@
 4. **dispatch-plan 波组导出**：每波增 `package / continuation / dependsOn / weight(costWeights[tier])`；continuation 波附 `expectedAgentId`（从 agent-map 读，见 §2.6）；wait-inflight stop 卡**内嵌原波组全文**（修复 E2E 断链缺陷）。
 5. **continuation 增量派单**：续派轮只带"本轮意见 + 包内待改清单"，不重述全量上下文。
 6. **agent 映射与选人**：
-   - `tw agent-map --task <n> --key <dispatchKey> --agent <平台subagentId>`：Lead 实际开 subagent 后登记 dispatchKey→agentId 到 `.team-work/platform/agents.json`（平台绑定事实，Lead 维护，runtime 只读写不调用平台）；
+   - `tw agent-map --task <n> --key <dispatchKey> --agent <平台subagentId>`：Lead 实际开 subagent 后登记 dispatchKey→agentId 到 `.team-work/tasks/<任务>/agents.json`（平台绑定事实，Lead 维护，runtime 只读写不调用平台）；
    - **降级规程（F4，落 skill）**：send_message 失败/incumbent 不可用 → 以全量派单文本新开 fresh subagent、重新 agent-map 登记、该包 continuation 重置；replace-owner（用户点名换人）走同一通道；
    - 当前档位候选池位于全局 `team-work-dsh.tiers`：单对象或 `[{provider, model, family?, effort?}]` 数组均兼容，挑选 = 家族去重后取序（policy `selection.diversityWithinTier`）；risk 升降：`tw open --risk critical|high|normal` 写入 intent（`tw intent --risk` 可修订），仅 owner 波查 `policy.riskTiers` 升档（只升不降；challenger/expert 不受影响）。项目 dsh.json 不读取或创建。
 7. **skill 重写**：`references/dsh-orchestration.md` = Lead 派发操作规程（决策表：continuation=false 组内多 owners → 每包一个命名 subagent（label=`<task>.<stage>.owner@<pkg>`）并 agent-map 登记；continuation=true → 对 expectedAgentId send_message，失败按降级规程 fresh 重开；一次性扇出 → workflow parallel；stop=awaiting-user → 呈现 choices 走 decide；stop=wait-inflight → 用卡内嵌派单补派）。SKILL.md 补拆包判断指引（含**语义质量责任声明**）与 risk 判断、整合包完成标准模板（**F7**：dependsOn 汇总包即整合 Owner——完成标准必须含"合并各包结论、解决冲突、不丢信息"）。

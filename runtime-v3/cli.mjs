@@ -11,6 +11,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint } from "./gate.mjs"
 import { scenePolicy } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
+import { loadGuidance } from "./guidance.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 
 // 标签机器段构造（与 skill 标签规范固定表一致）：阶段缩写·角色缩写[@包]。
@@ -179,7 +180,7 @@ function parseWritableEntry(entry) {
 }
 
 // 在途派单重建（F4）：journal 尾部连续 dispatched 批次中尚无 report 的派发，重建完整派单文本
-function inflightDispatches(task, stageId) {
+function inflightDispatches(task, stageId, guidance = null) {
   const stageDef = task.workflow.stages.find((st) => st.id === stageId)
   const settled = new Set(task.reports.map((r) => r.dispatchKey))
   const batch = []
@@ -188,7 +189,7 @@ function inflightDispatches(task, stageId) {
   return batch
     .filter((d) => !settled.has(d.key))
     .map((d) => {
-      const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }).dispatch
+      const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }, guidance).dispatch
       return { ...card, dispatchKey: card.key }  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
     })
 }
@@ -213,7 +214,9 @@ function isEscalatedTier(task, sp, pkg) {
 }
 
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
-function dispatchCard(task, stageDef, wave, detail) {
+// guidance（可选）：角色/场景公共引导库（team-work/guidance），按 role+teamScene 检索注入；
+// 缺失或未加载时跳过——引导是增强，不阻塞派发。
+function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const pkg = detail.package ?? null
   const boundaries = detail.writable.map(({ path: p, artifactKind }) => p + (pkg ? '（包 ' + pkg + '，产出物 ' + artifactKind + '）' : '（产出物 ' + artifactKind + '）'))
@@ -222,9 +225,13 @@ function dispatchCard(task, stageDef, wave, detail) {
   const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
   const intro = detail.continuation ? '# 续派（key: ' + detail.key + '）——你在原上下文基础上继续' : '# 派单（key: ' + detail.key + '）'
   const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '')
+  const roleHint = guidance?.roles?.[wave.role]
+  const sceneHint = guidance?.scenes?.[stageDef.teamScene]
   const parts = [
     intro,
     headLine,
+    roleHint ? '## 角色指引（' + wave.role + '）\n' + roleHint : '',
+    sceneHint ? '## 场景指引（' + stageDef.teamScene + '）\n' + sceneHint : '',
     detail.continuation ? '' : '目标：' + task.intent.objective,
     detail.continuation ? '' : (task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : ''),
     detail.continuation ? '' : (task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : ''),
@@ -292,6 +299,7 @@ async function archivedCard(projectRoot, name) {
 
 async function cmdRun({ projectRoot, name, writable = [] }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
+  const guidance = await loadGuidance(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
     if (archived) return archived
@@ -317,7 +325,7 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
     const task = await loadTask(projectRoot, name, { workflow, policy })
     await ensureE2ePackages(task) // B：e2e 场景无 packages 时按模板物化（幂等；在 derive 前生效）
     const state = deriveTask(task)
-    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
+    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance })
   })
 }
 
@@ -393,7 +401,7 @@ function dispatchedDetail(dispatch, wave, writable) {
   }
 }
 
-async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
+async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance }) {
 
   if (state.next.kind === 'dispatch') {
     if (!state.next.wave) {
@@ -447,20 +455,20 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         if (declined) {
           const tiersBackup = task.packages
           task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
-          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
+          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
           await persistTagHints(projectRoot, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
-      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d).dispatch, selectModelHint))
+      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
       await persistTagHints(projectRoot, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
-    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] })
+    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
     await persistTagHints(projectRoot, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), hint: dispatch.modelHint }])
@@ -492,7 +500,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   }
   if (state.next.kind === 'wait-inflight') {
     // F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派
-    const inflight = inflightDispatches(task, state.stage)
+    const inflight = inflightDispatches(task, state.stage, guidance)
     return {
       ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
       dispatchKey: state.next.dispatchKey,
@@ -786,6 +794,7 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
 // 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
 async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
+  const guidance = await loadGuidance(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
     if (archived) return { ok: true, task: name, stage: null, stop: "archived", waves: [], card: archived }
@@ -817,7 +826,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         if (hint?.family) usedFamilies.push(hint.family)
         return hint
       }
-      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
+      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
         const agentMaps = JSON.parse(await readFile(path.join(controlRoot(projectRoot), 'platform', 'agents.json'), 'utf8').catch(() => '{ "mappings": {} }')).mappings ?? {}

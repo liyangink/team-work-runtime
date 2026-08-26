@@ -23,7 +23,7 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 ## 四个 Module（v3 形态）
 
 - **Workflow**（`workflow/definitions/`）：机器可读的研发阶段、合法边、门禁声明、SPEC/E2E 路由 Policy；gate 推导的数据源。
-- **Team-work**（`team-work/policies/` + `skills/team-work-v3/`）：角色档位、场景拓扑、收敛轮次等 Policy 数据；协作策略与判断指引保存在 skill。Policy 是数据，不是代码。
+- **Team-work**（`team-work/policies/` + `team-work/guidance/` + `skills/team-work-v3/`）：角色档位、场景拓扑、收敛轮次等 Policy 数据；角色/场景公共引导库（`guidance/roles/<role>.md`、`guidance/scenes/<sceneId>.md`，派单按 role+teamScene 检索注入，包内基线可被项目根同名文件覆盖，缺失静默跳过）；协作策略与判断指引保存在 skill。Policy 是数据，不是代码。
 - **CoreRuntime**（`runtime-v3/`，含 domain/persistence 复用件）：`tw` CLI（Lead 与成员的唯一接口）、波次推进/门禁/状态推导纯函数、任务目录读写、deliver/review 调用内同步总检查。原子写、文件锁、路径防逃逸、digest 由 persistence 原语提供。
 - **PlatformBinding**：目标形态 = 平台编排工具执行团队拓扑（`tw dispatch-plan` 导出波次事实，编排脚本按 tier→模型映射派发成员）+ skill 装载 + （调查中）插件 hook。Runtime 不实现派发循环与 DAG 调度；任务数据必须留在项目 `.team-work/`。
 
@@ -53,7 +53,6 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 
 - `AGENTS.md` 保存产品边界，Roadmap 保存进度，Skill 保存协作策略，任务目录保存运行状态；不要重复定义。
 - `docs/file-inventory.json` 是当前实现与规划路径的清单；新增或迁移文件时必须同步。根目录不得重新引入 OMO、Claude Code、OpenCode 等旧版资产，历史实现只通过 Git 历史保留。
-- 开发本仓库时新建 subagent 默认使用 `gpt-5.6-terra`，推理强度统一设为 `max`；只有任务明确需要更高能力或用户另行指定时才升级模型。
 - 修改门禁、波次推进、目录结构或 intake 校验时，补齐损坏输入、非法流转、并发、恢复和幂等测试。
 - 新增平台时复用 Workflow、Team-work Policy 与 CoreRuntime，只新增绑定层；不得复制波次机和通用团队策略。
 - Roadmap 中尚未完成的能力不得描述成已经可用。

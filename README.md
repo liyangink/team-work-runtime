@@ -1,46 +1,50 @@
 # team-work-runtime
 
-平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转。
+> DSH 里的虚拟研发团队：一句话派活，Owner 干活、Challenger 挑错、Expert 裁决，人工门把关，全程留痕、随时恢复。
 
-> **v3（工具中心重写）** 已完成核心实现与真实任务验证；v2 及 OpenCode 插件已于 2026-08-21 删除（Git 历史可查）。验收规约：[`docs/runtime-v3-charter.md`](docs/runtime-v3-charter.md)，进度：[`docs/runtime-roadmap.md`](docs/runtime-roadmap.md)。
+在 DSH 对话里说一句“审查这段代码”或“设计并实现这个功能”，`team-work` skill 会组建一支虚拟研发团队，按机器可读的研发流程分阶段推进任务。成员各司其职、互相制衡；方案审查与最终验收两道人工门必须由你确认；所有状态落在你项目的 `.team-work/` 目录里，随时中断、随时继续。
 
-## 核心概念
+## 功能特性
 
-- **房间与门**：成员在派单内自由工作（派单全文内嵌上下文），检查只发生在两处——交付工具调用内（单一、同步、全量）与阶段门（产出物在场 + 检查通过 + 非作者评审在场 + 核心场景 Expert 裁决 + 人工门凭证）。
-- **任务目录即状态**：`.team-work/tasks/<name>/` 下的 intent/scope/reports/decisions/gates/snapshots/journal 是事实源，一切判定可纯函数重推导。
-- **CLI 即接口**：模型通过 shell 调用 `tw`；`--help` 即完整 meta，拒绝输出自带修复指引。
-- **制品两分法**：阶段产出物显式登记（路径即身份、digest 快照）；输入上下文由 objective 自然语言承载，不登记不检查。
+- 🎯 **对话即派活**：用自然语言提出研发需求（审查、设计、实现、测试、迁移……），自动判断阶段入口、组团与审查强度，无需了解内部流程。
+- 👥 **分工制衡的虚拟团队**：Owner 交付、Challenger 挑错、Expert 裁决；全员非作者评审，作者不自审。
+- 🚧 **人工门把关**：方案审查（design-approval）与最终验收（final-acceptance）两道人工门，批准绑定制品指纹，制品改动后需重新确认。
+- 💤 **随时中断恢复**：状态全在项目 `.team-work/tasks/` 目录，关掉会话、重启设备后接着推进，不丢上下文。
+- 🧾 **全链路留痕**：每次交付、每条评审意见、每个人工决定、每个路由依据都落盘，可追溯、可审计。
+- 💰 **三档成本可控**：junior / senior / expert 三档映射到模型——常规活默认廉价档，高风险环节自动升档并要你审批。
+- 🧩 **并行施工**：多个可独立验收的改动自动拆包并行，互斥写范围避免互相踩踏。
+- 🛡️ **越界兜底**：成员只能写派单声明的路径；越界写入被当场拒绝，被污染的产出物可一键恢复快照。
+- 📦 **数据留在本地**：任务数据全部在项目里，不锁云；Runtime 零第三方运行时依赖。
 
-## QuickStart
+## 快速开始
+
+### 1. 安装
+
+**方式一：DSH 市场（推荐）**：在市场搜索并安装 `team-work-runtime`，装完即用。
+
+**方式二：CLI 安装**（对指定 profile，`web` 即 Web 界面所用的 profile）：
 
 ```bash
-# Lead：开任务（名字寻址；重名拒绝）→ 推进（每次一步，返回卡片/派单）
-tw open --name audit-q3 --objective "审查 X，重点安全" --entry code-review
-tw run  --task audit-q3 --writable CODE_REVIEW.md:code-review   # 派单文本内嵌全部上下文
-
-# 成员（Owner 交卷 / Challenger·Expert 阅卷）
-tw deliver --task audit-q3 --key <派单key> --outcome delivered --summary "..." --paths CODE_REVIEW.md
-tw review  --task audit-q3 --key <派单key> --recommendation accept --summary "..."
-
-# 决定、路由、归档
-tw decide  --task audit-q3 --choice 1
-tw route   --task audit-q3 --route e2e --decision skip --basis "纯静态改动"
-tw archive --task audit-q3
+dsh plugin --profile web add team-work-runtime     # 安装
+dsh plugin --profile web remove team-work-runtime  # 卸载
 ```
 
-`awaiting-user` 是静止状态：门签发后任务停止推进，只由新的用户输入恢复；完成后重复 `run` 幂等返回同一卡片。
+**方式三：本地打包**（源码用户）：
 
-## 平台绑定
+```bash
+npm pack   # 在仓库根执行，产出 team-work-runtime-<版本>.tgz
+dsh plugin --profile web add ./team-work-runtime-<版本>.tgz   # 安装本地包，卸载命令同上
+```
 
-- **DSH**：根 `package.json` 产出的 `team-work-runtime` 是唯一市场制品，同时携带 Runtime、`tw` CLI、skill、host 插件与 Web client；不存在第二个插件子包。tier→模型的唯一配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，可在 DSH Web 的“插件配置”页编辑；候选池支持单对象或数组、同波优先不同模型家族，`effort` 可选。每个候选的 provider/model 必填，Web 保存时 Provider 必须 active，且该 Provider 的模型目录必须可验证并实际列出所选模型；模型 RPC 整体失败、候选 Provider 的目录失败或缺少该 Provider 目录时都会阻止保存并给出恢复指引。模型公开非空 effort 列表时，填写值必须命中该列表。项目 `dsh.json` 已废弃且不会被读取/创建；`.team-work/tasks/<任务>/agents.json` 是**任务级注册表**（child 映射与模型快照，随任务目录归档/删除）。**成员注入寻址=标签**：Lead 按 skill 标签规范（`阶段缩写·角色[@包] · 简述 #任务名`）为子代命名——任务段定位任务级注册表；派发时 runtime 自动把该标签的 model/effort 快照写入任务级 `agents.json.tagHints`，插件在子代创建时同步注入——**首轮请求即生效**（无任务段/目录不在场降级不注入，warn 指引）。**续派映射自动回填**：插件同时把 `mappings[派发key]=childId` 写回（任务作用域键），续派 expectedAgentId 直查——Lead 派子代**无需 agent-map 登记**（仅无标签/回填失败/换人纠错时兜底调用）。**续聊不变量**：贡献仅在子代创建/恢复时执行，同一成员跨轮不热改 model/effort（thinking 历史断裂 400 的防线）——要换档位需新建成员子代。自动装载、隔离与工具契约已验证；真实 LLM 注入和最终 Web 样式仍待用户实机确认。
-- **OpenCode**：v2 插件已删除；待核心稳定后按规约 §4 seam 另起薄适配器。
-- OpenSpec Provider 保留，作为门禁路由检查范本。
+### 2. 配置三档模型（两分钟）
 
-### DSH 安装与配置
+DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型：
 
-从 DSH 市场安装时选择 `team-work-runtime` 并指定目标 profile；源码安装同样以仓库根为入口。根制品通过 `cordis.patch.yml` 注册 `team-work-dsh`，Web client 由根清单的 `./client` 导出装载。卸载包名也是 `team-work-runtime`。
-
-启动 DSH Web 后，在“插件配置”页打开 `team-work-dsh`。首次安装可保持空配置；开始配置后，`junior`、`senior`、`expert` 必须同时完整：
+| 档位 | 干什么活 | 选模建议 |
+| --- | --- | --- |
+| `junior` | 常规实施、日常杂活 | 便宜够用的快模型 |
+| `senior` | 方案设计、审查挑战 | 均衡可靠的模型 |
+| `expert` | 高风险环节技术裁决 | 最强模型；最贵，只在裁决时上场 |
 
 ```yaml
 team-work-dsh:
@@ -50,13 +54,90 @@ team-work-dsh:
     expert: [{ provider: <provider-id>, model: <model-id> }]
 ```
 
-`injectionEnabled`、`projectRoots`、`twBin` 已失效；项目 `.team-work/platform/dsh.json` 也不再读取。旧键和旧文件确认无用后可手动删除。
+三档必须齐全，漏配时运行会收到带指引的提醒卡片；每档可配多个候选，派发时优先错开模型家族。配置改动即时生效，只影响后续波次。
 
-## 开发
+### 3. 第一次使用
 
-```bash
-npm test          # v3 核心、插件、E2E 与仓库契约
-npm pack --dry-run --ignore-scripts  # 验证唯一根制品清单
+在 DSH 会话里直接说需求，例如：
+
+> 审查一下 src/auth 最近三天的改动，重点看安全边界。
+
+接下来自动发生：组建团队 → Owner 干活 → Challenger 挑错 →（核心环节）Expert 裁决 → 人工门请你确认。你只需要做两件事：**读摘要、做决定**——认可就批准，不满意就让它返工。
+
+## 使用示例
+
+### 一次代码审查的完整体验
+
+```text
+你：审查一下 src/auth 最近三天的改动，重点看安全边界。
+
+团队：已开任务 review-auth，进入代码审查阶段。
+      ① Owner 完成安全审查，交付报告。
+      ② Challenger 逐条挑战，发现 2 处越权风险 → 要求修订一轮。
+      ③ 修订后复审通过；Expert 裁决：通过。
+      ④ E2E 适用性评估：纯静态改动，跳过（附依据）。
+
+你：◀ 收到人工门卡片：审查结论摘要 + 风险清单。回复确认。
+
+团队：任务完成。审查报告 CODE_REVIEW.md 已登记在任务档案。
 ```
 
-完整自动套件覆盖 v3 核心、插件、E2E 与仓库契约；宿主提供可解析的 Schemastery 依赖时，另执行对应的 settings schema 回归。实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`team-work/guidance`（角色/场景公共引导库，派单按 role+teamScene 注入，项目根同名文件覆盖）、`spec-providers/openspec`。零 npm 运行时依赖。
+- 有分歧时自主讨论最多三轮；三轮没收敛会把选项摆到你面前，你拍板。
+- 随时可以说“目标改为……”或追加约束，任务按新目标调整。
+- 全部记录（交付、评审意见、决定、路由依据）在 `.team-work/tasks/review-auth/`，随时可查。
+
+### 多包并行
+
+“把 auth 和 billing 两个模块都迁到新框架”这类多个可独立验收的目标，会自动拆成并行施工：多个 Owner 同时干活、互斥写范围防踩踏、评审按包归属精准返工。你只需在派活时讲清范围；复杂拆分会先出方案给你确认。
+
+## 工作原理
+
+### 房间与门
+
+整个系统只有一条主线：**成员在房间里自由工作，检查只发生在两处**——交卷/阅卷的瞬间，和过门的瞬间。
+
+```text
+你（DSH 会话）
+  │ 一句话派活
+  ▼
+Lead ──组建团队──▶ 成员子代理：Owner → Challenger → 核心环节 Expert
+  │                    │ 交付/评审：当场同步检查，拒绝即带修复指引
+  ▼                    ▼
+任务目录 .team-work/tasks/<name>/ ◀── 唯一事实源（意图/报告/决定/日志/快照）
+  │
+  ▼
+门：产出物在场 + 检查通过 + 非作者评审在场 + 人工确认（一处、确定性、必带恢复边）
+```
+
+### 三条设计信念
+
+- **任务目录即状态**。没有藏在内存里的状态机：目录里有什么就是什么，任何判定都能由目录 + 流程定义重新推导。所以任务永远不会“卡死”，中断、重启、迁移后接着跑。
+- **工具调用是唯一检查点**。每次交付/阅卷调用内做一次同步全量检查：accept/reject 连同全量原因与修复指引当场返回。没有异步拒绝，没有对成员不可见的第二层校验。
+- **模型只供语义**。工具参数只收模型才知道的事实（做了什么、产出在哪、发现了什么）；ID、链接、簿记全部由引擎从目录推导——成员不会因为“忘了填报告 ID”这类琐事被拒。
+
+### 四条协作铁律
+
+- 作者不自审；每个工作单元都有非作者 Challenger 挑战，核心环节由非作者 Expert 作技术裁决。
+- 每次拒绝都带 blocker、证据与恢复边——死门是缺陷。
+- 自主讨论最多三轮，未收敛交你拍板；追加轮次需你授权。
+- 人工门批准绑定制品指纹，制品变化即需重新确认；Agent 无权自行降级或代答。
+
+## 架构一瞥
+
+四块拼图，全部数据化：
+
+| 模块 | 一句话 |
+| --- | --- |
+| **Workflow**（`workflow/definitions/`） | 研发路线图：阶段、合法流转边、门禁、SPEC/E2E 路由——改流程改数据，不改代码 |
+| **Team-work**（`team-work/`） | 团队手册：哪个场景用哪档人、几轮收敛、审查视角、成本权重 |
+| **CoreRuntime**（`runtime-v3/` + `bin/tw.mjs`） | 唯一引擎：波次推进、门禁推导、任务目录读写、交付/评审检查 |
+| **DSH 绑定**（`dsh/`） | 插件本体：skill 装载、tw 工具、tier→模型注入、插件配置页 |
+
+> Runtime 不实现派发循环与 DAG 调度——编排是 DSH 平台职责；Runtime 只提供波次事实与验收。任务数据始终留在你项目的 `.team-work/`。
+
+## 更多资料
+
+- [AGENTS.md](AGENTS.md)：产品边界与完整规则（仓库契约事实源）
+- [docs/runtime-v3-charter.md](docs/runtime-v3-charter.md)：设计原则（P1–P6）与产品不变量（I1–I10）验收规约
+- [docs/runtime-roadmap.md](docs/runtime-roadmap.md)：开发进度与里程碑
+- [skills/team-work-v3/references/](skills/team-work-v3/references/)：拓扑与成本、场景指导、DSH 编排（skill 深度资料）

@@ -174,6 +174,7 @@ Owner 回应评审 = 再次 deliver：同路径原地修订（新 digest，旧�
 | domain/digests.mjs → policy/kernel.mjs | — | digestValue | 全部指纹计算 |
 | workflow/definitions/engineering.json | 51 | 十阶段、边、门、路由表 | gate 推导数据源，原样读 |
 | team-work/policies/default.json | 71 | 角色档位、轮次上限、E2E 模板 | 派单查表；**八视角合同改为 skill 引导，不再由编译器强制**（§8） |
+| team-work/guidance/ | 18 | 角色/场景公共引导库（roles/<role>.md、scenes/<sceneId>.md） | 派单按 role+teamScene 检索注入；包内基线 + 项目根同名文件覆盖，缺失静默跳过（惰性加载：仅派发/在途重建时读取） |
 | spec-providers/openspec/provider.mjs | 527 | status/instructions/validate/archive | SPEC 路由门复用；DSH 下 CLI 直调 |
 ### 6.2 重写（v3 新文件替代）
 

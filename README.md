@@ -59,4 +59,4 @@ npm test          # v3 核心、插件、E2E 与仓库契约
 npm pack --dry-run --ignore-scripts  # 验证唯一根制品清单
 ```
 
-完整自动套件覆盖 v3 核心、插件、E2E 与仓库契约；宿主提供可解析的 Schemastery 依赖时，另执行对应的 settings schema 回归。实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`spec-providers/openspec`。零 npm 运行时依赖。
+完整自动套件覆盖 v3 核心、插件、E2E 与仓库契约；宿主提供可解析的 Schemastery 依赖时，另执行对应的 settings schema 回归。实现：`runtime-v3/`（waves/gate/derive/store/intake/cli）+`bin/tw.mjs`；复用件：`runtime-v3/persistence`（原子写/锁/稳定读取）、`workflow/definitions`、`team-work/policies`、`team-work/guidance`（角色/场景公共引导库，派单按 role+teamScene 注入，项目根同名文件覆盖）、`spec-providers/openspec`。零 npm 运行时依赖。

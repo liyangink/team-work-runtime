@@ -2,7 +2,7 @@
 import assert from "node:assert/strict"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
-import test from "node:test"
+import test, { mock } from "node:test"
 
 import { loadGuidance } from "../runtime-v3/guidance.mjs"
 import { caller, makeProject, openTask } from "./support/v3-fixtures.mjs"
@@ -53,6 +53,37 @@ test("loadGuidance：项目根 guidance 目录不存在时回退包内基线，�
   const g = await loadGuidance("/nonexistent-project-root-tw-guidance")
   assert.ok(g.roles.owner?.includes("先调研和理解"), "目录缺失静默回退包内基线")
   assert.ok(g.scenes.test, "场景基线同样在场")
+})
+
+test("loadGuidance：相对路径 projectRoot 同样启用项目覆盖层（不再静默跳过）", async () => {
+  const projectRoot = await makeProject()
+  await mkdir(path.join(projectRoot, "team-work/guidance/scenes"), { recursive: true })
+  await writeFile(path.join(projectRoot, "team-work/guidance/scenes/implementation.md"), "- 相对路径覆盖专用：只在相对 projectRoot 下可见。", "utf8")
+  const rel = path.relative(process.cwd(), projectRoot)
+  assert.ok(!path.isAbsolute(rel), "夹具临时目录相对 cwd 应为相对路径")
+  const g = await loadGuidance(rel)
+  assert.ok(g.scenes.implementation.includes("相对路径覆盖专用"), "相对 projectRoot 覆盖层生效")
+  assert.ok(!g.scenes.implementation.includes("最小改动范围"), "覆盖后基线文本不残留")
+  assert.ok(g.roles.owner, "未覆盖的角色保留包内基线")
+})
+
+test("loadGuidance：项目覆盖层文件读取失败向 stderr 打一次警告，目录缺失静默", async () => {
+  const projectRoot = await makeProject()
+  // "损坏" = 条目在场但 readFile 失败：同名目录（readFile 目录抛 EISDIR）模拟文件不可读
+  await mkdir(path.join(projectRoot, "team-work/guidance/scenes/implementation.md"), { recursive: true })
+  const warns = []
+  mock.method(console, "warn", (...args) => warns.push(args.join(" ")))
+  const g = await loadGuidance(projectRoot)
+  assert.equal(warns.length, 1, "覆盖层损坏恰好一次警告：" + warns.join(" | "))
+  assert.match(warns[0], /team-work\/guidance\/scenes\/implementation\.md/, "警告指明文件")
+  assert.match(warns[0], /已回退包内基线/, "警告说明回退行为")
+  assert.ok(g.scenes.implementation?.includes("最小改动范围"), "损坏覆盖回退包内基线")
+
+  // 目录缺失（无覆盖目录）：静默，不产生任何警告
+  const warns2 = []
+  mock.method(console, "warn", (...args) => warns2.push(args.join(" ")))
+  await loadGuidance("/nonexistent-project-root-tw-guidance")
+  assert.equal(warns2.length, 0, "目录缺失静默无警告")
 })
 
 test("派单注入：owner 派单按角色+场景注入，不串入其他角色/场景引导", async () => {

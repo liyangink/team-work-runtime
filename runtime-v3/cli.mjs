@@ -302,7 +302,6 @@ async function archivedCard(projectRoot, name) {
 
 async function cmdRun({ projectRoot, name, writable = [] }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  const guidance = await loadGuidance(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
     if (archived) return archived
@@ -328,7 +327,7 @@ async function cmdRun({ projectRoot, name, writable = [] }) {
     const task = await loadTask(projectRoot, name, { workflow, policy })
     await ensureE2ePackages(task) // B：e2e 场景无 packages 时按模板物化（幂等；在 derive 前生效）
     const state = deriveTask(task)
-    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance })
+    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
   })
 }
 
@@ -404,7 +403,16 @@ function dispatchedDetail(dispatch, wave, writable) {
   }
 }
 
-async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance }) {
+// 引导库惰性加载（P3-5）：loadGuidance 只在"真正派发"与"在途重建"两个分支内按需调用——
+// 任务不存在（归档卡）、终态幂等完成卡、awaiting-user 静止、advance/blocked 等非派发路径
+// 零引导 I/O（每次调用 = 4 次 readdir（包内 + 项目根 roles/scenes，项目根缺失静默跳过）
+// + 全部引导文件读取，见 guidance.mjs）。
+// 无模块级缓存：每次派发/补发重新全量读取，保住"改引导文件即下次派发生效"的热变语义。
+// 锁内执行权衡：本函数整体在任务锁（locks/task.lock，见 cmdRun 的 withOwnerLock）内运行，
+// 引导读取计入持锁时间——代价通过惰性控制在最小（仅派发/在途重建分支才读），
+// 换取"判定与写入同锁"（复核修复原则）：注入引导的派单文本与 dispatched/journal 事实
+// 在同一临界区内落盘，并发 run 不会出现引导内容与派发事实错位或读到半程覆盖层的竞态。
+async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
 
   if (state.next.kind === 'dispatch') {
     if (!state.next.wave) {
@@ -458,6 +466,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         if (declined) {
           const tiersBackup = task.packages
           task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
+          const guidance = await loadGuidance(projectRoot) // 惰性：降档同样要派发，派发前加载
           const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
@@ -465,12 +474,14 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
+      const guidance = await loadGuidance(projectRoot) // 惰性：仅到达真正派发点才加载
       const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
       await persistTagHints(task.root, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
+    const guidance = await loadGuidance(projectRoot) // 惰性：非 owner 派发同样只在派发点加载
     const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
@@ -503,6 +514,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   }
   if (state.next.kind === 'wait-inflight') {
     // F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派
+    const guidance = await loadGuidance(projectRoot) // 惰性：在途重建（补发路径）按需加载
     const inflight = inflightDispatches(task, state.stage, guidance)
     return {
       ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
@@ -798,7 +810,6 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
 // 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
 async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  const guidance = await loadGuidance(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
     if (archived) return { ok: true, task: name, stage: null, stop: "archived", waves: [], card: archived }
@@ -830,7 +841,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         if (hint?.family) usedFamilies.push(hint.family)
         return hint
       }
-      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance })
+      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
         const agentMaps = (await readJson(path.join(task.root, 'agents.json'), { allowMissing: true }) ?? {}).mappings ?? {}

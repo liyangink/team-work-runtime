@@ -50,6 +50,7 @@
     "tests/runtime-v3-concurrency.test.mjs",
     "tests/runtime-v3-dsh.test.mjs",
     "tests/runtime-v3-topology.test.mjs",
+    "tests/runtime-v3-guidance-lazy.test.mjs",
     "tests/runtime-v3-guidance.test.mjs",
     "tests/support/v3-fixtures.mjs",
     "tests/repository-contract.test.mjs",

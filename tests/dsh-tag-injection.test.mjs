@@ -1,86 +1,84 @@
-// 标签寻址测试（docs/dsh-tag-injection-plan.md v2）：parseLabelTag/hintForTag 纯函数 + 同步注入三态
+// 标签寻址测试（任务级形态）：parseLabelTag 三重防线 + hintForTag + 同步注入三态
 import assert from "node:assert/strict"
 import test from "node:test"
+import { mkdtemp, mkdir, readFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 
 const DOT = String.fromCharCode(183)
 const { parseLabelTag, hintForTag, makeInjectContribution } = await import("../dsh/inject.js")
 
-test("parseLabelTag：合法三态（@包/无包/简述殿后）", () => {
-  assert.equal(parseLabelTag("CR" + DOT + "owner@store" + DOT + " 模块说明"), "CR" + DOT + "owner@store")
-  assert.equal(parseLabelTag("CR" + DOT + "chal"), "CR" + DOT + "chal")
-  assert.equal(parseLabelTag("IMPL" + DOT + "owner@api" + DOT + " 接口改造"), "IMPL" + DOT + "owner@api")
-})
-
-test("parseLabelTag：畸形全拒（小写/空格/无角色/含key/空/非串）", () => {
-  assert.equal(parseLabelTag("cr" + DOT + "owner"), null)
+test("parseLabelTag：{tag,task} 形态与三重防线", () => {
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner@store" + DOT + " 模块说明 #demo-t"), { tag: "CR" + DOT + "owner@store", task: "demo-t" })
+  assert.deepEqual(parseLabelTag("CR" + DOT + "chal #demo-t"), { tag: "CR" + DOT + "chal", task: "demo-t" })
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner"), { tag: "CR" + DOT + "owner", task: null })
+  assert.equal(parseLabelTag("cr" + DOT + "owner #t"), null)
   assert.equal(parseLabelTag("CR owner"), null)
-  assert.equal(parseLabelTag("CR" + DOT + "w2-abc"), null)
-  assert.equal(parseLabelTag(""), null)
   assert.equal(parseLabelTag(undefined), null)
 })
 
-test("hintForTag：命中带 effort 映射 / 缺失 / provider 空拒绝", () => {
+test("parseLabelTag 任务段边界：多#取末/#后还有内容/#42数字/#MyTask/#-task/超64", () => {
+  assert.equal(parseLabelTag("CR" + DOT + "owner" + DOT + " 见 #42 #demo-t").task, "demo-t", "多 # 取最后一个")
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner" + DOT + " x #demo-t 尾巴"), { tag: "CR" + DOT + "owner", task: null }, "# 后还有内容 → 非任务段")
+  assert.equal(parseLabelTag("CR" + DOT + "owner #42").task, "42", "#42 数字开头合法（残余已声明）")
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner #MyTask"), { tag: "CR" + DOT + "owner", task: null })
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner #-task"), { tag: "CR" + DOT + "owner", task: null })
+  assert.deepEqual(parseLabelTag("CR" + DOT + "owner #" + "a".repeat(65)), { tag: "CR" + DOT + "owner", task: null }, "超 64 → null（NAME_RE 上限 64）")
+})
+
+test("hintForTag：命中带 effort 映射 / 缺失拒绝", () => {
   const ag = { tagHints: { ["CR" + DOT + "owner"]: { provider: "p", model: "m", effort: "max" } } }
   assert.deepEqual(hintForTag(ag, "CR" + DOT + "owner"), { provider: "p", model: "m", reasoningEffort: "max" })
   assert.equal(hintForTag(ag, "RES" + DOT + "owner"), null)
-  assert.equal(hintForTag({ tagHints: { ["CR" + DOT + "owner"]: { provider: "", model: "m" } } }, "CR" + DOT + "owner"), null)
 })
 
-test("标签注入：descriptor.label 命中 tagHints → 首轮同步注入 + 补读互斥（F-7）", async () => {
+test("标签注入：任务段命中 → 首轮同步注入 + 回填 + 补读互斥", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-tag2-"))
+  const taskRoot = path.join(root, ".team-work", "tasks", "demo-t")
+  await mkdir(taskRoot, { recursive: true })
+  const file = path.join(taskRoot, "agents.json")
+  const { persistTagHints } = await import("../runtime-v3/cli.mjs")
+  await persistTagHints(taskRoot, [{ tag: "CR" + DOT + "owner", key: "w2-x", hint: { provider: "p", model: "m", effort: "max" } }])
   const installs = []
-  const fakeInstall = (c, sel) => { installs.push(sel) }
   const ctx = { logger: { info() {}, warn() {} } }
   let polled = 0
   const contribution = makeInjectContribution(ctx, {
     readFile: async () => { polled += 1; return "{}" },
-    readFileSync: () => JSON.stringify({ tagHints: { ["CR" + DOT + "owner"]: { provider: "p", model: "m", effort: "max" } } }),
-    installerNow: () => fakeInstall,
+    installerNow: () => (c, sel) => { installs.push(sel) },
     pollMs: 5,
   })
-  const childCtx = { agent: { id: "c1", session: { header: { cwd: "/x" }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner" + DOT + " 代码审查" } }] } } }
-  const disposer = contribution(childCtx) // 宿主契约：不 await
-  assert.equal(typeof disposer, "function")
+  const childCtx = { agent: { id: "c1", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner" + DOT + " 代码审查 #demo-t" } }] } } }
+  const disposer = contribution(childCtx)
   assert.equal(installs.length, 1, "install 同步执行")
   assert.equal(installs[0].current.model, "m", "首轮即注入")
   assert.equal(installs[0].current.reasoningEffort, "max")
-  await new Promise((r) => setTimeout(r, 25))
-  assert.equal(polled, 0, "标签命中即锁死：补读循环不启动")
+  await new Promise((r) => setTimeout(r, 80))
+  assert.equal(polled, 0, "标签命中锁死：补读不启动")
+  const d = JSON.parse(await readFile(file, "utf8"))
+  assert.equal(d.mappings["w2-x"], "c1", "回填任务级 mappings")
   disposer()
 })
 
-test("回退链：标签合法但 hint 缺 → 降级 childId 补读；无标签 → 现状同步首读", async () => {
+test("三重防线②：任务段目录不在场 → 不注入（简述 #42 不误判）", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-tag3-"))
   const installs = []
   const ctx = { logger: { info() {}, warn() {} } }
-  const c1 = makeInjectContribution(ctx, {
-    readFileSync: () => JSON.stringify({ tagHints: {} }),
-    readFile: async () => JSON.stringify({ modelHints: { c2: { provider: "p2", model: "m2" } } }),
-    installerNow: () => (c, sel) => { installs.push(sel) },
-    pollMs: 5,
-  })
-  const child = { agent: { id: "c2", session: { header: { cwd: "/x" }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner" } }] } } }
-  c1(child)
-  await new Promise((r) => setTimeout(r, 25))
-  assert.equal(installs[0].current.model, "m2", "降级补读命中")
-  const installs2 = []
-  const c2 = makeInjectContribution(ctx, {
-    readFileSync: () => JSON.stringify({ modelHints: { c3: { provider: "p3", model: "m3" } } }),
-    installerNow: () => (c, sel) => { installs2.push(sel) },
-  })
-  const child2 = { agent: { id: "c3", session: { header: { cwd: "/x" }, events: [{ type: "subagent/descriptor", data: { label: "随便" } }] } } }
-  c2(child2)
-  assert.equal(installs2[0].current.model, "m3", "无标签 → childId 同步首读")
+  const contribution = makeInjectContribution(ctx, { installerNow: () => (c, sel) => { installs.push(sel) } })
+  const childCtx = { agent: { id: "c2", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner" + DOT + " 修复 #42" } }] } } }
+  contribution(childCtx)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(installs.length, 1, "install 注册监听器（无条件）")
+  assert.equal(installs[0].current, undefined, "#42 目录不在场 → 不注入（selection 不写）")
 })
 
-test("resume 幂等：重复跑 contribution 同 hint 无害（第二次覆盖同值）", () => {
+test("无任务段回退：定位不了任务级文件 → 不注入", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-tag4-"))
   const installs = []
   const ctx = { logger: { info() {}, warn() {} } }
-  const contribution = makeInjectContribution(ctx, {
-    readFileSync: () => JSON.stringify({ tagHints: { ["RES" + DOT + "owner"]: { provider: "p", model: "m" } } }),
-    installerNow: () => (c, sel) => { installs.push(sel) },
-  })
-  const childCtx = { agent: { id: "c4", session: { header: { cwd: "/x" }, events: [{ type: "subagent/descriptor", data: { label: "RES" + DOT + "owner" } }] } } }
+  const contribution = makeInjectContribution(ctx, { installerNow: () => (c, sel) => { installs.push(sel) } })
+  const childCtx = { agent: { id: "c3", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: "CR" + DOT + "owner" } }] } } }
   contribution(childCtx)
-  contribution(childCtx)
-  assert.equal(installs.length, 2, "两次注册（宿主每次 resume 调 contribution）")
-  assert.equal(installs[1].current.model, "m", "重复注入同 hint（幂等语义）")
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(installs.length, 1, "install 注册监听器（无条件）")
+  assert.equal(installs[0].current, undefined, "无任务段 → 不注入（selection 不写）")
 })

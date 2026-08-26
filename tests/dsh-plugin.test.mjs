@@ -1,9 +1,13 @@
 // dsh-plugin 纯函数单测（不依赖 DSH 运行时；装载链验证在 I2 验证脚本与 I6 压轴 E2E）
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
+import { readFile, mkdtemp, mkdir, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 import vm from "node:vm"
+
+const DOT = String.fromCharCode(183)
 
 import { hintForChild, agentsJsonPath } from "../dsh/inject.js"
 import { resolveTwExecutable, resolveChildCwd } from "../dsh/tw-tool.js"
@@ -692,9 +696,10 @@ test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/�
   assert.equal(hintForChild({ modelHints: "not-object" }, "a"), null, "modelHints 非对象")
 })
 
-test("I2 agents.json 路径解析：只使用子会话 cwd", () => {
-  assert.equal(agentsJsonPath("/cwd"), "/cwd/.team-work/platform/agents.json", "从子会话 cwd 定位")
-  assert.equal(agentsJsonPath(null), null, "无子会话 cwd → 不注入")
+test("I2 agents.json 路径解析：cwd + 任务名 → 任务级注册表", () => {
+  assert.equal(agentsJsonPath("/cwd", "demo-t"), "/cwd/.team-work/tasks/demo-t/agents.json", "任务级定位")
+  assert.equal(agentsJsonPath(null, "t"), null, "无 cwd → null")
+  assert.equal(agentsJsonPath("/cwd", null), null, "无任务名 → null")
 })
 
 test("I2 tw 工具解析：唯一根制品直接携带 Runtime，不依赖 PATH", () => {
@@ -736,15 +741,20 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
     providerAtInstall = selection.current === undefined ? "UNDEFINED" : String(selection.current.provider)
     return fakeInstall(childCtx2, selection)
   }
+  // 任务级注册表（迁移方案）：真 cwd + 真任务目录 + label 带 #任务名；accessSync 校验目录在场
+  const cwd = await mkdtemp(path.join(tmpdir(), "tw-inject-"))
+  const taskDir = path.join(cwd, ".team-work", "tasks", "demo-t")
+  await mkdir(taskDir, { recursive: true })
+  const agentsJson = path.join(taskDir, "agents.json")
+  const child = (id, label) => ({ agent: { id, session: { header: { cwd }, events: [{ type: "subagent/descriptor", data: { label } }] } } })
   // 宿主真实契约（SetupRegistry.apply 源码）：contribution(childCtx) 同步调用、返回值直接存为 disposer、
-    // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
+  // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
+  await writeFile(agentsJson, JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }))
   const contribution = makeInjectContribution(ctx, {
-    readFileSync: () => JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }),
-    readFile: async () => { throw new Error("已有 hint 不应退化到异步首读") },
     installerNow: () => fakeInstallChecked,
     pollMs: 5,
   })
-  const childCtx = { agent: { id: "child-1", session: { header: { cwd: "/x" } } } }
+  const childCtx = child("child-1", "IMPL" + DOT + "owner #demo-t")
   const disposer = contribution(childCtx) // 不 await——同步契约
   assert.equal(typeof disposer, "function", "contribution 返回 disposer（宿主直接存储该返回值）")
   assert.equal(installs.length, 1, "install 在 contribution 同步段完成（监听器在场——F2 契约）")
@@ -757,20 +767,15 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   assert.equal(installDisposers, 1, "disposer 透传 install 清理")
 
   // 迟到写入场景：首次读无 hint，第二次读才命中（真实时序：agent-map 晚于子代创建）
-  let readCount = 0
+  await writeFile(agentsJson, JSON.stringify({ modelHints: {} }))
   const installsLate = []
   const contributionLate = makeInjectContribution(ctx, {
-    readFileSync: () => JSON.stringify({ modelHints: {} }),
-    readFile: async () => {
-      readCount += 1
-      if (readCount < 2) return JSON.stringify({ modelHints: {} }) // 首轮：Lead 尚未 agent-map
-      return JSON.stringify({ modelHints: { "child-late": { provider: "p2", model: "m2" } } })
-    },
     installerNow: () => (c, s) => { installsLate.push(s) },
     pollMs: 5,
   })
-  const disposeLate = contributionLate({ agent: { id: "child-late", session: { header: { cwd: "/x" } } } })
+  const disposeLate = contributionLate(child("child-late", "IMPL" + DOT + "owner #demo-t"))
   assert.equal(installsLate[0].current, undefined, "首读未命中：不注入（继承默认）")
+  await writeFile(agentsJson, JSON.stringify({ modelHints: { "child-late": { provider: "p2", model: "m2" } } }))
   await new Promise((r) => setTimeout(r, 30))
   assert.equal(installsLate[0].current?.model, "m2", "第二次读命中：hint 补写生效（下轮请求注入）")
   disposeLate()
@@ -781,7 +786,7 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
     installerNow: () => fakeInstall,
     pollMs: 5, pollMaxMs: 20,
   })
-  const dispose2 = contribution2({ agent: { id: "child-2", session: { header: { cwd: "/x" } } } })
+  const dispose2 = contribution2(child("child-2", "IMPL" + DOT + "owner #demo-t"))
   await new Promise((r) => setTimeout(r, 40))
   dispose2()
   // 无抛出即为通过（selection 保持 undefined——不干预）
@@ -803,9 +808,14 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
   const { makeInjectContribution } = await import("../dsh/inject.js")
   const warnings = []
   const ctx = { logger: { warn: (message) => warnings.push(String(message)), info() {} } }
+  const cwd = await mkdtemp(path.join(tmpdir(), "tw-inject-fail-"))
+  const taskDir = path.join(cwd, ".team-work", "tasks", "demo-t")
+  await mkdir(taskDir, { recursive: true })
+  const agentsJson = path.join(taskDir, "agents.json")
+  const child = (id) => ({ agent: { id, session: { header: { cwd }, events: [{ type: "subagent/descriptor", data: { label: "IMPL" + DOT + "owner #demo-t" } }] } } })
+  await writeFile(agentsJson, "{损坏")
   let reads = 0
   const contribution = makeInjectContribution(ctx, {
-    readFileSync: () => "{损坏",
     readFile: async () => {
       reads += 1
       const error = new Error("permission denied")
@@ -816,7 +826,7 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
     pollMs: 2,
     pollMaxMs: 8,
   })
-  const dispose = contribution({ agent: { id: "child-diagnostic", session: { header: { cwd: "/x" } } } })
+  const dispose = contribution(child("child-diagnostic"))
   await new Promise((resolve) => setTimeout(resolve, 25))
   dispose()
 
@@ -826,13 +836,12 @@ test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安�
 
   const damagedWarnings = []
   const damagedContribution = makeInjectContribution({ logger: { warn: (message) => damagedWarnings.push(String(message)) } }, {
-    readFileSync: () => "{损坏",
     readFile: async () => "{仍损坏",
     installerNow: () => () => () => {},
     pollMs: 2,
     pollMaxMs: 8,
   })
-  const disposeDamaged = damagedContribution({ agent: { id: "child-damaged", session: { header: { cwd: "/x" } } } })
+  const disposeDamaged = damagedContribution(child("child-damaged"))
   await new Promise((resolve) => setTimeout(resolve, 25))
   disposeDamaged()
   assert.ok(damagedWarnings.some((message) => message.includes("超时") && message.includes("修复或删除损坏的 agents.json")), "损坏 JSON 超时后给出恢复有效文件的指引")

@@ -457,7 +457,7 @@ team-work-dsh:
   try {
     const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
     assert.deepEqual(mapped.modelHint, selected)
-    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "snapshot-t", "agents.json"), "utf8"))
     assert.deepEqual(agents.modelHints["child-a"], selected)
     const manual = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-b", "--model-hint", '{"provider":"other","model":"other"}'])
     assert.equal(manual.ok, false)

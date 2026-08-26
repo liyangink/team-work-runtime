@@ -517,7 +517,7 @@ team-work-dsh:
       call(["agent-map", "--task", "pool-t", "--key", first.dispatchKey, "--agent", "child-one"]),
       call(["agent-map", "--task", "pool-t", "--key", second.dispatchKey, "--agent", "child-two"]),
     ])
-    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "platform", "agents.json"), "utf8"))
+    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "pool-t", "agents.json"), "utf8"))
     assert.equal(agents.mappings[first.dispatchKey], "child-one")
     assert.equal(agents.mappings[second.dispatchKey], "child-two")
     assert.deepEqual(agents.modelHints["child-one"], m1)

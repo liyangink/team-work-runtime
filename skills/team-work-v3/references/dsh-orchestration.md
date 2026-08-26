@@ -11,7 +11,7 @@ tw dispatch-plan --task <名> --json 取计划 → 对 waves[] 逐条：
 | 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label 按标签规范机器段 `阶段缩写·角色[@包] · 简述`（见下文标签规范节，机器段即注入寻址键）；prompt 原样转发；**无需 agent-map 登记**——插件按标签自动注入并回填续派映射（仅无标签/回填失败/换人纠错时才 agent-map） |
 | continuation=true 且有 expectedAgentId | 对该 subagent send_message（消息 = wave.prompt 增量派单全文）；**不要开新 agent** |
 | continuation=true 但 send_message 失败/会话不可用 | 降级规程：按 prompt 全量新开 fresh subagent + 重新 agent-map（用户点名换人 replace-owner 走同一通道） |
-| role=challenger（scope=consolidation）| 单个 challenger subagent（label = <任务>.<阶段>.challenger），组合制品视角 |
+| role=challenger（scope=consolidation）| 单个 challenger subagent（label 按标签规范机器段 `阶段缩写·chal · 简述 #任务名`），组合制品视角 |
 | role=expert | 单个 expert subagent；verdict 通过派单内嵌的 review 调用提交 |
 | 一次性探查（成员自派） | 成员用只读子派单（junior、可写空、workflow parallel），不占团队波次 |
 
@@ -44,7 +44,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 
 DSH 所有后台任务在**统一的子代理列表**混排，且侧栏从尾部截断（约 32 个半角字符）——**阶段是跨任务列表的第一分组建，必须最前**；简述殿后（被截断无害）。
 
-格式：`阶段·角色[@包] · 简述`
+格式：`阶段·角色[@包] · 简述 #任务名`（任务段固定 ` #任务名`——前置空格+`#`+任务名，殿后；任务名=tw open 的名字）
 
 - **阶段缩写固定表**（同阶段同缩写，不许自由发挥）：RES=调研 DESIGN=方案 SPEC=SPEC IMPL=实现 TEST=测试 CR=代码审查 E2E=端到端 FIN=收尾；
 - **角色**：owner / chal（challenger 固定缩写，省 6 字符）/ expert；
@@ -53,6 +53,7 @@ DSH 所有后台任务在**统一的子代理列表**混排，且侧栏从尾部
 
 示例：`CR·owner@store · 模块说明`（19 字符）/ `CR·chal · 文档整合评审` / `IMPL·owner@api · 接口改造`
 
-- 只读子派单前缀：`CR·RO · 并发扫描`（RO=read-only 一次性，非团队成员）；
+- 只读子派单前缀：`CR·RO · 并发扫描`（RO=read-only 一次性，非团队成员；只读子派单无需任务段）；
+- **简述不含 `#`**（任务段是唯一 ` #` 定界——简述里写 `#` 会被误解析为任务段候选，虽经目录存在性校验兜底，但可能撞上同名任务名）；
 - 禁止：派单 key、哈希、轮次号做标签（续派轮标签不变，同一成员可辨认）。
-- **机器段是模型注入的寻址键**（`阶段缩写·角色[@包]`，runtime 派发时按此键写入 hint 快照、插件按此键注入 model/effort）：机器段必须逐字符用固定表，简述可自由但不得含第二个机器段格式；机器段写错 = 该子代退化为默认模型（不阻塞任务，注入日志有 warn）。
+- **机器段是模型注入的寻址键**（`阶段缩写·角色[@包]` + 任务段 ` #任务名`）：机器段必须逐字符用固定表，简述可自由但不得含第二个机器段格式；任务段决定任务级注册表定位。机器段/任务段写错 = 该子代退化为默认模型（不阻塞任务，注入日志有 warn）。

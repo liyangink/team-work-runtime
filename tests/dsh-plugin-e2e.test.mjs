@@ -142,8 +142,9 @@ test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真�
   const os = await import("node:os")
   // 真实临时项目 + agents.json
   const proj = await mkdtemp(path.join(os.tmpdir(), "e2a-"))
-  await mkdir(path.join(proj, ".team-work/platform"), { recursive: true })
-  await writeFile(path.join(proj, ".team-work/platform/agents.json"), JSON.stringify({
+  const DOT = String.fromCharCode(183)
+  await mkdir(path.join(proj, ".team-work", "tasks", "demo-t"), { recursive: true })
+  await writeFile(path.join(proj, ".team-work", "tasks", "demo-t", "agents.json"), JSON.stringify({
     mappings: { w1: "child-real" },
     modelHints: { "child-real": { provider: "prov-demo", model: "model-demo", effort: "max" } },
   }))
@@ -154,7 +155,7 @@ test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真�
     pollMs: 5,
   })
   // 宿主真实契约：同步调用、不 await（返回 disposer）
-  const disposer = contribution({ agent: { id: "child-real", session: { header: { cwd: proj } } } })
+  const disposer = contribution({ agent: { id: "child-real", session: { header: { cwd: proj }, events: [{ type: "subagent/descriptor", data: { label: "IMPL" + DOT + "owner #demo-t" } }] } } })
   assert.equal(typeof disposer, "function", "contribution 返回 disposer")
   assert.equal(installs.length, 1)
   assert.equal(installs[0].current.model, "model-demo", "恢复时已有 hint 在 contribution 返回前生效")

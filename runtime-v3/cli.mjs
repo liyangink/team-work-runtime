@@ -23,30 +23,27 @@ export function tagLabel(stageId, role, pkg) {
   return ab + "·" + r + (pkg ? "@" + pkg : "")
 }
 
-// tagHints 落盘：dispatched 时把标签→modelHint 快照写入项目级 agents.json（P4 零转录）。
-// 项目级 owner 锁，跨任务并发派发不踩踏；写失败降级 warn 不阻塞派发。
-export async function persistTagHints(projectRoot, entries) {
+// tagHints/pendingTags 落盘：dispatched 时写入【任务级】 agents.json（taskRoot/agents.json，P4 零转录）。
+// 任务级键空间（迁移方案 docs/agents-json-task-scope-plan.md）：调用处已持 task.lock，这里不再自取锁。
+// 写失败降级 warn 不阻塞派发。
+export async function persistTagHints(taskRoot, entries) {
   const valid = (entries ?? []).filter((e) => e && e.tag && e.hint && e.hint.provider && e.hint.model)
   if (valid.length === 0) return
-  const file = path.join(projectRoot, ".team-work", "platform", "agents.json")
-  const lock = path.join(projectRoot, ".team-work", "platform", "locks", "agents.lock")
+  const file = path.join(taskRoot, "agents.json")
   try {
-    await mkdir(path.dirname(lock), { recursive: true }) // 锁原语 open("wx") 不建父目录
-    await withOwnerLock(lock, async () => {
-      const current = (await readJson(file, { allowMissing: true })) ?? {} // 缺失容错；损坏(STATE_CORRUPT)重抛→外层 warn 降级，不静默覆盖
-      const tagHints = { ...(current?.tagHints ?? {}) }
-      const pendingTags = { ...(current?.pendingTags ?? {}) }
-      for (const { tag, hint } of valid) {
-        tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }
-      }
-      // pendingTags[标签] = 最新派发 key：插件回填 mappings[key]=childId 的寻址期望（同标签续派覆盖=最新 key）
-      for (const { tag, key } of valid) {
-        if (key) pendingTags[tag] = key
-      }
-      current.tagHints = tagHints
-      current.pendingTags = pendingTags
-      await atomicJson(file, current)
-    })
+    const current = (await readJson(file, { allowMissing: true })) ?? {} // 缺失容错；损坏(STATE_CORRUPT)重抛→外层 warn 降级
+    const tagHints = { ...(current?.tagHints ?? {}) }
+    const pendingTags = { ...(current?.pendingTags ?? {}) }
+    for (const { tag, hint } of valid) {
+      tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }
+    }
+    // pendingTags[标签] = 最新派发 key：插件回填 mappings[key]=childId 的寻址期望（同任务串行，覆盖=最新 key）
+    for (const { tag, key } of valid) {
+      if (key) pendingTags[tag] = key
+    }
+    current.tagHints = tagHints
+    current.pendingTags = pendingTags
+    await atomicJson(file, current)
   } catch (error) {
     console.warn("tagHints 落盘失败（不阻塞派发，插件将回退 childId 补读）：" + String(error?.message ?? error))
   }
@@ -464,20 +461,20 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-          await persistTagHints(projectRoot, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
+          await persistTagHints(task.root, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
       const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-      await persistTagHints(projectRoot, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
+      await persistTagHints(task.root, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
     const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
-    await persistTagHints(projectRoot, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), key: dispatch.key, hint: dispatch.modelHint }])
+    await persistTagHints(task.root, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), key: dispatch.key, hint: dispatch.modelHint }])
     return { ...card, dispatch }
   }
 
@@ -785,20 +782,14 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
     // dispatch-plan 在写 dispatched 事实时已持久化精确选中的 hint。这里绝不重新读配置或重选家族，
     // 因此全局 settings 热更新、同波第二 Owner 的 diversity 选择都不会让 child 注入漂移。
     const hint = dispatch.detail.modelHint?.provider && dispatch.detail.modelHint?.model ? dispatch.detail.modelHint : null
-    const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
-    const fallback = '{ "mappings": {}, "modelHints": {} }'
-    const agentsLock = path.join(controlRoot(projectRoot), 'platform', 'locks', 'agents.lock')
-    await mkdir(path.dirname(agentsLock), { recursive: true })
-    // F2 锁面统一：agents.json 为项目级共享文件，写入统一 agents.lock（与 persistTagHints/插件回填互斥；
-    // 嵌套序 task.lock→agents.lock 与派发路径一致，无死锁）。
-    await withOwnerLock(agentsLock, async () => {
-      const current = (await readJson(file, { allowMissing: true })) ?? {}
-      current.mappings = { ...(current.mappings ?? {}) }
-      current.modelHints = { ...(current.modelHints ?? {}) }
-      current.mappings[key] = agent
-      if (hint) current.modelHints[agent] = hint
-      await atomicJson(file, current)
-    })
+    // 任务级注册表（迁移方案）：file=task.root/agents.json；task.lock 已持有（写 journal 同锁域）
+    const file = path.join(task.root, 'agents.json')
+    const current = (await readJson(file, { allowMissing: true })) ?? {}
+    current.mappings = { ...(current.mappings ?? {}) }
+    current.modelHints = { ...(current.modelHints ?? {}) }
+    current.mappings[key] = agent
+    if (hint) current.modelHints[agent] = hint
+    await atomicJson(file, current)
     return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并落盘 dispatch-plan 的模型快照（modelHints[childId]，插件注入消费）' : '已登记；该派单没有 dispatch-plan 模型快照（例如由 tw run 直接派发），成员将继承平台默认模型' }
   })
 }
@@ -842,7 +833,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint, guidance })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
-        const agentMaps = JSON.parse(await readFile(path.join(controlRoot(projectRoot), 'platform', 'agents.json'), 'utf8').catch(() => '{ "mappings": {} }')).mappings ?? {}
+        const agentMaps = (await readJson(path.join(task.root, 'agents.json'), { allowMissing: true }) ?? {}).mappings ?? {}
         // 同包同角色上一派发 key（expectedAgentId 推导源）
         // D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
         // 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。

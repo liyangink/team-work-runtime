@@ -11,7 +11,7 @@
 //      命中即同步写 selection.current——首请求即注入。
 //   ② childId 补读（回退通道，兼容旧派单）：标签缺失/未命中时按现状自循环补读 modelHints[childId]。
 import { readFile, mkdir } from "node:fs/promises"
-import { readFileSync } from "node:fs"
+import { readFileSync, accessSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { atomicJson, withOwnerLock } from "../runtime-v3/persistence/transactions.mjs"
@@ -20,13 +20,20 @@ const requireSync = createRequire(import.meta.url)
 
 // 标签机器段正则（skill 标签规范固定表）：阶段缩写·角色[@包]
 export const LABEL_TAG_RE = /^(RES|DESIGN|SPEC|IMPL|TEST|CR|E2E|FIN)·(owner|chal|expert)(@[A-Za-z0-9_\-]+)?/
+// 任务段（迁移方案三重防线①形态约束）：最后一个 # 之后全串，NAME_RE 且位于最末尾
+export const TASK_TAG_RE = / #([a-z0-9][a-z0-9-]{0,63})$/
 
-// 纯函数：从子代 label 解析注入寻址键（标签机器段），不合法返回 null（三态判定）
+// 纯函数：从子代 label 解析 {tag, task}。三重防线：
+//  ① 形态：头机器段（阶段·角色[@包]）+ 末尾 #任务名（NAME_RE）；
+//  ② 事实源：候选任务名必须真实存在（.team-work/tasks/<名>/ 目录在场）——简述误写 #42 不误判；
+//  ③ 规范：skill 明示简述不得以 # 结尾（软约束，②兜底）。
+// 返回 null = 无标签（回退链）；返回 {tag} = 有机器段但无任务段（无法定位任务级文件，回退）
 export function parseLabelTag(label) {
   if (typeof label !== "string") return null
-  // 头锚定直接提取机器段（对简述分隔形态全容忍：规范" · "、手写"· "、无简述均兼容）
-  const m = LABEL_TAG_RE.exec(label.trim())
-  return m ? m[0] : null
+  const head = LABEL_TAG_RE.exec(label.trim())
+  if (!head) return null
+  const taskM = TASK_TAG_RE.exec(label.trim())
+  return taskM ? { tag: head[0], task: taskM[1] } : { tag: head[0], task: null }
 }
 
 // 纯函数：从 agents.json 内容解析某标签的注入决策（tagHints 键）
@@ -55,10 +62,10 @@ export function hintForChild(agentsJson, childId) {
   }
 }
 
-// agents.json 路径解析（纯函数导出供单测）：只从子会话 cwd 定位。
-export function agentsJsonPath(headerCwd) {
-  if (typeof headerCwd !== "string" || !headerCwd) return null
-  return path.join(headerCwd, ".team-work", "platform", "agents.json")
+// agents.json 路径解析（任务级，迁移方案）：cwd + 任务名 → .team-work/tasks/<任务>/agents.json
+export function agentsJsonPath(headerCwd, task) {
+  if (typeof headerCwd !== "string" || !headerCwd || typeof task !== "string" || !task) return null
+  return path.join(headerCwd, ".team-work", "tasks", task, "agents.json")
 }
 
 // 安装器解析（与既有实现一致）
@@ -80,8 +87,8 @@ export function installerNow() {
 // 自动回填（方案 v2）：标签命中后把 mappings[派发key]=childId 写回项目 agents.json。
 // 单次尝试（withOwnerLock 内部自旋约 2s 已覆盖瞬时锁争用）；写失败 warn 降级（Lead 可 agent-map 兜底）。
 async function backfillMapping(file, tag, childId, warn, isStopped) {
-  // file=<root>/.team-work/platform/agents.json：dirname(file) 即 platform 层，锁与 CLI 同路径（F-1 修正）
-  const lock = path.join(path.dirname(file), "locks", "agents.lock")
+  // file=<root>/.team-work/tasks/<任务>/agents.json：dirname(file)=task.root，锁用 task.lock（与 CLI 同锁域）
+  const lock = path.join(path.dirname(file), "locks", "task.lock")
   try {
     await mkdir(path.dirname(lock), { recursive: true })
     await withOwnerLock(lock, async () => {
@@ -103,6 +110,7 @@ async function backfillMapping(file, tag, childId, warn, isStopped) {
 export function makeInjectContribution(ctx, deps = {}) {
   const readFileFn = deps.readFile ?? readFile
   const readFileSyncFn = deps.readFileSync ?? readFileSync
+  const accessSyncFn = deps.accessSync ?? accessSync
   const installerNowFn = deps.installerNow ?? installerNow
   const pollMs = deps.pollMs ?? 500
   const pollMaxMs = deps.pollMaxMs ?? 120000
@@ -124,8 +132,7 @@ export function makeInjectContribution(ctx, deps = {}) {
         return cleanup
       }
       const cwd = agent?.session?.header?.cwd
-      const file = agentsJsonPath(cwd)
-      if (!file) {
+      if (typeof cwd !== "string" || !cwd) {
         warn("模型注入跳过：子会话缺少工作目录；请在已打开项目的 DSH 会话中创建子代")
         return cleanup
       }
@@ -143,21 +150,34 @@ export function makeInjectContribution(ctx, deps = {}) {
       // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预
       const selection = { current: undefined, assembled: undefined }
       disposeInstall = install(childCtx, selection)
-      // ① 标签寻址（主通道）：descriptor 在 seed（seq0），同步段读 label 机器段查 tagHints。
+      // ① 标签寻址（主通道）：descriptor 在 seed（seq0），同步段读 label 机器段+任务段查任务级 tagHints。
       let tagHit = false
       const events = agent?.session?.events
       const descriptor = Array.isArray(events) ? events.find((e) => e?.type === "subagent/descriptor") : null
       const label = descriptor?.data?.label
-      const tag = parseLabelTag(label)
-      if (tag) {
+      const parsed = parseLabelTag(label)
+      // 任务段三重防线②：候选任务名必须目录在场（简述误写 #42 不误判）
+      let file = null
+      let tag = null
+      if (parsed) {
+        tag = parsed.tag
+        if (parsed.task) {
+          try {
+            accessSyncFn(path.join(cwd, ".team-work", "tasks", parsed.task))
+            file = agentsJsonPath(cwd, parsed.task)
+          } catch {
+            warn("标签任务段 " + parsed.task + " 对应任务目录不存在（简述 # 误写或任务已归档），视作无任务段")
+          }
+        }
+      }
+      if (tag && file) {
         try {
           const hint = hintForTag(JSON.parse(readFileSyncFn(file, "utf8")), tag)
           if (hint) {
             selection.current = hint
             tagHit = true
-            ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 标签注入 " + tag + " → " + hint.provider + "/" + hint.model)
-            // 自动回填（方案 docs/tag-agent-auto-register-plan.md v2）：fire-and-forget 把
-            // mappings[派发key] = childId 写回（key 任务作用域，续派 expectedAgentId 直查）。
+            ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 标签注入 " + tag + "@" + parsed.task + " → " + hint.provider + "/" + hint.model)
+            // 自动回填（方案 v2）：fire-and-forget 把 mappings[派发key] = childId 写回任务级文件。
             backfillMapping(file, tag, agent.id, warn, () => stopped)
           } else {
             warn("标签 " + tag + " 未在 tagHints 命中（派发快照缺失或已陈旧），降级 childId 补读")
@@ -167,7 +187,11 @@ export function makeInjectContribution(ctx, deps = {}) {
         }
       }
       if (tagHit) return cleanup // 命中即锁死（与补读互斥——F-7）
-      // ② childId 补读（回退通道）
+      // ② childId 补读（回退通道）：仅任务段在场（file 已定位）时可用；无任务段=定位不了任务级文件，补读放弃
+      if (!file) {
+        warn("标签无有效任务段（无法定位任务级注册表）：不注入；请按标签规范补 #任务名 后重建子代")
+        return cleanup
+      }
       const startedAt = Date.now()
       let readIssueWarned = false
       let timeoutWarned = false
@@ -210,7 +234,7 @@ export function makeInjectContribution(ctx, deps = {}) {
         }
       }
       try {
-        if (applyChildHint(readFileSyncFn(file, "utf8"))) return cleanup
+        if (file && applyChildHint(readFileSyncFn(file, "utf8"))) return cleanup
       } catch (error) {
         warnReadIssue(error)
       }

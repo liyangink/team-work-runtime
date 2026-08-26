@@ -35,10 +35,16 @@ export async function persistTagHints(projectRoot, entries) {
     await withOwnerLock(lock, async () => {
       const current = (await readJson(file, { allowMissing: true })) ?? {} // 缺失容错；损坏(STATE_CORRUPT)重抛→外层 warn 降级，不静默覆盖
       const tagHints = { ...(current?.tagHints ?? {}) }
+      const pendingTags = { ...(current?.pendingTags ?? {}) }
       for (const { tag, hint } of valid) {
         tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }
       }
+      // pendingTags[标签] = 最新派发 key：插件回填 mappings[key]=childId 的寻址期望（同标签续派覆盖=最新 key）
+      for (const { tag, key } of valid) {
+        if (key) pendingTags[tag] = key
+      }
       current.tagHints = tagHints
+      current.pendingTags = pendingTags
       await atomicJson(file, current)
     })
   } catch (error) {
@@ -458,20 +464,20 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-          await persistTagHints(projectRoot, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
+          await persistTagHints(projectRoot, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
       const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-      await persistTagHints(projectRoot, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), hint: c.modelHint })))
+      await persistTagHints(projectRoot, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
     const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
-    await persistTagHints(projectRoot, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), hint: dispatch.modelHint }])
+    await persistTagHints(projectRoot, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), key: dispatch.key, hint: dispatch.modelHint }])
     return { ...card, dispatch }
   }
 
@@ -781,11 +787,18 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
     const hint = dispatch.detail.modelHint?.provider && dispatch.detail.modelHint?.model ? dispatch.detail.modelHint : null
     const file = path.join(controlRoot(projectRoot), 'platform', 'agents.json')
     const fallback = '{ "mappings": {}, "modelHints": {} }'
-    await mkdir(path.dirname(file), { recursive: true })
-    const current = JSON.parse(await readFile(file, 'utf8').catch(() => fallback))
-    current.mappings = { ...(current.mappings ?? {}), [key]: agent }
-    if (hint) current.modelHints = { ...(current.modelHints ?? {}), [agent]: hint }
-    await atomicJson(file, current)
+    const agentsLock = path.join(controlRoot(projectRoot), 'platform', 'locks', 'agents.lock')
+    await mkdir(path.dirname(agentsLock), { recursive: true })
+    // F2 锁面统一：agents.json 为项目级共享文件，写入统一 agents.lock（与 persistTagHints/插件回填互斥；
+    // 嵌套序 task.lock→agents.lock 与派发路径一致，无死锁）。
+    await withOwnerLock(agentsLock, async () => {
+      const current = (await readJson(file, { allowMissing: true })) ?? {}
+      current.mappings = { ...(current.mappings ?? {}) }
+      current.modelHints = { ...(current.modelHints ?? {}) }
+      current.mappings[key] = agent
+      if (hint) current.modelHints[agent] = hint
+      await atomicJson(file, current)
+    })
     return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并落盘 dispatch-plan 的模型快照（modelHints[childId]，插件注入消费）' : '已登记；该派单没有 dispatch-plan 模型快照（例如由 tw run 直接派发），成员将继承平台默认模型' }
   })
 }
@@ -850,6 +863,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
             ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
+            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话（自动回填缺失或无标签）：请新开同标签 fresh subagent（插件自愈覆盖），或 tw agent-map 兜底登记' } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,

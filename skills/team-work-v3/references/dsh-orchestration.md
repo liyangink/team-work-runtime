@@ -8,7 +8,7 @@ tw dispatch-plan --task <名> --json 取计划 → 对 waves[] 逐条：
 
 | wave 字段 | 动作 |
 | --- | --- |
-| 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label = <任务>.<阶段>.owner@<包>（人读稳定标签），provider/model 按 modelHint；prompt 原样转发；开完立即 tw agent-map --task <名> --key <wave.dispatchKey> --agent <subagentId> 登记 |
+| 多 owners（package 各异）、continuation=false | 每包开一个**后台 subagent**：label 按标签规范机器段 `阶段缩写·角色[@包] · 简述`（见下文标签规范节，机器段即注入寻址键）；prompt 原样转发；**无需 agent-map 登记**——插件按标签自动注入并回填续派映射（仅无标签/回填失败/换人纠错时才 agent-map） |
 | continuation=true 且有 expectedAgentId | 对该 subagent send_message（消息 = wave.prompt 增量派单全文）；**不要开新 agent** |
 | continuation=true 但 send_message 失败/会话不可用 | 降级规程：按 prompt 全量新开 fresh subagent + 重新 agent-map（用户点名换人 replace-owner 走同一通道） |
 | role=challenger（scope=consolidation）| 单个 challenger subagent（label = <任务>.<阶段>.challenger），组合制品视角 |
@@ -24,7 +24,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## stop 处理
 
 - stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
-- stop: wait-inflight：有成员未交付。用卡内嵌的 inflight[]（原派单全文）原样补派——continuation 且有 expectedAgentId 则 send_message，否则新开 + agent-map；
+- stop: wait-inflight：有成员未交付。用卡内嵌的 inflight[]（原派单全文）原样补派——continuation 且有 expectedAgentId 则 send_message；无 expectedAgentId（回填失败/无标签）则新开同标签 fresh subagent（插件自愈覆盖）或 agent-map 兜底；send_message 失败 → 降级新开 fresh（见标签规范节）。
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后继续。
 

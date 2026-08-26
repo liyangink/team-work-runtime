@@ -10,10 +10,11 @@
 //      contribution 同步段读 session.events 的 subagent/descriptor 事件（seed 内，seq0）解析 label，
 //      命中即同步写 selection.current——首请求即注入。
 //   ② childId 补读（回退通道，兼容旧派单）：标签缺失/未命中时按现状自循环补读 modelHints[childId]。
-import { readFile } from "node:fs/promises"
+import { readFile, mkdir } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
+import { atomicJson, withOwnerLock } from "../runtime-v3/persistence/transactions.mjs"
 
 const requireSync = createRequire(import.meta.url)
 
@@ -76,6 +77,35 @@ export function installerNow() {
   return null
 }
 
+// 自动回填（方案 v2）：标签命中后把 mappings[派发key]=childId 写回项目 agents.json。
+// 有界重试（3 次 100ms，覆盖瞬时 LOCK_UNAVAILABLE 锁争用）；写失败 warn 降级（Lead 可 agent-map 兜底）。
+async function backfillMapping(file, tag, childId, warn, isStopped) {
+  const dir = path.dirname(path.dirname(file)) // file=.team-work/platform/agents.json → 项目根
+  const lock = path.join(dir, ".team-work", "platform", "locks", "agents.lock")
+  const attempts = 3
+  for (let i = 0; i < attempts; i += 1) {
+    if (isStopped()) return // 写前已亡 → 跳过（该子代无续派资格）
+    try {
+      await mkdir(path.dirname(lock), { recursive: true })
+      await withOwnerLock(lock, async () => {
+        const current = (await readFile(file, "utf8").then((t) => JSON.parse(t)).catch(() => ({})))
+        const key = current?.pendingTags?.[tag]
+        if (!key) return // 无派发期望 → 不写（历史派单/竞态：runtime 尚未落盘）
+        if (current.mappings?.[key] === childId) return // 幂等
+        current.mappings = { ...(current.mappings ?? {}) }
+        current.mappings[key] = childId
+        await atomicJson(file, current)
+      })
+      return
+    } catch (error) {
+      if (i === attempts - 1) {
+        warn("自动回填 mappings 失败（可 tw agent-map 兜底）：" + String(error?.message ?? error))
+      } else {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+    }
+  }
+}
 // contribution 工厂：返回【同步函数】（宿主存其返回值为 disposer）。
 export function makeInjectContribution(ctx, deps = {}) {
   const readFileFn = deps.readFile ?? readFile
@@ -133,6 +163,9 @@ export function makeInjectContribution(ctx, deps = {}) {
             selection.current = hint
             tagHit = true
             ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 标签注入 " + tag + " → " + hint.provider + "/" + hint.model)
+            // 自动回填（方案 docs/tag-agent-auto-register-plan.md v2）：fire-and-forget 把
+            // mappings[派发key] = childId 写回（key 任务作用域，续派 expectedAgentId 直查）。
+            backfillMapping(file, tag, agent.id, warn, () => stopped)
           } else {
             warn("标签 " + tag + " 未在 tagHints 命中（派发快照缺失或已陈旧），降级 childId 补读")
           }

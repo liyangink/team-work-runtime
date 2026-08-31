@@ -325,10 +325,21 @@ test("D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatch
   await call(["deliver", "--task", "d34-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   const rv = await call(["run", "--task", "d34-t"])
   await call(["review", "--task", "d34-t", "--key", rv.dispatch.key, "--recommendation", "accept", "--summary", "s"])
-  // 登记 review 波成员映射 → verdict 波应带 expectedAgentId（原无包波匹配不到）
-  await call(["agent-map", "--task", "d34-t", "--key", rv.dispatch.key, "--agent", "agent-chal-1"])
+  // 首裁：登记 Expert 映射并给 rework 裁决 → 构造同角色二次续派（重裁）
   const ve = await call(["run", "--task", "d34-t"])
-  await call(["review", "--task", "d34-t", "--key", ve.dispatch.key, "--recommendation", "accept", "--summary", "s", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  await call(["agent-map", "--task", "d34-t", "--key", ve.dispatch.key, "--agent", "agent-exp-1"])
+  await call(["review", "--task", "d34-t", "--key", ve.dispatch.key, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "rework", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  const k2 = (await call(["dispatch-plan", "--task", "d34-t", "--json", "--writable", "R.md:code-review"])).waves[0]
+  await writeFile(path.join(root, "R.md"), "v2", "utf8")
+  await call(["deliver", "--task", "d34-t", "--key", k2.dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv2 = await call(["run", "--task", "d34-t"])
+  await call(["review", "--task", "d34-t", "--key", rv2.dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  // 重裁（同角色二次续派）：倒序回溯解析原 Expert（台账 V3-E2E-02 Expert 重裁断链修复）
+  const ve2 = (await call(["dispatch-plan", "--task", "d34-t", "--json"])).waves[0]
+  assert.equal(ve2.role, "expert")
+  assert.equal(ve2.continuation, true, "重裁为续派")
+  assert.equal(ve2.expectedAgentId, "agent-exp-1", "verdict 波续派带 expectedAgentId（测试名与正文一致）")
+  await call(["review", "--task", "d34-t", "--key", ve2.dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
   // 人工门：过掉再走 e2e-skip → completed
   await call(["route", "--task", "d34-t", "--route", "e2e", "--decision", "skip", "--basis", "x"])
   const g1 = await call(["run", "--task", "d34-t"])

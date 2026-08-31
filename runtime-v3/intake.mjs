@@ -1,14 +1,15 @@
 // intake.mjs — deliver / review 的调用内同步总检查（P2：一次查完全部欠账，当场返回）
 // 派单身份用 dispatchKey（run 派发时生成、写进派单文本；成员从派单里照抄，是寻址不是簿记）。
 import path from "node:path"
-import { readFile } from "node:fs/promises"
+import { readFile, readdir } from "node:fs/promises"
 
 import { digestValue } from "./domain/digests.mjs"
 import { atomicJson, atomicWrite, withOwnerLock } from "./persistence/transactions.mjs"
 import { readStableArtifact } from "./persistence/file-artifact-repository.mjs"
 import { artifactsFingerprint } from "./gate.mjs"
+import { projectRounds, inflightBatch, supersededKeys, waveIdOf } from "./waves.mjs"
+import { currentStageOf } from "./derive.mjs"
 import { readJson } from "./store.mjs"
-import { readdir } from "node:fs/promises"
 
 function reject(reasons) {
   const error = new Error(Array.isArray(reasons) ? reasons.join("\n") : reasons)
@@ -75,15 +76,11 @@ async function readStable(projectRoot, relativePath) {
 }
 
 // D2：key 不存在时列当前在途派单（帮成员发现 key 错配——E2E 实测 intake 成员用错 key 覆盖他人报告）
+// 在途判定统一走 waves.inflightBatch（F3 四处共用同一纯函数；superseded 波不在在途）。
 function inflightHint(journal, reports) {
-  const settled = new Set(reports.map((r) => r.dispatchKey))
-  const lastIdx = journal.map((e) => e.type).lastIndexOf("dispatched")
-  const batch = []
-  for (let i = lastIdx; i >= 0 && journal[i].type === "dispatched"; i -= 1) batch.unshift(journal[i].detail)
-  const inflight = batch.filter((d) => !settled.has(d.key))
-  return inflight.length
-    ? `当前在途派单：${inflight.map((d) => `${d.key}（${d.role}${d.package ? "@" + d.package : ""} 轮次 ${d.round}）`).join("、")}——检查你是否用了别人的 key`
-    : "当前无在途派单；key 可能属于其他任务或已交付完毕"
+  const inflight = inflightBatch({ journal, reports })
+  if (!inflight) return "当前无在途派单；key 可能属于其他任务或已交付完毕"
+  return `当前在途派单：${inflight.open.map((d) => `${d.key}（${d.role}${d.package ? "@" + d.package : ""} 轮次 ${d.round}）`).join("、")}——检查你是否用了别人的 key`
 }
 
 // deliver：Owner 交卷。paths ⊆ 派单可写集；同路径原地修订 = 新 digest 新快照，旧快照保留（E2E-16/I8）。
@@ -102,7 +99,12 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
     reasons.push(`dispatchKey ${dispatchKey} 不对应有效的 Owner 派单。${dispatch ? `该 key 属于 ${dispatch.detail.role} 派单（轮次 ${dispatch.detail.round}${dispatch.detail.package ? "，包 " + dispatch.detail.package : ""}）——deliver 只接受 owner 派单 key，你可能用了评审者的 key。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
-  // 同 key 重交 = 幂等覆盖同一报告（E2E-10：重试不产生第二身份、不烧 key）
+  // F3：superseded 波的 key 拒绝（作废恢复边：重新 run 取新卡；I5 拒绝必有出路）
+  if (dispatch && supersededKeys(fresh.journal).has(dispatchKey)) {
+    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受交付：请重新 tw run 取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
+    throw reject(reasons)
+  }
+  // F7：同 key 重交 = key+payloadDigest 幂等；payload 变化 = ver+1 修订（身份 = key+ver，最新 ver 正文在单文件）
 
   const { outcome, summary, paths = [], checks = [], unresolved = [] } = payload ?? {}
   if (outcome !== "delivered" && outcome !== "blocked") reasons.push("outcome 只能是 delivered 或 blocked")
@@ -125,12 +127,19 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   }
   if (reasons.length) throw reject(reasons)
 
-  // 事件层幂等（E2E-10 补全）：同 key 同 payload 重交（重试/成员重复提交）返回同一接受结果，
-  // 不追加第二条 report-accepted；payload 变化才是真实修订，照常覆盖并记录。
+  // F7 事件层幂等（E2E-10 补全）：幂等判定 = key + payloadDigest（digestValue(canonicalJson(payload))，
+  // 键序归一化 + 无顺序语义数组（paths/checks/unresolved）排序归一化，消除 JSON.stringify 全等的键序敏感）；
+  // 同 key 同 digest 重交返回同一接受结果、不追加第二条 report-accepted、ver 不变；
+  // payload 变化才是真实修订（ver+1 照常覆盖记录）。
+  const payloadNow = { outcome, summary, paths: [...normalized].sort(), checks: [...checks].sort((a, b) => String(a?.name ?? "").localeCompare(String(b?.name ?? ""))), unresolved: [...(unresolved ?? [])].sort() }
+  const payloadDigest = digestValue(payloadNow)
   const prior = await readJson(path.join(task.root, "reports", `deliver-${dispatchKey}.json`), { allowMissing: true })
-  if (prior && JSON.stringify(prior.payload) === JSON.stringify({ outcome, summary, paths: normalized, checks, unresolved })) {
+  // 旧报告（无 payloadDigest）现场回算与当前归一化口径对齐（paths/checks/unresolved 排序），跨版本同内容重交仍幂等
+  const digestPrior = (p) => digestValue({ outcome: p?.outcome, summary: p?.summary, paths: [...(p?.paths ?? [])].sort(), checks: [...(p?.checks ?? [])].sort((a, b) => String(a?.name ?? "").localeCompare(String(b?.name ?? ""))), unresolved: [...(p?.unresolved ?? [])].sort() })
+  const priorDigest = prior ? (prior.payloadDigest ?? digestPrior(prior.payload ?? {})) : null
+  if (prior && priorDigest === payloadDigest) {
     const registered = normalized.map((rel) => ({ path: rel, digest: fresh.artifacts.items.find((i) => i.path === rel)?.digest ?? null }))
-    return { reportId: `deliver-${dispatchKey}`, accepted: true, idempotent: true, registered, hint: "此前已接受同一交付（幂等返回）；无需重复操作。" }
+    return { reportId: `deliver-${dispatchKey}`, accepted: true, idempotent: true, ver: prior.ver ?? 1, registered, hint: "此前已接受同一交付（幂等返回）；无需重复操作。" }
   }
 
   // 全部检查通过后一次性落盘（I10：失败不留半态）；先读全部再写，单路径失败不留孤儿快照（复核修复）
@@ -143,7 +152,10 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   const stage = currentStageOf(fresh.journal, task.scope)
   const registered = stables.map(({ rel, digest }) => ({ path: rel, digest, kind: kindByPath.get(rel) ?? "misc", stage }))
   const reportId = `deliver-${dispatchKey}`
-  const report = { reportId, dispatchKey, role: "owner", kind: "deliver", round: dispatch.detail.round, stage, package: dispatch.detail.package ?? null, payload: { outcome, summary, paths: normalized, checks, unresolved }, at }
+  // F7：报告身份 = key+ver，落盘带 ver 与 payloadDigest（digest 链即时可审计）；旧报告无 ver 视为 ver 1。
+  // F2：waveId 仅展示字段（投影判定一律经 dispatchKey join journal，不读此字段）。
+  const ver = prior ? (prior.ver ?? 1) + 1 : 1
+  const report = { reportId, dispatchKey, role: "owner", kind: "deliver", round: dispatch.detail.round, stage, package: dispatch.detail.package ?? null, ...(waveIdOf(fresh.journal, dispatchKey) ? { waveId: waveIdOf(fresh.journal, dispatchKey) } : {}), ver, payloadDigest, payload: payloadNow, at }
   for (const { rel, digest, content } of stables) {
     await atomicJson(path.join(task.root, "snapshots", `${digest}.json`), { digest, path: rel, content, at })
   }
@@ -155,8 +167,8 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   await atomicJson(path.join(task.root, "artifacts.json"), { items })
   const journal = await readFile(path.join(task.root, "journal.jsonl"), "utf8")
   const seq = journal.trim().split("\n").length + 1
-  await atomicWrite(path.join(task.root, "journal.jsonl"), `${journal}${JSON.stringify({ seq, at, type: "report-accepted", detail: { reportId, dispatchKey, paths: normalized } })}\n`)
-  return { reportId, accepted: true, registered: registered.map(({ path: p, digest }) => ({ path: p, digest })), hint: "已登记。你的交付将交非作者评审；无需其他操作。" }
+  await atomicWrite(path.join(task.root, "journal.jsonl"), `${journal}${JSON.stringify({ seq, at, type: "report-accepted", detail: { reportId, dispatchKey, paths: normalized, ver, payloadDigest } })}\n`)
+  return { reportId, accepted: true, ver, registered: registered.map(({ path: p, digest }) => ({ path: p, digest })), hint: "已登记。你的交付将交非作者评审；无需其他操作。" }
 }
 
 // review：Challenger/Expert 阅卷。无 paths 参数（E2E-05 消解）；recommendation 只评价这版交付（E2E-09）。
@@ -175,7 +187,12 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
     reasons.push(`dispatchKey ${dispatchKey} 不对应有效的评审派单。${dispatch ? `该 key 属于 ${dispatch.detail.role === "owner" ? "owner 交付派单（轮次 " + dispatch.detail.round + (dispatch.detail.package ? "，包 " + dispatch.detail.package : "") + "）——review 只接受 challenger/expert 派单 key" : "未知角色派单"}。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
-  // 同 key 重交 = 幂等覆盖同一报告
+  // F3：superseded 波的 key 拒绝（作废恢复边：重新 run 取新卡）
+  if (dispatch && supersededKeys(fresh.journal).has(dispatchKey)) {
+    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受评审：请重新 tw run 取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
+    throw reject(reasons)
+  }
+  // F7：同 key 重交 = key+payloadDigest 幂等；payload 变化 = ver+1 修订
 
   const { summary, recommendation, findings = [], verdict } = payload ?? {}
   if (typeof summary !== "string" || summary.trim() === "") reasons.push("summary 必填")
@@ -198,35 +215,33 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
   }
   if (reasons.length) throw reject(reasons)
 
-  // 事件层幂等（E2E-10 补全）：同 key 同 payload 重交不追加第二条 report-accepted
+  // F7 事件层幂等：幂等判定 = key + payloadDigest（键序归一化）；findings 保序——评审顺序是内容语义的一部分，
+  // 与 deliver 的 paths/checks（无顺序语义、排序归一化）口径区分；ver 不变、不追加第二条 report-accepted
+  const payloadNow = { summary, recommendation, findings, ...(verdict ? { verdict } : {}) }
+  const payloadDigest = digestValue(payloadNow)
   const prior = await readJson(path.join(task.root, "reports", `review-${dispatchKey}.json`), { allowMissing: true })
-  if (prior && JSON.stringify(prior.payload) === JSON.stringify({ summary, recommendation, findings, ...(verdict ? { verdict } : {}) })) {
-    return { reportId: `review-${dispatchKey}`, accepted: true, idempotent: true, reviewedDigest: prior.taskSha, hint: "此前已接受同一评审（幂等返回）；无需重复操作。" }
+  const priorDigest = prior ? (prior.payloadDigest ?? digestValue(prior.payload ?? {})) : null
+  if (prior && priorDigest === payloadDigest) {
+    return { reportId: `review-${dispatchKey}`, accepted: true, idempotent: true, ver: prior.ver ?? 1, reviewedDigest: prior.taskSha, hint: "此前已接受同一评审（幂等返回）；无需重复操作。" }
   }
 
   const at = new Date().toISOString()
   const stage = currentStageOf(fresh.journal, task.scope)
-  // 被审指纹与 gate.mjs 的 artifactsFingerprint 同公式，门禁可校验裁决绑定的是当前制品
+  // 被审指纹（taskSha）：评审绑定当前阶段全部登记制品，保持全局口径（非每包映射）。
+  // 每包指纹公式（F5 artifactFingerprints）的消费点只有三处：gate 人工门判定 / cmdDecide 落盘 / derive 僵局检测；
+  // 本处 taskSha 是评审绑定的第四类用途，不与每包指纹公式混用（评审 findings 无每包指纹语义）。
   const taskSha = artifactsFingerprint(fresh.artifacts.items.filter((item) => item.stage === stage))
-  // 被审包快照（v3.2）：评审时该阶段各包的最新轮次——runtime 自有事实推导（P4），
-  // 波次机据此精确判定"评审是否覆盖某包的最新交付"（同包更高轮次 = 未覆盖），不依赖时间戳近似
-  const latestRoundByPkg = new Map()
-  for (const r of fresh.reports) {
-    if (r.kind !== "deliver" || r.stage !== stage) continue
-    const key = r.package ?? null
-    const round = r.round ?? 1
-    if (!latestRoundByPkg.has(key) || round > latestRoundByPkg.get(key)) latestRoundByPkg.set(key, round)
-  }
-  const reviewedPackages = [...latestRoundByPkg.entries()].map(([p, round]) => ({ package: p, round }))
+  // 被审包快照（v3.2 + F2）：写入处与判定处同源——统一读 waves.projectRounds 投影函数
+  // （每包 max 已交付报告 round；blocked 与 superseded 波不入投影），波次机据此精确判定
+  // "评审是否覆盖某包的最新交付"（同包更高轮次 = 未覆盖），不依赖时间戳近似。
+  const reviewedPackages = [...projectRounds({ journal: fresh.journal, reports: fresh.reports.filter((r) => r.stage === stage) }).entries()].map(([p, round]) => ({ package: p, round }))
   const reportId = `review-${dispatchKey}`
-  const report = { reportId, dispatchKey, role: dispatch.detail.role, kind: "review", round: dispatch.detail.round, stage, taskSha, reviewedPackages, payload: { summary, recommendation, findings, ...(verdict ? { verdict } : {}) }, at }
+  // F7：ver/payloadDigest 落盘（报告身份 = key+ver）；F2：waveId 仅展示字段
+  const ver = prior ? (prior.ver ?? 1) + 1 : 1
+  const report = { reportId, dispatchKey, role: dispatch.detail.role, kind: "review", round: dispatch.detail.round, stage, taskSha, reviewedPackages, ...(waveIdOf(fresh.journal, dispatchKey) ? { waveId: waveIdOf(fresh.journal, dispatchKey) } : {}), ver, payloadDigest, payload: payloadNow, at }
   await atomicJson(path.join(task.root, "reports", `${reportId}.json`), report)
   const journal = await readFile(path.join(task.root, "journal.jsonl"), "utf8")
   const seq = journal.trim().split("\n").length + 1
-  await atomicWrite(path.join(task.root, "journal.jsonl"), `${journal}${JSON.stringify({ seq, at, type: "report-accepted", detail: { reportId, dispatchKey, recommendation: recommendation ?? null } })}\n`)
-  return { reportId, accepted: true, reviewedDigest: taskSha, hint: "意见已登记，将驱动下一波次或门禁。" }
-}
-
-function currentStageOf(journal, scope) {
-  return journal.filter((e) => e.type === "stage-advanced").map((e) => e.detail.to).at(-1) ?? scope.entry
+  await atomicWrite(path.join(task.root, "journal.jsonl"), `${journal}${JSON.stringify({ seq, at, type: "report-accepted", detail: { reportId, dispatchKey, recommendation: recommendation ?? null, ver, payloadDigest } })}\n`)
+  return { reportId, accepted: true, ver, reviewedDigest: taskSha, hint: "意见已登记，将驱动下一波次或门禁。" }
 }

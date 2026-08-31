@@ -178,8 +178,9 @@ test("裁决新鲜度：返工后的旧 accept 裁决不放行（重新裁决）
   const r1 = [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("accept")]
   assert.equal(nextWave({ scenePolicy: codeReviewScene, reports: r1 }).kind, "gate")
   const afterRework = [...r1, ownerDeliver(2), challengerReview(2, "accept")]
+  // 既有 expert 报告在场 → 重裁为续派（continuation=true，D3 同角色回溯解析原 Expert；首次裁决无该字段）
   assert.deepEqual(
     nextWave({ scenePolicy: codeReviewScene, reports: afterRework }),
-    { kind: "verdict", role: "expert", round: 2 },
+    { kind: "verdict", role: "expert", round: 2, continuation: true },
   )
 })

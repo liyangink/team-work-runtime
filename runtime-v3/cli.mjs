@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url"
 
 import { initTask, loadTask, taskExists, taskRoot, archiveRoot, controlRoot, atomicJson, atomicWrite, withOwnerLock, validName, readJson } from "./store.mjs"
 import { deriveTask } from "./derive.mjs"
-import { gateCheck, artifactsFingerprint } from "./gate.mjs"
-import { scenePolicy } from "./waves.mjs"
+import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFingerprint, humanDecisionFresh } from "./gate.mjs"
+import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
 import { loadGuidance } from "./guidance.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
@@ -111,6 +111,8 @@ function fixHint(code) {
     DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次）",
     MAP_INVALID: "在 DSH 全局 settings.yaml 的 team-work-dsh.tiers 配置 junior/senior/expert；每档提供非空 provider 与 model（可为候选数组）",
     STATE_CORRUPT: "控制文件损坏：任务事实在 reports/journal，可重推导；遗留 dsh.json 不参与读取",
+    RETIRE_UNKNOWN_WAVE: "tw run 或 dispatch-plan 的 wait-inflight 卡片输出当前波 waveId；请核对后重试",
+    RETIRE_SETTLED_WAVE: "该波已全部交付（已结波），无需作废；要解除未交付在途请核对 waveId（run 卡片列出当前未结波）",
     LOCK_UNAVAILABLE: "任务锁被并发写者占用（成员交付/Lead 推进同时进行）：等几秒原样重试同一命令即可；崩溃进程的锁会被自动回收",
     LOCK_CORRUPT: "任务锁读取异常：崩溃残留的损坏锁会在约 10 秒后自动回收；持续失败且确认无并发写者时，可手动删除任务目录 locks/task.lock",
   })[code] ?? "运行 tw help 查看全部命令与参数"
@@ -182,19 +184,15 @@ function parseWritableEntry(entry) {
   return { path: entry.slice(0, sep), artifactKind: entry.slice(sep + 1) }
 }
 
-// 在途派单重建（F4）：journal 尾部连续 dispatched 批次中尚无 report 的派发，重建完整派单文本
+// 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）
 function inflightDispatches(task, stageId, guidance = null) {
   const stageDef = task.workflow.stages.find((st) => st.id === stageId)
-  const settled = new Set(task.reports.map((r) => r.dispatchKey))
-  const batch = []
-  const lastIdx = task.journal.map((e) => e.type).lastIndexOf('dispatched')
-  for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
-  return batch
-    .filter((d) => !settled.has(d.key))
-    .map((d) => {
-      const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [] }, guidance).dispatch
-      return { ...card, dispatchKey: card.key }  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
-    })
+  const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
+  if (!inflight) return []
+  return inflight.open.map((d) => {
+    const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, guidance).dispatch
+    return { ...card, dispatchKey: card.key }  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
+  })
 }
 
 // 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
@@ -227,7 +225,7 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const verdictArg = ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>'
   const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
   const intro = detail.continuation ? '# 续派（key: ' + detail.key + '）——你在原上下文基础上继续' : '# 派单（key: ' + detail.key + '）'
-  const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '')
+  const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '')
   const roleHint = guidance?.roles?.[wave.role]
   const sceneHint = guidance?.scenes?.[stageDef.teamScene]
   const parts = [
@@ -264,6 +262,7 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     transition: 'dispatch',
     dispatch: {
       key: detail.key,
+      ...(detail.waveId ? { waveId: detail.waveId } : {}),
       role: wave.role,
       tier: wave.role === 'owner' ? ownerTierFor(task, sp, pkg) : wave.role === 'challenger' ? sp.challengerTier : 'expert',
       round: detail.round ?? wave.round,
@@ -389,6 +388,20 @@ function withModelHint(dispatch, selectModelHint) {
   return modelHint ? { ...dispatch, modelHint } : dispatch
 }
 
+// F1/F8 波身份：waveId 与 d 序号两个「全任务递增序号」均以 journal 内 dispatched 事件数为源（任务锁内推导，
+// 不引入平行权威）；迁移后新号从 max(wvN)/max(dN) 接续。waveNum = max(dispatchedCount, maxWvN) + 1，
+// 恒严格大于已赋最大值（B8/R1 断言语义；dispatchedCount >= 波数 >= maxWvN 为正常态，max 为损坏数据防御）。
+// 同批次多派发共享一个 waveId；d 序号不承担幂等键职责（唯一性由随机后缀保证）。
+function nextWaveIdentity(task) {
+  const dispatchedCount = task.journal.filter((e) => e.type === "dispatched").length
+  let maxWv = 0
+  for (const e of task.journal) {
+    const m = /^wv(\d+)$/.exec(e.detail?.waveId ?? "")
+    if (m) maxWv = Math.max(maxWv, Number(m[1]))
+  }
+  return { waveId: `wv${Math.max(dispatchedCount, maxWv) + 1}`, dispatchSeq: dispatchedCount + 1 }
+}
+
 function dispatchedDetail(dispatch, wave, writable) {
   return {
     key: dispatch.key,
@@ -399,8 +412,21 @@ function dispatchedDetail(dispatch, wave, writable) {
     continuation: dispatch.continuation,
     ...(dispatch.scope ? { scope: dispatch.scope } : {}),
     writable,
+    ...(dispatch.waveId ? { waveId: dispatch.waveId } : {}),
+    ...(wave.causeDecisionId ? { causeDecisionId: wave.causeDecisionId } : {}),  // F5：respond 派发抄写返工决定（runtime 抄写，P4）
     ...(dispatch.modelHint ? { modelHint: dispatch.modelHint } : {}),
   }
+}
+
+// F9 当前待决卡选择（runTransition 渲染与 cmdDecide 处理共用同一函数，防两处取卡顺序分叉）：
+// 未决 migrate 冲突卡优先于一切其他卡（derive 静止语义同源：迁移冲突未决时任务不推进、不渲染/不答其他卡），
+// 否则取最早未决卡。返回 decision-issued 的 detail 对象（无待决卡 → null）。
+function pendingDecisionDetail(journal) {
+  const settled = new Set(journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
+  const open = journal.filter((e) => e.type === "decision-issued").map((e) => e.detail)
+  const migrate = open.find((d) => d?.migrate && !settled.has(d.decisionId))
+  if (migrate) return migrate
+  return open.find((d) => !settled.has(d.decisionId)) ?? null
 }
 
 // 引导库惰性加载（P3-5）：loadGuidance 只在"真正派发"与"在途重建"两个分支内按需调用——
@@ -423,13 +449,16 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const wave = state.next.wave
     const stageDef = workflow.stages.find((st) => st.id === state.stage)
     const pkgItems = Array.isArray(task.packages) && task.packages.length ? task.packages : null
+    // F1/F8：波身份与 d 前缀 key（d 消除旧 w 前缀与 wave 的歧义）；同批次共享一个 waveId
+    const { waveId, dispatchSeq } = nextWaveIdentity(task)
+    const newKey = () => 'd' + dispatchSeq + '-' + randomBytes(3).toString('hex')
     if (wave.role === 'owner') {
       let decls
       if (pkgItems) {
         // 多包：可写范围来自包定义（--writable 不适用）；每包独立 key/轮次/continuation
         decls = wave.owners.map((o) => {
           const pkg = pkgItems.find((p) => p.id === o.package)
-          return { key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: o.package, round: o.round, continuation: o.continuation, writable: (pkg?.writable ?? []).map(parseWritableEntry) }
+          return { key: newKey(), waveId, package: o.package, round: o.round, continuation: o.continuation, writable: (pkg?.writable ?? []).map(parseWritableEntry) }
         })
       } else {
         if (!writable.length) {
@@ -439,7 +468,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         const o = wave.owners?.[0]
         // --writable none = 无产物派单（纯调查/回应，outputs 为空的阶段）；其余按 路径:kind 解析
         const decl = writable.length === 1 && writable[0] === 'none' ? [] : writable.map(parseWritableEntry)
-        decls = [{ key: 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex'), package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
+        decls = [{ key: newKey(), waveId, package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
       }
       // C（pre-phase3 §C）：升档审批——包 tier 高于场景默认的派发批次需用户批准一次（合批）。
       // 幂等身份 = stage + 波轮次 + 包集；已批准同批不再出卡；拒绝 = 本批按默认档派发（忽略包 tier）。
@@ -480,9 +509,9 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       await persistTagHints(task.root, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
-    const key = 'w' + (task.journal.length + 1) + '-' + randomBytes(3).toString('hex')
+    const key = newKey()
     const guidance = await loadGuidance(projectRoot) // 惰性：非 owner 派发同样只在派发点加载
-    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
+    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
     await persistTagHints(task.root, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), key: dispatch.key, hint: dispatch.modelHint }])
@@ -513,12 +542,13 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   if (state.next.kind === 'wait-inflight') {
-    // F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派
+    // F3/F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派；waveId 出卡（P4）
     const guidance = await loadGuidance(projectRoot) // 惰性：在途重建（补发路径）按需加载
     const inflight = inflightDispatches(task, state.stage, guidance)
     return {
       ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
       dispatchKey: state.next.dispatchKey,
+      ...(state.next.waveId ? { waveId: state.next.waveId } : {}),
       wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round },
       inflight,
       note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组可原样转发补派）：' + inflight.map((d) => d.key).join('、'),
@@ -539,20 +569,58 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         note: "先做路由判定（tw route），完成后人工门卡才会出现",
       }
     }
-    const open = task.journal.filter((e) => e.type === "decision-issued").map((e) => e.detail.decisionId)
-    const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
-    const pending = open.find((id) => !settled.has(id))
-    if (!pending) {
-      const decisionId = `dec-${randomBytes(3).toString("hex")}`
-      const human = state.gate?.humanGate
-      const choices = human
-        ? [{ n: 1, label: "accept", desc: "接受本阶段交付" }, { n: 2, label: "rework", desc: "要求返工（回到 Owner 波次）" }]
-        : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
-      await appendEventsUnlocked(task, [{ type: "decision-issued", detail: { decisionId, gateId: human, reason: state.next.reason ?? `人工门 ${human}`, choices } }])
-      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices }
+    // F9：待决卡按 pendingDecisionDetail 选择（migrate 冲突卡优先），渲染与 decide 同源——
+    // 防 migrate 卡与先签发人工门卡并存时按 journal 顺序取卡导致的渲染错位/decide 误映射（实证修复）
+    const pending = pendingDecisionDetail(task.journal)
+    // F6-3 签发锚点：人工门卡签发时绑定 {artifactFingerprint, reviewFingerprint} 快照；
+    // F6-2 未决分支：签发指纹 vs 当前指纹，变化 → 作废旧卡（decided:superseded，只增不改）重签新卡。
+    const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const sp = scenePolicy(policy, stageDef?.teamScene ?? "implementation")
+    const currentArtifactFp = artifactFingerprints(task.artifacts.items.filter((i) => i.stage === state.stage), Array.isArray(task.packages) && task.packages.length ? task.packages : null)
+    const currentReviewFp = reviewChainFingerprint({ reports: task.reports.filter((r) => r.stage === state.stage), journal: task.journal, core: Boolean(sp.core) })
+    // 僵局卡（F5 多包混合）：对既有 converge-user choices 的扩展——「追加一轮」对僵局包会立即再判僵局（用户可见空转），不得沿用
+    const isStalemate = Array.isArray(state.next.reworkStalemate)
+    // blocked 卡（F5 消费规则 2，实证修正）：专用两选项「重派 respond（新绑定波）/ 结束任务」——
+    // 不沿用「追加一轮」（extra-round 无派发路径、绑定波报告仍 blocked → 空转循环）
+    const isBlocked = Boolean(state.next.reworkBlocked)
+    const human = state.gate?.humanGate ?? state.next.gateId ?? null
+    const cardChoices = isStalemate
+      ? [
+          { n: 1, label: "接受现状", desc: "未修包按原内容过评审链（人工门需重新确认）", grant: "accept-as-is" },
+          { n: 2, label: "仅重派未修包", desc: "新 respond 波绑定同一返工决定、只含未修包", grant: "rework-unfixed" },
+          { n: 3, label: "结束任务", desc: "以当前形态终止" },
+        ]
+      : isBlocked
+        ? [
+            { n: 1, label: "重派 respond", desc: "新 respond 波绑定同一返工决定、整波重派", grant: "rework-rerun" },
+            { n: 2, label: "结束任务", desc: "以当前形态终止" },
+          ]
+        : human
+          ? [{ n: 1, label: "accept", desc: "接受本阶段交付" }, { n: 2, label: "rework", desc: "要求返工（回到 Owner 波次）" }]
+          : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
+    if (pending) {
+      if (pending.migrate) {
+        // F9 迁移冲突卡：渲染其签出时的 question/choices（不套用 cardChoices、不参与人工门指纹比对——
+        // 卡面与 decide 校验同源，防误映射候选索引；优先于任何其他未决卡）
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, note: "迁移冲突卡待决：decide 保留版本后任务恢复推进" }
+      }
+      if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp: currentArtifactFp, reviewFp: currentReviewFp })) {
+        // 指纹失效：作废旧卡（不删事实，只增 decided:superseded），落入下方重签
+        await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "等待期评审链或制品已变化，卡片自动失效重签" } }])
+      } else {
+        // 重出卡按当前事实重渲染 question/choices（不复用旧 reason；choices 由当前状态生成，与签发同函数）
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: state.next.reason ?? pending.reason, choices: cardChoices }
+      }
     }
-    const issued = task.journal.find((e) => e.type === "decision-issued" && e.detail.decisionId === pending)
-    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending, question: issued.detail.reason, choices: issued.detail.choices }
+    const decisionId = `dec-${randomBytes(3).toString("hex")}`
+    await appendEventsUnlocked(task, [{ type: "decision-issued", detail: {
+      decisionId, gateId: human,
+      reason: state.next.reason ?? `人工门 ${human}`,
+      choices: cardChoices,
+      fingerprints: { artifactFingerprint: currentArtifactFp, reviewFingerprint: currentReviewFp },
+      ...(isStalemate ? { reworkStalemate: state.next.reworkStalemate.map(String) } : {}),
+    } }])
+    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices }
   }
   if (state.next.kind === "blocked") {
     return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason, recovery: state.next.reason }] }
@@ -565,23 +633,36 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy })
-    const issued = task.journal.filter((e) => e.type === "decision-issued")
-    const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
-    const pending = issued.find((e) => !settled.has(e.detail.decisionId))
+    // F9：待决卡选择与 runTransition 渲染同源（pendingDecisionDetail：migrate 冲突卡优先），
+    // 防「run 渲染 migrate 卡、decide 却处理人工门卡」的选项序号错位（实证修复）
+    const pending = pendingDecisionDetail(task.journal)
     if (!pending) throw fail("DECISION_STALE", "当前没有等待中的决定")
-    const options = pending.detail.choices
+    const options = pending.choices
     const picked = options.find((o) => o.n === choice)
     if (!picked) throw fail("DECISION_STALE", `选项序号 ${choice} 不在当前卡片中。合法选项：${options.map((o) => `${o.n}=${o.label}`).join("、")}`)
 
     const stageId = deriveTask(task).stage
     const current = task.artifacts.items.filter((item) => item.stage === stageId)
+    // F5/F6 指纹（决定落盘与 gate 判定共用同一导出纯函数；R4 同源）
+    const stageDef = task.workflow.stages.find((st) => st.id === stageId)
+    const sp = scenePolicy(task.policy, stageDef?.teamScene ?? "implementation")
+    const pkgArr = Array.isArray(task.packages) && task.packages.length ? task.packages : null
+    const artifactFp = artifactFingerprints(current, pkgArr)
+    const reviewFp = reviewChainFingerprint({ reports: task.reports.filter((r) => r.stage === stageId), journal: task.journal, core: Boolean(sp.core) })
+    // F6-3：未决人工门卡同样做「签发指纹 vs 当前指纹」对比，失效即拒绝（旧卡直答被拒 + 指引闭环）
+    if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp, reviewFp })) {
+      throw fail("DECISION_STALE", "该卡片的签发指纹已失效（等待期评审链或制品发生变化）：tw run 取最新卡片后重新 decide")
+    }
     const decision = {
-      decisionId: pending.detail.decisionId,
-      gateId: pending.detail.gateId ?? null,
+      decisionId: pending.decisionId,
+      gateId: pending.gateId ?? null,
       choice: picked.label,
       ...(picked.grant ? { grant: picked.grant } : {}),
       ...(picked.batchKey ? { batchKey: picked.batchKey } : {}),
-      ...(pending.detail.gateId ? { fingerprint: artifactsFingerprint(current) } : {}),
+      // F5/F6：决定绑定双指纹——artifactFingerprint（每包「包→指纹」映射）+ reviewFingerprint；
+      // fingerprint 旧字段双写（§7 回滚兼容：旧版 runtime 读旧字段仍可判定）
+      ...(pending.gateId ? { fingerprint: artifactsFingerprint(current), artifactFingerprint: artifactFp, reviewFingerprint: reviewFp } : {}),
+      ...(picked.grant === "rework-unfixed" && Array.isArray(pending.reworkStalemate) ? { packages: pending.reworkStalemate } : {}),
       ...(note ? { note } : {}),
       proof: { mode: "caller-reported", at: new Date().toISOString() },
       at: new Date().toISOString(),
@@ -592,6 +673,16 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
     await atomicJson(file, existing)
     const events = [{ type: "decided", detail: { decisionId: decision.decisionId, choice: decision.choice } }]
     if (picked.label === "结束任务") events.push({ type: "task-completed", detail: { stage: stageId, by: "user", form: "partial" } })
+    // F9 四类恢复：异 digest 多报告 → 用户选择保留一版，其余波写 dispatch-superseded（未经评审的内容不得混入收敛基线）
+    const migrate = pending.migrate
+    if (migrate && Array.isArray(migrate.candidates)) {
+      const pickedIdx = options.findIndex((o) => o.n === choice)
+      const kept = migrate.candidates[pickedIdx]
+      for (const cand of migrate.candidates) {
+        if (!kept || cand.key === kept.key) continue
+        events.push({ type: "dispatch-superseded", detail: { waveId: cand.waveId, reason: `迁移恢复：用户选择保留 ${kept.key} 的版本` } })
+      }
+    }
     await appendEventsUnlocked(task, events)
     return { ok: true, task: name, decisionId: decision.decisionId, choice: decision.choice, next: "run" }
   })
@@ -606,6 +697,143 @@ async function cmdRestore({ projectRoot, name, target }) {
   const snapshot = JSON.parse(await readFile(path.join(task.root, item.snapshotRef), "utf8"))
   await atomicWrite(path.join(projectRoot, item.path), snapshot.content)
   return { ok: true, task: name, restored: item.path, fromDigest: item.digest, toDigestPrevious: "see journal", note: "已恢复最后注册内容；恢复后请成员重新 deliver 以刷新指纹" }
+}
+
+// F3 作废恢复边：tw retire（仅 Lead；命令面）。只增 dispatch-superseded {waveId, reason}（detail 不含 at，事件顶层已有 at）。
+// 幂等矩阵：重复 retire 幂等返回；未知 waveId / 已结波 / 缺 reason 拒绝并附恢复指引（附当前未结波清单）。
+// 已交付报告保留为审计事实、不参与推导（投影/快照/依赖/耗尽/回溯统一排除 superseded 波）；
+// 清退该波映射（agents.json mappings 删除该波 key，审计记录保留在 journal）。
+async function cmdRetire({ projectRoot, name, wave, reason }) {
+  if (!wave || !/^wv\d+$/.test(wave)) throw fail("USAGE", "retire 需要 --wave <wvN>（当前未结波见 tw run / dispatch-plan 的 wait-inflight 卡）")
+  if (!reason || !reason.trim()) throw fail("USAGE", "retire 需要 --reason <作废原因>（写入 dispatch-superseded 供审计与恢复指引）")
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  const task0 = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
+    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const groups = waveGroups(task.journal)
+    const group = groups.find((g) => g.waveId === wave)
+    const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
+    const openHint = inflight ? `当前未结波：${inflight.waveId ?? "无 waveId 的历史派发（" + inflight.open[0].key + "…）"}` : "当前无未结波"
+    if (!group) throw fail("RETIRE_UNKNOWN_WAVE", `未知波 ${wave}（journal 中不存在该 waveId 的派发）。${openHint}`)
+    if (task.journal.some((e) => e.type === "dispatch-superseded" && e.detail?.waveId === wave)) {
+      return { ok: true, task: name, wave, idempotent: true, note: "该波此前已作废（幂等返回）" }
+    }
+    const settled = new Set(task.reports.map((r) => r.dispatchKey))
+    if (group.keys.every((k) => settled.has(k))) {
+      throw fail("RETIRE_SETTLED_WAVE", `波 ${wave} 已全部交付（已结波）。retire 仅解除未交付派发在途；已交付报告保留为审计事实。${openHint}`)
+    }
+    await appendEventsUnlocked(task, [{ type: "dispatch-superseded", detail: { waveId: wave, reason } }])
+    // 清退该波映射：新 key 不再可被回溯/续派解析（agents.json 其余记录保留）
+    const agentsFile = path.join(task.root, "agents.json")
+    const agents = (await readJson(agentsFile, { allowMissing: true })) ?? {}
+    if (agents.mappings) {
+      let changed = false
+      for (const k of group.keys) if (k in agents.mappings) { delete agents.mappings[k]; changed = true }
+      if (changed) await atomicJson(agentsFile, agents)
+    }
+    const openCount = group.keys.filter((k) => !settled.has(k)).length
+    return { ok: true, task: name, wave, supersededKeys: group.keys, note: `波已作废（解除 ${openCount} 条未交付派发在途）；成员重新 tw run 取新卡。` }
+  })
+}
+
+// F9 既有任务迁移（追加式，B4）：为无 waveId 事实的既有派发追加 wave-assigned {waveId, dispatchKeys[], at} 映射事件，
+// 不改写既有 journal 行与报告文件（与 journal 只增不改、报告不可变一致）；投影经 join 解析。
+// 合并规则（B6/R10-T13）：以最近 stage-advanced 事件为界（不跨阶段并波），同 (kind, role, round) 且 package 互不相同的
+// 合并为一个波；package 相同（同轮重复派发）各自成波；package=null 一律各自成波；按序赋 wv1…wvN（新号从 max(wvN) 接续）。
+// 幂等：已赋号派发跳过，重跑不重复赋号；中断重跑等价（半迁移 journal 可续跑至完整）。
+// 四类恢复（B6）：零报告/单报告按投影自然收敛；同 digest 多报告机械合并；不同 digest 多报告出用户选择卡保留一版、
+// 其余写 dispatch-superseded（未经评审的内容不得混入收敛基线）。迁移输出「迁移前后投影对比」作为现场机械验收证据。
+async function cmdMigrate({ projectRoot, name }) {
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  const task0 = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
+    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const before = Object.fromEntries([...projectRounds({ journal: task.journal, reports: task.reports }).entries()].map(([k, v]) => [String(k), v]))
+    // 待决迁移冲突卡：先让用户 decide 保留版本（decide 写 dispatch-superseded 后再迁移）
+    const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
+    const pendingMigrate = task.journal.find((e) => e.type === "decision-issued" && e.detail?.migrate && !settled.has(e.detail.decisionId))
+    if (pendingMigrate) {
+      return { ok: true, task: name, status: "awaiting-user", next: "decide", decisionId: pendingMigrate.detail.decisionId, question: pendingMigrate.detail.reason, choices: pendingMigrate.detail.choices, note: "迁移冲突卡待决：decide 保留版本后再 tw migrate 完成剩余处理" }
+    }
+    // 1) 待赋号派发：无 waveId 事实（detail.waveId 与 wave-assigned join 均无）
+    const assignedKeys = new Set(task.journal.filter((e) => e.type === "wave-assigned").flatMap((e) => e.detail?.dispatchKeys ?? []))
+    const stageIdx = task.journal.map((e) => e.type).lastIndexOf("stage-advanced")
+    const unassigned = []
+    for (let i = Math.max(stageIdx, 0); i < task.journal.length; i += 1) {
+      const e = task.journal[i]
+      if (e.type !== "dispatched") continue
+      if (e.detail?.waveId) continue
+      if (assignedKeys.has(e.detail?.key)) continue
+      unassigned.push(e)
+    }
+    // 2) 分组：同 (kind, role, round)；组内 package 互不相同合并一波、package 相同或 null 各自成波
+    let maxWv = 0
+    for (const e of task.journal) {
+      const m = /^wv(\d+)$/.exec(e.detail?.waveId ?? "")
+      if (m) maxWv = Math.max(maxWv, Number(m[1]))
+    }
+    const byGroup = new Map()
+    for (const e of unassigned) {
+      const k = `${e.detail.kind}\u0000${e.detail.role}\u0000${e.detail.round}`
+      if (!byGroup.has(k)) byGroup.set(k, [])
+      byGroup.get(k).push(e.detail)
+    }
+    // 分割顺序钉死（F9 边界）：组内按 journal 序——不同 package 并入当前波；package 相同（同轮重复派发）
+    // 或 package=null 一律从重复处开新波，后续条目逐条独立成波；赋号顺序 = journal 序（wvN 递增）。
+    const newWaves = []
+    let num = maxWv
+    for (const entries of byGroup.values()) {
+      let current = null
+      for (const d of entries) {
+        if (!current || d.package == null || current.packages.has(d.package)) {
+          num += 1
+          current = { waveId: `wv${num}`, dispatchKeys: [d.key], packages: new Set(d.package == null ? [] : [d.package]) }
+          newWaves.push(current)
+        } else {
+          current.dispatchKeys.push(d.key)
+          current.packages.add(d.package)
+        }
+      }
+    }
+    if (newWaves.length) {
+      await appendEventsUnlocked(task, newWaves.map((w) => ({ type: "wave-assigned", detail: { waveId: w.waveId, dispatchKeys: w.dispatchKeys } })))
+    }
+    // 3) 异 digest 冲突检测（独立于赋号循环：遍历迁移段全部分组逐组处理——多组冲突/重跑均不遗漏，B6 四类恢复完整）
+    const afterTask = await loadTask(projectRoot, name, { workflow, policy })
+    const excluded = supersededKeys(afterTask.journal)
+    const reportByKey = new Map(afterTask.reports.map((r) => [r.dispatchKey, r]))
+    const digestSetOf = (key) => {
+      const rid = `deliver-${key}`
+      return (afterTask.artifacts?.items ?? []).filter((i) => i.reportRef === rid).map((i) => i.digest).sort()
+    }
+    // 迁移段内全部已赋号派发（经 waveId join）按 (kind, role, round, package) 四元组分组：
+    // 同组重复派发成员 ≥2 且非 superseded 交付 ≥2 且制品 digest 组合互异 = 冲突组（每组一卡，逐组解决）
+    const conflictGroups = new Map()
+    for (let i = Math.max(stageIdx, 0); i < afterTask.journal.length; i += 1) {
+      const e = afterTask.journal[i]
+      if (e.type !== "dispatched") continue
+      const wid = e.detail?.waveId ?? waveIdOf(afterTask.journal, e.detail?.key)
+      if (!wid) continue
+      const k = `${e.detail.kind}\u0000${e.detail.role}\u0000${e.detail.round}\u0000${e.detail.package ?? null}`
+      if (!conflictGroups.has(k)) conflictGroups.set(k, [])
+      conflictGroups.get(k).push(e.detail)
+    }
+    for (const ds of conflictGroups.values()) {
+      if (ds.length < 2) continue
+      const delivered = ds.filter((d) => reportByKey.has(d.key) && !excluded.has(d.key))
+      if (delivered.length < 2) continue
+      const sets = delivered.map((d) => ({ key: d.key, set: digestSetOf(d.key), waveId: waveIdOf(afterTask.journal, d.key) }))
+      if (new Set(sets.map((s) => s.set.join("\u0000"))).size < 2) continue
+      const decisionId = `migrate-${randomBytes(3).toString("hex")}`
+      const question = `迁移恢复：同一逻辑波存在多个不同内容的交付版本（${sets.map((s) => s.key).join("、")}），请选择保留哪一版（其余版本作废）`
+      const choices = sets.map((s, i) => ({ n: i + 1, label: `保留 ${s.key} 的版本`, desc: `digest ${s.set.join("、").slice(0, 48)}` }))
+      await appendEventsUnlocked(task, [{ type: "decision-issued", detail: { decisionId, gateId: null, reason: question, choices, migrate: { candidates: sets.map((s) => ({ key: s.key, waveId: s.waveId })) } } }])
+      return { ok: true, task: name, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question, choices, note: "迁移赋号已完成（幂等）；解决冲突卡后再次 tw migrate 完成剩余处理" }
+    }
+    // 4) 完成：输出迁移前后投影对比（「迁移前后状态等价」验收证据）
+    const after = Object.fromEntries([...projectRounds({ journal: afterTask.journal, reports: afterTask.reports }).entries()].map(([k, v]) => [String(k), v]))
+    return { ok: true, task: name, assignedWaves: newWaves.map((w) => ({ waveId: w.waveId, dispatchKeys: w.dispatchKeys })), projectionBefore: before, projectionAfter: after, equivalent: JSON.stringify(before) === JSON.stringify(after), note: newWaves.length ? "迁移完成（追加 wave-assigned 事件，不改写历史行）；迁移前后投影对比见输出" : "无需迁移（无可赋号派发，幂等返回）" }
+  })
 }
 
 async function cmdRoute({ projectRoot, name, route, decision, basis }) {
@@ -655,7 +883,7 @@ async function cmdGate({ projectRoot, name }) {
   const task = await loadTask(projectRoot, name, { workflow, policy })
   const state = deriveTask(task)
   if (state.gate) return { ok: true, task: name, stage: state.stage, passed: state.gate.passed, blockers: state.gate.blockers }
-  const gate = gateCheck({ workflow, policy, stageId: state.stage, scope: task.scope, artifacts: task.artifacts, reports: task.reports.filter((r) => r.stage === state.stage), decisions: task.decisions, journal: task.journal })
+  const gate = gateCheck({ workflow, policy, stageId: state.stage, scope: task.scope, artifacts: task.artifacts, reports: task.reports.filter((r) => r.stage === state.stage), decisions: task.decisions, journal: task.journal, packages: Array.isArray(task.packages) && task.packages.length ? task.packages : null })
   return { ok: true, task: name, stage: state.stage, passed: gate.passed, blockers: gate.blockers, wave: state.wave }
 }
 
@@ -763,12 +991,9 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）
     const state = deriveTask(task)
     if (state.status === 'awaiting-user') throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
-    const batch = []
-    const lastIdx = task.journal.map((e) => e.type).lastIndexOf('dispatched')
-    for (let i = lastIdx; i >= 0 && task.journal[i].type === 'dispatched'; i -= 1) batch.unshift(task.journal[i].detail)
-    const settledKeys = new Set(task.reports.map((r) => r.dispatchKey))
-    const inflight = batch.filter((d) => !settledKeys.has(d.key))
-    if (inflight.length) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
+    // F3：在途判定统一走 waves.inflightBatch（与 derive/重建/提示同源；superseded 波不在在途）
+    const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
+    if (inflight) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.open.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
     const had = task.packages != null
     await atomicJson(path.join(task.root, 'packages.json'), { items })
     await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: items.map((p) => p.id) } }])
@@ -845,13 +1070,26 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
         const agentMaps = (await readJson(path.join(task.root, 'agents.json'), { allowMissing: true }) ?? {}).mappings ?? {}
-        // 同包同角色上一派发 key（expectedAgentId 推导源）
+        // F4 续派身份回溯（过渡形态，memberSlot 为终局后置）：沿 journal 倒序找同角色同包范围内
+        // 最近一个有映射的派发 key——send_message 续派不登记新 key，映射链必然间断，只看紧邻 key 必断链；
+        // 遇 stage-advanced 事件停止（不跨阶段串线）；跳过 superseded 波的 key（F3 排除面）。
         // D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
         // 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。
+        const excludedKeys = supersededKeys(task.journal)
         const prevKeyOf = (d) => {
-          const prior = task.journal.filter((e) => e.type === 'dispatched' && e.detail.key !== d.key && e.detail.role === d.role
-            && ((d.package ?? null) === null ? true : (e.detail.package ?? null) === d.package)).at(-1)
-          return prior?.detail.key ?? null
+          let resolved = null
+          for (let i = task.journal.length - 1; i >= 0; i -= 1) {
+            const e = task.journal[i]
+            if (e.type === 'stage-advanced') break
+            if (e.type !== 'dispatched') continue
+            const detail = e.detail
+            if (detail.key === d.key) continue
+            if (detail.role !== d.role) continue
+            if (excludedKeys.has(detail.key)) continue
+            if ((d.package ?? null) !== null && (detail.package ?? null) !== d.package) continue
+            if (agentMaps[detail.key]) { resolved = detail.key; break }
+          }
+          return resolved
         }
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
@@ -861,11 +1099,11 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
             : twCommand() + ' review --task ' + name + ' --key ' + d.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (d.kind === 'verdict' ? ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>' : '')
           return {
-            dispatchKey: d.key, kind: d.kind, role: d.role, tier: d.tier, round: d.round,
+            dispatchKey: d.key, ...(d.waveId ? { waveId: d.waveId } : {}), kind: d.kind, role: d.role, tier: d.tier, round: d.round,
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
             ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
-            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话（自动回填缺失或无标签）：请新开同标签 fresh subagent（插件自愈覆盖），或 tw agent-map 兜底登记' } : {}),
+            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话（自动回填缺失或无标签）：请新开同标签 fresh subagent，或 tw agent-map 兜底登记；若复用原派单 key，请 tw agent-map --key <原key> --agent <新childId> 回填新映射覆盖旧映射（R3：fresh 复用同一 key 必须回填新 childId）' } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
@@ -957,6 +1195,8 @@ function helpCard() {
       models: "tw models：只读全局 DSH settings 中的 tier→模型解析结果",
       init: "tw init [--force]：可选——只装载 skill 到 .dsh/skills/",
       restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
+      retire: "tw retire --task <n> --wave <wvN> --reason <原因>：作废未结波（仅 Lead；解除在途，已交付报告保留审计）",
+      migrate: "tw migrate --task <n>：既有任务波身份迁移（追加 wave-assigned 事件；异 digest 冲突出选择卡）",
       archive: "tw archive --task <n>：归档（用户确认后；归档目录只读）",
       deliver: "成员交卷：tw deliver --task <n> --key <k> --outcome delivered --summary <一句话> --paths <路径...> [--checks <JSON>] [--unresolved <JSON>]",
       review: "成员阅卷：tw review --task <n> --key <k> --recommendation accept|rework|escalate --summary <一句话> [--findings <JSON>] [--verdict <JSON>]",
@@ -982,6 +1222,8 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
       case "intent": return await cmdIntent({ ...common, name: args.task, objective: args.objective, risk: args.risk, addConstraint: flag("add-constraint"), addExclusion: flag("add-exclusion") })
       case "route": return await cmdRoute({ ...common, name: args.task, route: args.route, decision: args.decision, basis: args.basis })
       case "restore": return await cmdRestore({ ...common, name: args.task, target: args.path })
+      case "retire": return await cmdRetire({ ...common, name: args.task, wave: args.wave, reason: args.reason })
+      case "migrate": return await cmdMigrate({ ...common, name: args.task })
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
       case "plan": return await cmdPlan({ ...common, name: args.task, packagesJson: args.packages })
@@ -1002,7 +1244,7 @@ export async function tw(argv, { projectRoot = process.cwd(), stdout = process.s
         verdict: parseJsonArg(args.verdict, "--verdict"),
       } })
       default:
-        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/run/dispatch-plan/decide/intent/route/gate/models/init/restore/archive；成员：deliver/review）")
+        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/run/dispatch-plan/decide/intent/route/gate/models/init/restore/retire/migrate/archive；成员：deliver/review）")
     }
   } catch (error) {
     if (error.card) return error.card

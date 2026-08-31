@@ -28,6 +28,14 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后继续。
 
+## 作废未结波（tw retire）
+
+- 触发：wait-inflight 卡或 dispatch-plan 输出中的未结波需要放弃时——如派错人、该波不再需要、迁移冲突已选保留版本等。waveId 直接取自卡内字段（P4：运行期卡自带 waveId，不手工编造）；
+- 执行：`tw retire --task <名> --wave <wvN> --reason <原因>`（**仅 Lead**；reason 必填，写入 journal 的 `dispatch-superseded` 事件供审计）；
+- 语义：只解除**未交付派发**的在途（该波不再等交付）；已交付报告保留为审计事实、不参与后续推导（投影/快照/依赖/轮次耗尽/续派回溯统一排除作废波）；该波 key 再被 deliver/review 会拒绝并提示「重新 tw run 取新卡」；
+- 幂等矩阵：重复 retire 幂等返回；未知 waveId / 已结波 / 缺 reason 拒绝并附恢复指引（拒绝输出带当前未结波清单）；
+- 后续：retire 后重新 dispatch-plan / run，波次机按剩余活跃包推进（多包波中已交付包照常进入评审链）；retire 与 run 并发由任务锁串行化，状态一致。
+
 ## 拆包（tw plan）
 
 - 判断要不要拆：目标含多个可独立验收的垂直范围且可写范围能互斥拆分才拆；共享热点收进一个包或设 dependsOn 汇总包；拆分粒度以"子 agent 高注意力"为准（每包一个清晰交付物）；拆分语义质量由 Lead 把关（runtime 只验机械属性：互斥/无环/完成标准在场）；

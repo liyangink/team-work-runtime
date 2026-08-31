@@ -19,16 +19,42 @@ async function pollUntil(fn, timeoutMs = 3000) {
 }
 const DOT = String.fromCharCode(183)
 
-test("pendingTags：任务级落盘标签到key，同标签续派覆盖为最新key", async () => {
-  const root = await mkdt(path.join(os.tmpdir(), "tw-pend-"))
+test("续派回填边界：同标签续派覆盖 pendingTags 最新 key，send_message 不触发回填（回填只发生在子代创建时）", async () => {
+  const root = await mkdt(path.join(os.tmpdir(), "tw-cont-"))
   const taskRoot = path.join(root, ".team-work", "tasks", "demo-t")
   await mkdir(taskRoot, { recursive: true })
-  await persistTagHints(taskRoot, [{ tag: "CR" + DOT + "owner", key: "w2-aaa", hint: { provider: "p", model: "m" } }])
-  let d = JSON.parse(await rf(path.join(taskRoot, "agents.json"), "utf8"))
-  assert.equal(d.pendingTags["CR" + DOT + "owner"], "w2-aaa")
-  await persistTagHints(taskRoot, [{ tag: "CR" + DOT + "owner", key: "w2-bbb", hint: { provider: "p", model: "m" } }])
-  d = JSON.parse(await rf(path.join(taskRoot, "agents.json"), "utf8"))
-  assert.equal(d.pendingTags["CR" + DOT + "owner"], "w2-bbb", "续派覆盖最新key")
+  const file = path.join(taskRoot, "agents.json")
+  const tag = "CR" + DOT + "owner"
+  // 首派：落盘 pendingTags=key1；子代创建（descriptor 标签命中）→ 回填 mappings[key1]
+  await persistTagHints(taskRoot, [{ tag, key: "w2-abc", hint: { provider: "p", model: "m" } }])
+  const contribution = makeInjectContribution({ logger: { info() {}, warn() {} } }, {
+    readFileSync: (f) => rfs(f, "utf8"),
+    installerNow: () => (c, sel) => {},
+  })
+  const childA = { agent: { id: "child-a", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: tag + " #demo-t" } }] } } }
+  const disposerA = contribution(childA)
+  const d1 = await pollUntil(async () => {
+    const parsed = JSON.parse(await rf(file, "utf8"))
+    return parsed.mappings?.["w2-abc"] === "child-a" ? parsed : null
+  })
+  assert.equal(d1.mappings["w2-abc"], "child-a", "首派子代创建时回填")
+  // 续派：send_message 复用既有子会话——不产生新 descriptor、宿主不再次调用 contribution；
+  // runtime 仅把 pendingTags 覆盖为最新 key，mappings 不新增回填（新 key 无映射，生命周期不错位）
+  await persistTagHints(taskRoot, [{ tag, key: "w2-bbb", hint: { provider: "p", model: "m" } }])
+  await new Promise((r) => setTimeout(r, 300)) // 给足潜在误回填窗口后仍无新键
+  const d2 = JSON.parse(await rf(file, "utf8"))
+  assert.equal(d2.pendingTags[tag], "w2-bbb", "pendingTags 覆盖为最新 key（续派寻址事实）")
+  assert.equal(d2.mappings["w2-bbb"], undefined, "send_message 续派不触发回填：新 key 无映射（回填只发生在子代创建时）")
+  assert.equal(d2.mappings["w2-abc"], "child-a", "旧键映射保留（审计记录）")
+  // 新子代创建（同标签 fresh）→ contribution 才按最新 pendingTags 回填
+  const childB = { agent: { id: "child-b", session: { header: { cwd: root }, events: [{ type: "subagent/descriptor", data: { label: tag + " #demo-t" } }] } } }
+  const disposerB = contribution(childB)
+  const d3 = await pollUntil(async () => {
+    const parsed = JSON.parse(await rf(file, "utf8"))
+    return parsed.mappings?.["w2-bbb"] === "child-b" ? parsed : null
+  })
+  assert.equal(d3.mappings["w2-bbb"], "child-b", "新子代创建（fresh）才按最新 key 回填（R3：fresh 复用 key 回填新映射）")
+  disposerA(); disposerB()
 })
 
 test("插件回填：标签命中后任务级 mappings[key]=childId；无 pending 不写；幂等", async () => {

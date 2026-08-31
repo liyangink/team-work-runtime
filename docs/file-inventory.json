@@ -50,6 +50,10 @@
     "tests/runtime-v3-concurrency.test.mjs",
     "tests/runtime-v3-dsh.test.mjs",
     "tests/runtime-v3-topology.test.mjs",
+    "tests/runtime-v3-waves-regression.test.mjs",
+    "tests/tag-hints-runtime.test.mjs",
+    "tests/dsh-tag-injection.test.mjs",
+    "tests/tag-agent-auto-register.test.mjs",
     "tests/runtime-v3-guidance-lazy.test.mjs",
     "tests/runtime-v3-guidance.test.mjs",
     "tests/support/v3-fixtures.mjs",
@@ -72,8 +76,14 @@
     "docs/runtime-roadmap.md",
     "docs/runtime-v3-charter.md",
     "docs/dsh-phase1-plan.md",
+    "docs/dsh-directed-delegation-plan.md",
     "docs/v2-e2e-findings.md",
     "docs/team-topology-recovery-plan.md",
+    "docs/team-work-runtime-model.md",
+    "docs/wave-identity-recovery-plan.md",
+    "docs/dsh-tag-injection-plan.md",
+    "docs/tag-agent-auto-register-plan.md",
+    "docs/agents-json-task-scope-plan.md",
     "docs/M-store.md",
     "docs/M-intake.md",
     "docs/M-overview.md"
@@ -81,7 +91,10 @@
   "sharedBuild": [
     "package.json"
   ],
-  "planned": [],
+  "planned": [
+    "dsh/subagent-with-model.js",
+    "tests/dsh-subagent-with-model.test.mjs"
+  ],
   "removedInV2": [
     "runtime/core.mjs",
     "plugins/opencode/src/lead-controller.mjs",

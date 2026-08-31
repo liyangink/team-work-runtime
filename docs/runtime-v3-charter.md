@@ -93,6 +93,8 @@ v3 以已验证的 OpenSpec 形状为中心原则：**制品即状态，工具�
 | `run` | `task` | 无前置检查；派发当前可派发波次，返回卡片 | 无可派发且门未过：卡片列出缺口 |
 | `decide` | `task`、`choice`（序号）、`note?` | 序号在当前卡片选项内；决定凭证绑定签发时制品指纹 | 序号越界：回显当前卡片与合法序号 |
 | `intent` | `task`、`objective?`、`--add-constraint?`、`--add-exclusion?` | 任务未 completed | 完成后修订：建议开新任务引用旧目录 |
+| `retire` | `task`、`--wave <wvN>`、`--reason <原因>` | 仅 Lead；波存在且未结（存在未交付派发）；reason 必填；只增 `dispatch-superseded {waveId, reason}`，解除在途，已交付报告保留为审计事实，清退该波 agents.json 映射 | 缺 wave/reason、未知波、已结波拒绝并附当前未结波清单；重复 retire 幂等返回 |
+| `migrate` | `task` | 既有任务波身份迁移：追加 `wave-assigned {waveId, dispatchKeys[]}` 映射事件（不改写历史行）；同 (kind,role,round) 不同包合并一波、同包重复与 package=null 各自成波；异 digest 多报告出用户选择卡保留一版、其余写 dispatch-superseded；输出迁移前后投影对比 | 幂等（重跑不重复赋号、无可迁移返回）；迁移冲突卡待决时返回 awaiting-user（decide 保留版本后再 migrate） |
 
 `plan`/`steer` 退役：目标与约束初始提交归 open，后续修订归 intent；卡片应答归 decide；干预（换 Owner、追加轮次、Expert 仲裁、升级用户）是特定情境卡片的选项，不是常设动作枚举。
 
@@ -121,7 +123,7 @@ Owner 回应评审 = 再次 deliver：同路径原地修订（新 digest，旧�
   tasks/<name>/                     # 活动任务（完成后归档并移除，见 5.2）
     intent.json                     # 目标与约束 + 修订历史
     scope.json                      # entry/completion 投影 + workflow 指纹
-    reports/<report-id>.json        # 成员报告，一次写入不可变
+    reports/<report-id>.json        # 成员报告（身份 = key+ver：同 key 修订 ver+1 覆盖单文件，历史版本经 journal 链审计）
     decisions.json                  # 人工与路由决定凭证（单文件数组）
     artifacts.json                  # 产出物登记索引（可重建）
     snapshots/<digest>.json         # 产出物内容快照
@@ -140,12 +142,12 @@ Owner 回应评审 = 再次 deliver：同路径原地修订（新 digest，旧�
 | --- | --- | --- | --- | --- |
 | `intent.json` | `{objective, constraints[], exclusions[], revisions: [{seq, at, change}]}` | 任务语义源头；派单文本与卡片的目标/约束段由此渲染 | open 创建（revisions 空）；intent 追加修订 | 仅追加 revision，不改写历史；新派单读最新值 |
 | `scope.json` | `{entry, completion, stages[], workflowDigest}` | 阶段子图投影；推导合法边与完成点 | open 一次写入 | **冻结**；创建后不可变（变更=新任务） |
-| `reports/<id>.json` | `{reportId, wave, role, sessionRef, taskSha?, payload, at}`（taskSha=被审产出物 digest，review 专用） | 成员交付的不可变事实；波次收敛与门禁证据由此推导 | deliver/review 调用内一次写入 | 不可变；重派=新文件 |
-| `decisions.json` | `{items: [{decisionId, gateId?/route, choice, grant?, note?, fingerprint?, proof, at}]}` | 人工与路由决定凭证；fingerprint 绑签发时产出物 digest（I7） | decide/route 调用内追加 | 数组追加；route 同类决定后者覆盖 |
+| `reports/<id>.json` | `{reportId, dispatchKey, role, kind, round, stage, package, waveId?, ver, payloadDigest, taskSha?, reviewedPackages?, payload, at}`（taskSha=被审制品 digest、reviewedPackages=评审覆盖快照，review 专用；waveId 仅展示字段，投影一律经 dispatchKey join journal） | 成员交付事实；波次收敛与门禁证据由此推导 | deliver/review 调用内一次写入 | **身份 = key+ver**：同 key 同 payloadDigest 重交幂等（ver 不变）；payload 变化 ver+1 覆盖单文件，历史版本经 journal `report-accepted`（ver+payloadDigest）链即时可审计；全文留档为后置项；重派=新文件 |
+| `decisions.json` | `{items: [{decisionId, gateId?/route, choice, grant?, basis?, packages?, note?, fingerprint?, artifactFingerprint?, reviewFingerprint?, proof, at}]}` | 人工与路由决定凭证；人工门决定绑**双指纹**——artifactFingerprint（每包「包→指纹」映射）+ reviewFingerprint（评审链复合 digest），任一变化即失效重签（I7）；旧字段 fingerprint 双写兼容旧版读取；basis=route skip 的可定位依据，packages=rework-unfixed 决定的未修包清单 | decide/route 调用内追加 | 数组追加；route 同类决定后者覆盖 |
 | （无 gates/ 文件） | — | **门禁判定不落盘**：gate 是目录数据的纯函数（derive 时即时计算），推导即检查，制品变化自然使旧判定失效；审计由 journal 事件与 decisions 承载 | — | — |
 | `artifacts.json` | `{items: [{path, digest, kind, stage, reportRef, snapshotRef}]}` | 产出物登记索引；路径即身份（E2E-16） | deliver 登记时更新 | 原子覆盖；可由 reports+snapshots 重建（I3） |
 | `snapshots/<digest>.json` | `{digest, path, content, at}` | 产出物内容快照；I8 污染恢复源 + 归档取材 | deliver 登记时写入 | 不可变；同路径修订=新 digest 新文件，旧版保留 |
-| `journal.jsonl` | 每行一个事件：`{seq, at, type, detail}`；type ∈ task-opened/dispatched/report-accepted/decision-issued/decided/stage-advanced/task-completed | 唯一审计序列；在途状态（已派发未交付的波次）由此推导 | 每个状态事件追加一行 | 只增不改 |
+| `journal.jsonl` | 每行一个事件：`{seq, at, type, detail}`；type ∈ task-opened/dispatched/report-accepted/decision-issued/decided/stage-advanced/task-completed/dispatch-superseded/wave-assigned；dispatched detail 含 waveId（波身份）与 causeDecisionId（返工波绑定的决定），report-accepted detail 含 ver+payloadDigest（报告修订链），dispatch-superseded `{waveId, reason}`（作废恢复边），wave-assigned `{waveId, dispatchKeys[]}`（既有任务迁移映射） | 唯一审计序列；在途状态（已派发未交付的波次）与波身份由此推导 | 每个状态事件追加一行 | 只增不改 |
 | （无 runtime.json） | — | 会话与执行实例归平台/编排层管理；runtime 只记派单事实（journal 的 dispatched 条目），不绑定具体 session；易失信息丢失最多导致重派当前波次，不阻塞门禁 | — | — |
 
 ### 5.2 归档（显式收尾，任意完成形态）
@@ -214,7 +216,7 @@ plugins/opencode/ 全部（~2.6k 行）及其测试：停止投入、留档、�
 ## 8. DSH 绑定（首个平台）
 
 - **唯一 skill**：`team-work`——不再区分 lead/member 两个 skill。skill 内容：工具用法（open/run/decide/intent/archive + deliver/review）、卡片转述规范、门禁静止语义、写边界与"上下文已内嵌"纪律（E2E-08）。**阶段触发、是否组团、是否要求八视角完整审查，由 Lead 依据用户语义判断；skill 提供判断指引**（何种目标对应哪个 entry、何时 solo 何时 team、何时要求完整视角合同、何时允许轻量抽查），不由编译器强制。成员派单文本由 Lead 生成：从 policy 查角色档位，按 skill 指引组装完成条件与边界。
-- **薄 CLI（九命令）**：`tw open / run / decide / intent / route / archive / deliver / review / gate`（open 用 `--name` 寻址，其余动词带 `--task`），Lead 与成员经 bash 调用；CLI 是工具契约的参考实现。
+- **薄 CLI**：Lead `tw open / run / dispatch-plan / decide / intent / route / gate / archive / retire / migrate / plan / agent-map / models / init / restore` + 成员 `tw deliver / review`（open 用 `--name` 寻址，其余动词带 `--task`；`tw help` 即完整命令面），Lead 与成员经 bash 调用；CLI 是工具契约的参考实现。
 - **派发与拓扑**：团队拓扑由 DSH 编排工具（workflow：`agent/pipeline/parallel`）在平台层执行——`tw dispatch-plan` **按波组导出**波次事实（`multi-wave` 多包波带 owners、`continuation` 增量续派、challenger findings 包归属选择性重派、`expectedAgentId` 续派映射、`weight` 成本权重）。tier→模型唯一来自 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）：档位兼容单对象与候选数组，provider/model 必填，family 与 effort 可选；同波按候选池优先不同家族选择，并将 modelHint 快照记入派发事实。项目 `.team-work/platform/dsh.json` 不再读取或创建，`agents.json` 只保存项目内 child 映射与快照。编排脚本按该 modelHint 以 `agent(prompt, {provider, model})` 派发成员，推进到人工门即终止返回卡片；成本控制的本质是该映射：简单任务廉价模型、复杂任务高预算，`costWeights` 为映射权重标注（详见 Roadmap v3.1）。runtime 不实现派发循环与 DAG 调度。
 - **v3.2 拓扑进度**：`tw plan` 包定义登记与机械验收、波次机波组化与选择性重派、邻派映射（`tw agent-map`）已随 v3.2 第一批实施；八视角并行独立审（视角包 tier + 组合评审）、e2eTemplate 物化、升档审批卡已随 v3.2 第二批实施；**Phase 3 DSH 插件能力（`dsh/`：childId 寻址注入、skill 注册、tw 原生工具、席位徽标）已实施并随唯一根市场制品发布**——自动验证层（cordis 装载/功能矩阵/实机 boot 链）全绿，真实 LLM 注入效果待用户实机确认（根 README 的 DSH 节）；Phase 2 成本投影维持用户否决。详 Roadmap 与 docs/phase3-acceptance.md。
 - **人工门禁**：任务静止由 DSH 语义天然保证（无宿主自动续跑）；决定凭证绑定制品指纹。

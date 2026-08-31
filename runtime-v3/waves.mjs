@@ -4,6 +4,9 @@
 // 单 owner 任务（无 packages）= 匿名单包 [null]，行为与 v3.1 一致。
 // 报告形状：{reportId, role, kind, round, payload, at, package?}——
 // deliver 的 package 由 runtime 从派发事件写入（成员不填，P4）；review 的 findings[].package 为模型语义（F3）。
+// v3.4 波身份与恢复（docs/wave-identity-recovery-plan.md）：
+// 波有实体身份 waveId（wv1/wv2/…，F1）；轮次无实体、唯一算法 = 每包 max(已交付报告 round)（F2）；
+// 在途 = 存在未 superseded 的未结波（F1/F3 守卫，波与波永远串行）；superseded 波在投影/在途/回溯统一排除（F3）。
 
 export function scenePolicy(policy, sceneId) {
   const scene = policy?.scenes?.[sceneId]
@@ -29,31 +32,133 @@ function findingsPackages(review) {
   return (review?.payload?.findings ?? []).map((f) => f.package).filter((p) => p != null)
 }
 
+// —— F1/F9 波身份解析 ——
+// 派发 → waveId：dispatched.detail.waveId 直接事实优先；wave-assigned join（F9 迁移追加式，不改写既有行）；
+// 两者皆无 → null（退化语义 B8：每条派发按 key 各自成波，列为迁移验收「迁移前后状态等价」的一部分）。
+export function waveIdOf(journal, dispatchKey) {
+  const dispatch = journal.find((e) => e.type === "dispatched" && e.detail?.key === dispatchKey)
+  if (dispatch?.detail?.waveId) return dispatch.detail.waveId
+  const assigned = journal.find((e) => e.type === "wave-assigned" && (e.detail?.dispatchKeys ?? []).includes(dispatchKey))
+  return assigned?.detail?.waveId ?? null
+}
+
+// 已作废波（dispatch-superseded {waveId, reason}，F3 只增恢复边）→ 其派发 key 集合（含 wave-assigned join 解析）。
+// 投影/快照/依赖/耗尽/回溯/在途统一以此为排除源。
+export function supersededKeys(journal) {
+  const superseded = new Set(journal.filter((e) => e.type === "dispatch-superseded" && e.detail?.waveId).map((e) => e.detail.waveId))
+  if (superseded.size === 0) return new Set()
+  const keys = new Set()
+  for (const e of journal) {
+    if (e.type !== "dispatched" || !e.detail?.key) continue
+    const wid = e.detail.waveId ?? waveIdOf(journal, e.detail.key)
+    if (wid && superseded.has(wid)) keys.add(e.detail.key)
+  }
+  return keys
+}
+
+// 波分组（journal 序）：{waveId|null, keys[]}[]；无 waveId 事实按 key 各自成波（退化语义）。
+// wave-assigned join 解析（F9 迁移追加式事实，与 waveIdOf 同源）：迁移赋号的派发必须按其波分组，
+// 否则 retire/在途卡等消费点对迁移波一律判「未知波」（retire 恢复边死门）。
+export function waveGroups(journal) {
+  const assigned = new Map() // 预建 join 索引：dispatchKey → waveId（O(n)，避免逐条 waveIdOf 的 O(n²)）
+  for (const e of journal) {
+    if (e.type === "wave-assigned" && e.detail?.waveId && Array.isArray(e.detail?.dispatchKeys)) {
+      for (const k of e.detail.dispatchKeys) if (!assigned.has(k)) assigned.set(k, e.detail.waveId)
+    }
+  }
+  const groups = []
+  const index = new Map()
+  for (const e of journal) {
+    if (e.type !== "dispatched" || !e.detail?.key) continue
+    const wid = e.detail.waveId ?? assigned.get(e.detail.key) ?? null
+    const groupKey = wid ?? `key:${e.detail.key}`
+    let group = index.get(groupKey)
+    if (!group) {
+      group = { waveId: wid, keys: [] }
+      index.set(groupKey, group)
+      groups.push(group)
+    }
+    group.keys.push(e.detail.key)
+  }
+  return groups
+}
+
+// —— F2 轮次唯一投影 ——
+// 投影输入集钉死：kind=deliver 且 outcome=delivered 且非 superseded 波；blocked 报告不入投影；
+// 旧报告无 waveId 回退按 dispatchKey 独立条目（与 max 口径等价，防御性）。
+// 唯一权威源：每包 max(已交付报告 round 字段)，round 由派发事件抄写（P4，成员不填）；
+// 报告上的 waveId 仅作展示字段，投影判定一律经 dispatchKey join journal 解析（杜绝新旧双源分叉）。
+// 去重由 max 天然完成，不另设 waveId 去重步骤；同 key 多 ver 取最大 ver 唯一化（F7 防御）。
+export function effectiveDelivers({ journal = [], reports = [] }) {
+  const excluded = supersededKeys(journal)
+  const latest = new Map()
+  for (const r of reports) {
+    if (r.role !== "owner" || r.kind !== "deliver") continue
+    if (r.payload?.outcome !== "delivered") continue
+    if (r.dispatchKey != null && excluded.has(r.dispatchKey)) continue
+    // 同 key 多 ver 取最大 ver（F7 防御）；无 dispatchKey 的旧报告按 reportId 独立条目（与 max 口径等价，防御性）
+    const k = `${r.package ?? null}\u0000${r.dispatchKey ?? r.reportId}`
+    const prev = latest.get(k)
+    if (!prev || (r.ver ?? 1) > (prev.ver ?? 1)) latest.set(k, r)
+  }
+  return [...latest.values()]
+}
+
+// 每包投影轮（唯一算法）：Map<pkg, round>；produce/respond 轮次 = 投影轮 + 1（该包最大派发 round + 1）。
+export function projectRounds({ journal = [], reports = [] }) {
+  const rounds = new Map()
+  for (const r of effectiveDelivers({ journal, reports })) {
+    const pkg = r.package ?? null
+    const round = r.round ?? 1
+    if (!rounds.has(pkg) || round > rounds.get(pkg)) rounds.set(pkg, round)
+  }
+  return rounds
+}
+
+// —— F1/F3 在途批次（唯一实现；derive / cli 在途重建 / intake 提示 / plan 重拆四处共用）——
+// 波与波永远串行（F1 模型基线）：存在任何未 superseded 的未结波 → 该波在途（wait-inflight）。
+// 未结波 = 同 waveId 的派发集合中至少一条尚无报告（settled = 报告的 dispatchKey 集合）；
+// 多包部分交付只等未交付包（open，组合评审等齐语义）。
+// 无 waveId 退化：每条派发按 key 各自成波，与现状「尾部连续批次」判定等价（B8）。
+// 返回 journal 序最早未结波 {waveId|null, entries, open}；全部已结 → null。
+export function inflightBatch({ journal = [], reports = [] }) {
+  const settled = new Set(reports.map((r) => r.dispatchKey))
+  const excluded = supersededKeys(journal)
+  for (const group of waveGroups(journal)) {
+    const openKeys = group.keys.filter((k) => !settled.has(k) && !excluded.has(k))
+    if (openKeys.length === 0) continue
+    const entries = journal.filter((e) => e.type === "dispatched" && group.keys.includes(e.detail?.key)).map((e) => e.detail)
+    return { waveId: group.waveId, entries, open: entries.filter((d) => openKeys.includes(d.key)) }
+  }
+  return null
+}
+
 // 返回波组描述符：
 //   {kind:"produce"|"respond", role:"owner", round, owners:[{package,round,continuation}]}
 //   {kind:"review",  role:"challenger", round, scope?, continuation}   // 多包组合评审 scope="consolidation"
-//   {kind:"verdict", role:"expert", round}
+//   {kind:"verdict", role:"expert", round, continuation}  // continuation = 已有 expert 报告（重裁续派，台账门槛 3）
 //   {kind:"gate"} | {kind:"converge-user", reason}
 // owners 的 package 为 null 表示单 owner 匿名包；continuation = 该包该角色已有报告（增量续派）。
-export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages = null }) {
+export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages = null, journal = [] }) {
   const items = Array.isArray(packages) ? packages : null
   const ids = items ? items.map((p) => p.id) : [null]
   const depsOf = (id) => items?.find((p) => p.id === id)?.dependsOn ?? []
   const maxRounds = sp.maxRounds + extraRounds
 
-  // 每包 owner 交付事实（reports 已按 at 升序）
+  // F2 唯一算法：轮次 = 每包 max(已交付报告 round) 投影；报告计数口径删除。
+  const rounds = projectRounds({ journal, reports })
+  const roundOf = (id) => rounds.get(id) ?? 0
+  // 每包有效交付事实（裁决新鲜度等用 at 口径，§8 后置保留）
   const delivers = new Map()
-  for (const r of reports) {
-    if (r.role !== "owner" || r.kind !== "deliver") continue
+  for (const r of effectiveDelivers({ journal, reports })) {
     const key = r.package ?? null
     if (!delivers.has(key)) delivers.set(key, [])
     delivers.get(key).push(r)
   }
-  const roundOf = (id) => delivers.get(id)?.length ?? 0
   const lastDeliverAt = (id) => delivers.get(id)?.at(-1)?.at ?? ""
   const depsSatisfied = (id) => depsOf(id).every((d) => roundOf(d) > 0)
 
-  // —— 每包状态推导（F2 按包计轮：轮 = 该包 owner 交付数）——
+  // —— 每包状态推导（F2 按包计轮：轮 = 该包投影轮）——
   // latest challenger review 评审"当轮已交付活跃包"组合
   const challenger = lastOf(reports, (r) => r.role === "challenger" && r.kind === "review")
   const expert = lastOf(reports, (r) => r.role === "expert" && r.kind === "review")
@@ -133,7 +238,7 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
 
   const active = ids.filter((id) => !doneP.has(id))
 
-  // —— converge-user 判定（F2 按包触发）——
+  // —— converge-user 判定（F2 按包触发，轮次按投影真实轮消耗）——
   const exhausted = [...reworkP].filter((id) => roundOf(id) >= maxRounds)
   if (exhausted.length) {
     const names = exhausted.map((id) => id ?? "（单 owner）").join("、")
@@ -168,9 +273,12 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
     const owners = reworkTodo.map((id) => ({ package: id, round: roundOf(id) + 1, continuation: true }))
     return { kind: "respond", role: "owner", round: Math.max(...owners.map((o) => o.round)), owners }
   }
-  // 3) 核心场景待裁决：裁决先于新包派发（裁决可能 rework 既有包，新包应基于已裁决的稳定基线开工）
+  // 3) 核心场景待裁决：裁决先于新包派发（裁决可能 rework 既有包，新包应基于已裁决的稳定基线开工）。
+  // continuation 仅在重裁（已有 expert 报告）时输出 true：重裁为续派——D3 同角色倒序回溯解析原 Expert 会话
+  // （台账 V3-E2E-02「同类问题也发生在 Expert 重裁」的修复落点，缺此前每次重裁断链 fresh 新会话；
+  // 首次裁决无报告、无 continuation 语义，与 produce/respond 的 owners[].continuation 风格区分）
   if (sp.core && accepted.size) {
-    return { kind: "verdict", role: "expert", round: Math.max(...[...accepted].map((id) => roundOf(id))) }
+    return { kind: "verdict", role: "expert", round: Math.max(...[...accepted].map((id) => roundOf(id))), ...(expert ? { continuation: true } : {}) }
   }
   // 4) 新交付派发（produce）：依赖满足且未交付的包（F1 分层：依赖包交付后解锁）
   const pending = active.filter((id) => !byId.get(id).delivered && byId.get(id).depsOk)

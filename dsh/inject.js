@@ -62,6 +62,33 @@ export function hintForChild(agentsJson, childId) {
   }
 }
 
+// 纯函数（§10.3 风险 1 cold-resume）：从子会话事件回读最近的 request/header。
+// provider/model 是持久化选择的权威来源；reasoningEffort 有值才附带。无 effort 不是“不曾选择”，
+// 因此必须同样锁定 provider/model，避免迁移期旧标签链覆写已确认的选择。返回 null = 无可回读内容。
+export function recallFromHeader(events) {
+  if (!Array.isArray(events)) return null
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event?.type !== "request/header") continue
+    const config = event?.data?.header?.config
+    if (
+      config &&
+      typeof config.provider === "string" && config.provider &&
+      typeof config.model === "string" && config.model
+    ) {
+      return {
+        provider: config.provider,
+        model: config.model,
+        ...(typeof config.reasoningEffort === "string" && config.reasoningEffort
+          ? { reasoningEffort: config.reasoningEffort }
+          : {}),
+      }
+    }
+    return null
+  }
+  return null
+}
+
 // agents.json 路径解析（任务级，迁移方案）：cwd + 任务名 → .team-work/tasks/<任务>/agents.json
 export function agentsJsonPath(headerCwd, task) {
   if (typeof headerCwd !== "string" || !headerCwd || typeof task !== "string" || !task) return null
@@ -112,6 +139,8 @@ export function makeInjectContribution(ctx, deps = {}) {
   const readFileSyncFn = deps.readFileSync ?? readFileSync
   const accessSyncFn = deps.accessSync ?? accessSync
   const installerNowFn = deps.installerNow ?? installerNow
+  // tw-tool-subagent 直接选择通道（take-once）：sessionId → 已验证选择；冷恢复后为空走回读。
+  const directSelections = deps.directSelections ?? new Map()
   const pollMs = deps.pollMs ?? 500
   const pollMaxMs = deps.pollMaxMs ?? 120000
   return function contribution(childCtx) {
@@ -150,7 +179,29 @@ export function makeInjectContribution(ctx, deps = {}) {
       // 同步注册（F2）：listener 在 contribution 同步段即刻在场；current=undefined=不干预
       const selection = { current: undefined, assembled: undefined }
       disposeInstall = install(childCtx, selection)
-      // ① 标签寻址（主通道）：descriptor 在 seed（seq0），同步段读 label 机器段+任务段查任务级 tagHints。
+      // ⓪ 直接选择通道（tw-tool-subagent 创建，方案 §4 步骤 4）：按 sessionId 取内存选择，
+      //    take-once 命中即同步注入（首请求即生效）并锁死——不走标签/补读。
+      //    selection 与 request.agentOptions 由工具侧同一份 resolveCallConfig 结果派生（§10.3 风险 2 单一来源）。
+      if (directSelections.size > 0) {
+        const direct = directSelections.get(agent.id)
+        if (direct) {
+          directSelections.delete(agent.id)
+          selection.current = direct
+          ctx.logger?.info?.("team-work-dsh: 成员 " + agent.id.slice(0, 8) + " 直接选择注入 " + direct.provider + "/" + direct.model)
+          return cleanup
+        }
+      }
+      // ① header 回读（cold-resume 权威通道）：direct selection 只在创建进程内存在；恢复时必须先
+      //    采用同一会话持久化的最后请求，不能让仍合法的旧标签链改写已确认的 provider/model/effort。
+      const recalled = recallFromHeader(agent?.session?.events)
+      if (recalled) {
+        selection.current = recalled
+        ctx.logger?.info?.(
+          "team-work-dsh: 成员 " + agent.id.slice(0, 8) + " header 回读重建 " + recalled.provider + "/" + recalled.model
+        )
+        return cleanup
+      }
+      // ② 标签寻址（迁移期旧链主通道）：descriptor 在 seed（seq0），同步段读 label 机器段+任务段查任务级 tagHints。
       let tagHit = false
       const events = agent?.session?.events
       const descriptor = Array.isArray(events) ? events.find((e) => e?.type === "subagent/descriptor") : null

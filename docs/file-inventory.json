@@ -59,6 +59,7 @@
     "tests/support/v3-fixtures.mjs",
     "tests/repository-contract.test.mjs",
     "tests/dsh-plugin.test.mjs",
+    "tests/dsh-tw-tool-subagent.test.mjs",
     "tests/e2e-b-matrix.test.mjs",
     "tests/dsh-plugin-e2e.test.mjs",
     "tests/e2e-root.test.mjs",
@@ -69,6 +70,7 @@
     "dsh/settings.js",
     "dsh/skill-embed.js",
     "dsh/tw-tool.js",
+    "dsh/tw-tool-subagent.js",
     "dsh/client/badge.js",
     "scripts/e2e-smoke.mjs",
     "docs/phase3-acceptance.md",
@@ -91,10 +93,7 @@
   "sharedBuild": [
     "package.json"
   ],
-  "planned": [
-    "dsh/subagent-with-model.js",
-    "tests/dsh-subagent-with-model.test.mjs"
-  ],
+  "planned": [],
   "removedInV2": [
     "runtime/core.mjs",
     "plugins/opencode/src/lead-controller.mjs",

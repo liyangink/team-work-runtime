@@ -10,6 +10,13 @@ var factory = function (require) {
     senior: "常规实现、复核与需要稳定判断的工作。",
     expert: "核心场景、技术裁决与高失败成本工作。",
   }
+  // @ 候选的一句话价值主张（方案 §3.5/§3.7）：与 dsh/tw-tool-subagent.js 的 TIER_VALUE_PROPS 字面同文，
+  // 由 tests/dsh-tw-tool-subagent.test.mjs 对齐校验（浏览器 bundle 无法 require host 模块，只能内联副本）。
+  var TIER_TRIGGER_TEXT = {
+    junior: "足以负担大部分基础工作；速度优势显著、单位成本最低——批量探索、信息收集、格式化整理、初稿类工作的默认选择。",
+    senior: "平衡档：推理能力与解题率不错，综合能力对比 expert 略有不足，但价格优势明显、性价比高——大多数常规开发任务的默认选择。",
+    expert: "最强推理能力、高解题率、低错误率；价格与执行耗时都最贵——只在高难度设计、疑难定位、关键技术裁决时使用。",
+  }
   var SETTINGS_CSS = [
     ".tw-settings-card{border:1px solid var(--dsw-alias-border-l2,#e1e5ee);background:var(--dsw-alias-bg-layer-3,#fff);border-radius:12px;list-style:none;color:var(--dsw-alias-label-primary,#0f1115);font-family:inherit;transition:border-color .16s,background .16s}",
     ".tw-settings-card:hover{border-color:var(--dsw-alias-label-dimmed,#c8ccd4)}",
@@ -61,6 +68,7 @@ var factory = function (require) {
   }
 
   function apply(ctx) {
+    registerTierTriggers(ctx)
     var React
     try { React = require("react") } catch (error) {
       warn(ctx, "react 不可解析，Web 扩展停用")
@@ -68,6 +76,40 @@ var factory = function (require) {
     }
     registerBadge(ctx, React)
     registerTierSettings(ctx, React)
+  }
+
+  // @junior/@senior/@expert 档位候选（方案 §3.5）：选中后写入明确、可见的委派意图，
+  // 不创建子代理、不保存 sessionId；Lead 补全任务后调用 tw-tool-subagent。
+  // 客户端缺少 inputTriggers 时仅关闭候选（自然语言与工具调用不受影响，§3.2 尾段）。
+  function registerTierTriggers(ctx) {
+    var inputTriggers = getService(ctx, "inputTriggers")
+    if (!inputTriggers || typeof inputTriggers.registerSource !== "function") {
+      warn(ctx, "inputTriggers 不可用，跳过 @ 档位候选（自然语言与 tw-tool-subagent 工具调用不受影响）")
+      return
+    }
+    try {
+      inputTriggers.registerSource({
+        trigger: "@",
+        name: "team-work 档位",
+        order: 100,
+        candidates: function (_session, req) {
+          var query = String((req && req.query) || "").toLowerCase()
+          return TIER_ORDER
+            .filter(function (tier) { return query === "" || tier.indexOf(query) === 0 })
+            .map(function (tier) {
+              return { name: tier, description: TIER_TRIGGER_TEXT[tier] }
+            })
+        },
+        onPick: function (pick) {
+          var name = pick && pick.candidate && pick.candidate.name
+          if (TIER_ORDER.indexOf(name) < 0) return { text: "" }
+          return { text: "请使用 tw-tool-subagent，以 " + name + " 档位委派子代理处理：" }
+        },
+        lexicon: function () { return TIER_ORDER.slice() },
+      })
+    } catch (error) {
+      warn(ctx, "@ 档位候选注册失败：" + String(error?.message ?? error))
+    }
   }
 
   function registerBadge(ctx, React) {

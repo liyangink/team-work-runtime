@@ -1,12 +1,12 @@
 # DSH 定向委派技术方案
 
-状态：**待用户审查，尚未实施**。
+状态：**已批准；第一阶段已实施（自动测试与全量回归绿），真实 DSH 验收（§7 七条）与第二阶段切链清理待做**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
 
 ## 1. 方案结论
 
-在现有 DSH 平台绑定中增加 `subagent_with_model` 工具，让 Lead 可以按档位，或按 provider、model 和 effort 创建子代理。工具复用 DSH 原生子会话能力，不重写子代理引擎。
+在现有 DSH 平台绑定中增加 `tw-tool-subagent` 工具，让 Lead 可以按档位，或按 provider、model 和 effort 创建子代理。工具复用 DSH 原生子会话能力，不重写子代理引擎。
 
-`@junior`、`@senior`、`@expert` 与新工具在第一阶段同时交付。自然语言和 `@` 只是两种输入方式，最终都由 `subagent_with_model` 执行。
+`@junior`、`@senior`、`@expert` 与新工具在第一阶段同时交付。自然语言和 `@` 只是两种输入方式，最终都由 `tw-tool-subagent` 执行。工具说明携带三档成本/速度价值主张（§3.7），Agent 在 team-work 工作流内外都可按性价比主动选档委派。
 
 新能力属于基础设施层的 **PlatformBinding**。不新增第五个架构 Module，不新增 npm 包，也不在 CoreRuntime 中增加派发逻辑。
 
@@ -49,18 +49,18 @@ provider 和 model 直接写入 DSH 原生 `agentOptions`（`AgentOptions` 只�
 PlatformBinding（基础设施层）
 └── dsh/
     ├── index.js              插件装配
-    ├── subagent-with-model.js  定向选模工具的内部实现
+    ├── tw-tool-subagent.js  定向选模工具的内部实现
     ├── inject.js             子代理创建期的模型注入
     └── client/badge.js        现有客户端入口，增加 @ 候选
 ```
 
-`subagent-with-model.js` 只是 DSH PlatformBinding 的内部实现文件，不是新的架构 Module。对外仍然只有根包导出的一个 DSH 插件。
+`tw-tool-subagent.js` 只是 DSH PlatformBinding 的内部实现文件，不是新的架构 Module。对外仍然只有根包导出的一个 DSH 插件。
 
 新功能直接复用下列 DSH 能力：
 
 | DSH 能力 | 用途 |
 | --- | --- |
-| `tools` | 注册 `subagent_with_model`。 |
+| `tools` | 注册 `tw-tool-subagent`。 |
 | `subagents` | 创建可续聊子会话。 |
 | `llm` | 在创建前验证 provider、model 和 effort。 |
 | `sessions` | 读取首个请求记录并等待写入完成。 |
@@ -75,7 +75,7 @@ PlatformBinding（基础设施层）
 按档位委派：
 
 ```js
-subagent_with_model({
+tw-tool-subagent({
   description: "简短名称",
   prompt: "完整任务",
   target: { tier: "junior" | "senior" | "expert" }
@@ -85,7 +85,7 @@ subagent_with_model({
 按精确模型委派：
 
 ```js
-subagent_with_model({
+tw-tool-subagent({
   description: "简短名称",
   prompt: "完整任务",
   target: {
@@ -114,28 +114,45 @@ sessionId 也不写入 label。DSH 已经用 sessionId 识别会话，label 只�
 
 ### 3.5 `@` 输入
 
-客户端通过 DSH 现有 `inputTriggers.registerSource()` 注册 `junior`、`senior`、`expert` 三个 `@` 候选。选中后在输入框写入明确、可见的委派意图。
+客户端通过 DSH 现有 `inputTriggers.registerSource()` 注册 `junior`、`senior`、`expert` 三个 `@` 候选。选中后在输入框写入明确、可见的委派意图。每个候选的描述带对应档位的一句话价值主张（§3.7）。
 
-`@` 候选不自己创建子代理，也不保存 sessionId。Lead 读取这段意图后调用 `subagent_with_model`；直接说“让 senior 处理”得到相同结果。
+`@` 候选不自己创建子代理，也不保存 sessionId。Lead 读取这段意图后调用 `tw-tool-subagent`；直接说“让 senior 处理”得到相同结果。
 
 ### 3.6 新工具与原生工具如何分工
 
-两个工具同时存在，以“是否需要指定模型”为主要分界（下表描述的是**第二阶段切换后**的终态分工；第一阶段 team-work 正式派发仍用原生 `subagent`，本表只在 phase 2 切换后对 skill 生效）：
+两个工具同时存在，以“是否显式选择模型”为主要分界——由用户/任务指定，或由 Agent 按档位价值主张（§3.7）主动选定（下表描述的是**第二阶段切换后**的终态分工；第一阶段 team-work 正式派发仍用原生 `subagent`，本表只在 phase 2 切换后对 skill 生效）：
 
 | 场景 | 使用方式 |
 | --- | --- |
-| 用户或任务指定了 tier、provider、model 或 effort | `subagent_with_model` |
-| team-work 首次派发，`dispatch-plan` 已给出 `modelHint` | `subagent_with_model` |
+| 用户或任务指定了 tier、provider、model 或 effort | `tw-tool-subagent` |
+| Agent 按任务复杂度、时效与成本主动选档（无需任何人显式指定） | `tw-tool-subagent` |
+| team-work 首次派发，`dispatch-plan` 已给出 `modelHint` | `tw-tool-subagent` |
 | 不指定模型，接受继承平台默认选择 | 原生 `subagent` |
 | 需要原生工具的前台或一次性模式 | 原生 `subagent` |
 | 继续已存在的子会话 | `send_message` |
 | 需要继承父会话上下文 | 原生 `subagent_fork` |
 
-这个决策不只写在文档里。`subagent_with_model` 的工具说明会写明适用条件和不适用条件；平台绑定还会通过 `systemPrompt.section()` 注入同一张决策表。工具说明与 systemPrompt 中的决策表统一带分阶段标注：team-work 正式首派一行注明「第一阶段仍用原生 `subagent`，第二阶段切换后改用本工具」。
+这个决策不只写在文档里。`tw-tool-subagent` 的工具说明会写明适用条件和不适用条件；平台绑定还会通过 `systemPrompt.section()` 注入同一张决策表。工具说明与 systemPrompt 中的决策表统一带分阶段标注：team-work 正式首派一行注明「第一阶段仍用原生 `subagent`，第二阶段切换后改用本工具」。
 
-team-work skill 另外固定正式派发用法（第二阶段切换后生效）：首派用 `subagent_with_model`，返回 sessionId 后调 `agent-map`，续派用 `send_message`。第一阶段 skill 保持旧规程（首派原生 `subagent`），与工具说明/systemPrompt 中「第二阶段切换后」的标注不冲突。三处文案按阶段对齐，避免互相矛盾。
+team-work skill 另外固定正式派发用法（第二阶段切换后生效）：首派用 `tw-tool-subagent`，返回 sessionId 后调 `agent-map`，续派用 `send_message`。第一阶段 skill 保持旧规程（首派原生 `subagent`），与工具说明/systemPrompt 中「第二阶段切换后」的标注不冲突。三处文案按阶段对齐，避免互相矛盾。
 
 这三层规则能大幅降低误选，但不会从底层拦截原生 `subagent`。插件在 Agent 选择工具前无法机械判断一段自然语言是否含有选模意图。是否需要硬拦截，以第一阶段真实误选数据为准。
+
+### 3.7 档位价值主张与主动委派
+
+工具说明（tool description）不只描述参数，还必须写明三档的成本/能力权衡，让 Agent 把 `tw-tool-subagent`（下文简称 tw-sub）当作有成本意识的通用委派入口，而不是只在有人明确指定模型时才被动使用：
+
+| 档位 | 定位 |
+| --- | --- |
+| `junior` | 足以负担大部分基础工作；速度优势显著、单位成本最低——批量探索、信息收集、格式化整理、初稿类工作的默认选择。 |
+| `senior` | 平衡档：推理能力与解题率不错，综合能力对比 expert 略有不足，但价格优势明显、性价比高——大多数常规开发任务的默认选择。 |
+| `expert` | 最强推理能力、高解题率、低错误率；价格与执行耗时都最贵——只在高难度设计、疑难定位、关键技术裁决时使用。 |
+
+文案要求：
+
+- 工具说明与 `systemPrompt.section()` 注入的决策表携带同一张价值主张表（与 §3.6 的分阶段标注规则一致），并明确写出「不处于 team-work 工作流时同样可用」——脱离任务的普通委派（信息收集、并行调查、独立审查）也是合法用途。
+- `@junior`/`@senior`/`@expert` 候选的描述各带对应档位的一句话价值主张（§3.5）。
+- 引导语气是「积极但有意识」：Agent 应根据任务复杂度、时效要求和成本预算主动选档委派；不确定时优先 senior，明确的高难度才升 expert，大量低风险基础工作下沉 junior。
 
 ## 4. 创建过程
 
@@ -158,17 +175,17 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 新工具本身已足够支撑正式工作流，不增加第二套派发入口：
 
 1. `tw dispatch-plan` 继续给出 prompt、dispatchKey 和已固化的 `modelHint`。
-2. 首次派发调用 `subagent_with_model`，`target` 直接采用 `modelHint` 中的 provider/model/effort。不重新按 tier 选模，因此不会丢失同波模型多样性。
+2. 首次派发调用 `tw-tool-subagent`，`target` 直接采用 `modelHint` 中的 provider/model/effort。不重新按 tier 选模，因此不会丢失同波模型多样性。
 3. 新工具返回 sessionId 后，调用现有 `tw agent-map --task ... --key ... --agent ...` 登记续派映射。
 4. 后续返工和复审继续根据 `expectedAgentId` 调用 DSH 原生 `send_message`。
 
-`subagent_with_model` 只管 DSH 子会话；`dispatch-plan` 只管工作流事实；`agent-map` 只管派发编号与 sessionId 的对应关系。三者职责已经完整，不增加预留、提交、恢复等 Runtime 命令，也不另造工作流专用的派发模式。
+`tw-tool-subagent` 只管 DSH 子会话；`dispatch-plan` 只管工作流事实；`agent-map` 只管派发编号与 sessionId 的对应关系。三者职责已经完整，不增加预留、提交、恢复等 Runtime 命令，也不另造工作流专用的派发模式。
 
 ## 6. 实施步骤
 
 ### 第一阶段：交付完整工具
 
-- 在 DSH PlatformBinding 内实现 `subagent_with_model`，支持档位和精确模型两种调用。
+- 在 DSH PlatformBinding 内实现 `tw-tool-subagent`，支持档位和精确模型两种调用。
 - 同时实现三个 `@` 档位候选，自然语言调用也必须可用。
 - 验证首次请求、并行创建、续聊、重启恢复和失败清理。
 - team-work 正式派发暂时仍用原生 `subagent`，旧注入链保持不变，便于对照和回退。
@@ -177,7 +194,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 
 ### 第二阶段：统一派发并清理旧链
 
-先把 team-work skill 的首次派发从原生 `subagent` 切换为 `subagent_with_model`，并用现有 `agent-map` 登记返回的 sessionId。续派仍用 `send_message`。
+先把 team-work skill 的首次派发从原生 `subagent` 切换为 `tw-tool-subagent`，并用现有 `agent-map` 登记返回的 sessionId。续派仍用 `send_message`。
 
 新派发切换后，停止新写 `tagHints`、`pendingTags` 和 `modelHints`。标签只保留阶段、角色和简述，不再含机器寻址段。runtime 侧写端同步清理：删除 `runtime-v3/cli.mjs` 的 `persistTagHints`（定义 `cli.mjs:29`，调用点 `cli.mjs:473/480/488`，即 `tagHints`/`pendingTags` 的派发落盘）；`cmdAgentMap` 中 `modelHints` 的落盘与 note 文案（`cli.mjs:796-805`）改为只登记 `mappings`——`agent-map` 保留为派发编号→sessionId 的续派登记通道；对应测试（`tests/tag-hints-runtime.test.mjs`、`tests/tag-agent-auto-register.test.mjs`、`tests/dsh-tag-injection.test.mjs` 等）随写端删除或改写。
 
@@ -187,9 +204,9 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 
 清理完成后，`agents.json` 只保留 `mappings`，即 dispatchKey 到 sessionId 的续派关系。同时删除标签反查、自动回填、sessionId 轮询补读及对应测试。
 
-同步更新 `runtime-v3/cli.mjs:873` 的 `modelHint` 输出：`effort` 现带的硬编码 `effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员"` 在切换后成为错误信息——首派已能经 `subagent_with_model` 下发 effort，应删除该 `effortNote`（或改为指向新工具的准确说明）。已核实无需修改任何断言：tests/ 中无 `effortNote` 断言，全部 `modelHint` 的 `deepEqual` 比对均为同源快照（期望值取自 dispatch-plan 波次或派单卡，如 `tests/runtime-v3-dsh.test.mjs:300/317/459/461`、`tests/runtime-v3-topology.test.mjs:523-524`，非字面量）；`dispatched.detail.modelHint` 由 `runtime-v3/dsh-map.mjs` 的 `computeModelHint` 生成、本就不含 `effortNote`，删除后 dispatch-plan 输出与 journal 快照反而更一致——回归确认测试全绿即可。
+同步更新 `runtime-v3/cli.mjs:873` 的 `modelHint` 输出：`effort` 现带的硬编码 `effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员"` 在切换后成为错误信息——首派已能经 `tw-tool-subagent` 下发 effort，应删除该 `effortNote`（或改为指向新工具的准确说明）。已核实无需修改任何断言：tests/ 中无 `effortNote` 断言，全部 `modelHint` 的 `deepEqual` 比对均为同源快照（期望值取自 dispatch-plan 波次或派单卡，如 `tests/runtime-v3-dsh.test.mjs:300/317/459/461`、`tests/runtime-v3-topology.test.mjs:523-524`，非字面量）；`dispatched.detail.modelHint` 由 `runtime-v3/dsh-map.mjs` 的 `computeModelHint` 生成、本就不含 `effortNote`，删除后 dispatch-plan 输出与 journal 快照反而更一致——回归确认测试全绿即可。
 
-实施新增 `dsh/subagent-with-model.js` 时，同步 `docs/file-inventory.json`：该文件已把 `dsh/subagent-with-model.js` 与 `tests/dsh-subagent-with-model.test.mjs` 预列为 `planned`，落地后须把它们从 `planned` 迁移到 `newImplementation`（AGENTS.md 变更要求：新增/迁移实现路径必须同步本清单）。
+实施新增 `dsh/tw-tool-subagent.js` 时，同步 `docs/file-inventory.json`：该文件已把 `dsh/tw-tool-subagent.js` 与 `tests/dsh-tw-tool-subagent.test.mjs` 预列为 `planned`，落地后须把它们从 `planned` 迁移到 `newImplementation`（AGENTS.md 变更要求：新增/迁移实现路径必须同步本清单）。
 
 ## 7. 验收标准
 
@@ -201,7 +218,8 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 - 多个子代理并行创建时，模型选择不串线。
 - 缺少持久化后端、`flush()` 返回 `false` 或持久化失败时，不报告启动成功。
 - `@` 候选能正确搜索、选择和写入委派意图，与其他 DSH `@` 来源共存。
-- 工具说明、系统提示和 team-work skill 中的选择规则一致（按阶段限定：第一阶段要求工具说明与 systemPrompt 互一致、且不与 skill 旧规程矛盾——skill 首派仍是原生 `subagent`，工具说明/systemPrompt 的 team-work 首派行注明第二阶段切换后改用 `subagent_with_model`；第二阶段切换后三处完全一致）。
+- 工具说明、系统提示和 team-work skill 中的选择规则一致（按阶段限定：第一阶段要求工具说明与 systemPrompt 互一致、且不与 skill 旧规程矛盾——skill 首派仍是原生 `subagent`，工具说明/systemPrompt 的 team-work 首派行注明第二阶段切换后改用 `tw-tool-subagent`；第二阶段切换后三处完全一致）。
+- 工具说明、systemPrompt 与 `@` 候选三处的档位价值主张同源一致（§3.7），且工具说明明确写出不处于 team-work 工作流时同样可用。
 - 原生 `subagent` 在第一阶段不受新工具影响。
 - （§10.3 风险 2）`installModelSelection` 的 selection 中 provider/model 与 `request.agentOptions` 断言同值；显式 provider/model 与 selection 不一致时创建前失败（防双源不一致把子会话打回默认模型）。
 - （§10.3 风险 3）所选的子代理 provider 必须具备 `prepareContinuable` 能力（`continuable` 创建能力），缺此能力在创建前失败而非忽略（仿 `dsh-tool-subagent` 的能力校验）。
@@ -215,7 +233,13 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 4. 重启 DSH 后恢复子会话，provider/model/effort 不变。实现依赖：provider/model 由 durable `agentOptions` 承载；effort 由 setup 阶段从持久化 `request/header.config.reasoningEffort` 回读重建 selection（见 §10.3 风险 1）——实现时必须落此依赖，否则本条只能验证 provider/model、无法验证 effort。
 5. 执行一个完整 team-work 任务，首派、`agent-map`、续派、评审和门禁全链路正常。
 6. 用升级前的旧子代理做跨版本恢复，确认清理前只读兼容有效。
-7. 给出明确模型要求时 Agent 选择 `subagent_with_model`；没有模型要求的普通委派仍选择原生 `subagent`。
+7. 给出明确模型要求时 Agent 选择 `tw-tool-subagent`；无模型要求且无成本/复杂度考量的普通委派仍可选原生 `subagent`；Agent 面对大量低风险基础工作（下沉 junior）或高难度任务（升 expert）时，即使无人指定也应按价值主张（§3.7）主动选 `tw-tool-subagent` 相应档位。
+
+评审留档的时序关注项（任务 `twsub-p1-review` 八轮收敛后并入，实机验收时逐项核验）：
+
+- `sessions.flush()` 返回 true 后首个 `request/header` 是否已可读——若持久化完成先于 header 可见，工具会误判 `TW_SUB_FIRST_REQUEST_MISMATCH` 并回收健康会话，需实测该时序或增加限时等待；
+- 宿主 `startContinuable` 是否尊重传入 `childId`——若忽略并自行生成，直接选择将 miss、effort 静默丢失且无提示；
+- `drainContinuableChildren(parent, [childId])` 的停止完成语义（已核实为宿主公开 API，`dsh-subagent/lib/types/index.d.ts:195`，行为语义待实机验证）。
 
 ## 8. 首版限制
 
@@ -224,11 +248,14 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 - 工具不内置档位上限与只读校验：任意会话成员都可直接指定任意 provider/model/effort（含最贵档），越级选模（如 junior 档成员按 expert 档委派）暂靠派单纪律约束，治理 hook 留待后续裁决；写边界仍靠派单纪律 + 只读子派单可写范围为空。
 - 同一子会话中不切换模型或 effort；需要新选择时另建子代理。
 
-## 9. 需要用户确认
+## 9. 用户确认记录
+
+以下事项已全部确认：第 1、2 条随 2026-08-31 人工门批准（dec-2ffeb0）生效；第 3、4 条为批准后的增量裁决。
 
 1. 首版只提供后台、可续聊模式。
 2. Owner、Challenger 和 Expert 可使用新工具委派 junior 只读助手，不仅限于顶层 Lead。
-3. 新工具命名为 `subagent_with_model`，通过工具说明、系统提示和 team-work skill 区分原生 `subagent`；首版不做硬拦截。
+3. 新工具命名为 `tw-tool-subagent`（已由用户裁决确认）：模型侧注册名与 DSH 工具目录组件命名 `dsh-tool-subagent` 对齐——统一用短横线，前缀 `tw-` 对应本绑定命名空间（与现有 `tw` 工具同源），区别于 DSH 原生模型侧工具的 snake_case（`send_message`、`subagent_fork` 等）；实现文件 `dsh/tw-tool-subagent.js` 与测试文件 `tests/dsh-tw-tool-subagent.test.mjs` 同步该风格。通过工具说明、系统提示和 team-work skill 区分原生 `subagent`；首版不做硬拦截。
+4. 工具说明携带三档成本/速度价值主张（junior 速度与成本优势、senior 性价比、expert 最强推理），并引导 Agent 在工作流内外主动按性价比选档委派（已由用户裁决确认，见 §3.7）。
 
 ## 10. 设计评审结论（owner 复核，2026）
 

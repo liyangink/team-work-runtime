@@ -2,6 +2,7 @@
 // 失败语义逐级降级（不注入/不注册不阻塞宿主），错误经 ctx.logger.warn 留痕。
 import { makeInjectContribution, resolveInstaller } from "./inject.js"
 import { twToolDefinition } from "./tw-tool.js"
+import { twToolSubagentDefinition, systemPromptSection } from "./tw-tool-subagent.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 import { installPluginSettings } from "./settings.js"
 
@@ -18,8 +19,10 @@ export async function apply(ctx, config = {}, deps = {}) {
   // 全局配置 entry（settings 区段的 base 层初值）：空 tiers 代表尚未配置，不能猜测环境默认模型。
   // settings 服务装载后，Web 配置卡经宿主 scope 取得最新深冻结快照。
   const entry = { tiers: {} }
-  // 0) 全局配置区段注册：fire-and-forget，不阻断其他插件能力。
-  installSettings(ctx, entry)
+  // 0) 全局配置区段注册：fire-and-forget，不阻断其他插件能力。返回快照读取 thunk。
+  const tiersSource = installSettings(ctx, entry)
+  // tw-tool-subagent 直接选择表（sessionId → 已验证选择）：工具写入、setup 贡献 take-once 消费。
+  const directSelections = new Map()
   // 激活门槛：先解析安装器，再开放 continuable setup。Cordis 会等待 async apply，
   // 因此 Node 18/20 的动态 import 也不会出现“首个子代错过、第二个才生效”的竞态。
   let resolvedInstaller = null
@@ -61,6 +64,7 @@ export async function apply(ctx, config = {}, deps = {}) {
   try {
     setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, {
       installerNow: () => resolvedInstaller,
+      directSelections,
     }))
     setupRegistered = true
   } catch (error) {
@@ -88,10 +92,34 @@ export async function apply(ctx, config = {}, deps = {}) {
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: tw 工具注册失败：" + String(error?.message ?? error))
   }
+  // 4) tw-tool-subagent 定向选模委派工具（宿主侧依赖运行时探测：缺失时工具报错，不阻塞装载）
+  try {
+    ctx.tools.register(twToolSubagentDefinition(ctx, {
+      tiersSource,
+      directSelections,
+      isModelInjectionReady: () => setupRegistered && typeof resolvedInstaller === "function",
+    }))
+  } catch (error) {
+    ctx.logger?.warn?.("team-work-dsh: tw-tool-subagent 工具注册失败：" + String(error?.message ?? error))
+  }
+  // 5) systemPrompt 决策表 section（§3.6/§3.7：与工具说明同源；服务缺失时降级不阻塞）
+  let sectionDisposer = null
+  try {
+    const systemPrompt = ctx.systemPrompt ?? (ctx.get ? ctx.get("systemPrompt") : undefined)
+    if (systemPrompt && typeof systemPrompt.section === "function") {
+      sectionDisposer = systemPrompt.section(systemPromptSection())
+    } else {
+      ctx.logger?.warn?.("team-work-dsh: systemPrompt 服务不可用，跳过定向委派决策表注入（工具说明仍携带同表）")
+    }
+  } catch (error) {
+    sectionDisposer = null
+    ctx.logger?.warn?.("team-work-dsh: systemPrompt 决策表注册失败：" + String(error?.message ?? error))
+  }
   return () => {
     stopped = true
     if (retryTimer) clearTimeout(retryTimer)
     retryTimer = null
     if (typeof setupDisposer === "function") setupDisposer()
+    if (typeof sectionDisposer === "function") sectionDisposer()
   }
 }

@@ -767,11 +767,16 @@ test("badge 客户端：注册 @ 档位候选，描述与 TIER_VALUE_PROPS 字�
   }
   const filtered = await source.candidates({ sessionId: "s" }, { query: "ju" })
   assert.deepEqual([...filtered].map((c) => c.name), ["junior"])
+  // insert 形态：与文件/会话引用一致的标记 chip（非提示词文本）；vm realm 对象用 JSON 比较
   assert.equal(
     JSON.stringify(source.onPick({ candidate: { name: "senior" } })),
-    JSON.stringify({ text: "请使用 tw-tool-subagent，以 senior 档位委派子代理处理：" })
+    JSON.stringify({ insert: { source: "tw-tier", ref: "@senior", label: "senior", appearance: "session", clipboardText: "@senior" } })
   )
   assert.equal(JSON.stringify(source.onPick({ candidate: { name: "unknown" } })), JSON.stringify({ text: "" }), "无效候选不得生成伪造委派意图")
+  // codec：insert 源必须提供，提交时序列化为模型可读的委派指令
+  assert.equal(typeof source.codec?.serialize, "function", "insert 源必须提供 codec.serialize")
+  assert.equal(await source.codec.serialize("@senior"), "[委派 @senior]（请以该档位调用 tw-tool-subagent 创建子代理）")
+  assert.equal(source.codec.clipboardText("@senior"), "@senior")
   assert.deepEqual([...source.lexicon({ sessionId: "s" })], ["junior", "senior", "expert"])
 })
 

@@ -112,7 +112,21 @@ var factory = function (require) {
         onPick: function (pick) {
           var name = pick && pick.candidate && pick.candidate.name
           if (TIER_ORDER.indexOf(name) < 0) return { text: "" }
-          return { text: "请使用 tw-tool-subagent，以 " + name + " 档位委派子代理处理：" }
+          // insert 形态：与文件/会话引用一致的标记 chip（有 occurrence 身份与 range），
+          // 提交时经 codec 序列化为模型可读的委派指令（而非把提示词写进输入框）。
+          return { insert: {
+            source: "tw-tier",
+            ref: "@" + name,
+            label: name,
+            appearance: "session",
+            clipboardText: "@" + name,
+          } }
+        },
+        codec: {
+          clipboardText: function (ref) { return ref },
+          serialize: function (ref) {
+            return Promise.resolve("[委派 " + ref + "]（请以该档位调用 tw-tool-subagent 创建子代理）")
+          },
         },
         lexicon: function () { return TIER_ORDER.slice() },
       })

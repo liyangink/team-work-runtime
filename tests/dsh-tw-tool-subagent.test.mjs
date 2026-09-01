@@ -382,7 +382,7 @@ test("execute：并行创建两个不同模型，选择按 sessionId 隔离不�
 
 // ── 文案同源（§3.6/§3.7：工具说明、systemPrompt、价值主张三处一致） ─────────
 
-test("工具说明与 systemPrompt 同源：含三档价值主张、非工作流可用、决策表与分阶段标注", () => {
+test("工具说明与 systemPrompt 同源：含三档价值主张、非工作流可用、决策表现状陈述（无分阶段标注）", () => {
   const desc = toolDescriptionText()
   const section = systemPromptSection()
   for (const tier of TIER_NAMES) {
@@ -392,7 +392,9 @@ test("工具说明与 systemPrompt 同源：含三档价值主张、非工作流
   assert.match(desc, /不处于 team-work 工作流时同样可用/)
   assert.ok(desc.includes(decisionTableText()))
   assert.ok(section.text.includes(decisionTableText()))
-  assert.match(desc, /第一阶段 team-work 正式首派仍用原生 subagent/)
+  assert.match(desc, /team-work 首派经本工具 target 直取 dispatch-plan 的 modelHint/)
+  assert.doesNotMatch(desc, /第一阶段|第二阶段/)
+  assert.doesNotMatch(section.text, /第一阶段|第二阶段/)
   assert.equal(section.name, "team-work-dsh:tw-tool-subagent")
   assert.ok(section.order >= 100 && section.order <= 199, "section order 落在工具引导区")
   assert.ok(tierValuePropsText().split("\n").length === 3)

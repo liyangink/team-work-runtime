@@ -25,13 +25,13 @@ export function tierValuePropsText() {
   return TIER_NAMES.map((tier) => "- " + tier + "：" + TIER_VALUE_PROPS[tier]).join("\n")
 }
 
-// §3.6 决策表（工具说明与 systemPrompt section 共用文本，带分阶段标注）。
+// §3.6 决策表（工具说明与 systemPrompt section 共用文本，现状陈述；二阶段切链已于 2026-09-06 完成）。
 export function decisionTableText() {
   return [
     "tw-tool-subagent 与原生 subagent 的分工（以是否显式选择模型为界——由用户/任务指定，或由 Agent 按档位价值主张主动选定）：",
     "- 用户或任务指定 tier、provider、model 或 effort → tw-tool-subagent",
     "- Agent 按任务复杂度、时效与成本主动选档（无需任何人显式指定） → tw-tool-subagent",
-    "- team-work 首次派发且 dispatch-plan 已给出 modelHint → tw-tool-subagent（第一阶段 team-work 正式首派仍用原生 subagent，第二阶段切换后改用本工具）",
+    "- team-work 首次派发且 dispatch-plan 已给出 modelHint → tw-tool-subagent（team-work 首派经本工具 target 直取 dispatch-plan 的 modelHint）",
     "- 不选模型、接受继承平台默认选择 → 原生 subagent",
     "- 需要原生工具的前台或一次性模式 → 原生 subagent",
     "- 需要继承父会话上下文 → 原生 subagent_fork",

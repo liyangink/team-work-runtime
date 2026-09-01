@@ -64,11 +64,11 @@
 
 **自动证据**：用例「cold-resume 的 header 优先于合法标签链，保持持久化的已确认选择」「cold-resume 的无 effort header 优先于合法旧标签链」「无直接选择时按 header 回读重建（effort 冷恢复路径）」。
 
-### 第 5 项：完整 team-work 任务全链路 —— 待做
+### 第 5 项：完整 team-work 任务全链路 —— 通过（二阶段切链后，2026-09-06）
 
 **要求**：执行一个完整 team-work 任务，首派、agent-map、续派、评审和门禁全链路正常。
 
-**现状（如实标注）**：**未验收**。该链路的运行前提是 team-work skill 首派切换到 tw-tool-subagent（方案 §6 第二阶段）；第一阶段 team-work 正式首派仍用原生 subagent 旧链，本条暂无实际运行对象。归入第二阶段切链时一并验收。
+**实测**：二阶段切链后以真实任务验证（任务 twsub-p2-verify，2026-09-06）：首派经 tw-tool-subagent 以 target 直取 dispatch-plan 的 modelHint（provider/model/effort 显式生效，source=explicit）；agent-map 登记 dispatchKey→childId，任务级 agents.json 顶层仅含 mappings（tagHints/pendingTags/modelHints 零写入，旧链死透实证）；评审波同样经新链派发；全链路 open→首派→deliver→review→人工门正常走通。入第二阶段切链时一并验收。
 
 ### 第 6 项：升级前的旧子代理跨版本恢复 —— 通过
 

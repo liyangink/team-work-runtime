@@ -329,20 +329,54 @@ test("execute：post-start 会话读取抛错时统一回收并清理选择", as
   assert.equal(selections.size, 0)
 })
 
-test("execute：首个 request/header 缺失或与验证选择不符时不报成功", async () => {
+test("execute：首 request/header 缺失（限时等待超时）→ PENDING；错配 → MISMATCH；均回收不报成功", async () => {
   const header = (config) => ({ type: "request/header", data: { header: { config } } })
+  const fastWait = { firstHeaderWaitMs: 120, firstHeaderPollMs: 20 }
+  // 缺失：限时等待超时 → PENDING（与真错配区分；§7 真实宿主实测的时序路径）
+  const missing = makeTool({ sessions: { get: () => ({ events: [] }), flush: async () => true } }, fastWait)
+  const cardMissing = await missing.tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
+  assert.equal(cardMissing.code, "TW_SUB_FIRST_REQUEST_PENDING")
+  assert.match(cardMissing.message, /未持久化/)
+  assert.equal(missing.selections.size, 0, "超时后必须清理待注入选择")
   const cases = [
-    { name: "缺失", events: [] },
     { name: "provider 错配", events: [header({ provider: "wrong", model: "m-s1", reasoningEffort: "medium" })] },
     { name: "model 错配", events: [header({ provider: "p-a", model: "wrong", reasoningEffort: "medium" })] },
     { name: "effort 错配", events: [header({ provider: "p-a", model: "m-s1", reasoningEffort: "low" })] },
   ]
   for (const entry of cases) {
-    const { tool, selections } = makeTool({ sessions: { get: () => ({ events: entry.events }), flush: async () => true } })
+    const { tool, selections } = makeTool({ sessions: { get: () => ({ events: entry.events }), flush: async () => true } }, fastWait)
     const card = await tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
     assert.equal(card.code, "TW_SUB_FIRST_REQUEST_MISMATCH", entry.name)
     assert.equal(selections.size, 0, entry.name + " 后必须清理待注入选择")
   }
+})
+
+test("execute：首 header 延迟落盘（真实宿主时序）→ 轮询等到后核验成功（§7 验收发现的缺陷回归）", async () => {
+  const events = []
+  const { tool } = makeTool(
+    {
+      sessions: {
+        get: () => ({ events }),
+        flush: async () => true,
+      },
+      subagents: {
+        getProvider: () => ({ prepareContinuable: async () => ({}) }),
+        startContinuable: async (spec) => {
+          // 模拟真实宿主：inbox 接受后首请求异步延迟发出、header 延迟落盘
+          setTimeout(() => {
+            events.push({ type: "request/header", data: { header: { config: { provider: "p-a", model: "m-s1", reasoningEffort: "medium" } } } })
+          }, 120)
+          return { childId: spec.childId, messageId: "m" }
+        },
+        drainContinuableChildren: async () => {},
+      },
+    },
+    { firstHeaderWaitMs: 3000, firstHeaderPollMs: 20 }
+  )
+  const card = await tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
+  assert.equal(card.ok, true, JSON.stringify(card))
+  assert.equal(card.model, "m-s1")
+  assert.equal(card.effort, "medium")
 })
 
 test("execute：并行创建两个不同模型，选择按 sessionId 隔离不串线；selection 与 agentOptions 同值（§7 + §10.3 风险 2）", async () => {

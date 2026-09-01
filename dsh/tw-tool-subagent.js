@@ -136,6 +136,10 @@ export function twToolSubagentDefinition(ctx, deps = {}) {
   const tiersSource = deps.tiersSource ?? (() => null)
   const directSelections = deps.directSelections ?? new Map()
   const providerName = deps.subagentProviderName ?? SUBAGENT_PROVIDER
+  // 首请求 header 限时等待（§7 真实宿主实测：inbox 接受 ≠ 首请求已发出，flush=true 只证明
+  // 持久化监听器参与；立即核验会把 header 尚未写出的健康子会话误判 MISMATCH 并回收）。
+  const firstHeaderWaitMs = deps.firstHeaderWaitMs ?? 10000
+  const firstHeaderPollMs = deps.firstHeaderPollMs ?? 150
   // 定向委派必须依赖可用的同步注入通道；否则首请求无法保证使用已验证的选择。
   const isModelInjectionReady = deps.isModelInjectionReady ?? (() => true)
   const getService =
@@ -356,10 +360,27 @@ export function twToolSubagentDefinition(ctx, deps = {}) {
           )
         }
 
-        const firstHeader = Array.isArray(childSession.events)
-          ? childSession.events.find((event) => event?.type === "request/header")
-          : undefined
-        const config = firstHeader?.data?.header?.config
+        // 限时轮询等待首个 request/header 落盘：每轮重读会话事件（真实时序中首请求
+        // 在 inbox 接受后才异步发出）；出现即核验，超时未现报 PENDING（与真错配区分）。
+        const deadline = Date.now() + firstHeaderWaitMs
+        let config
+        for (;;) {
+          const sessionNow = sessions.get(childId)
+          const events = Array.isArray(sessionNow?.events) ? sessionNow.events : []
+          const firstHeader = events.find((event) => event?.type === "request/header")
+          if (firstHeader) {
+            config = firstHeader?.data?.header?.config
+            break
+          }
+          if (Date.now() >= deadline) break
+          await new Promise((resolve) => setTimeout(resolve, firstHeaderPollMs))
+        }
+        if (config === undefined) {
+          return rejectUnconfirmedStart(
+            "TW_SUB_FIRST_REQUEST_PENDING",
+            "子会话首请求在 " + firstHeaderWaitMs + "ms 内未持久化（" + childId + "）；可能仍在排队或宿主请求延迟，请确认宿主状态后重试"
+          )
+        }
         const expectedEffort = selection.reasoningEffort
         const matches =
           config &&

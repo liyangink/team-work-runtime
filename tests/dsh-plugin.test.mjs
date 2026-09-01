@@ -42,7 +42,7 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   for (const { factory } of registrations) {
     const plugin = factory(() => ({}))
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
-    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "settingsScope"], "须声明模型查询与全局 settingsScope；logger 是 ctx 内建属性")
+    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "settingsScope", "inputTriggers"], "须声明模型查询、全局 settingsScope 与 @ 候选源服务；logger 是 ctx 内建属性")
   }
 })
 

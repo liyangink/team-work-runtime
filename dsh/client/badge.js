@@ -57,7 +57,9 @@ var factory = function (require) {
     ".tw-settings-save:hover:not(:disabled){border-color:transparent;color:var(--dsw-alias-bg-layer-3,#fff)}",
     "@container (max-width:460px){.tw-settings-fields{grid-template-columns:minmax(0,1fr)}}",
   ].join("")
-  var inject = ["slots", "sessions", "connection", "settingsScope"]
+  // inputTriggers 必须显式声明：客户端 ctx 只注入已声明服务（对齐 dsh-client-ui-skill 的做法），
+  // 未声明时 ctx.get 拿不到、@ 档位候选静默降级。DSH Web 宿主该服务为输入框内置能力。
+  var inject = ["slots", "sessions", "connection", "settingsScope", "inputTriggers"]
 
   function getService(ctx, name) {
     // Cordis 对 ctx.<service> 实施 inject 属性守卫；可选服务必须先走 ctx.get，

@@ -99,11 +99,15 @@ var factory = function (require) {
         order: 100,
         candidates: function (_session, req) {
           var query = String((req && req.query) || "").toLowerCase()
-          return TIER_ORDER
-            .filter(function (tier) { return query === "" || tier.indexOf(query) === 0 })
-            .map(function (tier) {
-              return { name: tier, description: TIER_TRIGGER_TEXT[tier] }
-            })
+          // 宿主契约：candidates 必须返回 Promise（InputTriggerController 直接调 .then），
+          // 同步数组会在 fetchCandidates 抛 TypeError 并炸掉整个 @ 菜单。
+          return Promise.resolve(
+            TIER_ORDER
+              .filter(function (tier) { return query === "" || tier.indexOf(query) === 0 })
+              .map(function (tier) {
+                return { name: tier, description: TIER_TRIGGER_TEXT[tier] }
+              })
+          )
         },
         onPick: function (pick) {
           var name = pick && pick.candidate && pick.candidate.name

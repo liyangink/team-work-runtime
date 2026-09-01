@@ -757,7 +757,10 @@ test("badge 客户端：注册 @ 档位候选，描述与 TIER_VALUE_PROPS 字�
   plugin.apply(ctx)
   assert.ok(source, "须注册 @ 候选源")
   assert.equal(source.trigger, "@")
-  const candidates = await source.candidates({ sessionId: "s" }, { query: "" })
+  // 宿主契约：candidates 必须返回 Promise（InputTriggerController.fetchCandidates 直接调 .then）
+  const pending = source.candidates({ sessionId: "s" }, { query: "" })
+  assert.equal(typeof pending?.then, "function", "candidates 须返回 Promise（同步数组会炸掉宿主 @ 菜单）")
+  const candidates = await pending
   assert.deepEqual([...candidates].map((c) => c.name), ["junior", "senior", "expert"])
   for (const candidate of candidates) {
     assert.equal(candidate.description, TIER_VALUE_PROPS[candidate.name], "描述与 host 价值主张字面同文")

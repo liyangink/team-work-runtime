@@ -1,6 +1,6 @@
 {
   "name": "team-work-runtime",
-  "version": "1.1.0",
+  "version": "1.0.2",
   "description": "平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转",
   "repository": {
     "type": "git",

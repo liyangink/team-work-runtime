@@ -136,10 +136,6 @@ export function twToolSubagentDefinition(ctx, deps = {}) {
   const tiersSource = deps.tiersSource ?? (() => null)
   const directSelections = deps.directSelections ?? new Map()
   const providerName = deps.subagentProviderName ?? SUBAGENT_PROVIDER
-  // 首请求 header 限时等待（§7 真实宿主实测：inbox 接受 ≠ 首请求已发出，flush=true 只证明
-  // 持久化监听器参与；立即核验会把 header 尚未写出的健康子会话误判 MISMATCH 并回收）。
-  const firstHeaderWaitMs = deps.firstHeaderWaitMs ?? 10000
-  const firstHeaderPollMs = deps.firstHeaderPollMs ?? 150
   // 定向委派必须依赖可用的同步注入通道；否则首请求无法保证使用已验证的选择。
   const isModelInjectionReady = deps.isModelInjectionReady ?? (() => true)
   const getService =
@@ -359,46 +355,8 @@ export function twToolSubagentDefinition(ctx, deps = {}) {
             "子会话（" + childId + "）启动未获得持久化监听器确认（flush=false）；请检查持久化后端后重试"
           )
         }
-
-        // 限时轮询等待首个 request/header 落盘：每轮重读会话事件（真实时序中首请求
-        // 在 inbox 接受后才异步发出）；出现即核验，超时未现报 PENDING（与真错配区分）。
-        const deadline = Date.now() + firstHeaderWaitMs
-        let config
-        for (;;) {
-          const sessionNow = sessions.get(childId)
-          const events = Array.isArray(sessionNow?.events) ? sessionNow.events : []
-          const firstHeader = events.find((event) => event?.type === "request/header")
-          if (firstHeader) {
-            config = firstHeader?.data?.header?.config
-            break
-          }
-          if (Date.now() >= deadline) break
-          await new Promise((resolve) => setTimeout(resolve, firstHeaderPollMs))
-        }
-        if (config === undefined) {
-          return rejectUnconfirmedStart(
-            "TW_SUB_FIRST_REQUEST_PENDING",
-            "子会话首请求在 " + firstHeaderWaitMs + "ms 内未持久化（" + childId + "）；可能仍在排队或宿主请求延迟，请确认宿主状态后重试"
-          )
-        }
-        const expectedEffort = selection.reasoningEffort
-        const matches =
-          config &&
-          config.provider === selection.provider &&
-          config.model === selection.model &&
-          config.reasoningEffort === expectedEffort
-        if (!matches) {
-          return rejectUnconfirmedStart(
-            "TW_SUB_FIRST_REQUEST_MISMATCH",
-            "子会话首个请求未匹配已验证模型选择（期望 " +
-              selection.provider +
-              "/" +
-              selection.model +
-              "，effort=" +
-              (expectedEffort ?? "未指定") +
-              "）；请检查模型注入与宿主请求持久化后重试"
-          )
-        }
+        // 用户裁决（§9 增量）：不做首请求 header 运行期对账——模型/effort 的实际生效由
+        // 客户端徽标展示承载（人工可见核验）。启动确认 = 持久化在场 + flush 参与。
       } catch (error) {
         return rejectUnconfirmedStart(
           "TW_SUB_SESSION_READ_FAILED",

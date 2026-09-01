@@ -160,7 +160,7 @@ team-work skill 另外固定正式派发用法（第二阶段切换后生效）�
 2. 调用 `crypto.randomUUID()` 生成 sessionId，在插件内存中暂存该 id 对应的模型选择。
 3. 调用 `startContinuable()`，将 sessionId 作为 `childId`，并将 provider/model 写入 `request.agentOptions`。注意 `ContinuableStartSpec.provider` 是**子代理 provider 名**（`spawn`/`fork` 等），不是 LLM provider——LLM 的 provider/model 必须放在 `request.agentOptions` 里，二者是两个命名空间（已按 `dsh-tool-subagent/lib/index.js` 核实原生 `subagent` 工具的做法）。新工具不设置“仅顶层 Lead 可用”的额外深度上限。
 4. DSH 执行子代理 setup 时，现有注入入口先按 sessionId 取直接选择；未命中才走迁移期的旧标签逻辑。
-5. 首个 `request/header` 必须与预期选择一致。工具确认 `sessionPersistence` 存在，并且 `ctx.sessions.flush(childSession)` 后，才报告启动成功。`childSession` 经 `ctx.sessions.get(childId)` 读取（`SessionStore.get(id): Session | undefined`，见 `dsh-session/lib/types/index.d.ts`）；`flush(session): Promise<boolean>` 的返回值语义是“是否有至少一个持久化监听器参与”，无监听器或抛错均视为启动未持久化、不报告成功。
+5. 工具确认 `sessionPersistence` 存在，并且 `ctx.sessions.flush(childSession)` 后，才报告启动成功。`childSession` 经 `ctx.sessions.get(childId)` 读取（`SessionStore.get(id): Session | undefined`，见 `dsh-session/lib/types/index.d.ts`）；`flush(session): Promise<boolean>` 的返回值语义是“是否有至少一个持久化监听器参与”，无监听器或抛错均视为启动未持久化、不报告成功。**不做首请求 header 运行期对账**（用户裁决，见 §9 第 5 条）：模型/effort 的实际生效由客户端徽标展示承载（人工可见核验）；实机验证曾证立即对账必然误杀（inbox 接受 ≠ 首请求已发出，header 未落盘），限时轮询又引入时序复杂度，均超出产品需求。
 
 provider/model 和 effort 始终来自同一份已验证选择。不允许两处分别解析，避免子会话描述信息与真实请求不一致。
 
@@ -227,7 +227,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 
 ### 真实 DSH 验收
 
-1. 分别用档位、精确模型和 effort 创建子代理，首个 `request/header` 与指定值一致。
+1. 分别用档位、精确模型和 effort 创建子代理，子代理右下角模型/effort 徽标展示与指定值一致（人工可见核验；工具不做运行期对账，§9 第 5 条裁决）。
 2. 并行创建两个不同模型的子代理，会话与模型徽标均不串线。
 3. 子代理完成一轮后，`send_message` 续聊仍使用原模型和 effort。
 4. 重启 DSH 后恢复子会话，provider/model/effort 不变。实现依赖：provider/model 由 durable `agentOptions` 承载；effort 由 setup 阶段从持久化 `request/header.config.reasoningEffort` 回读重建 selection（见 §10.3 风险 1）——实现时必须落此依赖，否则本条只能验证 provider/model、无法验证 effort。
@@ -237,7 +237,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 
 评审留档的时序关注项（任务 `twsub-p1-review` 八轮收敛后并入，实机验收时逐项核验）：
 
-- `sessions.flush()` 返回 true 后首个 `request/header` 是否已可读——若持久化完成先于 header 可见，工具会误判 `TW_SUB_FIRST_REQUEST_MISMATCH` 并回收健康会话，需实测该时序或增加限时等待；
+- ~~flush 后首个 header 可见时序~~ 已随 header 对账砍除（§9 第 5 条）失效——实机两轮验证证实立即对账必然误杀健康会话，该需求整体移除；
 - 宿主 `startContinuable` 是否尊重传入 `childId`——若忽略并自行生成，直接选择将 miss、effort 静默丢失且无提示；
 - `drainContinuableChildren(parent, [childId])` 的停止完成语义（已核实为宿主公开 API，`dsh-subagent/lib/types/index.d.ts:195`，行为语义待实机验证）。
 
@@ -256,6 +256,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 2. Owner、Challenger 和 Expert 可使用新工具委派 junior 只读助手，不仅限于顶层 Lead。
 3. 新工具命名为 `tw-tool-subagent`（已由用户裁决确认）：模型侧注册名与 DSH 工具目录组件命名 `dsh-tool-subagent` 对齐——统一用短横线，前缀 `tw-` 对应本绑定命名空间（与现有 `tw` 工具同源），区别于 DSH 原生模型侧工具的 snake_case（`send_message`、`subagent_fork` 等）；实现文件 `dsh/tw-tool-subagent.js` 与测试文件 `tests/dsh-tw-tool-subagent.test.mjs` 同步该风格。通过工具说明、系统提示和 team-work skill 区分原生 `subagent`；首版不做硬拦截。
 4. 工具说明携带三档成本/速度价值主张（junior 速度与成本优势、senior 性价比、expert 最强推理），并引导 Agent 在工作流内外主动按性价比选档委派（已由用户裁决确认，见 §3.7）。
+5. 砍除首请求 header 运行期对账（2026-09-01 用户裁决）：该核验为评审链引入的额外需求，非产品需求——模型/effort 实际生效的核验由子代理右下角徽标展示承载即可。实机两轮验证证实立即对账必然误杀（startContinuable 返回时首请求尚未发出、header 未落盘），限时轮询属为额外需求引入的额外复杂度，一并移除；启动确认语义回归「sessionPersistence 在场 + flush 参与」。
 
 ## 10. 设计评审结论（owner 复核，2026）
 

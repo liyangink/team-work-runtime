@@ -329,50 +329,9 @@ test("execute：post-start 会话读取抛错时统一回收并清理选择", as
   assert.equal(selections.size, 0)
 })
 
-test("execute：首 request/header 缺失（限时等待超时）→ PENDING；错配 → MISMATCH；均回收不报成功", async () => {
-  const header = (config) => ({ type: "request/header", data: { header: { config } } })
-  const fastWait = { firstHeaderWaitMs: 120, firstHeaderPollMs: 20 }
-  // 缺失：限时等待超时 → PENDING（与真错配区分；§7 真实宿主实测的时序路径）
-  const missing = makeTool({ sessions: { get: () => ({ events: [] }), flush: async () => true } }, fastWait)
-  const cardMissing = await missing.tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
-  assert.equal(cardMissing.code, "TW_SUB_FIRST_REQUEST_PENDING")
-  assert.match(cardMissing.message, /未持久化/)
-  assert.equal(missing.selections.size, 0, "超时后必须清理待注入选择")
-  const cases = [
-    { name: "provider 错配", events: [header({ provider: "wrong", model: "m-s1", reasoningEffort: "medium" })] },
-    { name: "model 错配", events: [header({ provider: "p-a", model: "wrong", reasoningEffort: "medium" })] },
-    { name: "effort 错配", events: [header({ provider: "p-a", model: "m-s1", reasoningEffort: "low" })] },
-  ]
-  for (const entry of cases) {
-    const { tool, selections } = makeTool({ sessions: { get: () => ({ events: entry.events }), flush: async () => true } }, fastWait)
-    const card = await tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
-    assert.equal(card.code, "TW_SUB_FIRST_REQUEST_MISMATCH", entry.name)
-    assert.equal(selections.size, 0, entry.name + " 后必须清理待注入选择")
-  }
-})
-
-test("execute：首 header 延迟落盘（真实宿主时序）→ 轮询等到后核验成功（§7 验收发现的缺陷回归）", async () => {
-  const events = []
-  const { tool } = makeTool(
-    {
-      sessions: {
-        get: () => ({ events }),
-        flush: async () => true,
-      },
-      subagents: {
-        getProvider: () => ({ prepareContinuable: async () => ({}) }),
-        startContinuable: async (spec) => {
-          // 模拟真实宿主：inbox 接受后首请求异步延迟发出、header 延迟落盘
-          setTimeout(() => {
-            events.push({ type: "request/header", data: { header: { config: { provider: "p-a", model: "m-s1", reasoningEffort: "medium" } } } })
-          }, 120)
-          return { childId: spec.childId, messageId: "m" }
-        },
-        drainContinuableChildren: async () => {},
-      },
-    },
-    { firstHeaderWaitMs: 3000, firstHeaderPollMs: 20 }
-  )
+test("execute：用户裁决——不做首请求 header 运行期对账，flush 确认即成功（模型生效由徽标展示承载）", async () => {
+  // 无任何 request/header 事件（真实宿主 startContinuable 返回时的实际状态）也必须成功。
+  const { tool } = makeTool({ sessions: { get: (id) => ({ id, events: [] }), flush: async () => true } })
   const card = await tool.execute({ description: "d", prompt: "p", target: { tier: "senior" } }, EXEC)
   assert.equal(card.ok, true, JSON.stringify(card))
   assert.equal(card.model, "m-s1")

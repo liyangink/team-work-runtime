@@ -1,6 +1,6 @@
 # DSH 定向委派技术方案
 
-状态：**已批准；第一阶段已实施，真实 DSH 验收 §7 七条中 1/2/3/4/5/6 已通过实机验证（2026-09-01，记录见 [dsh-delegation-acceptance.md](dsh-delegation-acceptance.md)），第 7 项（主动选档行为）待真实使用样本积累；第二阶段切链清理待做**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
+状态：**已批准；第一阶段已实施，真实 DSH 验收 §7 七条中 1/2/3/4/5/6 已通过实机验证（2026-09-01，记录见 [dsh-delegation-acceptance.md](dsh-delegation-acceptance.md)），第 7 项（主动选档行为）待真实使用样本积累；第二阶段切链已实施（2026-09-06，自动回归全绿；旧字段只读兼容窗口经增量裁决取消，见 §9 第 6 条）**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
 
 ## 1. 方案结论
 
@@ -200,7 +200,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 
 关于 `#任务名` 任务段（`dsh/inject.js` 的 `parseLabelTag` 当前用它定位任务级 `agents.json` 并触发 `mappings` 自动回填）：自动回填删除后，该段不再充当任何机器寻址输入，仅保留侧栏跨任务列表的分组/展示用途。**第二阶段保留任务段（降级为纯展示）**，并同步 `skills/team-work-v3/references/dsh-orchestration.md` 的“成员标签规范”节：删除“机器段是模型注入的寻址键”以及机器段/任务段“写错=退化默认模型”的表述，改为纯展示语义（仍固定格式，便于人读分组）。
 
-升级前已创建且仍在通话的旧子代理，需要暂时保留旧字段的只读兼容。确认没有活动旧会话后，在同一阶段内删除兼容实现。
+~~升级前已创建且仍在通话的旧子代理，需要暂时保留旧字段的只读兼容。确认没有活动旧会话后，在同一阶段内删除兼容实现。~~（增量裁决修订：不做只读兼容窗口——header 回读天然覆盖旧会话冷恢复，见 §9 第 6 条。）
 
 清理完成后，`agents.json` 只保留 `mappings`，即 dispatchKey 到 sessionId 的续派关系。同时删除标签反查、自动回填、sessionId 轮询补读及对应测试。
 
@@ -232,7 +232,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 3. 子代理完成一轮后，`send_message` 续聊仍使用原模型和 effort。
 4. 重启 DSH 后恢复子会话，provider/model/effort 不变。实现依赖：provider/model 由 durable `agentOptions` 承载；effort 由 setup 阶段从持久化 `request/header.config.reasoningEffort` 回读重建 selection（见 §10.3 风险 1）——实现时必须落此依赖，否则本条只能验证 provider/model、无法验证 effort。
 5. 执行一个完整 team-work 任务，首派、`agent-map`、续派、评审和门禁全链路正常。
-6. 用升级前的旧子代理做跨版本恢复，确认清理前只读兼容有效。
+6. 用升级前的旧子代理做跨版本恢复，确认冷恢复后 provider/model/effort 不变（原“清理前只读兼容”语义已随 §9 第 6 条增量裁决取消——header 回读天然覆盖旧会话冷恢复）。
 7. 给出明确模型要求时 Agent 选择 `tw-tool-subagent`；无模型要求且无成本/复杂度考量的普通委派仍可选原生 `subagent`；Agent 面对大量低风险基础工作（下沉 junior）或高难度任务（升 expert）时，即使无人指定也应按价值主张（§3.7）主动选 `tw-tool-subagent` 相应档位。
 
 评审留档的时序关注项（任务 `twsub-p1-review` 八轮收敛后并入，实机验收时逐项核验）：
@@ -257,6 +257,7 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 3. 新工具命名为 `tw-tool-subagent`（已由用户裁决确认）：模型侧注册名与 DSH 工具目录组件命名 `dsh-tool-subagent` 对齐——统一用短横线，前缀 `tw-` 对应本绑定命名空间（与现有 `tw` 工具同源），区别于 DSH 原生模型侧工具的 snake_case（`send_message`、`subagent_fork` 等）；实现文件 `dsh/tw-tool-subagent.js` 与测试文件 `tests/dsh-tw-tool-subagent.test.mjs` 同步该风格。通过工具说明、系统提示和 team-work skill 区分原生 `subagent`；首版不做硬拦截。
 4. 工具说明携带三档成本/速度价值主张（junior 速度与成本优势、senior 性价比、expert 最强推理），并引导 Agent 在工作流内外主动按性价比选档委派（已由用户裁决确认，见 §3.7）。
 5. 砍除首请求 header 运行期对账（2026-09-01 用户裁决）：该核验为评审链引入的额外需求，非产品需求——模型/effort 实际生效的核验由子代理右下角徽标展示承载即可。实机两轮验证证实立即对账必然误杀（startContinuable 返回时首请求尚未发出、header 未落盘），限时轮询属为额外需求引入的额外复杂度，一并移除；启动确认语义回归「sessionPersistence 在场 + flush 参与」。
+6. 不做旧字段只读兼容窗口（2026-09-01 用户裁决增量，随第二阶段实施落地）：§6 原承诺的“升级前已创建且仍在通话的旧子代理，需要暂时保留旧字段的只读兼容”不再实施——header 回读通道天然覆盖旧会话冷恢复（provider/model/effort 同源于持久化 request/header，与字段新旧无关），旧字段读端（tagHints 标签反查、modelHints childId 补读、pendingTags 自动回填）一次删净。§7 真实 DSH 验收第 6 条的语义随之调整为“旧会话冷恢复经 header 回读保持模型不变”；升级前任务 agents.json 中的旧字段键残留无害、不再被读取，可手动删除。
 
 ## 10. 设计评审结论（owner 复核，2026）
 
@@ -300,4 +301,4 @@ provider/model 和 effort 始终来自同一份已验证选择。不允许两处
 ### 10.5 遗留 unresolved（不阻塞，供实现期跟踪）
 
 - 方案 §3.2 表格把 `inputTriggers` 列为宿主侧依赖；实际是客户端面，缺它只关闭 `@` 候选、不影响工具与自然语言（§3.2 尾段已自洽）。2026-09-01 实机暴露实现曾用 `ctx.inputTriggers` 直接探测未声明服务，触发 Cordis `without inject` 并阻断 Web 装载；已统一改为 `ctx.get()` 可选查询，并同步修复 Host 的 `systemPrompt` 与工具执行期 `llm/sessions/sessionPersistence` 查询。严格 Context 守卫回归锁定“未声明服务禁止直接属性访问”。
-- §6 二阶段“跨版本旧子代理只读兼容”的兼容窗口结束条件（“确认没有活动旧会话”）如何机械判定未定义；建议以“旧字段写端已移除后一个宿主重启周期 + 日志无旧标签命中”为收敛信号，实现期细化。
+- ~~§6 二阶段“跨版本旧子代理只读兼容”的兼容窗口结束条件未定义~~ 已随 §9 第 6 条增量裁决消解：不做只读兼容窗口，旧链读端一次删净，冷恢复由 header 回读覆盖。

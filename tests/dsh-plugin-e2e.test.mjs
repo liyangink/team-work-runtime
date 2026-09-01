@@ -136,29 +136,32 @@ test("E2E-A：安装器解析不 settle 时超时降级，不阻塞插件激活"
   disposePlugin()
 })
 
-test("E2E-A：注入 contribution 真调用链（childCtx 桩 + agents.json 真文件）", async () => {
+test("E2E-A：注入 contribution 真调用链（childCtx 桩 + 直接选择通道 + 旧字段残留不读）", async () => {
   const { makeInjectContribution } = await import("../dsh/inject.js")
   const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises")
   const os = await import("node:os")
-  // 真实临时项目 + agents.json
+  // 真实临时项目 + 升级前任务的旧字段残留（tagHints/modelHints）：读端已删，不再被读取
   const proj = await mkdtemp(path.join(os.tmpdir(), "e2a-"))
   const DOT = String.fromCharCode(183)
   await mkdir(path.join(proj, ".team-work", "tasks", "demo-t"), { recursive: true })
   await writeFile(path.join(proj, ".team-work", "tasks", "demo-t", "agents.json"), JSON.stringify({
     mappings: { w1: "child-real" },
-    modelHints: { "child-real": { provider: "prov-demo", model: "model-demo", effort: "max" } },
+    tagHints: { "IMPL·owner": { provider: "prov-tag", model: "model-tag" } },
+    modelHints: { "child-real": { provider: "prov-old", model: "model-old" } },
   }))
-  // fake installer 捕获 selection（完整链：路径解析→真文件读取→hintForChild→补写）
+  // fake installer 捕获 selection（完整链：⓪直接选择 take-once → selection 同步注入；旧字段全程不参与）
   const installs = []
+  const directSelections = new Map([["child-real", { provider: "prov-demo", model: "model-demo", reasoningEffort: "max" }]])
   const contribution = makeInjectContribution({ logger: { info() {} } }, {
     installerNow: () => (ctx2, sel) => installs.push(sel), // 同步契约：contribution 同步段直取安装器
-    pollMs: 5,
+    directSelections,
   })
   // 宿主真实契约：同步调用、不 await（返回 disposer）
   const disposer = contribution({ agent: { id: "child-real", session: { header: { cwd: proj }, events: [{ type: "subagent/descriptor", data: { label: "IMPL" + DOT + "owner #demo-t" } }] } } })
   assert.equal(typeof disposer, "function", "contribution 返回 disposer")
   assert.equal(installs.length, 1)
-  assert.equal(installs[0].current.model, "model-demo", "恢复时已有 hint 在 contribution 返回前生效")
+  assert.equal(installs[0].current.model, "model-demo", "直接选择在 contribution 返回前同步生效（不经 agents.json）")
   assert.equal(installs[0].current.reasoningEffort, "max", "effort 映射链")
+  assert.equal(directSelections.size, 0, "take-once：消费后删除")
   disposer()
 })

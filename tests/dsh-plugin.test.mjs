@@ -1,6 +1,6 @@
 // dsh-plugin 纯函数单测（不依赖 DSH 运行时；装载链验证在 I2 验证脚本与 I6 压轴 E2E）
 import assert from "node:assert/strict"
-import { readFile, mkdtemp, mkdir, writeFile } from "node:fs/promises"
+import { readFile, mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -9,7 +9,6 @@ import vm from "node:vm"
 
 const DOT = String.fromCharCode(183)
 
-import { hintForChild, agentsJsonPath } from "../dsh/inject.js"
 import { resolveTwExecutable, resolveChildCwd } from "../dsh/tw-tool.js"
 import { installPluginSettings, SETTINGS_NS, TIER_DESCRIPTIONS } from "../dsh/settings.js"
 import { parseFrontmatter } from "../dsh/skill-embed.js"
@@ -686,20 +685,12 @@ test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {
   assert.equal(metadata.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", file + " 必须声明直接导入的宿主模型选择包")
 })
 
-test("I2 注入寻址：childId 查 modelHints（合法/缺字段/无此 child/损坏输入）", () => {
-  const agents = { mappings: { w1: "child-a" }, modelHints: { "child-a": { provider: "p", model: "m", effort: "high" }, "child-b": { provider: "p", model: "m" }, "child-c": { provider: "", model: "m" } } }
-  assert.deepEqual(hintForChild(agents, "child-a"), { provider: "p", model: "m", reasoningEffort: "high" }, "effort 映射为 reasoningEffort")
-  assert.deepEqual(hintForChild(agents, "child-b"), { provider: "p", model: "m" }, "无 effort 不带字段")
-  assert.equal(hintForChild(agents, "child-c"), null, "空 provider 拒绝")
-  assert.equal(hintForChild(agents, "child-x"), null, "无此 child")
-  assert.equal(hintForChild(null, "child-a"), null, "损坏输入")
-  assert.equal(hintForChild({ modelHints: "not-object" }, "a"), null, "modelHints 非对象")
-})
-
-test("I2 agents.json 路径解析：cwd + 任务名 → 任务级注册表", () => {
-  assert.equal(agentsJsonPath("/cwd", "demo-t"), "/cwd/.team-work/tasks/demo-t/agents.json", "任务级定位")
-  assert.equal(agentsJsonPath(null, "t"), null, "无 cwd → null")
-  assert.equal(agentsJsonPath("/cwd", null), null, "无任务名 → null")
+test("I2 注入通道（第二阶段后）：inject.js 只剩直接选择 + header 回读，无文件读取面", async () => {
+  const inject = await import("../dsh/inject.js")
+  assert.equal(typeof inject.makeInjectContribution, "function")
+  assert.equal(typeof inject.recallFromHeader, "function")
+  assert.equal(inject.hintForChild, undefined, "childId 补读（modelHints）已删")
+  assert.equal(inject.agentsJsonPath, undefined, "任务级注册表寻址已删（标签纯展示）")
 })
 
 test("I2 tw 工具解析：唯一根制品直接携带 Runtime，不依赖 PATH", () => {
@@ -728,7 +719,7 @@ test("I2 tw 工具失败路径：缺少子会话 cwd 返回可恢复失败卡", 
   })
 })
 
-test("I2 注入链（同步 contribution 契约）：install 同步在场 + undefined 占位 + hint 迟到补读 + disposer 语义", async () => {
+test("I2 注入链（同步 contribution 契约）：install 同步在场 + undefined 占位 + header 回读同步生效 + disposer 语义", async () => {
   const { makeInjectContribution } = await import("../dsh/inject.js")
   const installs = []
   let installDisposers = 0
@@ -741,55 +732,34 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
     providerAtInstall = selection.current === undefined ? "UNDEFINED" : String(selection.current.provider)
     return fakeInstall(childCtx2, selection)
   }
-  // 任务级注册表（迁移方案）：真 cwd + 真任务目录 + label 带 #任务名；accessSync 校验目录在场
   const cwd = await mkdtemp(path.join(tmpdir(), "tw-inject-"))
-  const taskDir = path.join(cwd, ".team-work", "tasks", "demo-t")
-  await mkdir(taskDir, { recursive: true })
-  const agentsJson = path.join(taskDir, "agents.json")
-  const child = (id, label) => ({ agent: { id, session: { header: { cwd }, events: [{ type: "subagent/descriptor", data: { label } }] } } })
+  const header = { type: "request/header", data: { header: { config: { provider: "p", model: "m", reasoningEffort: "max" } } } }
+  const child = (id, events) => ({ agent: { id, session: { header: { cwd }, events } } })
   // 宿主真实契约（SetupRegistry.apply 源码）：contribution(childCtx) 同步调用、返回值直接存为 disposer、
   // 不 await——测试原样复刻该契约：不加 await，调用后立即断言同步效果。
-  await writeFile(agentsJson, JSON.stringify({ modelHints: { "child-1": { provider: "p", model: "m", effort: "max" } } }))
   const contribution = makeInjectContribution(ctx, {
     installerNow: () => fakeInstallChecked,
-    pollMs: 5,
   })
-  const childCtx = child("child-1", "IMPL" + DOT + "owner #demo-t")
+  const childCtx = child("child-1", [header])
   const disposer = contribution(childCtx) // 不 await——同步契约
   assert.equal(typeof disposer, "function", "contribution 返回 disposer（宿主直接存储该返回值）")
   assert.equal(installs.length, 1, "install 在 contribution 同步段完成（监听器在场——F2 契约）")
   assert.equal(providerAtInstall, "UNDEFINED", "注册时刻 current=undefined（null 对象会清空宿主模型选择）")
   const selection = installs[0].selection
-  assert.equal(selection.current?.model, "m", "恢复时已有 hint → contribution 返回前同步生效")
+  assert.equal(selection.current?.model, "m", "header 回读在 contribution 返回前同步生效（cold-resume 通道）")
   assert.equal(selection.current.reasoningEffort, "max")
-  // disposer：清定时器 + 透传 install 的 disposer
+  // disposer：透传 install 的 disposer
   disposer()
   assert.equal(installDisposers, 1, "disposer 透传 install 清理")
 
-  // 迟到写入场景：首次读无 hint，第二次读才命中（真实时序：agent-map 晚于子代创建）
-  await writeFile(agentsJson, JSON.stringify({ modelHints: {} }))
-  const installsLate = []
-  const contributionLate = makeInjectContribution(ctx, {
-    installerNow: () => (c, s) => { installsLate.push(s) },
-    pollMs: 5,
+  // 无选择来源（原生 subagent 新建、无持久化请求；标签事件不参与）→ 不干预（继承默认模型）
+  const installsFresh = []
+  const contributionFresh = makeInjectContribution(ctx, {
+    installerNow: () => (c, s) => { installsFresh.push(s) },
   })
-  const disposeLate = contributionLate(child("child-late", "IMPL" + DOT + "owner #demo-t"))
-  assert.equal(installsLate[0].current, undefined, "首读未命中：不注入（继承默认）")
-  await writeFile(agentsJson, JSON.stringify({ modelHints: { "child-late": { provider: "p2", model: "m2" } } }))
-  await new Promise((r) => setTimeout(r, 30))
-  assert.equal(installsLate[0].current?.model, "m2", "第二次读命中：hint 补写生效（下轮请求注入）")
-  disposeLate()
-
-  // 读失败静默（超时窗口内重试，无抛出）
-  const contribution2 = makeInjectContribution(ctx, {
-    readFile: async () => { throw new Error("enoent") },
-    installerNow: () => fakeInstall,
-    pollMs: 5, pollMaxMs: 20,
-  })
-  const dispose2 = contribution2(child("child-2", "IMPL" + DOT + "owner #demo-t"))
-  await new Promise((r) => setTimeout(r, 40))
-  dispose2()
-  // 无抛出即为通过（selection 保持 undefined——不干预）
+  const disposeFresh = contributionFresh(child("child-fresh", [{ type: "subagent/descriptor", data: { label: "IMPL" + DOT + "owner #demo-t" } }]))
+  assert.equal(installsFresh[0].current, undefined, "标签纯展示：无 header/直接选择 → selection 不写")
+  disposeFresh()
 
   // installer 同步解析失败 → 不注入，但仍须返回宿主可释放的 no-op disposer
   const contribution3 = makeInjectContribution(ctx, { installerNow: () => null })
@@ -804,48 +774,10 @@ test("I2 注入链（同步 contribution 契约）：install 同步在场 + unde
   assert.doesNotThrow(() => disposeInvalid())
 })
 
-test("I2 注入失败可诊断且不阻塞：损坏文件重试、超时与安装器异常均留恢复指引", async () => {
+test("I2 注入失败可诊断且不阻塞：安装器异常留恢复指引（文件读取面已随标签链删除）", async () => {
   const { makeInjectContribution } = await import("../dsh/inject.js")
   const warnings = []
   const ctx = { logger: { warn: (message) => warnings.push(String(message)), info() {} } }
-  const cwd = await mkdtemp(path.join(tmpdir(), "tw-inject-fail-"))
-  const taskDir = path.join(cwd, ".team-work", "tasks", "demo-t")
-  await mkdir(taskDir, { recursive: true })
-  const agentsJson = path.join(taskDir, "agents.json")
-  const child = (id) => ({ agent: { id, session: { header: { cwd }, events: [{ type: "subagent/descriptor", data: { label: "IMPL" + DOT + "owner #demo-t" } }] } } })
-  await writeFile(agentsJson, "{损坏")
-  let reads = 0
-  const contribution = makeInjectContribution(ctx, {
-    readFile: async () => {
-      reads += 1
-      const error = new Error("permission denied")
-      error.code = "EACCES"
-      throw error
-    },
-    installerNow: () => () => () => {},
-    pollMs: 2,
-    pollMaxMs: 8,
-  })
-  const dispose = contribution(child("child-diagnostic"))
-  await new Promise((resolve) => setTimeout(resolve, 25))
-  dispose()
-
-  assert.ok(reads > 0, "损坏同步快照后仍异步重试")
-  assert.ok(warnings.some((message) => message.includes("agents.json") && message.includes("继续补读")), "读错留痕并说明自动重试")
-  assert.ok(warnings.some((message) => message.includes("超时") && message.includes("读权限")), "权限错误超时后给出修复权限的恢复指引")
-
-  const damagedWarnings = []
-  const damagedContribution = makeInjectContribution({ logger: { warn: (message) => damagedWarnings.push(String(message)) } }, {
-    readFile: async () => "{仍损坏",
-    installerNow: () => () => () => {},
-    pollMs: 2,
-    pollMaxMs: 8,
-  })
-  const disposeDamaged = damagedContribution(child("child-damaged"))
-  await new Promise((resolve) => setTimeout(resolve, 25))
-  disposeDamaged()
-  assert.ok(damagedWarnings.some((message) => message.includes("超时") && message.includes("修复或删除损坏的 agents.json")), "损坏 JSON 超时后给出恢复有效文件的指引")
-
   const contributionInstallerError = makeInjectContribution(ctx, {
     installerNow: () => { throw new Error("installer failed") },
   })

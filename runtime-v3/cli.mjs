@@ -14,40 +14,6 @@ import { registerDelivery, registerReview } from "./intake.mjs"
 import { loadGuidance } from "./guidance.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 
-// 标签机器段构造（与 skill 标签规范固定表一致）：阶段缩写·角色缩写[@包]。
-// design/spec 的 review 阶段复用 DESIGN/SPEC 缩写（规范同阶段同缩写；无独立缩写）。
-const STAGE_ABBREV = { research: "RES", design: "DESIGN", "design-review": "DESIGN", spec: "SPEC", "spec-review": "SPEC", implementation: "IMPL", test: "TEST", "code-review": "CR", e2e: "E2E", finish: "FIN" }
-export function tagLabel(stageId, role, pkg) {
-  const ab = STAGE_ABBREV[stageId] ?? String(stageId)
-  const r = role === "challenger" ? "chal" : role
-  return ab + "·" + r + (pkg ? "@" + pkg : "")
-}
-
-// tagHints/pendingTags 落盘：dispatched 时写入【任务级】 agents.json（taskRoot/agents.json，P4 零转录）。
-// 任务级键空间（迁移方案 docs/agents-json-task-scope-plan.md）：调用处已持 task.lock，这里不再自取锁。
-// 写失败降级 warn 不阻塞派发。
-export async function persistTagHints(taskRoot, entries) {
-  const valid = (entries ?? []).filter((e) => e && e.tag && e.hint && e.hint.provider && e.hint.model)
-  if (valid.length === 0) return
-  const file = path.join(taskRoot, "agents.json")
-  try {
-    const current = (await readJson(file, { allowMissing: true })) ?? {} // 缺失容错；损坏(STATE_CORRUPT)重抛→外层 warn 降级
-    const tagHints = { ...(current?.tagHints ?? {}) }
-    const pendingTags = { ...(current?.pendingTags ?? {}) }
-    for (const { tag, hint } of valid) {
-      tagHints[tag] = { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) }
-    }
-    // pendingTags[标签] = 最新派发 key：插件回填 mappings[key]=childId 的寻址期望（同任务串行，覆盖=最新 key）
-    for (const { tag, key } of valid) {
-      if (key) pendingTags[tag] = key
-    }
-    current.tagHints = tagHints
-    current.pendingTags = pendingTags
-    await atomicJson(file, current)
-  } catch (error) {
-    console.warn("tagHints 落盘失败（不阻塞派发，插件将回退 childId 补读）：" + String(error?.message ?? error))
-  }
-}
 function collectList(argv, flag) {
   const out = []
   for (let i = 0; i < argv.length; i += 1) if (argv[i] === `--${flag}`) out.push(argv[i + 1])
@@ -499,14 +465,12 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
           const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-          await persistTagHints(task.root, cardsD.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
       const guidance = await loadGuidance(projectRoot) // 惰性：仅到达真正派发点才加载
       const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-      await persistTagHints(task.root, cards.map((c) => ({ tag: tagLabel(state.stage, c.role, c.package), key: c.key, hint: c.modelHint })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = newKey()
@@ -514,7 +478,6 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
-    await persistTagHints(task.root, [{ tag: tagLabel(state.stage, dispatch.role, dispatch.package), key: dispatch.key, hint: dispatch.modelHint }])
     return { ...card, dispatch }
   }
 
@@ -1002,13 +965,15 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
 }
 
 
-// agent-map（v3.2/F5）：登记 dispatchKey → 平台 subagent id（Lead 实际开 subagent 后调用）。
-// 存 .team-work/platform/agents.json（平台绑定事实，Lead 维护；runtime 只读写不调平台）。
+// agent-map（v3.2/F5；定向委派第二阶段收敛为纯续派登记）：登记 dispatchKey → 平台 subagent id。
+// 任务级注册表 task.root/agents.json 只保存 mappings——模型选择由 tw-tool-subagent 在创建子代理时直接指定
+// （provider/model 落 agentOptions、effort 走首请求 selection），不经 agents.json 中转；modelHint 快照仍在
+// journal 的 dispatched 事实内（dispatch-plan 导出给 Lead 当 target 用）。
 // 续派波经 dispatch-plan 导出 expectedAgentId（同包同角色上一派发的映射）——Lead 据此 send_message 续原会话。
 async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择只能使用 dispatch-plan 已登记的全局配置快照')
+  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择在创建子代理时由 tw-tool-subagent 直接指定（target 取 dispatch-plan 的 modelHint）')
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy })
@@ -1016,18 +981,14 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
     if (!dispatch) {
       throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
     }
-    // dispatch-plan 在写 dispatched 事实时已持久化精确选中的 hint。这里绝不重新读配置或重选家族，
-    // 因此全局 settings 热更新、同波第二 Owner 的 diversity 选择都不会让 child 注入漂移。
-    const hint = dispatch.detail.modelHint?.provider && dispatch.detail.modelHint?.model ? dispatch.detail.modelHint : null
-    // 任务级注册表（迁移方案）：file=task.root/agents.json；task.lock 已持有（写 journal 同锁域）
+    // 任务级注册表：file=task.root/agents.json；task.lock 已持有（写 journal 同锁域）。
+    // 只写 mappings（dispatchKey→childId 续派映射）；遗留旧键（tagHints/pendingTags/modelHints）不再写入。
     const file = path.join(task.root, 'agents.json')
     const current = (await readJson(file, { allowMissing: true })) ?? {}
     current.mappings = { ...(current.mappings ?? {}) }
-    current.modelHints = { ...(current.modelHints ?? {}) }
     current.mappings[key] = agent
-    if (hint) current.modelHints[agent] = hint
     await atomicJson(file, current)
-    return { ok: true, task: name, key, agent, ...(hint ? { modelHint: hint } : {}), note: hint ? '已登记派单映射并落盘 dispatch-plan 的模型快照（modelHints[childId]，插件注入消费）' : '已登记；该派单没有 dispatch-plan 模型快照（例如由 tw run 直接派发），成员将继承平台默认模型' }
+    return { ok: true, task: name, key, agent, note: '已登记派单映射（dispatchKey→childId，续派 send_message 用）；模型选择由 tw-tool-subagent 创建子代理时直接指定' }
   })
 }
 
@@ -1103,12 +1064,12 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
             ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
-            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话（自动回填缺失或无标签）：请新开同标签 fresh subagent，或 tw agent-map 兜底登记；若复用原派单 key，请 tw agent-map --key <原key> --agent <新childId> 回填新映射覆盖旧映射（R3：fresh 复用同一 key 必须回填新 childId）' } : {}),
+            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话映射：用 tw-tool-subagent 新建子代理（target 取本派单 modelHint）后 tw agent-map --key <本key> --agent <新childId> 登记；若复用原派单 key，务必回填新 childId 覆盖旧映射（R3：fresh 复用同一 key 必须回填新 childId）' } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort, effortNote: "Lead 派发原语暂无下发通道；Phase 3 插件经 registerContinuableSetup 注入 continuable 成员" } : {}), ...(hint.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
+            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort } : {}), ...(hint.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }
@@ -1184,7 +1145,7 @@ function helpCard() {
     ok: true,
     commands: {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
-      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员映射，并复用 dispatch-plan 的模型快照",
+      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（模型选择由 tw-tool-subagent 创建时直接指定）",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
       run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",

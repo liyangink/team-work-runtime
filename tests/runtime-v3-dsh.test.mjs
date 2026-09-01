@@ -441,30 +441,24 @@ test("dispatch-plan stop:blocked 的 blockers 保持对象数组", async () => {
   assert.ok(Array.isArray(plan.card.blockers) && plan.card.blockers.every((blocker) => typeof blocker === "object" && blocker.recovery))
 })
 
-test("agent-map 复制 dispatch-plan 模型快照，不因全局配置热变或手工覆盖漂移", async () => {
+test("agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 --model-hint", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "snapshot-t")
   const plan = await call(["dispatch-plan", "--task", "snapshot-t", "--writable", "R.md:code-review", "--json"])
-  const selected = plan.waves[0].modelHint
-  await setSettings(`
-team-work-dsh:
-  tiers:
-    junior: { provider: changed-vendor, model: changed-model }
-    senior: { provider: changed-vendor, model: changed-senior }
-    expert: { provider: changed-vendor, model: changed-expert }
-`)
-  try {
-    const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
-    assert.deepEqual(mapped.modelHint, selected)
-    const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "snapshot-t", "agents.json"), "utf8"))
-    assert.deepEqual(agents.modelHints["child-a"], selected)
-    const manual = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-b", "--model-hint", '{"provider":"other","model":"other"}'])
-    assert.equal(manual.ok, false)
-    assert.match(manual.message, /不接受 --model-hint/)
-  } finally {
-    await setSettings(BASE_SETTINGS)
-  }
+  assert.ok(plan.waves[0].modelHint?.provider && plan.waves[0].modelHint?.model, "dispatch-plan 仍输出 modelHint（tw-tool-subagent 的 target 来源）")
+  const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
+  assert.equal(mapped.ok, true)
+  assert.equal(mapped.agent, "child-a")
+  assert.equal(mapped.modelHint, undefined, "agent-map 不再返回模型快照（模型选择由 tw-tool-subagent 创建时直接指定）")
+  const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "snapshot-t", "agents.json"), "utf8"))
+  assert.equal(agents.mappings[plan.waves[0].dispatchKey], "child-a")
+  assert.equal(agents.modelHints, undefined, "agents.json 不再落盘 modelHints")
+  assert.equal(agents.tagHints, undefined)
+  assert.equal(agents.pendingTags, undefined)
+  const manual = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-b", "--model-hint", '{"provider":"other","model":"other"}'])
+  assert.equal(manual.ok, false)
+  assert.match(manual.message, /不接受 --model-hint/)
 })
 
 test("TW_CMD 覆盖派单内的成员工具调用指令", async () => {

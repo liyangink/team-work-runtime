@@ -459,30 +459,13 @@ test("contribution：直接选择 take-once 命中即注入；不走标签/回�
   if (typeof dispose === "function") dispose()
 })
 
-test("contribution：cold-resume 的 header 优先于合法标签链，保持持久化的已确认选择", () => {
-  const directSelections = new Map()
-  const installed = []
-  const contribution = makeInjectContribution(
-    { logger: { warn() {}, info() {} } },
-    {
-      directSelections,
-      installerNow: () => (_childCtx, selection) => { installed.push(selection); return () => {} },
-      accessSync: () => {},
-      readFileSync: () => JSON.stringify({ tagHints: { "CR·owner": { provider: "p-tag", model: "m-tag", effort: "low" } } }),
-    }
-  )
-  contribution({
-    agent: {
-      id: "child-uuid-1",
-      session: {
-        header: { cwd: "/tmp" },
-        events: [
-          { type: "subagent/descriptor", data: { label: "CR·owner · 合法标签 #task-x" } },
-          { type: "request/header", data: { header: { config: { provider: "p-header", model: "m-header", reasoningEffort: "high" } } } },
-        ],
-      },
-    },
-  })
+test("contribution：cold-resume 按 header 回读重建（有 effort；descriptor 标签事件不参与）", () => {
+  const events = [
+    { type: "subagent/descriptor", data: { label: "CR·owner · 合法标签 #task-x" } },
+    { type: "request/header", data: { header: { config: { provider: "p-header", model: "m-header", reasoningEffort: "high" } } } },
+  ]
+  const { contribution, childCtx, installed } = makeContribution(new Map(), events)
+  contribution(childCtx)
   assert.deepEqual(installed[0]?.current, { provider: "p-header", model: "m-header", reasoningEffort: "high" })
 })
 
@@ -496,29 +479,13 @@ test("contribution：无直接选择时按 header 回读重建（effort 冷恢�
   assert.deepEqual(installed[0]?.current, { provider: "p-a", model: "m-s1", reasoningEffort: "medium" })
 })
 
-test("contribution：cold-resume 的无 effort header 优先于合法旧标签链", () => {
-  const installed = []
-  const contribution = makeInjectContribution(
-    { logger: { warn() {}, info() {} } },
-    {
-      directSelections: new Map(),
-      installerNow: () => (_childCtx, selection) => { installed.push(selection); return () => {} },
-      accessSync: () => {},
-      readFileSync: () => JSON.stringify({ tagHints: { "CR·owner": { provider: "p-tag", model: "m-tag", effort: "low" } } }),
-    }
-  )
-  contribution({
-    agent: {
-      id: "child-uuid-1",
-      session: {
-        header: { cwd: "/tmp" },
-        events: [
-          { type: "subagent/descriptor", data: { label: "CR·owner · 合法旧标签 #task-x" } },
-          { type: "request/header", data: { header: { config: { provider: "p-header", model: "m-header" } } } },
-        ],
-      },
-    },
-  })
+test("contribution：cold-resume 按 header 回读重建（无 effort 仍是持久化的精确选择）", () => {
+  const events = [
+    { type: "subagent/descriptor", data: { label: "CR·owner · 合法旧标签 #task-x" } },
+    { type: "request/header", data: { header: { config: { provider: "p-header", model: "m-header" } } } },
+  ]
+  const { contribution, childCtx, installed } = makeContribution(new Map(), events)
+  contribution(childCtx)
   assert.deepEqual(installed[0]?.current, { provider: "p-header", model: "m-header" })
 })
 

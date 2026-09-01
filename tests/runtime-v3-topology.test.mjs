@@ -522,7 +522,7 @@ team-work-dsh:
     assert.equal(m2.model, "familytwo-lite", "同档第二 owner 家族去重选第二候选")
     assert.equal(m2.selectedBy, "diversity")
 
-    // agent-map 必须复制该批 dispatch-plan 的精确快照，不能因重选又退回首候选。
+    // diversity 选择固化在 dispatch-plan 的 wave.modelHint（journal 同一快照）；agent-map 只登记续派映射。
     const [first, second] = plan.waves
     await Promise.all([
       call(["agent-map", "--task", "pool-t", "--key", first.dispatchKey, "--agent", "child-one"]),
@@ -531,8 +531,7 @@ team-work-dsh:
     const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "pool-t", "agents.json"), "utf8"))
     assert.equal(agents.mappings[first.dispatchKey], "child-one")
     assert.equal(agents.mappings[second.dispatchKey], "child-two")
-    assert.deepEqual(agents.modelHints["child-one"], m1)
-    assert.deepEqual(agents.modelHints["child-two"], m2)
+    assert.equal(agents.modelHints, undefined, "agents.json 收敛纯 mappings（模型快照不经注册表中转）")
   } finally {
     await writeFile(settingsFile, BASE_SETTINGS)
   }

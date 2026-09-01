@@ -158,14 +158,14 @@ team-work-dsh:
     }
     const keyA = plans["iso-a"].waves[0].dispatchKey
     const keyB = plans["iso-b"].waves[0].dispatchKey
-    const ra = await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
-    const rb = await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
-    assert.equal(ra.modelHint.model, "fam-one", "F-4 全局池首选")
-    assert.equal(rb.modelHint.model, "fam-one", "不同波次各自从首选开始")
+    await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
+    await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
+    assert.equal(plans["iso-a"].waves[0].modelHint.model, "fam-one", "F-4 全局池首选")
+    assert.equal(plans["iso-b"].waves[0].modelHint.model, "fam-one", "不同波次各自从首选开始")
     const agentsA = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-a", "agents.json"), "utf8"))
     const agentsB = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-b", "agents.json"), "utf8"))
-    assert.equal(agentsA.modelHints["child-A1"].model, "fam-one")
-    assert.equal(agentsB.modelHints["child-B1"].model, "fam-one")
+    assert.equal(agentsA.modelHints, undefined, "agents.json 收敛纯 mappings")
+    assert.equal(agentsB.modelHints, undefined)
     assert.equal(agentsA.mappings[keyA], "child-A1", "F-6 双任务映射各归各任务文件")
     assert.equal(agentsB.mappings[keyB], "child-B1", "F-6 双任务映射各归各任务文件")
     assert.equal(Object.hasOwn(agentsA.mappings, keyB), false, "A 任务文件不含 B 任务映射")

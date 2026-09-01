@@ -5,7 +5,7 @@
 //  S2 隔离 profile 装配（DSH_HOME→临时目录；根 bundle 挂载唯一制品）
 //  S3 dsh headless 启动验证插件装载（skills/tools 注册成功标志）
 //  S4 tw 工具真调（spawn 路径：open→gate 幂等）
-//  S5 注入链干跑（构造 agents.json + 直接调 inject.js 的 hintForChild——装载级验证留给 I6）
+//  S5 注入链干跑（直接调 inject.js 的 recallFromHeader——第二阶段后仅剩直接选择+header 回读双通道；装载级验证留给 I6）
 import { execFile } from "node:child_process"
 import { mkdir, mkdtemp, writeFile, readFile, symlink } from "node:fs/promises"
 import { promisify } from "node:util"
@@ -57,10 +57,10 @@ async function main() {
   console.log("S4 OK tw 工具 spawn 链路（open→卡片）")
 
   // S5 注入决策干跑
-  const { hintForChild } = await import(path.join(repoRoot, "dsh/inject.js"))
-  const hint = hintForChild({ modelHints: { "c1": { provider: "p", model: "m", effort: "high" } } }, "c1")
-  if (hint.reasoningEffort !== "high") throw new Error("S5: hintForChild 失败")
-  console.log("S5 OK 注入决策干跑（effort→reasoningEffort）")
+  const { recallFromHeader } = await import(path.join(repoRoot, "dsh/inject.js"))
+  const recalled = recallFromHeader([{ type: "request/header", data: { header: { config: { provider: "p", model: "m", reasoningEffort: "high" } } } }])
+  if (recalled?.reasoningEffort !== "high") throw new Error("S5: recallFromHeader 失败")
+  console.log("S5 OK 注入决策干跑（header 回读 effort→reasoningEffort）")
 
   console.log("SMOKE PASS（完整装载链由 tests/e2e-root.test.mjs 验证）")
 }

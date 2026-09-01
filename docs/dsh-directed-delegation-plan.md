@@ -1,6 +1,6 @@
 # DSH 定向委派技术方案
 
-状态：**已批准；第一阶段已实施（自动测试与全量回归绿），真实 DSH 验收（§7 七条）与第二阶段切链清理待做**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
+状态：**已批准；第一阶段已实施，真实 DSH 验收 §7 七条中 1/2/3/4/5/6 已通过实机验证（2026-09-01，记录见 [dsh-delegation-acceptance.md](dsh-delegation-acceptance.md)），第 7 项（主动选档行为）待真实使用样本积累；第二阶段切链清理待做**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
 
 ## 1. 方案结论
 

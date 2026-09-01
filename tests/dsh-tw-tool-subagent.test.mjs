@@ -80,6 +80,24 @@ function makeTool(overrides = {}, deps = {}) {
 
 const EXEC = { agent: { id: "parent-agent-1" } }
 
+// 模拟 Cordis 的服务属性守卫：只有 inject 声明过的服务才能经 ctx.<name> 访问；
+// ctx.get(name) 保留为可选/运行期服务的查询通道。普通对象 mock 无法捕获这类装载错误。
+function guardedContext(services, declared = []) {
+  const allowed = new Set([...declared, "get", "logger"])
+  const target = {
+    ...services,
+    get(name) { return services[name] },
+  }
+  return new Proxy(target, {
+    get(object, key, receiver) {
+      if (typeof key === "string" && !allowed.has(key)) {
+        throw new Error('cannot get property "' + key + '" without inject')
+      }
+      return Reflect.get(object, key, receiver)
+    },
+  })
+}
+
 // ── 参数校验（§7：档位、精确模型和可选 effort 的参数校验正确） ─────────────────
 
 test("normalizeTarget：tier 与显式模型互斥", () => {
@@ -662,6 +680,57 @@ test("index 装配：systemPrompt 服务缺失时降级 warn，不阻塞工具�
   }
 })
 
+test("Cordis 服务守卫：host 可选 systemPrompt 与工具运行期服务只经 ctx.get 查询", async () => {
+  const registered = []
+  const sections = []
+  const selections = new Map()
+  const services = {
+    logger: { warn() {}, info() {} },
+    tools: { register(def) { registered.push(def) } },
+    skills: {},
+    subagents: {
+      registerContinuableSetup() { return () => {} },
+      getProvider: () => ({ prepareContinuable() {} }),
+      startContinuable: async (spec) => ({ childId: spec.childId, messageId: "m1" }),
+      drainContinuableChildren: async () => {},
+    },
+    llm: { resolveCallConfig: async (config) => ({ ...config }) },
+    sessions: {
+      get(id) {
+        return {
+          id,
+          events: [{ type: "request/header", data: { header: { config: selections.get(id) } } }],
+        }
+      },
+      flush: async () => true,
+    },
+    sessionPersistence: {},
+    systemPrompt: { section(section) { sections.push(section); return () => {} } },
+  }
+  const ctx = guardedContext(services, hostPlugin.inject)
+  const dispose = await hostPlugin.apply(ctx, {}, {
+    resolveInstaller: async () => (_childCtx, selection) => {
+      // 工具与 setup 共享表的真实路径由其他集成测试覆盖；本用例只锁定服务访问协议。
+      return () => {}
+    },
+    installPluginSettings: () => () => TIERS_SNAPSHOT,
+    registerEmbeddedSkill: async () => {},
+  })
+  try {
+    assert.equal(sections.length, 1, "未声明的可选 systemPrompt 必须经 ctx.get 正常取得")
+    const tool = registered.find((definition) => definition.name === "tw-tool-subagent")
+    // 让首请求确认读取到工具生成的同一选择。
+    services.subagents.startContinuable = async (spec) => {
+      selections.set(spec.childId, { provider: "p-a", model: "m-j1" })
+      return { childId: spec.childId, messageId: "m1" }
+    }
+    const card = await tool.execute({ description: "d", prompt: "p", target: { tier: "junior" } }, EXEC)
+    assert.equal(card.ok, true, JSON.stringify(card))
+  } finally {
+    if (typeof dispose === "function") dispose()
+  }
+})
+
 // ── badge.js @ 候选（§3.5/§3.7：描述与 host 价值主张字面同文） ───────────────
 
 async function loadBadgeClient() {
@@ -715,4 +784,21 @@ test("badge 客户端：无 inputTriggers 时降级 warn 不抛错（§3.2 尾�
   const plugin = registration.factory(() => ({}))
   plugin.apply(ctx)
   assert.ok(warns.some((m) => m.includes("inputTriggers 不可用")))
+})
+
+test("Cordis 服务守卫：badge 通过 ctx.get 查询可选 inputTriggers，不阻塞 Web 装载", async () => {
+  const registration = await loadBadgeClient()
+  const plugin = registration.factory(() => ({}))
+  let source = null
+  const services = {
+    logger: { warn() {} },
+    inputTriggers: { registerSource(candidateSource) { source = candidateSource; return () => {} } },
+    slots: { inject() {}, register() { return () => {} } },
+    sessions: {},
+    connection: {},
+    settingsScope: undefined,
+  }
+  const ctx = guardedContext(services, plugin.inject)
+  assert.doesNotThrow(() => plugin.apply(ctx))
+  assert.equal(source?.trigger, "@")
 })

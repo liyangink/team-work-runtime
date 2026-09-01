@@ -139,7 +139,12 @@ export function twToolSubagentDefinition(ctx, deps = {}) {
   // 定向委派必须依赖可用的同步注入通道；否则首请求无法保证使用已验证的选择。
   const isModelInjectionReady = deps.isModelInjectionReady ?? (() => true)
   const getService =
-    deps.getService ?? ((name) => (ctx && ctx[name]) || (ctx?.get ? ctx.get(name) : undefined))
+    deps.getService ?? ((name) => {
+      // llm/sessions/sessionPersistence 是工具执行期探测的服务，不提升为插件装载硬依赖；
+      // 真实 Cordis Context 必须经 get 查询，避免未声明属性访问绕过结构化失败卡。
+      if (ctx && typeof ctx.get === "function") return ctx.get(name)
+      return ctx && ctx[name]
+    })
 
   return {
     name: TOOL_NAME,

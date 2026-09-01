@@ -105,7 +105,9 @@ export async function apply(ctx, config = {}, deps = {}) {
   // 5) systemPrompt 决策表 section（§3.6/§3.7：与工具说明同源；服务缺失时降级不阻塞）
   let sectionDisposer = null
   try {
-    const systemPrompt = ctx.systemPrompt ?? (ctx.get ? ctx.get("systemPrompt") : undefined)
+    // systemPrompt 是可选增强，不列入顶层 inject；真实 Cordis Context 经 get 查询，
+    // 避免属性守卫把“缺失时降级”变成静默异常。
+    const systemPrompt = typeof ctx.get === "function" ? ctx.get("systemPrompt") : ctx.systemPrompt
     if (systemPrompt && typeof systemPrompt.section === "function") {
       sectionDisposer = systemPrompt.section(systemPromptSection())
     } else {

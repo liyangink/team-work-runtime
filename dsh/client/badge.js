@@ -60,7 +60,10 @@ var factory = function (require) {
   var inject = ["slots", "sessions", "connection", "settingsScope"]
 
   function getService(ctx, name) {
-    return ctx[name] || (ctx.get && ctx.get(name))
+    // Cordis 对 ctx.<service> 实施 inject 属性守卫；可选服务必须先走 ctx.get，
+    // 否则还没进入“缺失时降级”分支就会抛 without inject。普通对象仅供测试兜底。
+    if (ctx && typeof ctx.get === "function") return ctx.get(name)
+    return ctx && ctx[name]
   }
 
   function warn(ctx, message) {

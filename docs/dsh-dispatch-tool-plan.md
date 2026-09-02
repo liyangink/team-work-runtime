@@ -1,6 +1,6 @@
 # tw-dispatch 工作流派发工具方案
 
-状态：**已批准并实施**（§6 三项经用户确认：推翻旧方案 §5 裁决、三工具分工与「反复 tw-dispatch」推进循环、标签由工具生成；实施任务 tw-dispatch-tool，回归见 tests/dsh-dispatch.test.mjs 与 roadmap v3.3 记录）。
+状态：**已实施 + §7 修订待评审**（初版三项经用户确认并实施；2026-09-06 实机事故触发 §7 修订——run 职责归位与死门根治，两轮交叉评审后用户裁决定稿方向，待再评审）。
 
 ## 1. 背景与动机
 
@@ -99,4 +99,40 @@ dispatch-plan 输出多张派单时逐张创建+登记（工具声明并发安�
 
 1. 推翻旧方案 §5「不另造工作流专用派发模式」裁决（本方案 §1 依据）。
 2. 三工具分工表（§3.7）与 Lead 循环简化为「反复 tw-dispatch」的使用形态。
+
+## 7. 修订 v2：run 职责归位与死门根治（2026-09-06 事故 + 两轮交叉评审）
+
+### 7.1 事故与评审链
+
+实机事故：某会话先调 `tw run`（派单落盘、波次进入在途）再调 `tw-dispatch`（领到 wait-inflight 卡，按初版设计透传不创建）——派单从未被执行，无子代理、无登记，流程死锁。违反无死门原则（任何状态必须留恢复边）。
+
+第一版补丁（tw-dispatch 直读 agents.json 判「无登记即未执行」）经两视角交叉评审否决，三个实质缺陷：①续派波走 send_message 不写 mappings（设计事实），「无登记≠未执行」会在全部续派在途波上必现误判 fresh 补派，且续派派单为增量语义、新会话不可执行；②绑定层锁外直读 runtime 账本形成第二语义源（判定输入 journal+mappings 全为 runtime 自有事实，推导责任应在 runtime 并投影进卡片——P4 的准确读法）；③wait-inflight 卡 inflight 条目无 modelHint（journal 已落盘、dispatchCard 重建时丢弃），补派无 target 数据，且 skill「target 取 modelHint」指引自始为空指引。
+
+用户终裁（设计层根因）：`tw run` 越俎代庖——状态机写操作（开单落盘）本应唯一归属 dispatch 侧；run 在无派发工具的年代兼任推进者是历史合理，工具就位后职责未收缩，制造了「已开单无人干」中间态。修订为两层：
+
+### 7.2 第一层（源头）：run 撤推进，单一写者
+
+- `tw run` 改为**只读**：返回当前状态卡 + 下一步指引（「调 tw-dispatch 推进」/awaiting-user 时呈现选项等），**不再开单落盘**；
+- AGENTS 规则 6 同步修订：推进职责归属 dispatch 侧（dispatch-plan 为机器接口、tw-dispatch 为 DSH 工具；run 退化为状态查询与向导）；
+- 终端（无 DSH 插件）推进通道：`dispatch-plan` 顶上（本就是推进者），补人读输出模式；
+- 效果：「已开单无人干」的常态制造源消失——dispatch 开单→创建→登记为一口气的原子序列（同任务锁域内推进+登记的编排在工具内串行完成）。
+
+### 7.3 第二层（兜底）：dispatch 自身崩溃窗口的恢复
+
+tw-dispatch 自身存在不原子窗口（开单后、创建/登记完成前进程崩溃或超时；登记写文件失败），重启/重试后再调仍遇「已开单未创建」。兜底层：
+
+1. **runtime 一处锁内改动**：dispatch-plan 生成 wait-inflight 卡时给每个 inflight 条目补三字段——`modelHint`（journal dispatched 快照回填）、`expectedAgentId`（仅续派：prevKeyOf 回溯老 key 查 mappings）、`registered`（锁内查 mappings 该 key 有无对应代理）；
+2. **tw-dispatch 三分支**：registered=true → 透传等待；续派（有 expectedAgentId）→ send_message 指引不创建（回溯不到则创建路径，target 用回填 modelHint）；registered=false 且非续派 → 自动补派（创建+登记，结果标注「补派：此前已落盘无执行登记」）；registered 字段缺失（agents.json 缺失/损坏降级）→ 透传+修复指引不补派；多张单子逐张独立判定；
+3. **并发保守**：tw-dispatch `isConcurrencySafe` 改 false（同任务连点排队，首调用完成登记后次调用见 registered=true）；
+4. **登记失败回执**：补派创建成功但登记失败（写 agents.json 失败）时，回执带子代理 ID +「先 agent-map 补登记再继续，勿重复创建」；
+5. **判定权边界**：事实判定（未执行）归工具；「该波要不要」的语义决定归 `tw retire`——补派结果卡附「若本波不应执行，立即 tw retire --wave 回收」。
+
+### 7.4 影响面
+
+runtime-v3/cli.mjs（cmdRun 只读化、inflight 导出增强、dispatch-plan 人读模式）、dsh/tw-dispatch.js（三分支/并发声明/回执）、AGENTS.md 规则 6、skills/team-work-v3/references/dsh-orchestration.md（wait-inflight 处置节）、tests（run 只读无副作用、终端 dispatch-plan 人读推进、兜底矩阵：崩溃后补派/已登记透传/续派指引/降级透传/登记失败回执/retire 不补派）、docs/file-inventory.json、roadmap。
+
+### 7.5 遗留观察项
+
+- 登记失败残留（创建了但未登记、回执指引被无视）：回执指引+并发保守兜底，实机出现后再评估锁内占位原语（agent-map --claim）；
+- 旧会话装载的旧版 skill 不随宿主刷新：本次修订后 skill 的 wait-inflight 处置已自动化，旧会话按旧规程操作也不会死锁（兜底层接管），仅效率差异。
 3. 标签由工具生成、skill 标签规范降为说明（§3.3）。

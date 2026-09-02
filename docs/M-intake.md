@@ -12,7 +12,7 @@
 
 1. **派单身份寻址**：用 `dispatchKey`（run 派发时生成、写进派单文本；成员从派单照抄，是寻址不是簿记，符合 P4）定位 journal 中的派单合同，核验角色。
 2. **参数形状校验**：对 payload 做逐一检查（deliver 的 outcome/summary/paths/checks/unresolved；review 的 summary/recommendation/findings/verdict），不通过即返回结构化 `INTAKE_REJECTED` + 全量 reasons。
-3. **可写范围与路径安全校验**：`paths ⊆ 派单可写集`；交付路径必须项目内相对路径（复用 `persistence/file-artifact-repository` 的 `readStableArtifact` 稳定读取：符号链接拒绝、读中变化检测、realpath 防逃逸，I1）。
+3. **可写范围与路径安全校验**：`paths ⊆ 派单可写集`（精确条目或尾斜杠目录条目，见 `domain/writable.mjs`）；交付路径必须项目内相对路径（复用 `persistence/file-artifact-repository` 的 `readStableArtifact` 稳定读取：符号链接拒绝、读中变化检测、realpath 防逃逸，I1）。
 4. **登记 + 快照 + 审计**：把交付物登记进 `artifacts.json`、写入 `snapshots/<digest>.json`、落盘 `reports/<reportId>.json`、追加 `journal` 的 `report-accepted` 事件。
 5. **幂等与并发安全**：同 key 同 payload 重提交返回幂等接受不追加事件；读-算-写整体在任务锁内，并发 deliver/review 不丢登记（E2E-10/复核修复）。
 6. **为门禁与波次提供证据**：写入 review 报告的 `taskSha`（与 gate 的 `artifactsFingerprint` 同公式）与 `reviewedPackages`（评审时各包最新轮次，P4），供 gate/waves 精确判定“评审是否覆盖某包某交付”。
@@ -55,7 +55,7 @@ intake 复用 store 导出的 `readJson` 与持久层 `atomicJson/atomicWrite/wi
 
 1. `registerDelivery` 在任务锁内调用 `deliverLocked`。
 2. `freshState` 重读最新事实；`findDispatch` 验证 key 对应**有效 Owner 派单**，否则拒绝（提示从派单文本原样复制 `--key`）。
-3. 校验 payload：`outcome` ∈ {delivered, blocked}；`summary` 非空；`paths` 为数组；每路径经 `normalizeRelative` 规范化且**必须 ∈ 派单 writable 集合**；delivered 但无登记路径且 writable 非空时拒绝；`checks` 逐条 name + result∈{pass,fail,not-run}。
+3. 校验 payload：`outcome` ∈ {delivered, blocked}；`summary` 非空；`paths` 为数组；每路径经 `normalizeRelative` 规范化且**必须 ∈ 派单 writable 集合**（`domain/writable.mjs`：条目精确匹配，尾斜杠 = 目录授权其下全部路径，kind 继承条目 artifactKind；范围外拒绝文案内嵌 blocked 升级引导——任务确需范围外路径时以 blocked 交付说明，由 Lead 扩权重派）；delivered 但无登记路径且 writable 非空时拒绝；`checks` 逐条 name + result∈{pass,fail,not-run}。
 4. **事件层幂等**：同 key 同 payload 重交（重试/重复提交）返回同一接受结果，不追加第二条 `report-accepted`（payload 变化才是真实修订，照常覆盖）。
 5. 全部通过后一次性落盘（I10）：逐路径 `readStable` 计算 digest → 写 `snapshots/<digest>.json`（原地修订 = 新 digest 新快照，旧快照保留，I8/E2E-16）→ 写 `reports/deliver-<key>.json` → 更新 `artifacts.json`（同路径原地修订覆盖，`reportRef`/`snapshotRef` 指向本报告与快照）→ 追加 journal `report-accepted`。
 6. 返回 `{reportId, accepted:true, registered}`。

@@ -4,7 +4,7 @@
 // v3.4 重排（F3/F5）：先算波（含人工门 rework 的 respond 覆盖波，结构因果绑定）→ converge-user →
 // gate 判定（不再内含派发）→ 所有派发路径统一经过 waveId 批次守卫（在途语义见 waves.mjs inflightBatch）。
 
-import { nextWave, scenePolicy, projectRounds, inflightBatch, supersededKeys, waveIdOf } from "./waves.mjs"
+import { nextWave, scenePolicy, projectRounds, inflightBatch, supersededKeys, waveIdOf, effectiveBlockedSet } from "./waves.mjs"
 import { gateCheck, artifactFingerprints } from "./gate.mjs"
 
 const state2Packages = (packages) => (Array.isArray(packages) ? packages : null)
@@ -77,10 +77,31 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
   }
   const extraRounds = decisions.filter((d) => d.grant === "extra-round").length
   let wave = nextWave({ scenePolicy: sp, reports: stageReports, extraRounds, packages: state2Packages(packages), journal })
+  // 统一有效 blocked 投影（seq 因果，与 nextWave 同源）：F5 消费规则 2 与 produceBlocked 让位检查共用
+  const blockedSet = effectiveBlockedSet({ journal, reports: stageReports, packages: state2Packages(packages) })
 
-  // converge-user（波次机仲裁，静止）
+  // converge-user（波次机仲裁，静止）；produceBlocked 标记 = blocked 静止卡（非 decision 卡，
+  // 恢复通道是扩权重派而非 decide，CLI 据此免签发 decision-issued 并放行 plan 重拆）。
+  // 让位检查（r4：覆盖**所有** converge-user 返回，含 maxRounds exhausted 轮次耗尽分支——该分支
+  // 无 produceBlocked 标记，若不让位会先出「追加一轮/结束」卡、追加后又出 F5 reworkBlocked 卡，
+  // 双重用户处理）：人工门 rework 绑定波在场、绑定波报告全在场（按报告身份 dispatchKey+最新 ver
+  // 匹配）且存在"blocked 且仍在有效投影（blockedSet）"的包时，F5 消费规则 2 的 reworkBlocked
+  // 仲裁卡（decision 语义）优先；让位后落入 gate 分支，exhausted 场景同样由消费规则 2 接管。
+  // 其余 converge-user（无绑定或绑定波无有效 blocked 的普通轮次耗尽/escalate/produceBlocked 卡）不受影响。
   if (wave.kind === "converge-user") {
-    return { stage: stageId, status: "awaiting-user", wave, gate: null, next: { kind: "await-decision", reason: wave.reason } }
+    const binding = reworkBinding({ journal, decisions })
+    if (binding && binding.boundEntries.length > 0) {
+      const boundReports = binding.boundEntries.map((e) => stageReports.filter((r) => r.dispatchKey === e.detail.key).at(-1) ?? null)
+      if (boundReports.every((r) => r != null) && boundReports.some((r) => r.payload?.outcome === "blocked" && blockedSet.has(r.package ?? null))) {
+        wave = { kind: "gate" } // 让位：落入下方 gate 分支的 F5 处理（出 reworkBlocked 卡或 rework-rerun 续派）
+      }
+    }
+    if (wave.kind === "converge-user") {
+      return {
+        stage: stageId, status: "awaiting-user", wave, gate: null,
+        next: { kind: "await-decision", reason: wave.reason, ...(Array.isArray(wave.produceBlocked) ? { produceBlocked: wave.produceBlocked } : {}) },
+      }
+    }
   }
 
   // gate 分支（F5：人工门 rework 结构因果覆盖波；判定链不含派发，派发统一过守卫）
@@ -103,8 +124,10 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
         // 绑定波部分在途：复用该波身份落入统一守卫（wait-inflight），不重复派发
         const owner = { package: binding.bound.detail.package ?? null, round: binding.bound.detail.round ?? 1, continuation: true }
         wave = { kind: "respond", role: "owner", round: binding.bound.detail.round ?? 1, owners: [owner], causeDecisionId: binding.decision.decisionId }
-      } else if (boundReports.some((r) => r.payload?.outcome === "blocked")) {
+      } else if (boundReports.some((r) => r.payload?.outcome === "blocked" && blockedSet.has(r.package ?? null))) {
         // 消费规则 2：blocked → converge-user 人工仲裁，不无限重派 respond。
+        // 判定用统一有效 blocked 投影（blockedSet，seq 因果）：绑定波 blocked 报告的包在新派发/重拆
+        // （扩权重派）或新交付后即不再有效——旧 blocked 报告不得在扩权恢复后二次触发 F5 仲裁。
         // 选项边界（F5 钉死，实证修正）：blocked 卡专用两选项「重派 respond（新绑定波）/ 结束任务」——
         // 不得沿用普通 converge-user 的「追加一轮」（extra-round 无派发路径，绑定波报告仍 blocked → 空转循环）。
         const stance = decisions.filter((d) => d.gateId === binding.decision.gateId && d.grant === "rework-rerun").at(-1)

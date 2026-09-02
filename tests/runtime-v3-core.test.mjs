@@ -8,7 +8,8 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { nextWave, scenePolicy } from "../runtime-v3/waves.mjs"
-import { gateCheck, artifactsFingerprint } from "../runtime-v3/gate.mjs"
+import { gateCheck, artifactsFingerprint, artifactFingerprints } from "../runtime-v3/gate.mjs"
+import { writablePathsOverlap } from "../runtime-v3/domain/writable.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
 import { ownerDeliver, challengerReview, expertVerdict, registeredArtifacts, throughStageScope, e2eSkipped, pkgDeliver, pkgReview, pkgVerdict, PACKAGES, snap } from "./support/v3-fixtures.mjs"
 
@@ -89,6 +90,40 @@ test("波组：聚合裁决新鲜度（F8）——任一包新交付使旧裁决
   const afterOverview = nextWave({ scenePolicy: codeReviewScene, reports: [...accepted1, pkgDeliver("overview", 1)], packages: PACKAGES })
   assert.equal(afterOverview.kind, "review", "总览包新交付需新一轮评审，旧裁决不覆盖它")
 })
+test("可写重叠判定：同名文件/目录与祖先路径组件均重叠，兄弟前缀不重叠", () => {
+  // 同一路径只一个 inode：docs 与 docs/、docs 与 docs/x 都判重叠（文件系统同名互斥）
+  assert.equal(writablePathsOverlap("docs", "docs/"), true, "文件条目与同名目录条目重叠（同一路径）")
+  assert.equal(writablePathsOverlap("docs", "docs/x.md"), true, "文件条目与其下路径重叠（祖先组件）")
+  assert.equal(writablePathsOverlap("docs/", "docs/x.md"), true, "目录条目与其下路径重叠")
+  assert.equal(writablePathsOverlap("docs", "docs"), true, "相同路径重叠")
+  // 兄弟前缀（字符串前缀相同但路径组件不同）不重叠
+  assert.equal(writablePathsOverlap("docs/", "docs-x/"), false, "兄弟目录不重叠")
+  assert.equal(writablePathsOverlap("docs/", "docs-x/a.md"), false, "目录与兄弟目录下文件不重叠")
+  assert.equal(writablePathsOverlap("docs", "other"), false, "不相关路径不重叠")
+})
+
+test("artifactFingerprints：目录条目（尾斜杠）归属其下制品，精确条目不扩张", () => {
+  const items = [
+    { path: "review/findings-a.md", digest: "da" },
+    { path: "review/findings-b.md", digest: "db" },
+    { path: "review-x/c.md", digest: "dc" },
+    { path: "overview.md", digest: "dd" },
+  ]
+  const pkgs = [
+    { id: "a", writable: ["review/:code-review"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["overview.md:doc"], done: ["d"], dependsOn: [] },
+  ]
+  const fps = artifactFingerprints(items, pkgs)
+  // 包 a：目录条目归属 review/ 下两个制品（含指纹实体，非空集 digest）
+  assert.equal(fps.a, artifactsFingerprint(items.filter((i) => i.path.startsWith("review/"))), "目录条目下制品归入包指纹（F5/F6 双指纹与僵局检测不漏检）")
+  assert.notEqual(fps.a, artifactsFingerprint([]), "目录条目不得把包指纹算成空集")
+  // 兄弟目录 review-x 不归包 a（前缀以路径组件为界）
+  const withSibling = artifactFingerprints([...items, { path: "review-x/extra.md", digest: "dx" }], pkgs)
+  assert.equal(withSibling.a, fps.a, "兄弟前缀（review-x）不归入目录条目")
+  // 精确条目只归自身
+  assert.equal(fps.b, artifactsFingerprint([items[3]]), "精确条目只归属自身路径")
+})
+
 test("门：through-stage 的 scoped final-acceptance 未决 → awaiting-user（I7 静止）", () => {
   const result = gateCheck({
     workflow, policy, stageId: "code-review", scope: throughStageScope,
@@ -139,6 +174,45 @@ test("门：Owner 报告的 fail 检查阻塞（I6 验收不信声称）", () =>
   })
   assert.equal(result.passed, false)
   assert.match(result.blockers.map((b) => b.requirement).join(), /npm test/)
+})
+
+test("F5 消费规则 2（derive 纯函数）：绑定波 blocked 后扩权重派已交付 → 旧 blocked 不二次触发仲裁", () => {
+  // 人工门 rework → 绑定 respond 波 blocked → 扩权重派（非绑定 produce）delivered → 新评审链 accept →
+  // 有效 blocked 投影（seq 因果）已解除 → F5 消费规则 2 不得被旧绑定波 blocked 报告再触发（回 gateCheck 人工门）
+  const t = (n) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`
+  const journal = [
+    { seq: 1, at: t(1), type: "dispatched", detail: { key: "d1-aaa", role: "owner", round: 1, waveId: "wv1", writable: [{ path: "R.md", artifactKind: "code-review" }] } },
+    { seq: 2, at: t(2), type: "report-accepted", detail: { reportId: "o1" } },
+    { seq: 3, at: t(3), type: "dispatched", detail: { key: "d2-bbb", role: "challenger", round: 1, waveId: "wv2" } },
+    { seq: 4, at: t(4), type: "report-accepted", detail: { reportId: "rc1" } },
+    { seq: 5, at: t(5), type: "dispatched", detail: { key: "d3-ccc", role: "expert", round: 1, waveId: "wv3" } },
+    { seq: 6, at: t(6), type: "report-accepted", detail: { reportId: "re1" } },
+    { seq: 7, at: t(7), type: "dispatched", detail: { key: "d4-ddd", role: "owner", round: 2, waveId: "wv4", causeDecisionId: "dec-1", writable: [{ path: "R.md", artifactKind: "code-review" }] } },
+    { seq: 8, at: t(8), type: "report-accepted", detail: { reportId: "o2" } }, // blocked（绑定波）
+    { seq: 9, at: t(9), type: "dispatched", detail: { key: "d5-eee", role: "owner", round: 3, waveId: "wv5", writable: [{ path: "R.md", artifactKind: "code-review" }, { path: "T.md", artifactKind: "code" }] } }, // 扩权重派（非绑定）
+    { seq: 10, at: t(10), type: "report-accepted", detail: { reportId: "o3" } },
+    { seq: 11, at: t(11), type: "dispatched", detail: { key: "d6-fff", role: "challenger", round: 3, waveId: "wv6" } },
+    { seq: 12, at: t(12), type: "report-accepted", detail: { reportId: "rc2" } },
+    { seq: 13, at: t(13), type: "dispatched", detail: { key: "d7-ggg", role: "expert", round: 3, waveId: "wv7" } },
+    { seq: 14, at: t(14), type: "report-accepted", detail: { reportId: "re2" } },
+  ]
+  const reports = [
+    { reportId: "o1", dispatchKey: "d1-aaa", role: "owner", kind: "deliver", round: 1, stage: "code-review", payload: { outcome: "delivered", summary: "s", paths: ["R.md"] }, at: t(2) },
+    { reportId: "rc1", dispatchKey: "d2-bbb", role: "challenger", kind: "review", round: 1, stage: "code-review", reviewedPackages: [{ package: null, round: 1 }], payload: { summary: "s", recommendation: "accept" }, at: t(4) },
+    { reportId: "re1", dispatchKey: "d3-ccc", role: "expert", kind: "review", round: 1, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } }, at: t(6) },
+    { reportId: "o2", dispatchKey: "d4-ddd", role: "owner", kind: "deliver", round: 2, stage: "code-review", payload: { outcome: "blocked", summary: "范围不够" }, at: t(8) },
+    { reportId: "o3", dispatchKey: "d5-eee", role: "owner", kind: "deliver", round: 3, stage: "code-review", payload: { outcome: "delivered", summary: "扩权后完成", paths: ["R.md"] }, at: t(10) },
+    { reportId: "rc2", dispatchKey: "d6-fff", role: "challenger", kind: "review", round: 3, stage: "code-review", reviewedPackages: [{ package: null, round: 3 }], payload: { summary: "s", recommendation: "accept" }, at: t(12) },
+    { reportId: "re2", dispatchKey: "d7-ggg", role: "expert", kind: "review", round: 3, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } }, at: t(14) },
+  ]
+  const decisions = [...e2eSkipped, { decisionId: "dec-1", gateId: "scoped-final-code-review", choice: "rework", artifactFingerprint: { null: "fp-at-decision" }, at: t(6) }]
+  const result = deriveTask({
+    scope: throughStageScope, intent: { objective: "o" },
+    artifacts: { items: [{ path: "R.md", digest: "digest-after-fix", kind: "code-review", stage: "code-review" }] },
+    reports, decisions, journal, workflow, policy,
+  })
+  assert.equal(result.status, "awaiting-user", "回 gateCheck 人工门（制品指纹已变、评审链新鲜）")
+  assert.equal(result.next.reworkBlocked, undefined, "扩权重派交付后旧绑定波 blocked 报告不再二次触发 F5 仲裁")
 })
 
 test("E2E-14 根：task-completed 事件使 derive 幂等返回 completed", () => {

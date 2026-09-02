@@ -21,7 +21,7 @@ description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱�
 
 ```bash
 tw open --name <名字> --objective "<目标一句话>" [--entry <stage>]   # 开房间；重名会拒绝并提示
-tw run --task <名字> [--writable <路径>:<kind> ...]                  # 推进一步；返回卡片或派单
+tw run --task <名字> [--writable <路径>:<kind> ...]                  # 推进一步；路径以 / 结尾 = 目录授权（如 docs/:doc）
 tw decide --task <名字> --choice <序号> [--note ...]                 # 回答当前卡片
 tw intent --task <名字> [--objective ...] [--add-constraint ...]     # 随时修订目标/约束
 tw archive --task <名字>                                              # 用户明确要求归档时
@@ -35,7 +35,8 @@ tw archive --task <名字>                                              # 用户
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
-- 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。
+- 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。可写条目写目录（尾斜杠）即授权其下全部路径——派单前预估产出文件位置，目录授权比逐文件列举更稳。
+- **派单范围不够**（任务确需修改范围外文件才能完成）：成员以 `--outcome blocked` 交付（paths 留空），在 summary 写明需要扩权的路径与理由。你会收到 `next: re-scope` 静止卡——单 owner 直接带新的 `--writable` 重跑 run，多包先 `tw plan` 重拆（该卡不阻塞重拆）再 run；重派派单会自动内嵌上一轮 blocked 原因，成员不需要重述背景。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 只评价这版交付本身；产品缺陷写 findings，不因此 rework 审查制品。

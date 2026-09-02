@@ -104,7 +104,7 @@ v3 以已验证的 OpenSpec 形状为中心原则：**制品即状态，工具�
 
 | 工具 | 使用者 | 参数 | 调用内检查 |
 | --- | --- | --- | --- |
-| `deliver` | Owner | `task`、`outcome`(delivered/blocked)、`summary`、`paths[]`（本轮产出物路径）、`checks[]?`、`unresolved[]?` | paths ⊆ 派单可写集；登记+快照；checks 与平台观察对账；回应场景自动挂接（不填报告 ID）；**无 recommendation**（作者不自审，I6） |
+| `deliver` | Owner | `task`、`outcome`(delivered/blocked)、`summary`、`paths[]`（本轮产出物路径）、`checks[]?`、`unresolved[]?` | paths ⊆ 派单可写集（条目精确匹配，尾斜杠 = 目录授权其下全部路径）；登记+快照；checks 与平台观察对账；回应场景自动挂接（不填报告 ID）；**无 recommendation**（作者不自审，I6）；任务确需范围外路径时以 blocked 交付说明（paths 留空），由 Lead 扩权重派 |
 | `review` | Challenger/Expert | `task`、`findings[]?`、`recommendation`、`summary`、`verdict?`(Expert) | recommendation 只评价被审这版交付（E2E-09，写入 --help）；被审制品 digest 变化则告知并重绑；**无 paths/artifacts 参数** |
 
 Owner 回应评审 = 再次 deliver：同路径原地修订（新 digest，旧快照保留）或纯反驳（paths 空、summary 承载证据）。交付工具是传话通道，协调责任在 Lead 与派单文本，不在工具内预埋规则。角色合同不同则 schema 不同（不取并集）。

@@ -3,7 +3,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, writeFile, readFile } from "node:fs/promises"
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -28,6 +28,54 @@ test("I1：任务名校验与目录唯一（open 重名拒绝）", async () => {
   await assert.rejects(
     initTask({ projectRoot: root, name: "t-1", objective: "o", entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd", stages: [] }),
     (error) => error.code === "TASK_EXISTS" && /已存在/.test(error.message),
+  )
+})
+
+test("initTask 目录骨架：只创建运行时实际使用的目录（无 decisions/、gates/ 残留）", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tw-v3-"))
+  await initTask({ projectRoot: root, name: "skel-t", objective: "o", entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd", stages: [] })
+  const entries = await readdir(taskRoot(root, "skel-t"), { withFileTypes: true })
+  const names = entries.map((e) => e.name).sort()
+  // 决定存单文件 decisions.json（首次决定时才落盘）、门禁判定不落盘（charter §5）——骨架里没有这两个目录
+  assert.deepEqual(names, ["artifacts.json", "intent.json", "journal.jsonl", "locks", "reports", "scope.json", "snapshots"])
+  for (const dir of ["locks", "reports", "snapshots"]) {
+    assert.equal(entries.find((e) => e.name === dir)?.isDirectory(), true, `${dir} 应为目录`)
+  }
+})
+
+test("deliver 目录授权：尾斜杠条目覆盖其下路径且 kind 继承条目声明", async () => {
+  const { projectRoot, task, dispatch, reload } = await fixture()
+  await dispatch({ key: "w1-dir001", kind: "produce", role: "owner", round: 1, writable: [{ path: "review/", artifactKind: "code-review" }] })
+  await mkdir(path.join(projectRoot, "review"), { recursive: true })
+  await writeFile(path.join(projectRoot, "review", "findings-defects.md"), "# 审查\n缺陷清单", "utf8")
+  const receipt = await registerDelivery({ projectRoot, task, dispatchKey: "w1-dir001", payload: { outcome: "delivered", summary: "目录交付", paths: ["review/findings-defects.md"], checks: [], unresolved: [] } })
+  assert.equal(receipt.accepted, true)
+  assert.equal(receipt.registered[0].path, "review/findings-defects.md")
+  const t2 = await reload()
+  assert.equal(t2.artifacts.items.find((i) => i.path === "review/findings-defects.md")?.kind, "code-review", "kind 继承目录条目的 artifactKind")
+})
+
+test("deliver 目录授权边界：前缀不误匹配（review/ 不覆盖 review-x/）；范围外拒绝文案含 blocked 恢复引导", async () => {
+  const { projectRoot, task, dispatch } = await fixture()
+  await dispatch({ key: "w1-dir002", kind: "produce", role: "owner", round: 1, writable: [{ path: "review/", artifactKind: "code-review" }] })
+  await mkdir(path.join(projectRoot, "review-x"), { recursive: true })
+  await writeFile(path.join(projectRoot, "review-x", "a.md"), "x", "utf8")
+  await assert.rejects(
+    registerDelivery({ projectRoot, task, dispatchKey: "w1-dir002", payload: { outcome: "delivered", summary: "越界", paths: ["review-x/a.md"], checks: [], unresolved: [] } }),
+    (error) => error.code === "INTAKE_REJECTED"
+      && error.reasons.some((r) => r.includes("review-x/a.md") && r.includes("不在本派单可写范围") && r.includes("目录条目以 / 结尾"))
+      && error.reasons.some((r) => r.includes("--outcome blocked") && r.includes("扩大可写范围")),
+  )
+})
+
+test("deliver 精确条目不扩张：无尾斜杠条目仅匹配自身", async () => {
+  const { projectRoot, task, dispatch } = await fixture()
+  await dispatch({ key: "w1-exact01", kind: "produce", role: "owner", round: 1, writable: [{ path: "docs", artifactKind: "code-review" }] })
+  await mkdir(path.join(projectRoot, "docs"), { recursive: true })
+  await writeFile(path.join(projectRoot, "docs", "a.md"), "x", "utf8")
+  await assert.rejects(
+    registerDelivery({ projectRoot, task, dispatchKey: "w1-exact01", payload: { outcome: "delivered", summary: "越界", paths: ["docs/a.md"], checks: [], unresolved: [] } }),
+    (error) => error.code === "INTAKE_REJECTED" && error.reasons.some((r) => r.includes("docs/a.md") && r.includes("目录条目以 / 结尾")),
   )
 })
 

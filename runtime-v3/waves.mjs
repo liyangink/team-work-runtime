@@ -115,6 +115,60 @@ export function projectRounds({ journal = [], reports = [] }) {
   return rounds
 }
 
+// —— 有效 blocked（seq 因果，导出纯函数：nextWave 静止卡判定与 derive 的 F5 消费规则 2 共用）——
+// 语义：blocked 只对"当前范围承诺"有效。锚 = 该包最新 owner 报告（blocked）所属派发的 journal seq；
+// 锚之后出现同包 owner 派发（Lead 扩权重派）或任意重拆（packages-planned/re-planned）= 新范围承诺
+// 已在场，旧 blocked 降级为派单卡上下文（cli 重派时内嵌原因），不再静止。
+// 因果用 journal seq 全序（与 reviewChainFingerprint 同口径：report-accepted seq 第一全序、at 次级破平、
+// ver 再破平），不用墙钟 at 比较——同毫秒误判、时钟回拨误静止。
+// 报告全序也用于"最新 owner 报告"选取（旧实现 at 比较同样受墙钟影响）。
+// 返回 Map<pkg, 报告>（键即有效 blocked 包集合，值为该包最新 blocked 报告，供静止卡文案与 F5 判定）。
+export function effectiveBlockedSet({ journal = [], reports = [], packages = null }) {
+  const ids = Array.isArray(packages) ? packages.map((p) => p.id) : [null]
+  // 单次扫描建索引：报告 seq / 派发 seq / 每包 owner 派发最大 seq / 全局重拆最大 seq
+  const reportSeq = new Map()
+  const dispatchSeq = new Map()
+  let lastPlanSeq = -1
+  const ownerDispatchSeq = new Map()
+  for (const e of journal) {
+    if (e.type === "report-accepted" && e.detail?.reportId) reportSeq.set(e.detail.reportId, e.seq ?? -1)
+    else if (e.type === "dispatched" && e.detail?.key) {
+      dispatchSeq.set(e.detail.key, e.seq ?? -1)
+      if (e.detail?.role === "owner") {
+        const pkg = e.detail.package ?? null
+        if ((e.seq ?? -1) > (ownerDispatchSeq.get(pkg) ?? -1)) ownerDispatchSeq.set(pkg, e.seq ?? -1)
+      }
+    } else if (e.type === "packages-planned" || e.type === "re-planned") {
+      if ((e.seq ?? -1) > lastPlanSeq) lastPlanSeq = e.seq ?? -1
+    }
+  }
+  const later = (a, b) => {
+    const sa = reportSeq.get(a.reportId) ?? -1
+    const sb = reportSeq.get(b.reportId) ?? -1
+    if (sa !== sb) return sa > sb
+    if ((a.at ?? "") !== (b.at ?? "")) return (a.at ?? "") > (b.at ?? "")
+    return (a.ver ?? 1) > (b.ver ?? 1)
+  }
+  const lastOfPkg = new Map()
+  for (const r of reports) {
+    if (r.role !== "owner" || r.kind !== "deliver") continue
+    const pkg = r.package ?? null
+    const prev = lastOfPkg.get(pkg)
+    if (!prev || later(r, prev)) lastOfPkg.set(pkg, r)
+  }
+  const out = new Map()
+  for (const id of ids) {
+    const r = lastOfPkg.get(id)
+    if (r?.payload?.outcome !== "blocked") continue
+    // 锚找不到（旧形状无 dispatchKey / journal 缺派发事件）→ -1：任意范围承诺事件都解除该 blocked
+    // （保守方向：宁可多派一轮，不误静止）。
+    const anchor = r.dispatchKey != null ? (dispatchSeq.get(r.dispatchKey) ?? -1) : -1
+    if ((ownerDispatchSeq.get(id) ?? -1) > anchor || lastPlanSeq > anchor) continue
+    out.set(id, r)
+  }
+  return out
+}
+
 // —— F1/F3 在途批次（唯一实现；derive / cli 在途重建 / intake 提示 / plan 重拆四处共用）——
 // 波与波永远串行（F1 模型基线）：存在任何未 superseded 的未结波 → 该波在途（wait-inflight）。
 // 未结波 = 同 waveId 的派发集合中至少一条尚无报告（settled = 报告的 dispatchKey 集合）；
@@ -162,6 +216,12 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
   // latest challenger review 评审"当轮已交付活跃包"组合
   const challenger = lastOf(reports, (r) => r.role === "challenger" && r.kind === "review")
   const expert = lastOf(reports, (r) => r.role === "expert" && r.kind === "review")
+
+  // 有效 blocked（produce/respond 静止卡判定源）：seq 因果统一投影（effectiveBlockedSet，与 derive 的
+  // F5 消费规则 2 同源）——该包最新 owner 报告为 blocked，且锚（报告所属派发的 journal seq）之后无
+  // 同包 owner 派发、无任意重拆；blocked 只对"当前范围承诺"有效。
+  // 消费动机：blocked 不入投影轮（F2）→ roundOf 恒 0 → 轮次上限永不触发，历史上会无限重派同形状派单。
+  const blockedP = effectiveBlockedSet({ journal, reports, packages: items })
 
   // 当轮包集合 = 活跃包中已交付、且交付时间晚于上一份 challenger 评审（同轮修订不再重评）
   // 简化口径：包的最新交付是否晚于其最近一次被评审时的交付。用事实近似：直接按下面每包状态机判定。
@@ -267,8 +327,9 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
       continuation: Boolean(challenger),
     }
   }
-  // 2) 返工修复（respond）：选择性重派只含被点名包；新解锁包等修复收敛后再派（F3 + 收敛纪律）
-  const reworkTodo = [...reworkP].filter((id) => active.includes(id))
+  // 2) 返工修复（respond）：选择性重派只含被点名包；新解锁包等修复收敛后再派（F3 + 收敛纪律）；
+  // 有效 blocked 包不自动重派（无限重派同形状派单 = 空转；恢复靠扩权重派，见分支 5）
+  const reworkTodo = [...reworkP].filter((id) => active.includes(id) && !blockedP.has(id))
   if (reworkTodo.length) {
     const owners = reworkTodo.map((id) => ({ package: id, round: roundOf(id) + 1, continuation: true }))
     return { kind: "respond", role: "owner", round: Math.max(...owners.map((o) => o.round)), owners }
@@ -280,12 +341,25 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
   if (sp.core && accepted.size) {
     return { kind: "verdict", role: "expert", round: Math.max(...[...accepted].map((id) => roundOf(id))), ...(expert ? { continuation: true } : {}) }
   }
-  // 4) 新交付派发（produce）：依赖满足且未交付的包（F1 分层：依赖包交付后解锁）
+  // 4) 新交付派发（produce）：依赖满足、未交付且未 blocked 的包（F1 分层：依赖包交付后解锁）
   const pending = active.filter((id) => !byId.get(id).delivered && byId.get(id).depsOk)
-  if (pending.length) {
-    const owners = pending.map((id) => ({ package: id, round: roundOf(id) + 1, continuation: false }))
+  const dispatchable = pending.filter((id) => !blockedP.has(id))
+  if (dispatchable.length) {
+    const owners = dispatchable.map((id) => ({ package: id, round: roundOf(id) + 1, continuation: false }))
     return { kind: "produce", role: "owner", round: Math.max(...owners.map((o) => o.round)), owners }
   }
-  // 5) 活跃集空 → 门
+  // 5) 有效 blocked 静止卡：评审/返工/新派发均无可派波时，被 blocked 挡住的包出用户卡
+  //（awaiting-user 静止；恢复 = 扩权重派：单 owner run --writable 新范围、多包 plan 重拆后 run；或用户决定结束）
+  const blockedActive = active.filter((id) => blockedP.has(id))
+  if (blockedActive.length) {
+    const parts = blockedActive.map((id) => {
+      const summary = String(blockedP.get(id)?.payload?.summary ?? "")
+      const brief = summary.slice(0, 160) + (summary.length > 160 ? "…" : "")
+      return `${id == null ? "（单 owner）" : `包 ${id}`}：${brief || "（无说明）"}`
+    })
+    const reason = `Owner 交付 blocked（无法在可写范围内完成）——${parts.join("；")}。恢复：扩大可写范围后重派（单 owner 直接 tw run --writable <新范围>；多包先 tw plan 重拆再 run），或由用户决定结束`
+    return { kind: "converge-user", reason, produceBlocked: blockedActive }
+  }
+  // 6) 活跃集空 → 门
   return { kind: "gate" }
 }

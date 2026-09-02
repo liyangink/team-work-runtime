@@ -55,6 +55,125 @@ test("tw plan：机械验收通过登记 packages.json + journal；重叠/成环
   const noDone = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([{ id: "a", writable: ["A.md:k"], done: [], dependsOn: [] }])])
   assert.equal(noDone.code, "PLAN_REJECTED")
   assert.match(noDone.message, /完成标准/)
+  // 目录条目与其下路径视为重叠（可写互斥是并行前提）；不相关目录不重叠
+  const dirOverlap = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["src/:k"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["src/foo.js:k"], done: ["d"], dependsOn: [] },
+  ])])
+  assert.equal(dirOverlap.code, "PLAN_REJECTED")
+  assert.match(dirOverlap.message, /重叠/)
+  // 同名文件/目录与祖先组件同样重叠（同一路径只一个 inode）
+  const samePath = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["docs:k"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["docs/:k"], done: ["d"], dependsOn: [] },
+  ])])
+  assert.equal(samePath.code, "PLAN_REJECTED", "docs 与 docs/ 同一路径，重叠")
+  assert.match(samePath.message, /重叠/)
+  const ancestor = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["docs:k"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["docs/x.md:k"], done: ["d"], dependsOn: [] },
+  ])])
+  assert.equal(ancestor.code, "PLAN_REJECTED", "docs 与 docs/x.md 祖先组件，重叠")
+  const sibling = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["docs/:k"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["docs-x/:k"], done: ["d"], dependsOn: [] },
+  ])])
+  assert.equal(sibling.ok, true, "兄弟前缀（docs/ 与 docs-x/）不重叠")
+  const dirOk = await call(["plan", "--task", "plan-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["src/:k"], done: ["d"], dependsOn: [] },
+    { id: "b", writable: ["docs/:k"], done: ["d"], dependsOn: [] },
+  ])])
+  assert.equal(dirOk.ok, true, "互斥目录条目通过")
+})
+
+test("produce blocked 静止卡与扩权重派（单 owner）：不再无限重派；新范围重派卡内嵌 blocked 原因", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "blk-t")
+  const d1 = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
+  await call(["deliver", "--task", "blk-t", "--key", d1.dispatch.key, "--outcome", "blocked", "--summary", "必须修改 src/config.ts 才能完成，超出可写范围"])
+  const card = await call(["run", "--task", "blk-t"])
+  assert.equal(card.status, "awaiting-user")
+  assert.equal(card.next, "re-scope")
+  assert.match(card.question, /blocked/)
+  assert.match(card.question, /src\/config\.ts/)
+  assert.match(card.note, /run --writable/)
+  const card2 = await call(["run", "--task", "blk-t"])
+  assert.equal(card2.status, "awaiting-user", "静止卡幂等：重复 run 不重派同形状派单")
+  // 扩权重派：Lead 携新可写范围重跑 run = 用户重派指示
+  const d2 = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review", "--writable", "src/:code"])
+  assert.equal(d2.transition, "dispatch")
+  assert.match(d2.dispatch.prompt, /上一轮 blocked 原因/)
+  assert.match(d2.dispatch.prompt, /src\/config\.ts/)
+  await writeFile(path.join(root, "R.md"), "报告", "utf8")
+  await call(["deliver", "--task", "blk-t", "--key", d2.dispatch.key, "--outcome", "delivered", "--summary", "完成", "--paths", "R.md"])
+  const rv = await call(["run", "--task", "blk-t"])
+  assert.equal(rv.dispatch.role, "challenger", "扩权交付后恢复正常评审链")
+})
+
+test("多包 blocked：评审优先消化已交付包；blocked 卡放行 plan 重拆扩权，重拆后派新波并带 blocked 原因", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "mpblk-t")
+  await call(["plan", "--task", "mpblk-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["A.md:code-review"], done: ["a 标准"], dependsOn: [] },
+    { id: "b", writable: ["B.md:code-review"], done: ["b 标准"], dependsOn: [] },
+  ])])
+  const w = await call(["run", "--task", "mpblk-t"])
+  assert.equal(w.dispatches.length, 2)
+  const keyOf = Object.fromEntries(w.dispatches.map((x) => [x.package, x.key]))
+  await writeFile(path.join(root, "A.md"), "a", "utf8")
+  await call(["deliver", "--task", "mpblk-t", "--key", keyOf.a, "--outcome", "delivered", "--summary", "a 完成", "--paths", "A.md"])
+  await call(["deliver", "--task", "mpblk-t", "--key", keyOf.b, "--outcome", "blocked", "--summary", "需要改 C.md，超出 B 包可写范围"])
+  // a 已交付未评审 → 评审波优先消化（b 的 blocked 卡延后）
+  const rv = await call(["run", "--task", "mpblk-t"])
+  assert.equal(rv.dispatch.role, "challenger")
+  await call(["review", "--task", "mpblk-t", "--key", rv.dispatch.key, "--recommendation", "accept", "--summary", "a 通过"])
+  // core 场景 → expert 裁决
+  const vd = await call(["run", "--task", "mpblk-t"])
+  assert.equal(vd.dispatch.role, "expert")
+  await call(["review", "--task", "mpblk-t", "--key", vd.dispatch.key, "--recommendation", "accept", "--summary", "裁决", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  // a 出集后 b 仍 blocked → 静止卡（带 blocked 原因摘要）
+  const card = await call(["run", "--task", "mpblk-t"])
+  assert.equal(card.status, "awaiting-user")
+  assert.equal(card.next, "re-scope")
+  assert.match(card.question, /包 b/)
+  assert.match(card.question, /C\.md/)
+  // blocked 静止卡放行重拆（扩权恢复通道），重拆后 run 派 b 新波并内嵌 blocked 原因
+  const replan = await call(["plan", "--task", "mpblk-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["A.md:code-review"], done: ["a 标准"], dependsOn: [] },
+    { id: "b", writable: ["B.md:code-review", "C.md:code-review"], done: ["b 标准"], dependsOn: [] },
+  ])])
+  assert.equal(replan.ok, true, "blocked 静止卡允许重拆扩权")
+  const d = await call(["run", "--task", "mpblk-t"])
+  assert.equal(d.transition, "dispatch")
+  assert.equal(d.dispatch.package, "b")
+  assert.match(d.dispatch.prompt, /上一轮 blocked 原因/)
+})
+
+test("respond blocked（返工波）：owner 无法返工时出静止卡，不再无限重派 respond；扩权重派恢复", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "rblk-t")
+  const d1 = await call(["run", "--task", "rblk-t", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "初版", "utf8")
+  await call(["deliver", "--task", "rblk-t", "--key", d1.dispatch.key, "--outcome", "delivered", "--summary", "初版", "--paths", "R.md"])
+  const rv = await call(["run", "--task", "rblk-t"])
+  assert.equal(rv.dispatch.role, "challenger")
+  await call(["review", "--task", "rblk-t", "--key", rv.dispatch.key, "--recommendation", "rework", "--summary", "要求补充"])
+  const d2 = await call(["run", "--task", "rblk-t", "--writable", "R.md:code-review"])
+  assert.equal(d2.transition, "dispatch")
+  assert.equal(d2.dispatch.kind, "respond")
+  await call(["deliver", "--task", "rblk-t", "--key", d2.dispatch.key, "--outcome", "blocked", "--summary", "返工需要改 T.md，超出可写范围"])
+  const card = await call(["run", "--task", "rblk-t"])
+  assert.equal(card.status, "awaiting-user", "respond blocked 同样静止出卡（不再无限重派返工波）")
+  assert.equal(card.next, "re-scope")
+  assert.match(card.question, /T\.md/)
+  // 扩权重派：新范围含 T.md，重派派单内嵌 blocked 原因（投影轮 1 → 新 produce 轮 2）
+  const d3 = await call(["run", "--task", "rblk-t", "--writable", "R.md:code-review", "--writable", "T.md:code"])
+  assert.equal(d3.transition, "dispatch")
+  assert.equal(d3.dispatch.round, 2)
+  assert.match(d3.dispatch.prompt, /上一轮 blocked 原因/)
 })
 
 test("tw plan 重拆窗口：在途派发时拒绝", async () => {

@@ -10,6 +10,7 @@ import { artifactsFingerprint } from "./gate.mjs"
 import { projectRounds, inflightBatch, supersededKeys, waveIdOf } from "./waves.mjs"
 import { currentStageOf } from "./derive.mjs"
 import { readJson } from "./store.mjs"
+import { writableMatch } from "./domain/writable.mjs"
 
 function reject(reasons) {
   const error = new Error(Array.isArray(reasons) ? reasons.join("\n") : reasons)
@@ -111,12 +112,14 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   if (typeof summary !== "string" || summary.trim() === "") reasons.push("summary 必填（一句话说明本轮做了什么）")
   if (!Array.isArray(paths)) reasons.push("paths 必须是路径数组")
   const writable = dispatch.detail.writable ?? []
-  const allowed = new Set(writable.map((w) => w.path))
   const normalized = []
   for (const p of paths) {
     const rel = normalizeRelative(p)
     if (rel === null) { reasons.push(`路径不合法：${JSON.stringify(p)}（必须是项目内相对路径）`); continue }
-    if (!allowed.has(rel)) reasons.push(`路径 ${rel} 不在本派单可写范围（${[...allowed].join("、") || "无"}；本派单：${dispatch.detail.role} 轮次 ${dispatch.detail.round}${dispatch.detail.package ? " 包 " + dispatch.detail.package : ""}）。发现的问题请写进交付物或 unresolved，不要改派单外文件。`)
+    if (!writableMatch(writable, rel)) {
+      // 恢复边双层（无死门）：目录条目语义提示（写法纠正）+ blocked 升级通道（任务确需范围外路径时）
+      reasons.push(`路径 ${rel} 不在本派单可写范围（${writable.map((w) => w?.path ?? String(w)).join("、") || "无"}；目录条目以 / 结尾才授权其下路径，如 docs/。本派单：${dispatch.detail.role} 轮次 ${dispatch.detail.round}${dispatch.detail.package ? " 包 " + dispatch.detail.package : ""}）。若任务确实必须修改范围外路径才能完成：不要改派单外文件——以 --outcome blocked 交付（paths 留空），在 summary/unresolved 写明需要扩权的路径与理由，Lead 将扩大可写范围后重派。其余发现的问题请写进交付物或 unresolved。`)
+    }
     if (!normalized.includes(rel)) normalized.push(rel)
   }
   if (outcome === "delivered" && normalized.length === 0 && writable.length > 0) {
@@ -144,13 +147,14 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
 
   // 全部检查通过后一次性落盘（I10：失败不留半态）；先读全部再写，单路径失败不留孤儿快照（复核修复）
   const at = new Date().toISOString()
-  const kindByPath = new Map(writable.map((w) => [w.path, w.artifactKind]))
+  // kind 继承：目录条目下路径继承该条目的 artifactKind（精确或前缀匹配的第一条；无匹配兜底 misc）
+  const kindOf = (rel) => writableMatch(writable, rel)?.artifactKind ?? "misc"
   const stables = []
   for (const rel of normalized) {
     stables.push({ rel, ...(await readStable(projectRoot, rel)) })
   }
   const stage = currentStageOf(fresh.journal, task.scope)
-  const registered = stables.map(({ rel, digest }) => ({ path: rel, digest, kind: kindByPath.get(rel) ?? "misc", stage }))
+  const registered = stables.map(({ rel, digest }) => ({ path: rel, digest, kind: kindOf(rel), stage }))
   const reportId = `deliver-${dispatchKey}`
   // F7：报告身份 = key+ver，落盘带 ver 与 payloadDigest（digest 链即时可审计）；旧报告无 ver 视为 ver 1。
   // F2：waveId 仅展示字段（投影判定一律经 dispatchKey join journal，不读此字段）。

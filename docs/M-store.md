@@ -31,7 +31,7 @@
 | `decisions.json` | `appendDecision` | `{items:[决策]}`（单文件数组，避免目录遍历） |
 | `reports/<id>.json` | intake 侧写入（store 只读） | 每报告一条，文件名即报告身份 |
 | `snapshots/<digest>.json` | intake 侧写入（store 只读） | 制品内容快照（按 digest 命名） |
-| `gates/`、`locks/` | 内部 | 门凭证目录 / 任务锁目录 |
+| `locks/` | 内部 | 任务锁目录（`task.lock`；决定在单文件 `decisions.json`、门禁判定不落盘，不设 `decisions/`、`gates/` 目录） |
 
 > 注：`reports/**` 与 `snapshots/**` 的**写入**由 intake 负责；`store` 在 `loadTask`/`rebuildArtifacts` 中**读取**它们。下表与数据流仅体现 store 自身的职责边界。
 

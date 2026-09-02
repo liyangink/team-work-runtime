@@ -64,10 +64,10 @@ export async function initTask({ projectRoot, name, objective, entry, completion
   if (!await readJson(marker, { allowMissing: true })) {
     await atomicJson(marker, { runtimeMajor: 3, schema: "v3", createdAt: at })
   }
+  // 目录骨架只创建运行时实际使用的目录：决定在单文件 decisions.json、门禁判定不落盘（charter §5），
+  // 早期 per-file 设计遗留的 decisions/、gates/ 空目录不再创建（2026-09 清理；存量任务目录里的空目录无害，归档时随目录删除）。
   await mkdir(path.join(root, "reports"), { recursive: true })
-  await mkdir(path.join(root, "decisions"), { recursive: true })
   await mkdir(path.join(root, "snapshots"), { recursive: true })
-  await mkdir(path.join(root, "gates"), { recursive: true })
   await mkdir(path.join(root, "locks"), { recursive: true })
   await Promise.all([
     atomicJson(path.join(root, "intent.json"), { objective, constraints: [], exclusions: [], revisions: [], risk: risk ?? "normal" }),

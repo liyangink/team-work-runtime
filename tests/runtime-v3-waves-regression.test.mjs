@@ -12,7 +12,7 @@ import path from "node:path"
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
-import { projectRounds, inflightBatch, waveGroups, supersededKeys } from "../runtime-v3/waves.mjs"
+import { projectRounds, inflightBatch, waveGroups, supersededKeys, effectiveBlockedSet } from "../runtime-v3/waves.mjs"
 import { humanDecisionFresh } from "../runtime-v3/gate.mjs"
 import { makeProject, caller, openTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
@@ -438,6 +438,167 @@ test("F5：blocked → converge-user 不无限重派；重派 respond 绑定同�
   const card2 = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
   assert.equal(card2.status, "awaiting-user")
   assert.match(card2.question, /无法完成本次返工/, "再次 blocked 仍回仲裁卡，不无限重派 respond")
+})
+
+test("有效 blocked（seq 因果纯函数）：同毫秒不误判、墙钟回拨不误静止；锚后新派发/重拆解除", () => {
+  const at = "2026-01-01T00:00:00.000Z" // 全部事件同毫秒：seq 是唯一可靠因果序
+  const mkJournal = (events) => events.map((e, i) => ({ seq: i + 1, at, ...e }))
+  const blockedReport = (key, pkg = null) => ({ reportId: `b-${key}`, dispatchKey: key, role: "owner", kind: "deliver", round: 1, stage: "code-review", ...(pkg != null ? { package: pkg } : {}), payload: { outcome: "blocked", summary: "范围不够" }, at })
+  const ownerDispatch = (key, pkg = null) => ({ type: "dispatched", detail: { key, role: "owner", ...(pkg != null ? { package: pkg } : {}) } })
+  // 1) blocked 后无新事件 → 有效（同毫秒不影响 seq 因果；旧 at 严格 > 口径在同毫秒会误判）
+  const j1 = mkJournal([ownerDispatch("k1"), { type: "report-accepted", detail: { reportId: "b-k1" } }])
+  assert.equal(effectiveBlockedSet({ journal: j1, reports: [blockedReport("k1")], packages: null }).has(null), true)
+  // 2) 扩权重派（at 回拨到更早、seq 更大）→ 解除：seq 因果不受墙钟回拨影响
+  const j2 = mkJournal([
+    ownerDispatch("k1"),
+    { type: "report-accepted", detail: { reportId: "b-k1" } },
+    { ...ownerDispatch("k2"), at: "2025-01-01T00:00:00.000Z" },
+  ])
+  assert.equal(effectiveBlockedSet({ journal: j2, reports: [blockedReport("k1")], packages: null }).has(null), false, "锚后新 owner 派发（即使墙钟更早）解除 blocked")
+  // 3) 重拆（packages-planned/re-planned，seq 更大）→ 解除（任意包的重拆都是新范围承诺）
+  const j3 = mkJournal([
+    ownerDispatch("k1", "a"),
+    { type: "report-accepted", detail: { reportId: "b-k1" } },
+    { type: "re-planned", detail: { packages: [] } },
+  ])
+  assert.equal(effectiveBlockedSet({ journal: j3, reports: [blockedReport("k1", "a")], packages: [{ id: "a" }] }).has("a"), false, "锚后重拆解除 blocked")
+  // 4) 报告全序也走 seq：同 at 下后接受的 delivered 覆盖 blocked（最新 owner 报告为 delivered）
+  const j4 = mkJournal([
+    ownerDispatch("k1"),
+    { type: "report-accepted", detail: { reportId: "b-k1" } },
+    ownerDispatch("k2"),
+    { type: "report-accepted", detail: { reportId: "o-k2" } },
+  ])
+  const deliveredAfter = { ...blockedReport("k2"), reportId: "o-k2", payload: { outcome: "delivered", summary: "s", paths: ["R.md"] } }
+  assert.equal(effectiveBlockedSet({ journal: j4, reports: [blockedReport("k1"), deliveredAfter], packages: null }).size, 0, "最新 owner 报告为 delivered → 不在有效 blocked 集")
+  // 5) 多包隔离：包 a blocked、包 b 无报告 → 只有 a 进集合
+  const j5 = mkJournal([ownerDispatch("k1", "a"), { type: "report-accepted", detail: { reportId: "b-k1" } }])
+  const s5 = effectiveBlockedSet({ journal: j5, reports: [blockedReport("k1", "a")], packages: [{ id: "a" }, { id: "b" }] })
+  assert.deepEqual([...s5.keys()], ["a"], "集合按包隔离，值为该包最新 blocked 报告")
+  assert.equal(s5.get("a")?.payload?.summary, "范围不够")
+})
+
+test("F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 blocked → 出 F5 仲裁卡（不被 produceBlocked 遮蔽）；重派交付后不再触发 blocked 仲裁", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "xblk-t")
+  await call(["plan", "--task", "xblk-t", "--packages", PKGS2])
+  // 走完评审链到人工门：两包交付 → review accept → verdict accept → e2e skip
+  const d1 = await call(["run", "--task", "xblk-t"])
+  const kS = d1.dispatches.find((x) => x.package === "store").key
+  const kI = d1.dispatches.find((x) => x.package === "intake").key
+  await deliverContent(call, root, "xblk-t", kS, "S.md", "store v1")
+  await deliverContent(call, root, "xblk-t", kI, "I.md", "intake v1")
+  const rv1 = await call(["run", "--task", "xblk-t"])
+  await reviewAccept(call, "xblk-t", rv1.dispatch.key)
+  const ve1 = await call(["run", "--task", "xblk-t"])
+  await reviewAccept(call, "xblk-t", ve1.dispatch.key, VERDICT)
+  await call(["route", "--task", "xblk-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
+  await call(["run", "--task", "xblk-t"])
+  await call(["decide", "--task", "xblk-t", "--choice", "2", "--note", "返工"])
+  // 人工门 rework → 绑定 respond 覆盖波（两包，causeDecisionId）
+  const r1 = await call(["run", "--task", "xblk-t"])
+  assert.equal(r1.dispatches.length, 2, "返工覆盖波含全部包")
+  const kS2 = r1.dispatches.find((x) => x.package === "store").key
+  const kI2 = r1.dispatches.find((x) => x.package === "intake").key
+  await deliverContent(call, root, "xblk-t", kS2, "S.md", "store v2 修复", "修store")
+  await call(["deliver", "--task", "xblk-t", "--key", kI2, "--outcome", "blocked", "--summary", "intake 需要范围外文件，无法返工"])
+  // 评审链消化 store 的修复交付；challenger rework 点名 blocked 的 intake → 无可派波（intake 被有效 blocked 过滤）
+  const rv2 = await call(["run", "--task", "xblk-t"])
+  assert.equal(rv2.dispatch.role, "challenger")
+  await call(["review", "--task", "xblk-t", "--key", rv2.dispatch.key, "--recommendation", "rework", "--summary", "intake 仍需修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", package: "intake" }])])
+  const ve2 = await call(["run", "--task", "xblk-t"])
+  assert.equal(ve2.dispatch.role, "expert", "core 场景 store 修复先过裁决")
+  await reviewAccept(call, "xblk-t", ve2.dispatch.key, VERDICT)
+  // 无可派波 + intake 有效 blocked → nextWave 出 produceBlocked 场景，但人工门 rework 绑定在场 →
+  // derive 让位 F5：出 reworkBlocked 仲裁卡（decide 语义），不被 produceBlocked 卡遮蔽成 re-scope
+  const card = await call(["run", "--task", "xblk-t"])
+  assert.equal(card.status, "awaiting-user")
+  assert.notEqual(card.next, "re-scope", "不被 produceBlocked 静止卡遮蔽")
+  assert.match(card.question, /无法完成本次返工/, "出 F5 消费规则 2 的 reworkBlocked 仲裁卡")
+  assert.deepEqual(card.choices.map((c) => c.label), ["重派 respond", "结束任务"])
+  // 用户选择重派 → 新绑定 respond 波（同决定、含绑定波整波包集）→ 两包本轮均完成 → 评审链 →
+  // gate 分支消费规则 2 不再被旧 blocked 报告触发（新绑定波报告全 delivered；blocked 投影已解除）
+  await call(["decide", "--task", "xblk-t", "--choice", "1"])
+  const r2 = await call(["run", "--task", "xblk-t"])
+  assert.equal(r2.dispatches.length, 2, "rework-rerun 覆盖波仍含全部包")
+  await deliverContent(call, root, "xblk-t", r2.dispatches.find((x) => x.package === "store").key, "S.md", "store v3 再修", "再修store")
+  await deliverContent(call, root, "xblk-t", r2.dispatches.find((x) => x.package === "intake").key, "I.md", "intake v2 修复", "修intake")
+  const rv3 = await call(["run", "--task", "xblk-t"])
+  await reviewAccept(call, "xblk-t", rv3.dispatch.key)
+  const ve3 = await call(["run", "--task", "xblk-t"])
+  await reviewAccept(call, "xblk-t", ve3.dispatch.key, VERDICT)
+  const gate = await call(["run", "--task", "xblk-t"])
+  assert.equal(gate.status, "awaiting-user")
+  assert.doesNotMatch(gate.question ?? "", /无法完成本次返工/, "旧 blocked 报告不再二次触发 F5 仲裁（回到人工门卡）")
+  assert.match(gate.question ?? "", /scoped-final|人工|批准/, "回到人工门等待用户")
+  await call(["decide", "--task", "xblk-t", "--choice", "1"])
+  const done = await call(["run", "--task", "xblk-t"])
+  assert.equal(done.status, "completed", "交叉场景消解后正常收敛")
+})
+
+test("r4 边界：轮次耗尽（exhausted）不遮蔽 F5——绑定波含有效 blocked 时直接出 reworkBlocked 仲裁卡，不先出「追加一轮」卡；重派交付后不二次触发", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "exh-t")
+  await call(["plan", "--task", "exh-t", "--packages", PKGS2])
+  const keyOf = (w, pkg) => w.dispatches.find((x) => x.package === pkg).key
+  // 两轮 challenger rework（不点名 = 两包全重派）把两包推到第 3 轮
+  const w1 = await call(["run", "--task", "exh-t"])
+  await deliverContent(call, root, "exh-t", keyOf(w1, "store"), "S.md", "store v1")
+  await deliverContent(call, root, "exh-t", keyOf(w1, "intake"), "I.md", "intake v1")
+  const rv1 = await call(["run", "--task", "exh-t"])
+  await call(["review", "--task", "exh-t", "--key", rv1.dispatch.key, "--recommendation", "rework", "--summary", "两包都修"])
+  const w2 = await call(["run", "--task", "exh-t"])
+  await deliverContent(call, root, "exh-t", keyOf(w2, "store"), "S.md", "store v2")
+  await deliverContent(call, root, "exh-t", keyOf(w2, "intake"), "I.md", "intake v2")
+  const rv2 = await call(["run", "--task", "exh-t"])
+  await call(["review", "--task", "exh-t", "--key", rv2.dispatch.key, "--recommendation", "rework", "--summary", "再修"])
+  const w3 = await call(["run", "--task", "exh-t"])
+  await deliverContent(call, root, "exh-t", keyOf(w3, "store"), "S.md", "store v3")
+  await deliverContent(call, root, "exh-t", keyOf(w3, "intake"), "I.md", "intake v3")
+  // 第 3 轮收敛：review accept + verdict accept → 人工门 → rework
+  const rv3 = await call(["run", "--task", "exh-t"])
+  await reviewAccept(call, "exh-t", rv3.dispatch.key)
+  const ve3 = await call(["run", "--task", "exh-t"])
+  await reviewAccept(call, "exh-t", ve3.dispatch.key, VERDICT)
+  await call(["route", "--task", "exh-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
+  await call(["run", "--task", "exh-t"])
+  await call(["decide", "--task", "exh-t", "--choice", "2", "--note", "返工"])
+  // 人工门 rework → 绑定 respond round 4：store delivered、intake blocked（投影轮仍 3 = maxRounds）
+  const r4 = await call(["run", "--task", "exh-t"])
+  assert.equal(r4.dispatches.length, 2)
+  await deliverContent(call, root, "exh-t", keyOf(r4, "store"), "S.md", "store v4 修复", "修store")
+  await call(["deliver", "--task", "exh-t", "--key", keyOf(r4, "intake"), "--outcome", "blocked", "--summary", "intake 需范围外文件"])
+  // challenger 对 store 修复交付 rework 并点名 blocked 的 intake——此刻 intake 投影轮 3 = maxRounds，
+  // nextWave 的 exhausted 检查先于 review/verdict 派发触发（不会先派 store 的裁决波）
+  const rv4 = await call(["run", "--task", "exh-t"])
+  assert.equal(rv4.dispatch.role, "challenger")
+  await call(["review", "--task", "exh-t", "--key", rv4.dispatch.key, "--recommendation", "rework", "--summary", "intake 待修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", package: "intake" }])])
+  // 关键断言：nextWave 的 exhausted 分支（intake 投影轮 3 ≥ maxRounds 3）被让位检查接管——
+  // 直接出 F5 reworkBlocked 仲裁卡，而非「轮次上限」卡（否则用户先追加一轮、随后又收 F5 卡，双重处理）
+  const card = await call(["run", "--task", "exh-t"])
+  assert.equal(card.status, "awaiting-user")
+  assert.match(card.question, /无法完成本次返工/, "出 F5 reworkBlocked 仲裁卡")
+  assert.doesNotMatch(card.question, /轮次上限|自主轮次/, "不被 exhausted 卡抢先")
+  assert.deepEqual(card.choices.map((c) => c.label), ["重派 respond", "结束任务"])
+  // decide 重派 → 双包交付 → 回人工门，旧 blocked 不二次触发
+  await call(["decide", "--task", "exh-t", "--choice", "1"])
+  const r5 = await call(["run", "--task", "exh-t"])
+  assert.equal(r5.dispatches.length, 2, "rework-rerun 覆盖波含绑定波整波包集")
+  await deliverContent(call, root, "exh-t", keyOf(r5, "store"), "S.md", "store v5 终版", "s5")
+  await deliverContent(call, root, "exh-t", keyOf(r5, "intake"), "I.md", "intake v5 终版", "i5")
+  const rv5 = await call(["run", "--task", "exh-t"])
+  await reviewAccept(call, "exh-t", rv5.dispatch.key)
+  const ve5 = await call(["run", "--task", "exh-t"])
+  await reviewAccept(call, "exh-t", ve5.dispatch.key, VERDICT)
+  const gate = await call(["run", "--task", "exh-t"])
+  assert.equal(gate.status, "awaiting-user")
+  assert.doesNotMatch(gate.question ?? "", /无法完成本次返工/, "旧 blocked 不再二次触发 F5 仲裁")
+  assert.match(gate.question ?? "", /scoped-final|人工|批准/, "回人工门等待用户")
+  await call(["decide", "--task", "exh-t", "--choice", "1"])
+  const done = await call(["run", "--task", "exh-t"])
+  assert.equal(done.status, "completed", "耗尽×blocked 交叉场景消解后正常收敛")
 })
 
 test("F5：僵局检测——delivered 但制品指纹未变 → 仲裁卡含未修包清单；仅重派未修包 → 修复 → 完成", async () => {

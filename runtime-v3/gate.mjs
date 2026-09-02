@@ -7,6 +7,7 @@
 // 旧决定缺 reviewFingerprint 降级仅制品指纹（R2）；旧单 fingerprint 决定降级全局比对（§7 回滚双写兼容）。
 
 import { digestValue } from "./domain/digests.mjs"
+import { writableMatch } from "./domain/writable.mjs"
 
 export function artifactsFingerprint(items) {
   return digestValue(items.map(({ path, digest }) => ({ path, digest })).sort((a, b) => a.path.localeCompare(b.path)))
@@ -22,13 +23,15 @@ export function artifactFingerprints(stageItems, packages = null) {
   }
   const out = {}
   for (const p of packages) {
-    const paths = new Set()
-    for (const w of p?.writable ?? []) {
+    // 条目解析与 parseWritableEntry 同口径（lastIndexOf 冒号，路径可含冒号）；归属判定统一走
+    // writableMatch（目录条目覆盖其下路径）——精确匹配会把目录条目下制品排除出包指纹，
+    // 人工门双指纹（F5/F6）与僵局检测（消费规则 3）随之漏检。
+    const entries = (p?.writable ?? []).map((w) => {
       const text = String(w)
       const sep = text.lastIndexOf(":")
-      paths.add(sep > 0 ? text.slice(0, sep) : text)
-    }
-    out[p.id] = artifactsFingerprint(stageItems.filter((item) => paths.has(item.path)))
+      return { path: sep > 0 ? text.slice(0, sep) : text }
+    })
+    out[p.id] = artifactsFingerprint(stageItems.filter((item) => writableMatch(entries, item.path)))
   }
   return out
 }

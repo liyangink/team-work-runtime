@@ -13,6 +13,7 @@ import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, 
 import { registerDelivery, registerReview } from "./intake.mjs"
 import { loadGuidance } from "./guidance.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
+import { writableMatch, writablePathsOverlap } from "./domain/writable.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -74,7 +75,7 @@ function fixHint(code) {
     OPEN_INPUT_REQUIRED: "open 需要 --name 与 --objective；可选 --entry <stage>",
     DECISION_STALE: "读取最新卡片（tw run）后按其中的选项序号重新 decide",
     ENTRY_UNKNOWN: "--entry 必须是 workflow 声明的阶段之一",
-    DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次）",
+    DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次；路径以 / 结尾 = 目录授权，如 docs/:doc）",
     MAP_INVALID: "在 DSH 全局 settings.yaml 的 team-work-dsh.tiers 配置 junior/senior/expert；每档提供非空 provider 与 model（可为候选数组）",
     STATE_CORRUPT: "控制文件损坏：任务事实在 reports/journal，可重推导；遗留 dsh.json 不参与读取",
     RETIRE_UNKNOWN_WAVE: "tw run 或 dispatch-plan 的 wait-inflight 卡片输出当前波 waveId；请核对后重试",
@@ -196,8 +197,10 @@ function twCommand() {
 function NLART(task) {
   const stage = task.workflow ? null : null
   const items = (task.artifacts?.items ?? []).filter((it) => it.stage === (task.reports?.at(-1)?.stage ?? it.stage))
+  // 路径:kind 条目解析与 parseWritableEntry 同口径（lastIndexOf 冒号，路径可含冒号）；目录条目覆盖其下路径
+  const entryPathOf = (w) => { const s = String(w); const sep = s.lastIndexOf(':'); return sep === -1 ? s : s.slice(0, sep) }
   const lines = (task.packages ?? []).map((p) => {
-    const paths = items.filter((it) => (p.writable ?? []).some((w) => w.split(':')[0] === it.path)).map((it) => it.path)
+    const paths = items.filter((it) => writableMatch((p.writable ?? []).map((w) => ({ path: entryPathOf(w) })), it.path)).map((it) => it.path)
     return '- 包 ' + p.id + '：' + (paths.join('、') || '（无登记产出物）')
   })
   return lines.length ? String.fromCharCode(10) + lines.join(String.fromCharCode(10)) : '（当前阶段登记产出物：' + items.map((it) => it.path).join('、') + '）'
@@ -241,10 +244,24 @@ function isEscalatedTier(task, sp, pkg) {
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
 // guidance（可选）：角色/场景公共引导库（team-work/guidance），按 role+teamScene 检索注入；
 // 缺失或未加载时跳过——引导是增强，不阻塞派发。
+// 上一轮 blocked 上下文（扩权重派场景）：该包最新 owner 报告为 blocked 时注入派单卡，
+// 让重派后的 Owner（可能是新会话）知道上次为什么做不了、本轮范围已重新声明。
+// 注意：本函数用 at 墙钟选取"最新报告"，仅服务于派单卡展示文案；blocked 的**有效性**判定
+// （静止卡/让位/派发过滤）一律以 waves.effectiveBlockedSet 的 seq 因果口径为准，二者不共用比较器。
+function lastOwnerBlockedSummary(task, pkg) {
+  let last = null
+  for (const r of task.reports ?? []) {
+    if (r.role !== 'owner' || r.kind !== 'deliver' || (r.package ?? null) !== pkg) continue
+    if (!last || (r.at ?? '') >= (last.at ?? '')) last = r
+  }
+  return last && last.payload?.outcome === 'blocked' ? String(last.payload.summary ?? '') : null
+}
+
 function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const pkg = detail.package ?? null
-  const boundaries = detail.writable.map(({ path: p, artifactKind }) => p + (pkg ? '（包 ' + pkg + '，产出物 ' + artifactKind + '）' : '（产出物 ' + artifactKind + '）'))
+  const boundaries = detail.writable.map(({ path: p, artifactKind }) => p + (p.endsWith('/') ? '（目录授权：其下路径均可写）' : '') + (pkg ? '（包 ' + pkg + '，产出物 ' + artifactKind + '）' : '（产出物 ' + artifactKind + '）'))
+  const lastBlocked = (wave.kind === 'produce' || wave.kind === 'respond') ? lastOwnerBlockedSummary(task, pkg) : null
   const deliverCmd = twCommand() + ' deliver --task ' + task.name + ' --key ' + detail.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
   const verdictArg = ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>'
   const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
@@ -275,6 +292,7 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
     wave.kind === 'respond' ? reworkContext(task, stageDef.id, pkg) : '',
+    lastBlocked ? '## 上一轮 blocked 原因\n' + lastBlocked + '\n本轮可写范围已由 Lead 重新声明；若仍无法完成，请再次以 --outcome blocked 交付并在 summary 写明还缺什么。' : '',
     '上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。',
   ]
   return {
@@ -464,6 +482,22 @@ function pendingDecisionDetail(journal) {
 // 在同一临界区内落盘，并发 run 不会出现引导内容与派发事实错位或读到半程覆盖层的竞态。
 async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
 
+  // blocked 静止卡的用户恢复通道（单 owner）：Lead 携新的可写范围重跑 run = 用户重派指示（规则 6：
+  // awaiting-user 只由新的用户输入恢复）。直接派新 produce 波——新 dispatched 晚于 blocked 报告，
+  // 波次机的 blocked 判定自然解除；多包恢复走 plan 重拆（re-planned 同样晚于 blocked）后正常 run。
+  if (Array.isArray(state.next?.produceBlocked) && writable.length && writable[0] !== 'none' && !(Array.isArray(task.packages) && task.packages.length)) {
+    const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const { waveId, dispatchSeq } = nextWaveIdentity(task)
+    const decl = writable.map(parseWritableEntry)
+    const round = (projectRounds({ journal: task.journal, reports: task.reports }).get(null) ?? 0) + 1
+    const wave = { kind: 'produce', role: 'owner', round, owners: [{ package: null, round, continuation: false }] }
+    const d = { key: 'd' + dispatchSeq + '-' + randomBytes(3).toString('hex'), waveId, package: null, round, continuation: false, writable: decl }
+    const guidance = await loadGuidance(projectRoot)
+    const dispatch = withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint)
+    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, decl) }])
+    return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch, dispatches: [dispatch], wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '已按新可写范围重派 produce（上一轮 blocked 解除）；派单卡内嵌上一轮 blocked 原因' }
+  }
+
   if (state.next.kind === 'dispatch') {
     if (!state.next.wave) {
       // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：返回 blocker 卡（I5）
@@ -582,6 +616,16 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     // 共用——自带"这阶段做了什么"的人话事实（P4：runtime 从自有 reports/artifacts 推导），
     // Lead 不必翻任务目录；空摘要（如 blocked 静止单包无交付）自然省略字段。
     const progressText = stageProgress(task, state.stage)
+    // blocked 静止卡（produce/respond 波，非 decision 卡）：不签发 decision-issued（无 decide 语义），
+    // 恢复通道 = 扩权重派（单 owner run --writable 新范围；多包 plan 重拆后 run）；重复 run 幂等返回本卡。
+    if (Array.isArray(state.next.produceBlocked)) {
+      return {
+        ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-scope", transition: "await-decision",
+        blocked: state.next.produceBlocked, question: state.next.reason,
+        ...(progressText ? { progress: progressText } : {}),
+        note: "任务静止等待用户：扩大可写范围后重派（单 owner 重新 tw run --writable <新范围>；多包先 tw plan 重拆再 run），或决定结束",
+      }
+    }
     // 路由类 blocker 优先（E2E 实测缺陷修复）：gate 同时有路由未判定与人工门时，
     // 必须先出路由指引卡（走 tw route），不提前签发人工门决定——否则用户答完人工门
     // 又收到同样的人工门卡（路由仍悬空），死循环且指引缺失。
@@ -950,7 +994,7 @@ async function cmdArchive({ projectRoot, name }) {
   await rm(taskRoot(projectRoot, name), { recursive: true, force: true })
   // 归档只读强制（§5.2：归档后目录只读）——文件 0444、目录 0555
   await markTreeReadOnly(dest)
-  return { ok: true, task: name, archivedTo: path.relative(projectRoot, dest), form, kept: ["manifest.json", "artifacts/", "reviews(在 manifest)", "decisions.json", "journal-summary.jsonl"], cleaned: ["reports/", "snapshots/", "gates/", "runtime 状态"] }
+  return { ok: true, task: name, archivedTo: path.relative(projectRoot, dest), form, kept: ["manifest.json", "artifacts/", "reviews(在 manifest)", "decisions.json", "journal-summary.jsonl"], cleaned: ["reports/", "snapshots/", "runtime 状态"] }
 }
 
 // plan（v3.2）：Lead 拆包登记 + 机械验收（P2 调用内一次查完）。
@@ -984,7 +1028,10 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
   }
   for (let i = 0; i < paths.length; i += 1) {
     for (let j = i + 1; j < paths.length; j += 1) {
-      if (paths[i].path === paths[j].path) reasons.push('可写范围重叠：' + paths[i].pkg + ' 与 ' + paths[j].pkg + ' 都写 ' + paths[i].path)
+      // 互斥判定 = 祖先路径组件语义（domain/writable.mjs，可写互斥是并行前提）：
+      // 相同路径、或互为祖先组件（含尾斜杠目录条目与其下路径）均重叠——同一路径只一个 inode，
+      // 同名文件/目录（docs 与 docs/）在文件系统互斥；兄弟前缀（docs/ 与 docs-x/）不重叠。
+      if (writablePathsOverlap(paths[i].path, paths[j].path)) reasons.push('可写范围重叠：' + paths[i].pkg + ' 与 ' + paths[j].pkg + ' 都写 ' + paths[i].path + (paths[i].path !== paths[j].path ? ' 与 ' + paths[j].path : '') + '（相同路径或互为祖先目录才可写（一个 inode 原则）：docs 与 docs/、docs 与 docs/x 均冲突；兄弟前缀 docs/ 与 docs-x/ 不冲突）')
     }
   }
   for (const p of items) {
@@ -1017,7 +1064,9 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     const task = await loadTask(projectRoot, name, { workflow, policy })
     // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）
     const state = deriveTask(task)
-    if (state.status === 'awaiting-user') throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
+    // blocked 静止卡（produceBlocked）放行重拆：扩权重派正是该卡的恢复通道（re-planned 晚于 blocked 报告，
+    // 波次机据此解除静止）；其余待决卡（人工门/路由/升档审批）仍禁止重拆，先 decide。
+    if (state.status === 'awaiting-user' && !Array.isArray(state.next.produceBlocked)) throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
     // F3：在途判定统一走 waves.inflightBatch（与 derive/重建/提示同源；superseded 波不在在途）
     const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
     if (inflight) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.open.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
@@ -1211,7 +1260,7 @@ function helpCard() {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
       "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（模型选择由 tw-tool-subagent 创建时直接指定）",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
-      run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单）",
+      run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单；路径以 / 结尾 = 目录授权，如 docs/:doc）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
       decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片",
       intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",

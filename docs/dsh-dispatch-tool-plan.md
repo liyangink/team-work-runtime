@@ -131,7 +131,19 @@ tw-dispatch 自身存在不原子窗口（开单后、创建/登记完成前进�
 
 runtime-v3/cli.mjs（cmdRun 只读化、inflight 导出增强、dispatch-plan 人读模式）、dsh/tw-dispatch.js（三分支/并发声明/回执）、AGENTS.md 规则 6、skills/team-work-v3/references/dsh-orchestration.md（wait-inflight 处置节）、tests（run 只读无副作用、终端 dispatch-plan 人读推进、兜底矩阵：崩溃后补派/已登记透传/续派指引/降级透传/登记失败回执/retire 不补派）、docs/file-inventory.json、roadmap。
 
-### 7.5 遗留观察项
+### 7.5 二轮评审吸收（C/D 两视角，方向均确认无架构否决，9 条必改并入实施范围）
+
+1. run 只读化影响面补全：`skills/team-work-v3/SKILL.md`（Lead 推进循环整体建于 run——不改则终端死路）与 `references/topology-and-cost.md`；blocked 恢复五处文案改指 dispatch 侧（cli.mjs:626/1076/1263、waves.mjs:360、SKILL.md:24/39）；`ensureE2ePackages` 写副作用从 run 路径移除（dispatch-plan:1128 已有等价）；
+2. 指纹失效死循环封堵：只读 run 用 humanDecisionFresh 检测失效待决卡 → 返回「调 tw-dispatch / tw dispatch-plan 重签」指引；DECISION_STALE 两处 fix 文案同步改向；
+3. awaiting-user 表述收窄：只读 run 仅呈现已签发待决卡（首签归 dispatch）；归档卡/completed 幂等/wait-inflight 重建卡等天然只读行为保留；
+4. 规则 6 修订文案（双模式）：「推进是 dispatch 侧的单一写者：开单、决定卡签发、阶段流转与完成都在任务锁内由 dispatch 通道完成——dispatch-plan 是编排机器接口兼无插件终端的推进通道（人读输出），DSH 内由 tw-dispatch 调用；卡片即呈现单位。run 只读：返回当前状态卡与下一步指引，不写任务事实。awaiting-user 静止；completed 重复调用幂等返回同一完成卡片」；run/gate/dispatch-plan 三分工（查状态/查门/推进）补入方案表述；
+5. dispatch-plan 人读模式范围 = waves + 全部 stop 卡（awaiting-user/wait-inflight/completed/blocked）；存量约 10 个测试文件 120+ 处 run 推进用例与共享夹具 v3-fixtures 批量迁移（夹具先行）；
+6. 补派防双发：补派卡附 dispatchKey 与核对指引（先核对侧栏同波成员，存在则 agent-map 补登记）；补「创建后登记前崩溃→重试不双发」测试；
+7. modelHint 回填失败降级链：老 journal 无快照 → 按重建 tier 从当前全局 tiers 解析 → 仍不可解析报错并指 tw retire --wave；
+8. 三分支优先级声明：registered 缺失→降级透传；registered=true→透传（优先于续派）；续派→send_message 指引；其余→补派；
+9. 建议级 16 条随实施顺手（人读模式登记提醒、发布说明补重启会话、并发串行吞吐声明、run 冗余派发代码删除、§7 粘贴残留清理等）。
+
+### 7.6 遗留观察项
 
 - 登记失败残留（创建了但未登记、回执指引被无视）：回执指引+并发保守兜底，实机出现后再评估锁内占位原语（agent-map --claim）；
 - 旧会话装载的旧版 skill 不随宿主刷新：本次修订后 skill 的 wait-inflight 处置已自动化，旧会话按旧规程操作也不会死锁（兜底层接管），仅效率差异。

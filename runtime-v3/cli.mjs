@@ -84,6 +84,64 @@ function fixHint(code) {
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
+// ── 汇报呈现纪律（稳定注入）─────────────────────────────────────────────
+// 病灶：Lead 向用户汇报是「人机对话」——用户没看过工具调用与卡片原文；会话越长，
+// Lead 越被卡片里的编号/术语同化，汇报退化成编号+黑话（认知不对等随轮数恶化）。
+// 因此呈现纪律不依赖 skill 一次性装载，而是随每次汇报时机的卡片输出重新在场：
+// awaiting-user（用户决定点）带完整纪律 + 阶段工作摘素材（progress）；
+// dispatch/进展转折卡带简报纪律。注入为纯静态文本（E2E-14 终态幂等不受影响）。
+const PRESENTATION_DECISION = [
+  "呈现纪律（向用户转述本卡片时必须遵守，不因会话变长而省略）：",
+  "- 用户没有看过你的中间过程。汇报要自足：用完整句子说明这阶段实际做了什么、改动了哪些文件、评审意见怎么说、还有什么风险或分歧、现在需要用户决定什么。",
+  "- 用面向不了解任务细节的人的自然语言；卡片与任务目录里的编号（波次号、派单 key、指纹、规则编号）和内部术语（阶段名、波类型、gate id）不得原样抛给用户，需要引用时翻译成业务语言。",
+  "- 不得只报选项编号（如「选 1 还是 2」）而不解释每个选项的实际后果。",
+  "- progress 字段（若在场）是本阶段工作摘要素材：用它组织汇报，但用你自己的话完整表达。",
+].join("\n")
+const PRESENTATION_PROGRESS = "向用户汇报本卡片时用自然语言完整说明（做了什么、下一步会发生什么、需要用户做什么），不要输出卡片字段名或内部编号。"
+const PRESENTATION_DISPATCH = "向用户简报：本阶段派发了什么角色的成员做什么工作。派单全文（dispatch.prompt）原样转发给成员执行，不要复述给用户。"
+
+// 呈现注入（出口统一，单点全覆盖）：awaiting-user = 用户决定点（完整纪律）；
+// dispatch = 派发简报；advance/complete/blocked/wait-inflight = 进展转折。
+// 成员 deliver/review 回执、登记/查询类命令不命中（无这些字段），自然跳过。
+function attachPresentation(card) {
+  if (!card || typeof card !== "object" || Array.isArray(card) || card.presentation) return card
+  if (card.status === "awaiting-user") return { ...card, presentation: PRESENTATION_DECISION }
+  if (card.transition === "dispatch") return { ...card, presentation: PRESENTATION_DISPATCH }
+  if (card.transition === "advance" || card.transition === "complete" || card.transition === "blocked" || card.transition === "wait-inflight") {
+    return { ...card, presentation: PRESENTATION_PROGRESS }
+  }
+  return card
+}
+
+// 阶段工作摘要（P4：从 reports/artifacts 自有事实推导，给 Lead 现成的人话素材，
+// 不让 Lead 翻任务目录）：各包 Owner 交付一句话 + 产出物 + Challenger 评审结论
+// + （core 场景）Expert 裁决。多包按包归组（reports 按 at 升序，后写覆盖即最新）。
+function stageProgress(task, stageId) {
+  const stageReports = task.reports.filter((r) => r.stage === stageId)
+  const owners = new Map()
+  for (const r of stageReports) {
+    if (r.role !== "owner" || r.kind !== "deliver" || r.payload?.outcome === "blocked") continue
+    owners.set(r.package ?? "", r)
+  }
+  const lines = []
+  for (const [pkg, r] of owners) {
+    const paths = Array.isArray(r.payload?.paths) ? r.payload.paths : []
+    lines.push((pkg ? "包「" + pkg + "」" : "本阶段工作") + "：" + String(r.payload?.summary ?? "") + (paths.length ? "（产出：" + paths.join("、") + "）" : ""))
+  }
+  const challenger = stageReports.filter((r) => r.role === "challenger").at(-1)
+  if (challenger?.payload) {
+    const findings = Array.isArray(challenger.payload.findings) ? challenger.payload.findings.length : 0
+    lines.push("独立评审：" + String(challenger.payload.summary ?? "") + "（结论 " + challenger.payload.recommendation + (findings ? "，提出 " + findings + " 条意见" : "") + "）")
+  }
+  const expert = stageReports.filter((r) => r.role === "expert").at(-1)
+  if (expert?.payload?.verdict) {
+    lines.push("技术裁决：" + String(expert.payload.verdict.rationale ?? "") + "（结论 " + expert.payload.verdict.outcome + "）")
+  }
+  const items = (task.artifacts?.items ?? []).filter((it) => it.stage === stageId)
+  if (items.length) lines.push("已登记产出物：" + items.map((it) => it.path).join("、"))
+  return lines.join("\n")
+}
+
 // 复核修复：判定与写入必须同锁。appendEventsUnlocked 供已持锁的临界区使用。
 async function appendEventsUnlocked(task, events) {
   const file = path.join(task.root, "journal.jsonl")
@@ -452,7 +510,8 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
               { n: 2, label: '降回默认档继续', batchKey },
             ]
             await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: { decisionId, gateId: null, reason: '升档审批：' + escPkgs.map((e) => e.package + '→' + e.tier).join('、'), choices } }])
-            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: '以下包的 tier 高于场景默认档，是否批准按升档派发？（权重倍数 junior:senior:expert = 1:10:50）', escalations: escPkgs, choices }
+            const escProgress = stageProgress(task, state.stage)
+            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: '以下包的 tier 高于场景默认档，是否批准按升档派发？（权重倍数 junior:senior:expert = 1:10:50）', escalations: escPkgs, choices, ...(escProgress ? { progress: escProgress } : {}) }
           }
         }
         // 已批准（或降回默认档）：按实际档派发——降级路径由 decisions 中 choice='降回默认档继续' 体现：包 tier 忽略
@@ -519,6 +578,10 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   }
 
   if (state.next.kind === "await-decision") {
+    // 阶段工作摘要（呈现素材）：分支内全部用户决定点（blocked 静止/路由/人工门/僵局/converge-user）
+    // 共用——自带"这阶段做了什么"的人话事实（P4：runtime 从自有 reports/artifacts 推导），
+    // Lead 不必翻任务目录；空摘要（如 blocked 静止单包无交付）自然省略字段。
+    const progressText = stageProgress(task, state.stage)
     // 路由类 blocker 优先（E2E 实测缺陷修复）：gate 同时有路由未判定与人工门时，
     // 必须先出路由指引卡（走 tw route），不提前签发人工门决定——否则用户答完人工门
     // 又收到同样的人工门卡（路由仍悬空），死循环且指引缺失。
@@ -529,6 +592,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         route: routeBlocker.route,
         question: routeBlocker.requirement,
         fix: routeBlocker.recovery,
+        ...(progressText ? { progress: progressText } : {}),
         note: "先做路由判定（tw route），完成后人工门卡才会出现",
       }
     }
@@ -572,7 +636,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "等待期评审链或制品已变化，卡片自动失效重签" } }])
       } else {
         // 重出卡按当前事实重渲染 question/choices（不复用旧 reason；choices 由当前状态生成，与签发同函数）
-        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: state.next.reason ?? pending.reason, choices: cardChoices }
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: state.next.reason ?? pending.reason, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
       }
     }
     const decisionId = `dec-${randomBytes(3).toString("hex")}`
@@ -583,7 +647,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       fingerprints: { artifactFingerprint: currentArtifactFp, reviewFingerprint: currentReviewFp },
       ...(isStalemate ? { reworkStalemate: state.next.reworkStalemate.map(String) } : {}),
     } }])
-    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices }
+    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
   }
   if (state.next.kind === "blocked") {
     return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason, recovery: state.next.reason }] }
@@ -1169,7 +1233,7 @@ function helpCard() {
   }
 }
 
-export async function tw(argv, { projectRoot = process.cwd(), stdout = process.stdout } = {}) {
+async function twInner(argv, { projectRoot = process.cwd(), stdout = process.stdout } = {}) {
   const [cmd, ...rest] = argv
   const args = {}
   for (let i = 0; i < rest.length; i += 2) args[rest[i].replace(/^--/, "")] = rest[i + 1]
@@ -1235,6 +1299,22 @@ async function markTreeReadOnly(rootDir) {
   }
   await walk(rootDir)
   await chmod(rootDir, 0o555)
+}
+
+// tw 出口（唯一公共入口：bin、DSH tw-tool、测试都经此）——汇报呈现注入的统一后处理：
+// awaiting-user 用户决定点带完整呈现纪律（卡内另有 progress 素材），dispatch 带派发简报，
+// advance/complete/blocked/wait-inflight 带轻量提醒。注入随每次卡片输出重新在场——
+// Lead 的汇报纪律不依赖 skill 一次性装载，会话变长也不稀释（认知对等修复）。
+// dispatch-plan 的嵌套 stop 卡（result.card）同样处理；拒绝卡无 status/transition 不命中。
+export async function tw(argv, opts = {}) {
+  const card = await twInner(argv, opts)
+  if (card && typeof card === "object" && !Array.isArray(card)) {
+    if (card.card && typeof card.card === "object" && !Array.isArray(card.card)) {
+      return { ...card, card: attachPresentation(card.card) }
+    }
+    return attachPresentation(card)
+  }
+  return card
 }
 
 export { cmdOpen, cmdRun, cmdDecide, cmdIntent, cmdGate, cmdArchive }

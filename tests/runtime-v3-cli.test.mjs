@@ -147,3 +147,59 @@ test("partial 归档：未完成任务由用户终止后归档", async () => {
   const archived = await call(["archive", "--task", "quick-scan"])
   assert.equal(archived.form, "partial")
 })
+
+test("汇报呈现注入：用户决定点带纪律与素材，回执不注入，幂等稳定", async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-present-"))
+  const call = (argv) => tw(argv, { projectRoot })
+  await call(["open", "--name", "present-check", "--objective", "验证呈现注入", "--entry", "code-review"])
+
+  // dispatch 派发卡：轻量简报纪律（派单转发成员，不复述用户）
+  const d1 = await call(["run", "--task", "present-check", "--writable", "REPORT.md:code-review"])
+  assert.equal(d1.transition, "dispatch")
+  assert.ok(d1.presentation, "派发卡带呈现简报")
+  assert.match(d1.presentation, /原样转发给成员/)
+
+  // 成员 deliver 回执：不是用户汇报点，不注入
+  await writeFile(path.join(projectRoot, "REPORT.md"), "# 报告\n覆盖八视角", "utf8")
+  const delivered = await call(["deliver", "--task", "present-check", "--key", d1.dispatch.key, "--outcome", "delivered", "--summary", "完成八视角审查", "--paths", "REPORT.md"])
+  assert.equal(delivered.accepted, true)
+  assert.equal(delivered.presentation, undefined, "成员回执不注入呈现纪律")
+
+  // challenger accept → expert 裁决 → e2e skip → 人工门卡（用户决定点）
+  const d2 = await call(["run", "--task", "present-check"])
+  await call(["review", "--task", "present-check", "--key", d2.dispatch.key, "--recommendation", "accept", "--summary", "结论可靠"])
+  const d3 = await call(["run", "--task", "present-check"])
+  await call(["review", "--task", "present-check", "--key", d3.dispatch.key, "--recommendation", "accept", "--summary", "裁决", "--verdict", '{"outcome":"accept","rationale":"证据链完整","confidence":"high","recommendedAction":"验收"}'])
+  // 路由卡也是用户决定点：同样带完整纪律与阶段工作摘要
+  const routeCard = await call(["run", "--task", "present-check"])
+  assert.equal(routeCard.next, "route")
+  assert.match(routeCard.presentation, /呈现纪律/)
+  assert.match(routeCard.progress, /完成八视角审查/)
+  await call(["route", "--task", "present-check", "--route", "e2e", "--decision", "skip", "--basis", "审查类任务，无跨系统路径"])
+  const gate = await call(["run", "--task", "present-check"])
+  assert.equal(gate.status, "awaiting-user")
+
+  // 完整呈现纪律 + 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
+  assert.match(gate.presentation, /呈现纪律/)
+  assert.match(gate.presentation, /不得原样抛给用户/)
+  assert.match(gate.progress, /完成八视角审查/)
+  assert.match(gate.progress, /REPORT\.md/)
+  assert.match(gate.progress, /证据链完整/)
+
+  // 静止期重复 run：注入为静态文本，卡片自足稳定（I7 + 认知对等不随轮数漂移）
+  const again = await call(["run", "--task", "present-check"])
+  assert.equal(again.presentation, gate.presentation)
+  assert.equal(again.progress, gate.progress)
+
+  // dispatch-plan 的嵌套 stop 卡同样注入（编排通道与 run 通道同纪律，素材同携）
+  const plan = await call(["dispatch-plan", "--task", "present-check", "--json"])
+  assert.equal(plan.stop, "awaiting-user")
+  assert.match(plan.card.presentation, /呈现纪律/)
+  assert.equal(plan.card.progress, gate.progress)
+
+  // accept → completed：进展转折卡带轻量提醒
+  await call(["decide", "--task", "present-check", "--choice", "1"])
+  const done = await call(["run", "--task", "present-check"])
+  assert.equal(done.status, "completed")
+  assert.match(done.presentation, /自然语言完整说明/)
+})

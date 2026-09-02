@@ -15,7 +15,7 @@ description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱�
 - **审查强度**：默认轻量；安全敏感、跨模块、用户点名严格、生产缺陷复盘时要求完整八视角。
 - **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与档位（junior/senior/expert 预算）正交——裁决者每轮一个（波次机结构），expert 档的 owner 包完全正常，见拓扑与成本篇。
 
-场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；代码审查八视角与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（dispatch-plan → agent 派发）的脚本模板见 **[DSH 编排](references/dsh-orchestration.md)**；派单内按角色/场景自动注入的公共引导库见 **[派单引导库](references/guidance.md)**。
+场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；代码审查八视角与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；派单内按角色/场景自动注入的公共引导库见 **[派单引导库](references/guidance.md)**。
 
 ## Lead 操作
 

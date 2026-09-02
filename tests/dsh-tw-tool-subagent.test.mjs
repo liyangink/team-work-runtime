@@ -392,7 +392,11 @@ test("工具说明与 systemPrompt 同源：含三档价值主张、非工作流
   assert.match(desc, /不处于 team-work 工作流时同样可用/)
   assert.ok(desc.includes(decisionTableText()))
   assert.ok(section.text.includes(decisionTableText()))
-  assert.match(desc, /team-work 首派经本工具 target 直取 dispatch-plan 的 modelHint/)
+  // §3.7 三工具分工（tw-dispatch 上线）：波次派发行归 tw-dispatch，本工具行退守非工作流委派。
+  assert.match(desc, /正在推进 team-work 任务（派波次成员\/推进一步） → tw-dispatch/)
+  assert.match(desc, /非工作流委派：只读子派单、用户 @档位、并行调查、独立审查等 → tw-tool-subagent/)
+  assert.match(desc, /任务簿记：决定、门禁查询、交付、评审、补登记 → tw/)
+  assert.doesNotMatch(desc, /team-work 首派且 dispatch-plan 已给出 modelHint → tw-tool-subagent/)
   assert.doesNotMatch(desc, /第一阶段|第二阶段/)
   assert.doesNotMatch(section.text, /第一阶段|第二阶段/)
   assert.equal(section.name, "team-work-dsh:tw-tool-subagent")
@@ -571,7 +575,7 @@ test("index 装配：注册两工具 + systemPrompt section + 共享直接选择
     registerEmbeddedSkill: async () => {},
   })
   try {
-    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-tool-subagent"])
+    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-tool-subagent", "tw-dispatch"])
     assert.equal(sections.length, 1)
     assert.equal(sections[0].name, "team-work-dsh:tw-tool-subagent")
     assert.ok(sections[0].text.includes(TIER_VALUE_PROPS.senior))
@@ -635,7 +639,7 @@ test("index 装配：systemPrompt 服务缺失时降级 warn，不阻塞工具�
     registerEmbeddedSkill: async () => {},
   })
   try {
-    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-tool-subagent"])
+    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-tool-subagent", "tw-dispatch"])
     assert.ok(warns.some((m) => m.includes("systemPrompt 服务不可用")))
   } finally {
     if (typeof dispose === "function") dispose()

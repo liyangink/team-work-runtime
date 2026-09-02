@@ -1,6 +1,6 @@
 # tw-dispatch 工作流派发工具方案
 
-状态：**待用户审查**。
+状态：**已批准并实施**（§6 三项经用户确认：推翻旧方案 §5 裁决、三工具分工与「反复 tw-dispatch」推进循环、标签由工具生成；实施任务 tw-dispatch-tool，回归见 tests/dsh-dispatch.test.mjs 与 roadmap v3.3 记录）。
 
 ## 1. 背景与动机
 

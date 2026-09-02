@@ -3,6 +3,7 @@
 import { makeInjectContribution, resolveInstaller } from "./inject.js"
 import { twToolDefinition } from "./tw-tool.js"
 import { twToolSubagentDefinition, systemPromptSection } from "./tw-tool-subagent.js"
+import { twDispatchDefinition } from "./tw-dispatch.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 import { installPluginSettings } from "./settings.js"
 
@@ -102,7 +103,18 @@ export async function apply(ctx, config = {}, deps = {}) {
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: tw-tool-subagent 工具注册失败：" + String(error?.message ?? error))
   }
-  // 5) systemPrompt 决策表 section（§3.6/§3.7：与工具说明同源；服务缺失时降级不阻塞）
+  // 5) tw-dispatch 工作流派发工具（复用创建核心与同一份直接选择表；宿主侧依赖运行时探测：
+  //    缺失时工具报错，不阻塞装载）。波次推进/派发经此工具，tw-tool-subagent 退守非工作流委派。
+  try {
+    ctx.tools.register(twDispatchDefinition(ctx, {
+      tiersSource,
+      directSelections,
+      isModelInjectionReady: () => setupRegistered && typeof resolvedInstaller === "function",
+    }))
+  } catch (error) {
+    ctx.logger?.warn?.("team-work-dsh: tw-dispatch 工具注册失败：" + String(error?.message ?? error))
+  }
+  // 6) systemPrompt 决策表 section（§3.6/§3.7：与工具说明同源；服务缺失时降级不阻塞）
   let sectionDisposer = null
   try {
     // systemPrompt 是可选增强，不列入顶层 inject；真实 Cordis Context 经 get 查询，

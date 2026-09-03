@@ -9,8 +9,13 @@ import {
   TOOL_NAME,
   TIER_VALUE_PROPS,
   TIER_NAMES,
+  coldSessionReceived,
+  coldSessionStatus,
+  createDirectedSubagent,
   normalizeTarget,
+  ownSuffixOf,
   resolveTierSelection,
+  sessionReceived,
   toolDescriptionText,
   systemPromptSection,
   decisionTableText,
@@ -255,6 +260,208 @@ test("execute：创建失败清理待注入选择，不复用已有会话（§3.
   assert.equal(card.code, "TW_SUB_START_FAILED")
   assert.match(card.message, /不复用已有会话/)
   assert.equal(selections.size, 0)
+})
+
+// ── 确定性复用对账（返工终版判定链，docs/dispatch-rework-investigation.md §二·A + §三 fake 契约）──
+
+// fake 宿主（与 dsh-dispatch.test.mjs 同款 5 条契约：sessions.get 只活会话 / listSnapshots 只已物化 /
+// followup 活冷均入队且接受即落盘 / header.seedLength + spliced(inserted) 事件形态 + parentSession +
+// UNAUTHORIZED·DUPLICATE_CHILD / readRaw 按需读回）
+function makeReconcileHost() {
+  const live = new Map()
+  const store = new Map()
+  const started = []
+  const followups = []
+  let msgSeq = 0
+  const splice = (session, text) => {
+    session.events.push({ type: "agent/inbox/spliced", seq: session.events.length + 1, time: 0, data: { target: "next-turn", start: 0, inserted: [{ id: "msg-" + (++msgSeq), role: "user", content: [{ type: "text", text }] }] } })
+  }
+  const persist = (session) => store.set(session.id, { header: { ...session.header }, events: session.events.map((e) => ({ ...e, data: structuredClone(e.data) })) })
+  const ctx = {
+    llm: { resolveCallConfig: async (config) => ({ ...config }) },
+    subagents: {
+      getProvider: () => ({ name: "spawn", prepareContinuable: async () => ({}) }),
+      startContinuable: async (spec) => {
+        if (live.has(spec.childId) || (spec.childId !== undefined && store.has(spec.childId))) {
+          throw Object.assign(new Error('subagent "' + spec.childId + '" already exists'), { code: "DUPLICATE_CHILD" })
+        }
+        started.push(spec)
+        const session = { id: spec.childId, header: { id: spec.childId, parentSession: spec.request.parent.id, seedLength: 0 }, events: [{ type: "subagent/descriptor", seq: 1, time: 0, data: { mode: "continuable" } }] }
+        live.set(spec.childId, session)
+        splice(session, spec.request.prompt[0]?.text ?? "")
+        persist(session)
+        return { childId: spec.childId, messageId: "m-" + started.length }
+      },
+      followup: async (parent, childId, content) => {
+        let session = live.get(childId)
+        if (!session) {
+          const cold = store.get(childId)
+          if (!cold) throw Object.assign(new Error("unavailable"), { code: "NOT_RESUMABLE" })
+          if (cold.header.parentSession !== parent.id) throw Object.assign(new Error("foreign parent"), { code: "UNAUTHORIZED" })
+          session = { id: childId, header: { ...cold.header }, events: cold.events.map((e) => ({ ...e, data: structuredClone(e.data) })) }
+          live.set(childId, session)
+        } else if (session.header.parentSession !== parent.id) {
+          throw Object.assign(new Error("foreign parent"), { code: "UNAUTHORIZED" })
+        }
+        followups.push({ childId, text: content[0]?.text })
+        splice(session, content[0]?.text ?? "")
+        persist(session)
+        return "msg-" + (++msgSeq)
+      },
+      drainContinuableChildren: async () => {},
+    },
+    sessions: { get: (id) => live.get(id), flush: async () => true },
+    sessionPersistence: {
+      supportsRawArtifacts: true,
+      listSnapshots: async () => [...store.values()].map((s, i) => ({ header: { ...s.header }, revision: "r" + i })),
+      readRaw: async (id) => {
+        const s = store.get(id)
+        return s && { meta: { ...s.header }, filename: id + ".jsonl", content: [JSON.stringify(s.header), ...s.events.map((e) => JSON.stringify(e))].join("\n") }
+      },
+      inspect: async (id) => {
+        const s = store.get(id)
+        if (!s) throw new Error("not found")
+        return { meta: { ...s.header }, events: s.events.map((e) => ({ ...e, data: structuredClone(e.data) })) }
+      },
+    },
+  }
+  return {
+    ctx, started, followups,
+    injectLive(id, { received = null, parentSession = "lead-1", seedLength = 0, seedEvents = [] } = {}) {
+      const session = { id, header: { id, parentSession, seedLength }, events: [...seedEvents, { type: "subagent/descriptor", seq: seedEvents.length + 1, time: 0, data: { mode: "continuable" } }] }
+      if (received != null) splice(session, received)
+      live.set(id, session)
+    },
+    injectCold(id, { received = null, parentSession = "lead-1", materialized = true } = {}) {
+      const session = { id, header: { id, parentSession, seedLength: 0 }, events: [{ type: "subagent/descriptor", seq: 1, time: 0, data: { mode: "continuable" } }] }
+      if (received != null) splice(session, received)
+      if (materialized) persist(session)
+    },
+  }
+}
+
+const RECONCILE_EXEC = { agent: { id: "lead-1" } }
+const reconcile = (host, input) => createDirectedSubagent(host.ctx, { directSelections: new Map() }, { description: "d", prompt: "派单正文", target: { provider: "p-a", model: "m-j1" }, ...input, exec: RECONCILE_EXEC })
+
+test("判定原语：ownSuffixOf 按 header.seedLength 切分（seed 是父历史不是本会话工作）", () => {
+  const seedEvent = { type: "session/end-seed", seq: 1, time: 0, data: {} }
+  const own = { type: "agent/inbox/spliced", seq: 2, time: 0, data: { target: "next-turn", start: 0, inserted: [{ id: "m", role: "user" }] } }
+  assert.equal(ownSuffixOf({ header: { seedLength: 1 }, events: [seedEvent, own] }).length, 1)
+  assert.equal(ownSuffixOf({ header: { seedLength: 0 }, events: [seedEvent, own] }).length, 2)
+  assert.equal(ownSuffixOf({ header: {}, events: [own] }).length, 1, "缺省 seedLength=0：全部事件都是 own")
+  assert.equal(ownSuffixOf({ events: "not-array" }), null, "形态不可判定返回 null")
+})
+
+test("判定原语：sessionReceived——own-suffix 有 spliced(inserted 非空) 即收单；形态不可判定保守按已收单", () => {
+  const spliced = (n) => ({ type: "agent/inbox/spliced", data: { inserted: Array.from({ length: n }, () => ({})) } })
+  assert.equal(sessionReceived({ header: { seedLength: 0 }, events: [{ type: "subagent/descriptor" }, spliced(1)] }), true)
+  assert.equal(sessionReceived({ header: { seedLength: 0 }, events: [{ type: "subagent/descriptor" }] }), false, "descriptor-only 未收单")
+  assert.equal(sessionReceived({ header: { seedLength: 1 }, events: [spliced(1), { type: "subagent/descriptor" }] }), false, "seed 段的 spliced 不算收单")
+  assert.equal(sessionReceived({ header: { seedLength: 0 }, events: [{ type: "agent/inbox/spliced", data: { inserted: [] } }] }), false, "inserted 空数组不算")
+  assert.equal(sessionReceived({ events: undefined }), true, "形态不可判定：宁可停滞不双发")
+  assert.equal(sessionReceived(null), true)
+})
+
+test("判定原语：coldSessionStatus——listSnapshots 匹配与归属；服务缺失 undetermined none", async () => {
+  const persistence = {
+    listSnapshots: async () => [
+      { header: { id: "ours-1", parentSession: "lead-1" } },
+      { header: { id: "foreign-1", parentSession: "lead-2" } },
+    ],
+  }
+  assert.equal((await coldSessionStatus({ persistence, parentSessionId: "lead-1" }, "ours-1")).status, "ours")
+  assert.equal((await coldSessionStatus({ persistence, parentSessionId: "lead-1" }, "foreign-1")).status, "foreign")
+  assert.equal((await coldSessionStatus({ persistence, parentSessionId: "lead-1" }, "absent")).status, "none")
+  assert.equal((await coldSessionStatus({ persistence: null, parentSessionId: "lead-1" }, "ours-1")).undetermined, true, "持久服务缺失按 none（宿主 DUPLICATE 兜底）")
+  const headerless = { listSnapshots: async () => [{ header: { id: "no-parent" } }] }
+  assert.equal((await coldSessionStatus({ persistence: headerless, parentSessionId: "lead-1" }, "no-parent")).status, "ours", "无 parentSession 字段（顶层会话）不判 foreign")
+})
+
+test("判定原语：coldSessionReceived——readRaw 第一行 header、事件从 seedLength+1 行起；撕裂行保守已收单", async () => {
+  const mk = (lines, seedLength = 0) => ({
+    supportsRawArtifacts: true,
+    readRaw: async () => ({ meta: { seedLength }, filename: "x.jsonl", content: lines.join("\n") }),
+  })
+  const splicedLine = JSON.stringify({ type: "agent/inbox/spliced", data: { inserted: [{ id: "m" }] } })
+  const header = JSON.stringify({ id: "c1", seedLength: 0 })
+  assert.equal(await coldSessionReceived(mk([header, splicedLine]), 0), true)
+  assert.equal(await coldSessionReceived(mk([header, '{"type":"subagent/descriptor"}']), 0), false, "无 spliced 行=未收单")
+  assert.equal(await coldSessionReceived(mk([header, splicedLine], 1), 1), false, "seedLength=1：行 1 的 spliced 属 seed 段，不算收单")
+  assert.equal(await coldSessionReceived(mk([header, '{"type":"seed-event"}', splicedLine], 1), 1), true, "own 段（行 seedLength+1 起）的 spliced 算收单")
+  assert.equal(await coldSessionReceived(mk([header, '{"torn json', splicedLine], 0), 0), true, "撕裂行在 own 段前出现：保守按已收单")
+  const noRaw = { supportsRawArtifacts: false, inspect: async () => ({ meta: { seedLength: 0 }, events: [{ type: "agent/inbox/spliced", data: { inserted: [{}] } }] }) }
+  assert.equal(await coldSessionReceived(noRaw, "c1"), true, "非 raw 后端降级 inspect")
+  const bothFail = { supportsRawArtifacts: false }
+  assert.equal(await coldSessionReceived(bothFail, "c1"), true, "两路都不可得保守按已收单")
+})
+
+test("创建核心对账：活会话（归属一致）→ 统一等待不投递（轮次 6 终裁②③：活=任务进行中，通知链驱动；活+未收单状态不存在）", async () => {
+  const host = makeReconcileHost()
+  host.injectLive("fixed-1", { received: "此前派单" })
+  const reused = await reconcile(host, { sessionId: "fixed-1" })
+  assert.deepEqual({ ...reused, sessionId: undefined }, { ok: true, sessionId: undefined, reused: true, source: "reconciled" })
+  assert.equal(host.started.length, 0)
+  assert.equal(host.followups.length, 0)
+
+  // 活会话无论收单与否（宿主语义下活壳不存在，防御性形态）一律等待：不投正文、不重建——
+  // received-wait 投递分支与 live-fresh 补发分支均已删除（重入恒等待，永不重投）。
+  const host2 = makeReconcileHost()
+  host2.injectLive("fixed-2", { received: null })
+  const waited = await reconcile(host2, { sessionId: "fixed-2", dispatchKey: "d1-x" })
+  assert.equal(waited.ok, true)
+  assert.equal(waited.reused, true, "活壳形态统一 reused 等待")
+  assert.equal(host2.followups.length, 0, "不补发正文")
+  assert.equal(host2.started.length, 0, "不重建")
+})
+
+test("创建核心对账：冷持久异主 → 接管冲突卡；冷持久归属一致 → followup 冷唤醒（按收单定消息）", async () => {
+  const host = makeReconcileHost()
+  host.injectCold("fixed-3", { received: "x", parentSession: "other-lead" })
+  const conflict = await reconcile(host, { sessionId: "fixed-3" })
+  assert.equal(conflict.ok, false)
+  assert.equal(conflict.code, "TW_SUB_TAKEOVER_CONFLICT")
+  assert.match(conflict.message, /接管冲突/)
+  assert.equal(host.followups.length, 0)
+
+  const host2 = makeReconcileHost()
+  host2.injectCold("fixed-4", { received: "此前派单" })
+  const repromptPrior = await reconcile(host2, { sessionId: "fixed-4", dispatchKey: "d2-y" })
+  assert.equal(repromptPrior.ok, true)
+  assert.equal(repromptPrior.resume, "incremental", "已收单冷会话（有上一轮上下文）：唤醒投本轮增量正文（轮次 6 终裁②：nudge 轻提示废弃，缺什么补什么）")
+  assert.equal(host2.followups[0].text, "派单正文")
+
+  const host3 = makeReconcileHost()
+  host3.injectCold("fixed-5", { received: null })
+  const reprompt = await reconcile(host3, { sessionId: "fixed-5" })
+  assert.equal(reprompt.resume, "full", "未收单冷会话（无上下文）：唤醒投全量正文")
+  assert.equal(host3.followups[0].text, "派单正文")
+})
+
+test("创建核心对账：无记录（含未物化崩溃壳）→ 同 ID 重建走正常创建路径；宿主判重兜底 DUPLICATE_CHILD", async () => {
+  const host = makeReconcileHost()
+  host.injectCold("fixed-6", { materialized: false }) // 未物化：listSnapshots 无记录
+  const created = await reconcile(host, { sessionId: "fixed-6" })
+  assert.equal(created.ok, true)
+  assert.equal(created.sessionId, "fixed-6", "同 id 重建")
+  assert.equal(created.reused, undefined)
+  assert.equal(host.started.length, 1)
+
+  const host2 = makeReconcileHost()
+  host2.injectCold("fixed-7", { received: "x", parentSession: "lead-1", materialized: true })
+  // 冷记录在场但持久服务被移除（undetermined none）→ 重建 → 宿主显式 childId 判重拒绝
+  host2.ctx.sessionPersistence = {}
+  const rejected = await reconcile(host2, { sessionId: "fixed-7" })
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.code, "TW_SUB_START_FAILED")
+  assert.match(rejected.message, /already exists|DUPLICATE/)
+})
+
+test("创建核心对账：followup 的 UNAUTHORIZED 转译接管冲突（活会话异主的竞态窗口）", async () => {
+  const host = makeReconcileHost()
+  host.injectLive("fixed-8", { received: null, parentSession: "other-lead" })
+  const out = await reconcile(host, { sessionId: "fixed-8" })
+  assert.equal(out.ok, false)
+  assert.equal(out.code, "TW_SUB_TAKEOVER_CONFLICT")
 })
 
 test("execute：缺少回收能力时在创建前拒绝", async () => {

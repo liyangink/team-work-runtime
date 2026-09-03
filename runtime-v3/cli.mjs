@@ -69,11 +69,11 @@ function fail(code, message) {
 
 function fixHint(code) {
   return ({
-    TASK_EXISTS: "换一个任务名，或用 tw run --task <name> 继续既有任务",
+    TASK_EXISTS: "换一个任务名，或用 tw dispatch-plan --task <name>（或 tw-dispatch）继续既有任务",
     TASK_NOT_FOUND: "检查拼写；tw open 创建新任务",
     TASK_NAME_INVALID: "任务名使用小写字母/数字/连字符，≤64 字符",
     OPEN_INPUT_REQUIRED: "open 需要 --name 与 --objective；可选 --entry <stage>",
-    DECISION_STALE: "读取最新卡片（tw run）后按其中的选项序号重新 decide",
+    DECISION_STALE: "读取最新卡片（tw run 查看；重签经 tw-dispatch / tw dispatch-plan）后按其中的选项序号重新 decide",
     ENTRY_UNKNOWN: "--entry 必须是 workflow 声明的阶段之一",
     DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次；路径以 / 结尾 = 目录授权，如 docs/:doc）",
     MAP_INVALID: "在 DSH 全局 settings.yaml 的 team-work-dsh.tiers 配置 junior/senior/expert；每档提供非空 provider 与 model（可为候选数组）",
@@ -211,14 +211,74 @@ function parseWritableEntry(entry) {
   return { path: entry.slice(0, sep), artifactKind: entry.slice(sep + 1) }
 }
 
-// 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）
-function inflightDispatches(task, stageId, guidance = null) {
+// 续派回溯（F4）：沿 journal 倒序找同角色同包范围内最近一个有映射的派发 key——
+// send_message 续派不登记新 key，映射链必然间断，只看紧邻 key 必断链；
+// 遇 stage-advanced 事件停止（不跨阶段串线）；跳过 superseded 波的 key（F3 排除面）。
+// D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
+// 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。
+// 消费方：dispatch-plan 的 waves 导出（expectedAgentId）与 wait-inflight 兜底重建（§7.3）共用。
+function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
+  for (let i = journal.length - 1; i >= 0; i -= 1) {
+    const e = journal[i]
+    if (e.type === 'stage-advanced') break
+    if (e.type !== 'dispatched') continue
+    const detail = e.detail
+    if (detail.key === d.key) continue
+    if (detail.role !== d.role) continue
+    if (excludedKeys.has(detail.key)) continue
+    if ((d.package ?? null) !== null && (detail.package ?? null) !== d.package) continue
+    if (agentMaps[detail.key]) return detail.key
+  }
+  return null
+}
+
+// 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）。
+// §7.3 兜底三字段（dispatch 自身崩溃窗口的恢复事实，由 runtime 锁内投影——绑定层不直读账本）。
+// 调用方约束：必须在任务锁内调用（registered 查 agents.json 与 journal 读取要求同一临界区）。
+// - modelHint：journal dispatched 快照回填；老 journal 无快照时按重建 tier 从当前全局 tiers 解析降级
+//   （§7.5.7 降级链）；仍不可解析置 modelHintUnresolved（消费方不得据此创建，指 tw retire --wave 回收）；
+// - expectedAgentId：仅续派条目——continuationPrevKey 回溯老 key 查 mappings；
+// - promptFull：仅续派条目——全量 prompt 变体（C②：断链 fresh 重建/空壳补发用，绑定层只选用不拼装）；
+// - registered：锁内查 mappings 该 key 有无对应代理（tw-dispatch 判定链的判定事实；
+//   agents.json 缺失/损坏时字段降级为缺失，消费方透传不补派）。
+async function inflightDispatches(task, stageId, guidance = null) {
   const stageDef = task.workflow.stages.find((st) => st.id === stageId)
   const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
   if (!inflight) return []
+  // agents.json 缺失 = 零登记事实（registered=false，补派安全）；损坏 = 判定事实不可得（registered
+  // 字段降级为缺失，tw-dispatch 透传不补派——宁透传不误派）。
+  let mappings = {}
+  let registryCorrupt = null
+  try {
+    mappings = ((await readJson(path.join(task.root, "agents.json"), { allowMissing: true })) ?? {}).mappings ?? {}
+  } catch (error) {
+    registryCorrupt = String(error?.message ?? error)
+  }
+  const excludedKeys = supersededKeys(task.journal)
+  const resolvedTiers = await resolveTiers()
   return inflight.open.map((d) => {
     const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, guidance).dispatch
-    return { ...card, dispatchKey: card.key }  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
+    // modelHint 回填降级链：journal 快照 → 按重建 tier 从当前全局 tiers 解析 → 不可解析标记（指 retire）
+    let modelHint = d.modelHint && d.modelHint.provider && d.modelHint.model ? d.modelHint : null
+    let modelHintUnresolved = false
+    if (!modelHint) {
+      const hint = computeModelHint(resolvedTiers.tiers[card.tier], [])
+      if (hint?.provider && hint?.model) modelHint = hint
+      else modelHintUnresolved = true
+    }
+    const prevKey = d.continuation ? continuationPrevKey({ journal: task.journal, agentMaps: mappings, excludedKeys }, d) : null
+    return {
+      ...card,
+      dispatchKey: card.key,  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
+      ...(modelHint ? { modelHint } : {}),
+      ...(modelHintUnresolved ? { modelHintUnresolved: true } : {}),
+      ...(d.continuation && prevKey && mappings[prevKey] ? { expectedAgentId: mappings[prevKey] } : {}),
+      // mappedAgentId：该 key 已登记的 childId 值（判定链四态用：registered=true ≠ 子代理存在，
+      // 消费方按四态处置——活→等待/冷归属一致→冷唤醒/异主→接管冲突/无记录→同 id 重建；机器防双发的事实源，P4 投影）
+      ...(registryCorrupt ? {} : mappings[card.key] ? { mappedAgentId: mappings[card.key] } : {}),
+      ...(registryCorrupt ? {} : { registered: Boolean(mappings[card.key]) }),
+      ...(registryCorrupt ? { registeredUnresolved: registryCorrupt } : {}),
+    }
   })
 }
 
@@ -239,6 +299,31 @@ function ownerTierFor(task, sp, pkg = null) {
 function isEscalatedTier(task, sp, pkg) {
   const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
   return Boolean(pkgTier && (TIER_RANK[pkgTier] ?? 0) > (TIER_RANK[sp.ownerTier] ?? 0))
+}
+// 升档批准指纹（Expert 裁决 r2 幽灵复活封堵 + 返工终版 F-2 扩字段）：授权对象 = 完整包配置序列化
+//（id+tier+writable+done+dependsOn——re-plan 改任何包配置维度都使旧批准失效）。签发、批准落盘、
+// 幂等查找、decide 校验四处共用同一指纹；历史批准记录无该字段视为失效（多问一次优于误授权）。
+// 排序保证同配置不同书写顺序同指纹；纯函数（四处同源，防漂移）。
+function escalationFingerprint(task) {
+  return JSON.stringify(
+    (task.packages ?? [])
+      .map((p) => ({ id: p.id, tier: p.tier ?? null, writable: p.writable ?? [], done: p.done ?? [], dependsOn: p.dependsOn ?? [] }))
+      .sort((a, b) => (a.id < b.id ? -1 : 1)),
+  )
+}
+
+// 当前阶段双指纹（B 同源化：runStatusCard / runTransition / cmdDecide 三处共用同一计算——
+// 渲染失效检测、签发锚点与 decide 校验不漂移）
+function currentArtifactFpOf(task, state) {
+  return artifactFingerprints(
+    task.artifacts.items.filter((i) => i.stage === state.stage),
+    Array.isArray(task.packages) && task.packages.length ? task.packages : null,
+  )
+}
+function currentReviewFpOf(task, state, workflow, policy) {
+  const stageDef = workflow.stages.find((st) => st.id === state.stage)
+  const sp = scenePolicy(policy, stageDef?.teamScene ?? "implementation")
+  return reviewChainFingerprint({ reports: task.reports.filter((r) => r.stage === state.stage), journal: task.journal, core: Boolean(sp.core) })
 }
 
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
@@ -269,15 +354,20 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '')
   const roleHint = guidance?.roles?.[wave.role]
   const sceneHint = guidance?.scenes?.[stageDef.teamScene]
-  const parts = [
+  // 意图上下文三段（C② 全量变体的内嵌内容；非 continuation 派单的 prompt 本身就是全量）
+  const contextParts = [
+    '目标：' + task.intent.objective,
+    task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : '',
+    task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : '',
+  ]
+  const headParts = [
     intro,
     headLine,
     roleHint ? '## 角色指引（' + wave.role + '）\n' + roleHint : '',
     sceneHint ? '## 场景指引（' + stageDef.teamScene + '）\n' + sceneHint : '',
-    detail.continuation ? '' : '目标：' + task.intent.objective,
-    detail.continuation ? '' : (task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : ''),
-    detail.continuation ? '' : (task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : ''),
-    wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',,
+  ]
+  const tailParts = [
+    wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     // §4 写边界补强（phase3 方案）：声明越界后果——三层防线可见化（派单纪律/ deliver 校验/快照恢复）
     wave.role === 'owner' ? '可写范围外的修改会被 deliver 拒绝；已越界污染的产出物可在恢复轮回滚（tw restore 快照恢复）。不要尝试绕过。' : '',
     wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。被审制品清单：' + NLART(task) : '',
@@ -295,6 +385,19 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     lastBlocked ? '## 上一轮 blocked 原因\n' + lastBlocked + '\n本轮可写范围已由 Lead 重新声明；若仍无法完成，请再次以 --outcome blocked 交付并在 summary 写明还缺什么。' : '',
     '上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。',
   ]
+  // C② 全量 prompt 变体（返工终版 §二·C）：continuation 派单的增量正文假设成员有原上下文——
+  // 断链 fresh 重建 / 空壳（未收单）补发时新成员没有上下文，增量单不可执行。runtime 在导出层附
+  // promptFull（objective/constraints/exclusions 内嵌），绑定层只选用不拼装（P4 与 §7.1 评审先例）。
+  const join = (sections) => sections.filter(Boolean).join('\n\n')
+  const prompt = join([...headParts, ...(detail.continuation ? [] : contextParts), ...tailParts])
+  const promptFull = detail.continuation
+    ? join([
+        ['# 续派全量变体（key: ' + detail.key + '）——原会话上下文不可用时的自足派单', headLine],
+        headParts.slice(2),
+        contextParts,
+        tailParts,
+      ].flat())
+    : prompt
   return {
     ok: true,
     task: task.name,
@@ -312,7 +415,8 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
       ...(pkg != null ? { package: pkg } : {}),
       continuation: Boolean(detail.continuation),
       ...(wave.scope ? { scope: wave.scope } : {}),
-      prompt: parts.filter(Boolean).join('\n\n'),
+      prompt,
+      ...(detail.continuation ? { promptFull } : {}),
     },
   }
 }
@@ -341,35 +445,126 @@ async function archivedCard(projectRoot, name) {
   }
 }
 
+// run 的下一步指引（§7 修订 v2）：run 只读后，一切推进（开单/签发/流转/完成）经 dispatch 通道。
+const DISPATCH_HINT = "推进：调 tw-dispatch（{ task }，单次调用完成开单+创建+登记）；无 DSH 插件的终端用 tw dispatch-plan --task <名> [--writable <路径>:<kind>]"
+
+// run（§7.2 修订 v2 + 返工终版 §二·D）：只读状态卡 + 下一步指引。推进是 dispatch 侧的单一写者
+//（AGENTS 规则 6）：开单、决定卡签发、阶段流转与完成都在任务锁内由 dispatch 通道完成——dispatch-plan
+// 是编排机器接口兼无插件终端的推进通道（人读输出），DSH 内由 tw-dispatch 调用；卡片即呈现单位。
+// run 只读且**无锁**（与 gate 同一口径）：旧实现取任务锁会在锁目录创建/写入/删除锁文件——锁目录
+// 只读时 run 抛 EACCES，不是只读；且锁外首次读有一致性窗口。无锁快照承诺：锁目录只读时 run 照常
+// 返回状态卡、盘上零变化（含锁文件）。单文件原子写保证各文件不撕裂，跨文件尽力一致——卡面标注
+// 所读 journal seq 版本（journalSeq）供调用方对账；自愈写回只在锁内写命令（loadTask repair=false）。
+// awaiting-user 静止；completed 重复调用幂等返回同一完成卡片。
 async function cmdRun({ projectRoot, name, writable = [] }) {
+  if (writable.length) {
+    throw fail("USAGE", "run 已只读，不接受 --writable；扩权重派/推进请用 tw-dispatch（writables 参数）或 tw dispatch-plan --writable <路径>:<kind>")
+  }
   const { workflow, policy } = await loadDefinitions(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
     if (archived) return archived
   }
-  const early = await loadTask(projectRoot, name, { workflow, policy })
-  const earlyState = deriveTask(early)
-  if (earlyState.status === "completed") {
-    // E2E-14：终态幂等——重复 run 返回与完成时完全相同的卡片
-    return { ok: true, task: name, stage: earlyState.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
+  const task = await loadTask(projectRoot, name, { workflow, policy })
+  const state = deriveTask(task)
+  const card = await runStatusCard({ projectRoot, name, task, state, workflow, policy })
+  const lastSeq = task.journal.length ? task.journal[task.journal.length - 1].seq : 0
+  return { ...card, journalSeq: lastSeq }
+}
+
+// 只读状态卡渲染（cmdRun 专用）：分支与 runTransition 平行但零写入——runTransition 是 dispatch 通道的
+// 推进器（唯一写者），本函数只呈现事实与指路。天然只读的行为保留：归档摘要卡、completed 幂等完成卡、
+// wait-inflight 在途重建卡；决定卡仅呈现已签发的（首签归 dispatch，§7.5.3），签发指纹失效时给重签指引
+// 而不作废旧卡（作废/重签都是写，归 dispatch 通道——封堵「run 反复重签」的死循环写路径，§7.5.2）。
+async function runStatusCard({ projectRoot, name, task, state, workflow, policy }) {
+  // E2E-14：终态幂等——重复 run 返回与完成时完全相同的卡片
+  if (state.status === "completed") {
+    return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
-  // 复核修复：判定与写入同锁——并发 run 只有一方完成派发/推进，另一方锁内重推导后拿到新状态
-  // run 派单同样固化全局配置模型快照（修复回归：9b0b92c 后仅 dispatch-plan 固化，run 派单丢失
-  // modelHint → agent-map 无快照可落 → 插件注入静默失效，Lead 主通道子代全部默认模型）。
-  // 与 dispatch-plan 同源：resolveTiers 全局读取 + usedFamilies 波内家族去重闭包。
-  const resolved = await resolveTiers()
-  const usedFamilies = []
-  const selectModelHint = (tier) => {
-    const hint = computeModelHint(resolved.tiers[tier], usedFamilies)
-    if (hint?.family) usedFamilies.push(hint.family)
-    return hint
+  if (state.next.kind === "dispatch") {
+    if (!state.next.wave) {
+      // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：呈现 blocker 卡（I5；只读推导）
+      const blockers = (state.gate?.blockers ?? state.next.hint ?? []).map((b2) => (typeof b2 === "string" ? { message: b2, recovery: b2 } : b2))
+      return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers, transition: "blocked" }
+    }
+    const wave = state.next.wave
+    return {
+      ok: true, task: name, stage: state.stage, status: "working", next: "dispatch",
+      wave: { kind: wave.kind, role: wave.role, round: wave.round },
+      note: "有待派发波次（" + wave.kind + " · " + wave.role + " 第 " + wave.round + " 轮）。" + DISPATCH_HINT,
+    }
   }
-  return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
-    await ensureE2ePackages(task) // B：e2e 场景无 packages 时按模板物化（幂等；在 derive 前生效）
-    const state = deriveTask(task)
-    return runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
-  })
+  if (state.next.kind === "advance") {
+    return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", note: "当前阶段门禁已通过、待进入下一阶段。" + DISPATCH_HINT }
+  }
+  if (state.next.kind === "complete") {
+    return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", note: "任务完成条件已满足、待收尾出完成卡。" + DISPATCH_HINT }
+  }
+  if (state.next.kind === "wait-inflight") {
+    // F3/F4 在途重建（只读）：卡内嵌原派单全文与兜底判定事实（modelHint/expectedAgentId/registered）。
+    // 恢复入口 = tw-dispatch：按条目 registered/expectedAgentId 逐条自动处置（已登记等待/续派指引/补派）；
+    // 无插件终端按 dsh-orchestration 的 wait-inflight 规程手工处置。
+    const guidance = await loadGuidance(projectRoot) // 惰性：在途重建按需加载
+    const inflight = await inflightDispatches(task, state.stage, guidance)
+    return {
+      ok: true, task: name, stage: state.stage, status: "working", next: "wait", transition: "wait-inflight",
+      dispatchKey: state.next.dispatchKey,
+      ...(state.next.waveId ? { waveId: state.next.waveId } : {}),
+      wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round },
+      inflight,
+      note: "波次 " + state.wave.kind + "（" + state.wave.role + " 轮次 " + state.wave.round + "）已派发、部分在途（inflight 可原样转发补派：" + inflight.map((d) => d.key).join("、") + "）。" + DISPATCH_HINT,
+    }
+  }
+  if (state.next.kind === "await-decision") {
+    // 阶段工作摘要（呈现素材）：与 runTransition 的用户决定点共用同一 stageProgress 推导
+    const progressText = stageProgress(task, state.stage)
+    // blocked 静止卡（produce/respond 波，非 decision 卡）：只读呈现；恢复 = 扩权重派，入口在 dispatch 通道
+    if (Array.isArray(state.next.produceBlocked)) {
+      return {
+        ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-scope", transition: "await-decision",
+        blocked: state.next.produceBlocked, question: state.next.reason,
+        ...(progressText ? { progress: progressText } : {}),
+        note: "任务静止等待用户：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或决定结束",
+      }
+    }
+    // B（返工终版 §二·B）：渲染一律同钉账本原卡（derive 静止化带出的 state.next.pending）——
+    // question/choices 直接用签发时落盘的 pending.reason/pending.choices，禁止重算（防两源错位）。
+    const pending = state.next.pending ?? null
+    if (pending) {
+      if (pending.migrate) {
+        // F9 迁移冲突卡：只读渲染其签出时的 question/choices（迁移卡无指纹语义，decide 直答）
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, note: "迁移冲突卡待决：decide 保留版本后任务恢复推进" }
+      }
+      if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp: currentArtifactFpOf(task, state, workflow, policy), reviewFp: currentReviewFpOf(task, state, workflow, policy) })) {
+        // 指纹失效（§7.5.2 死循环封堵）：只读 run 不作废不重签（写归 dispatch 通道），返回失效指引卡——
+        // 调 tw-dispatch / tw dispatch-plan 推进时由 runTransition 作废旧卡（decided:superseded）并重签。
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "该待决卡已失效（签发后制品或评审链又变化，原选项不可再 decide）：调 tw-dispatch（或 tw dispatch-plan）重签最新卡片后重新 decide" }
+      }
+      if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
+        // 升档指纹失效（包配置变化）：同款 stale 指引；重签由 dispatch 通道作废旧卡后重新出卡
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "该升档待决卡已失效（签发后包配置变化，原选项不可再 decide）：调 tw-dispatch（或 tw dispatch-plan）重签最新卡片后重新 decide" }
+      }
+      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(progressText ? { progress: progressText } : {}) }
+    }
+    // 路由类 blocker（pending 之后——routeBlocker 在场时 derive 不会静止）：只读呈现路由指引
+    const routeBlocker = (state.gate?.blockers ?? []).find((b) => b.route && b.awaitingUser)
+    if (routeBlocker && !task.decisions.some((d) => d.route === routeBlocker.route)) {
+      return {
+        ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "route", transition: "await-route",
+        route: routeBlocker.route,
+        question: routeBlocker.requirement,
+        fix: routeBlocker.recovery,
+        ...(progressText ? { progress: progressText } : {}),
+        note: "先做路由判定（tw route），完成后人工门卡才会出现",
+      }
+    }
+    // 未签发（人工门首签/僵局/blocked 决定卡首签归 dispatch 通道，§7.5.3 收窄）：只读给指引不签发
+    return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", ...(state.next.reason ? { question: state.next.reason } : {}), note: (state.next.reason ? "需要用户决定（" + state.next.reason + "）" : "需要用户决定") + "；决定卡由 dispatch 通道签发。" + DISPATCH_HINT }
+  }
+  if (state.next.kind === "blocked") {
+    return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason, recovery: state.next.reason }] }
+  }
+  return { ok: true, task: name, stage: state.stage, status: state.status, next: "dispatch", note: DISPATCH_HINT }
 }
 
 // B（pre-phase3 §B）：e2eTemplate 物化——e2e 场景阶段首次派发前，任务无 packages 时按 policy 模板生成
@@ -476,15 +671,38 @@ function pendingDecisionDetail(journal) {
 // 零引导 I/O（每次调用 = 4 次 readdir（包内 + 项目根 roles/scenes，项目根缺失静默跳过）
 // + 全部引导文件读取，见 guidance.mjs）。
 // 无模块级缓存：每次派发/补发重新全量读取，保住"改引导文件即下次派发生效"的热变语义。
-// 锁内执行权衡：本函数整体在任务锁（locks/task.lock，见 cmdRun 的 withOwnerLock）内运行，
+// 锁内执行权衡：本函数整体在任务锁（locks/task.lock，见 cmdDispatchPlan 的 withOwnerLock）内运行，
 // 引导读取计入持锁时间——代价通过惰性控制在最小（仅派发/在途重建分支才读），
 // 换取"判定与写入同锁"（复核修复原则）：注入引导的派单文本与 dispatched/journal 事实
 // 在同一临界区内落盘，并发 run 不会出现引导内容与派发事实错位或读到半程覆盖层的竞态。
+// 待决卡选择表（F5 四类僵局/返工/人工门/默认收敛；runTransition 签发与 runStatusCard 只读渲染共用）：
+// 僵局卡对既有 converge-user choices 的扩展——「追加一轮」对僵局包会立即再判僵局（用户可见空转），不得沿用；
+// blocked 卡用专用两选项「重派 respond（新绑定波）/ 结束任务」——不沿用「追加一轮」
+// （extra-round 无派发路径、绑定波报告仍 blocked → 空转循环，实证修正）。
+function decisionChoicesFor({ state, human }) {
+  const isStalemate = Array.isArray(state.next.reworkStalemate)
+  const isBlocked = Boolean(state.next.reworkBlocked)
+  return isStalemate
+    ? [
+        { n: 1, label: "接受现状", desc: "未修包按原内容过评审链（人工门需重新确认）", grant: "accept-as-is" },
+        { n: 2, label: "仅重派未修包", desc: "新 respond 波绑定同一返工决定、只含未修包", grant: "rework-unfixed" },
+        { n: 3, label: "结束任务", desc: "以当前形态终止" },
+      ]
+    : isBlocked
+      ? [
+          { n: 1, label: "重派 respond", desc: "新 respond 波绑定同一返工决定、整波重派", grant: "rework-rerun" },
+          { n: 2, label: "结束任务", desc: "以当前形态终止" },
+        ]
+      : human
+        ? [{ n: 1, label: "accept", desc: "接受本阶段交付" }, { n: 2, label: "rework", desc: "要求返工（回到 Owner 波次）" }]
+        : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
+}
+
 async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
 
-  // blocked 静止卡的用户恢复通道（单 owner）：Lead 携新的可写范围重跑 run = 用户重派指示（规则 6：
-  // awaiting-user 只由新的用户输入恢复）。直接派新 produce 波——新 dispatched 晚于 blocked 报告，
-  // 波次机的 blocked 判定自然解除；多包恢复走 plan 重拆（re-planned 同样晚于 blocked）后正常 run。
+  // blocked 静止卡的用户恢复通道（单 owner）：Lead 携新的可写范围经 dispatch 通道重派 = 用户重派指示
+  // （规则 6：awaiting-user 只由新的用户输入恢复）。直接派新 produce 波——新 dispatched 晚于 blocked 报告，
+  // 波次机的 blocked 判定自然解除；多包恢复走 plan 重拆（re-planned 同样晚于 blocked）后经 dispatch 通道推进。
   if (Array.isArray(state.next?.produceBlocked) && writable.length && writable[0] !== 'none' && !(Array.isArray(task.packages) && task.packages.length)) {
     const stageDef = workflow.stages.find((st) => st.id === state.stage)
     const { waveId, dispatchSeq } = nextWaveIdentity(task)
@@ -532,25 +750,37 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       // 幂等身份 = stage + 波轮次 + 包集；已批准同批不再出卡；拒绝 = 本批按默认档派发（忽略包 tier）。
       if (wave.kind === 'produce' || wave.kind === 'respond') {
         const spC = scenePolicy(policy, stageDef.teamScene)
+        const escFp = escalationFingerprint(task)
         const escPkgs = decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => ({ package: d.package, tier: (task.packages ?? []).find((p) => p.id === d.package)?.tier }))
         if (escPkgs.length) {
           const batchRound = Math.max(...decls.map((d) => d.round))
           const batchKey = JSON.stringify([state.stage, batchRound, [...escPkgs.map((e) => e.package)].sort()])
-          const approved = task.decisions.find((dc) => dc.batchKey === batchKey && (dc.grant === 'approve-escalation' || dc.choice === '降回默认档继续'))
+          // 幽灵批准失效：批准绑定包配置指纹——re-plan 改包集/档位后，同 batchKey 的旧批准不再授权新批次
+          // （历史批准记录无指纹字段同样视为失效：重新出卡是多问一次，误授权是成本事故，保守方向取前者）。
+          const approved = task.decisions.find((dc) => dc.batchKey === batchKey && dc.escalationFingerprint === escFp && (dc.grant === 'approve-escalation' || dc.choice === '降回默认档继续'))
           if (!approved) {
+            // 同批旧未决升档卡先作废再重签：包配置已变化，旧卡选项不可再答；不作废会让
+            // pendingDecisionDetail 持续取到旧卡、decide 答旧卡永远不推进（死循环写路径）。
+            const journalPending = pendingDecisionDetail(task.journal)
+            if (journalPending && Array.isArray(journalPending.choices) && journalPending.choices.some((c) => c.grant === 'approve-escalation')) {
+              await appendEventsUnlocked(task, [{ type: 'decided', detail: { decisionId: journalPending.decisionId, choice: 'superseded', reason: '包配置已变化，升档批次重签（旧卡与旧批准一并失效）' } }])
+            }
             const decisionId = 'esc-' + randomBytes(3).toString('hex')
             const choices = [
               { n: 1, label: '批准升档', grant: 'approve-escalation', batchKey },
               { n: 2, label: '降回默认档继续', batchKey },
             ]
-            await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: { decisionId, gateId: null, reason: '升档审批：' + escPkgs.map((e) => e.package + '→' + e.tier).join('、'), choices } }])
+            // B 渲染同钉：reason 是唯一文本源（账本与签发返回卡同一字符串——重渲染禁止重算/改写）
+            const escReason = '升档审批：' + escPkgs.map((e) => e.package + '→' + e.tier).join('、') + '（tier 高于场景默认档；权重倍数 junior:senior:expert = 1:10:50）'
+            await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: { decisionId, gateId: null, reason: escReason, choices, escalationFingerprint: escFp, batchKey } }])
             const escProgress = stageProgress(task, state.stage)
-            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: '以下包的 tier 高于场景默认档，是否批准按升档派发？（权重倍数 junior:senior:expert = 1:10:50）', escalations: escPkgs, choices, ...(escProgress ? { progress: escProgress } : {}) }
+            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: escReason, escalations: escPkgs, choices, ...(escProgress ? { progress: escProgress } : {}) }
           }
         }
-        // 已批准（或降回默认档）：按实际档派发——降级路径由 decisions 中 choice='降回默认档继续' 体现：包 tier 忽略
+        // 已批准（或降回默认档）：按实际档派发——降级路径由 decisions 中 choice='降回默认档继续' 体现：包 tier 忽略。
+        // 降档决定同样绑定指纹：re-plan 后旧「降回默认档」不吞掉新批次的升档询问。
         const declinedKey = JSON.stringify([state.stage, Math.max(...decls.map((d) => d.round)), [...decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => d.package)].sort()])
-        const declined = task.decisions.some((dc) => dc.choice === '降回默认档继续' && dc.batchKey === declinedKey)
+        const declined = task.decisions.some((dc) => dc.choice === '降回默认档继续' && dc.batchKey === declinedKey && dc.escalationFingerprint === escFp)
         if (declined) {
           const tiersBackup = task.packages
           task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
@@ -598,16 +828,17 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   if (state.next.kind === 'wait-inflight') {
-    // F3/F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建），断链后可原样转发补派；waveId 出卡（P4）
+    // F3/F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建）+ §7.3 兜底判定事实三字段；
+    // 恢复入口 = dispatch 通道（tw-dispatch 按条目自动处置；无插件终端按 orchestration 规程手工补派）。
     const guidance = await loadGuidance(projectRoot) // 惰性：在途重建（补发路径）按需加载
-    const inflight = inflightDispatches(task, state.stage, guidance)
+    const inflight = await inflightDispatches(task, state.stage, guidance)
     return {
       ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
       dispatchKey: state.next.dispatchKey,
       ...(state.next.waveId ? { waveId: state.next.waveId } : {}),
       wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round },
       inflight,
-      note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组可原样转发补派）：' + inflight.map((d) => d.key).join('、'),
+      note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组含 modelHint/expectedAgentId/registered 判定事实，可原样转发补派）：' + inflight.map((d) => d.key).join('、') + '。恢复：调 tw-dispatch（按条目自动等待/续派/补派）',
     }
   }
 
@@ -617,13 +848,14 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     // Lead 不必翻任务目录；空摘要（如 blocked 静止单包无交付）自然省略字段。
     const progressText = stageProgress(task, state.stage)
     // blocked 静止卡（produce/respond 波，非 decision 卡）：不签发 decision-issued（无 decide 语义），
-    // 恢复通道 = 扩权重派（单 owner run --writable 新范围；多包 plan 重拆后 run）；重复 run 幂等返回本卡。
+    // 恢复通道 = 扩权重派（入口在 dispatch 通道：tw-dispatch writables / tw dispatch-plan --writable 新范围；
+    // 多包先 tw plan 重拆）；重复推进幂等返回本卡。
     if (Array.isArray(state.next.produceBlocked)) {
       return {
         ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-scope", transition: "await-decision",
         blocked: state.next.produceBlocked, question: state.next.reason,
         ...(progressText ? { progress: progressText } : {}),
-        note: "任务静止等待用户：扩大可写范围后重派（单 owner 重新 tw run --writable <新范围>；多包先 tw plan 重拆再 run），或决定结束",
+        note: "任务静止等待用户：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或决定结束",
       }
     }
     // 路由类 blocker 优先（E2E 实测缺陷修复）：gate 同时有路由未判定与人工门时，
@@ -640,35 +872,17 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         note: "先做路由判定（tw route），完成后人工门卡才会出现",
       }
     }
-    // F9：待决卡按 pendingDecisionDetail 选择（migrate 冲突卡优先），渲染与 decide 同源——
-    // 防 migrate 卡与先签发人工门卡并存时按 journal 顺序取卡导致的渲染错位/decide 误映射（实证修复）
-    const pending = pendingDecisionDetail(task.journal)
+    // B（返工终版 §二·B）：待决卡从 derive 静止化结果取（state.next.pending，与 runStatusCard/decide
+    // 同源），渲染一律同钉账本 pending.reason/pending.choices——禁止重算 choices（防「渲染重算、
+    // decide 用账本」两源错位：选项序号/文案漂移会让 decide 映射到错误语义）。
+    const pending = state.next.pending ?? null
     // F6-3 签发锚点：人工门卡签发时绑定 {artifactFingerprint, reviewFingerprint} 快照；
     // F6-2 未决分支：签发指纹 vs 当前指纹，变化 → 作废旧卡（decided:superseded，只增不改）重签新卡。
-    const stageDef = workflow.stages.find((st) => st.id === state.stage)
-    const sp = scenePolicy(policy, stageDef?.teamScene ?? "implementation")
-    const currentArtifactFp = artifactFingerprints(task.artifacts.items.filter((i) => i.stage === state.stage), Array.isArray(task.packages) && task.packages.length ? task.packages : null)
-    const currentReviewFp = reviewChainFingerprint({ reports: task.reports.filter((r) => r.stage === state.stage), journal: task.journal, core: Boolean(sp.core) })
-    // 僵局卡（F5 多包混合）：对既有 converge-user choices 的扩展——「追加一轮」对僵局包会立即再判僵局（用户可见空转），不得沿用
-    const isStalemate = Array.isArray(state.next.reworkStalemate)
-    // blocked 卡（F5 消费规则 2，实证修正）：专用两选项「重派 respond（新绑定波）/ 结束任务」——
-    // 不沿用「追加一轮」（extra-round 无派发路径、绑定波报告仍 blocked → 空转循环）
-    const isBlocked = Boolean(state.next.reworkBlocked)
+    const currentArtifactFp = currentArtifactFpOf(task, state)
+    const currentReviewFp = currentReviewFpOf(task, state, workflow, policy)
+    // 僵局/blocked/人工门/默认四类选择表（仅首签生成；重渲染一律用账本 pending.choices）
     const human = state.gate?.humanGate ?? state.next.gateId ?? null
-    const cardChoices = isStalemate
-      ? [
-          { n: 1, label: "接受现状", desc: "未修包按原内容过评审链（人工门需重新确认）", grant: "accept-as-is" },
-          { n: 2, label: "仅重派未修包", desc: "新 respond 波绑定同一返工决定、只含未修包", grant: "rework-unfixed" },
-          { n: 3, label: "结束任务", desc: "以当前形态终止" },
-        ]
-      : isBlocked
-        ? [
-            { n: 1, label: "重派 respond", desc: "新 respond 波绑定同一返工决定、整波重派", grant: "rework-rerun" },
-            { n: 2, label: "结束任务", desc: "以当前形态终止" },
-          ]
-        : human
-          ? [{ n: 1, label: "accept", desc: "接受本阶段交付" }, { n: 2, label: "rework", desc: "要求返工（回到 Owner 波次）" }]
-          : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
+    const cardChoices = decisionChoicesFor({ state, human })
     if (pending) {
       if (pending.migrate) {
         // F9 迁移冲突卡：渲染其签出时的 question/choices（不套用 cardChoices、不参与人工门指纹比对——
@@ -678,9 +892,14 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp: currentArtifactFp, reviewFp: currentReviewFp })) {
         // 指纹失效：作废旧卡（不删事实，只增 decided:superseded），落入下方重签
         await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "等待期评审链或制品已变化，卡片自动失效重签" } }])
+      } else if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
+        // 升档指纹失效（包配置变化）：作废旧卡后由 dispatch-plan 循环重推导重新出卡（升档签发在
+        // dispatch 分支内，本函数不在此重签）——返回 re-sign 循环标记，防「静止渲染旧卡 + decide 拒答」死循环。
+        await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "签发后包配置已变化，升档卡自动失效重签" } }])
+        return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", transition: "re-sign-escalation", note: "升档待决卡因包配置变化已作废，正在按当前配置重新出卡" }
       } else {
-        // 重出卡按当前事实重渲染 question/choices（不复用旧 reason；choices 由当前状态生成，与签发同函数）
-        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: state.next.reason ?? pending.reason, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
+        // 已签发未失效：同钉渲染账本原卡（卡面=账本=decide 依据；再调 dispatch 返回同一张卡——签发幂等）
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(progressText ? { progress: progressText } : {}) }
       }
     }
     const decisionId = `dec-${randomBytes(3).toString("hex")}`
@@ -689,7 +908,10 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       reason: state.next.reason ?? `人工门 ${human}`,
       choices: cardChoices,
       fingerprints: { artifactFingerprint: currentArtifactFp, reviewFingerprint: currentReviewFp },
-      ...(isStalemate ? { reworkStalemate: state.next.reworkStalemate.map(String) } : {}),
+      ...(Array.isArray(state.next.reworkStalemate) ? { reworkStalemate: state.next.reworkStalemate.map(String) } : {}),
+      // 卡类型标记落账（derive 静止态透传给重签：blocked 卡重签须生成「重派 respond/结束」两选项，
+      // 不得回退人工门默认选项）
+      ...(state.next.reworkBlocked ? { reworkBlocked: true } : {}),
     } }])
     return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
   }
@@ -703,7 +925,7 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     // F9：待决卡选择与 runTransition 渲染同源（pendingDecisionDetail：migrate 冲突卡优先），
     // 防「run 渲染 migrate 卡、decide 却处理人工门卡」的选项序号错位（实证修复）
     const pending = pendingDecisionDetail(task.journal)
@@ -722,7 +944,12 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
     const reviewFp = reviewChainFingerprint({ reports: task.reports.filter((r) => r.stage === stageId), journal: task.journal, core: Boolean(sp.core) })
     // F6-3：未决人工门卡同样做「签发指纹 vs 当前指纹」对比，失效即拒绝（旧卡直答被拒 + 指引闭环）
     if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp, reviewFp })) {
-      throw fail("DECISION_STALE", "该卡片的签发指纹已失效（等待期评审链或制品发生变化）：tw run 取最新卡片后重新 decide")
+      throw fail("DECISION_STALE", "该卡片的签发指纹已失效（等待期评审链或制品发生变化）：tw run 查看状态，调 tw-dispatch / tw dispatch-plan 重签最新卡片后重新 decide")
+    }
+    // 升档审批卡同构校验：签发时绑定包配置指纹，等待期 re-plan 改动包集/档位后旧卡拒绝直答——
+    // 否则答旧卡写入旧指纹批准，与当前批次指纹永不匹配（答了也白答的空转），且旧语义授权不可见地复活。
+    if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
+      throw fail("DECISION_STALE", "该升档卡签发后包配置已变化（re-plan 改动了包集或档位），原选项不可再 decide：调 tw-dispatch / tw dispatch-plan 重签最新升档卡后重新 decide")
     }
     const decision = {
       decisionId: pending.decisionId,
@@ -730,6 +957,8 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
       choice: picked.label,
       ...(picked.grant ? { grant: picked.grant } : {}),
       ...(picked.batchKey ? { batchKey: picked.batchKey } : {}),
+      // 升档批准绑定包配置指纹（签发指纹=当前指纹，校验已保证）：幂等查找据此识别幽灵批准
+      ...(pending.escalationFingerprint !== undefined ? { escalationFingerprint: pending.escalationFingerprint } : {}),
       // F5/F6：决定绑定双指纹——artifactFingerprint（每包「包→指纹」映射）+ reviewFingerprint；
       // fingerprint 旧字段双写（§7 回滚兼容：旧版 runtime 读旧字段仍可判定）
       ...(pending.gateId ? { fingerprint: artifactsFingerprint(current), artifactFingerprint: artifactFp, reviewFingerprint: reviewFp } : {}),
@@ -780,7 +1009,7 @@ async function cmdRetire({ projectRoot, name, wave, reason }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     const groups = waveGroups(task.journal)
     const group = groups.find((g) => g.waveId === wave)
     const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
@@ -796,14 +1025,23 @@ async function cmdRetire({ projectRoot, name, wave, reason }) {
     await appendEventsUnlocked(task, [{ type: "dispatch-superseded", detail: { waveId: wave, reason } }])
     // 清退该波映射：新 key 不再可被回溯/续派解析（agents.json 其余记录保留）
     const agentsFile = path.join(task.root, "agents.json")
-    const agents = (await readJson(agentsFile, { allowMissing: true })) ?? {}
+    let agents = null
+    let registryRebuilt = null
+    try {
+      agents = (await readJson(agentsFile, { allowMissing: true })) ?? {}
+    } catch (error) {
+      // 损坏账本不构成 retire 死门：retire 正是兜底恢复工具，不能被派生映射文件的损坏挡死。
+      // 损坏内容读不出任何映射，重写为空账本（历史映射丢失的后果同 agent-map 重建：续派走 fresh 路径）。
+      registryRebuilt = String(error?.message ?? error)
+      agents = { mappings: {} }
+    }
     if (agents.mappings) {
       let changed = false
       for (const k of group.keys) if (k in agents.mappings) { delete agents.mappings[k]; changed = true }
-      if (changed) await atomicJson(agentsFile, agents)
+      if (changed || registryRebuilt) await atomicJson(agentsFile, agents)
     }
     const openCount = group.keys.filter((k) => !settled.has(k)).length
-    return { ok: true, task: name, wave, supersededKeys: group.keys, note: `波已作废（解除 ${openCount} 条未交付派发在途）；成员重新 tw run 取新卡。` }
+    return { ok: true, task: name, wave, supersededKeys: group.keys, ...(registryRebuilt ? { registryRebuilt } : {}), note: `波已作废（解除 ${openCount} 条未交付派发在途）${registryRebuilt ? '；agents.json 此前损坏已重建（历史映射丢失）' : ''}；重新 tw-dispatch / tw dispatch-plan 推进取新派单。` }
   })
 }
 
@@ -818,7 +1056,7 @@ async function cmdMigrate({ projectRoot, name }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     const before = Object.fromEntries([...projectRounds({ journal: task.journal, reports: task.reports }).entries()].map(([k, v]) => [String(k), v]))
     // 待决迁移冲突卡：先让用户 decide 保留版本（decide 写 dispatch-superseded 后再迁移）
     const settled = new Set(task.journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
@@ -870,7 +1108,7 @@ async function cmdMigrate({ projectRoot, name }) {
       await appendEventsUnlocked(task, newWaves.map((w) => ({ type: "wave-assigned", detail: { waveId: w.waveId, dispatchKeys: w.dispatchKeys } })))
     }
     // 3) 异 digest 冲突检测（独立于赋号循环：遍历迁移段全部分组逐组处理——多组冲突/重跑均不遗漏，B6 四类恢复完整）
-    const afterTask = await loadTask(projectRoot, name, { workflow, policy })
+    const afterTask = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     const excluded = supersededKeys(afterTask.journal)
     const reportByKey = new Map(afterTask.reports.map((r) => [r.dispatchKey, r]))
     const digestSetOf = (key) => {
@@ -1061,7 +1299,7 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
   const tagWarn = longIds.length ? `包 id 过长（${longIds.join("、")}，>12 字符）：子代理标签中会挤压简述空间，建议短词（如 store/intake）` : null
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）
     const state = deriveTask(task)
     // blocked 静止卡（produceBlocked）放行重拆：扩权重派正是该卡的恢复通道（re-planned 晚于 blocked 报告，
@@ -1073,7 +1311,7 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     const had = task.packages != null
     await atomicJson(path.join(task.root, 'packages.json'), { items })
     await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: items.map((p) => p.id) } }])
-    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'run', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: had ? '包定义已更新（下一波生效）' : '包定义已登记；下一次 run 将按波组派发' }
+    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'dispatch', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: had ? '包定义已更新（下一波生效）' : '包定义已登记；推进将按波组派发（tw-dispatch / tw dispatch-plan）' }
   })
 }
 
@@ -1089,7 +1327,7 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择在创建子代理时由 tw-tool-subagent 直接指定（target 取 dispatch-plan 的 modelHint）')
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
-    const task = await loadTask(projectRoot, name, { workflow, policy })
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     const dispatch = task.journal.find((e) => e.type === 'dispatched' && e.detail.key === key)
     if (!dispatch) {
       throw fail('USAGE', 'key ' + key + ' 不是本任务的派单 key（从派单卡或 dispatch-plan 输出复制）')
@@ -1097,12 +1335,60 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
     // 任务级注册表：file=task.root/agents.json；task.lock 已持有（写 journal 同锁域）。
     // 只写 mappings（dispatchKey→childId 续派映射）；遗留旧键（tagHints/pendingTags/modelHints）不再写入。
     const file = path.join(task.root, 'agents.json')
-    const current = (await readJson(file, { allowMissing: true })) ?? {}
+    let current = null
+    let registryRebuilt = null
+    try {
+      current = (await readJson(file, { allowMissing: true })) ?? {}
+    } catch (error) {
+      // 账本损坏自愈（I5 无死门）：本命令是 registeredUnresolved 降级卡指名的修复入口，
+      // 若在这里被损坏挡死则该恢复边永远走不通（死门闭环）。损坏 JSON 读不出任何可保留映射，
+      // 重建为空账本后历史映射丢失——受影响续派由 dispatch-plan 的 expectedAgentIdMissing
+      // fresh 重建路径自动恢复（派单卡自带 resumeNote）。
+      registryRebuilt = String(error?.message ?? error)
+      current = { mappings: {} }
+    }
     current.mappings = { ...(current.mappings ?? {}) }
     current.mappings[key] = agent
     await atomicJson(file, current)
-    return { ok: true, task: name, key, agent, note: '已登记派单映射（dispatchKey→childId，续派 send_message 用）；模型选择由 tw-tool-subagent 创建子代理时直接指定' }
+    return {
+      ok: true, task: name, key, agent,
+      ...(registryRebuilt ? { registryRebuilt } : {}),
+      note: '已登记派单映射（dispatchKey→childId，续派 send_message 用）；模型选择由 tw-tool-subagent 创建子代理时直接指定' +
+        (registryRebuilt ? '；agents.json 此前损坏已重建（历史映射丢失，相关续派按 fresh 重建路径恢复）' : ''),
+    }
   })
+}
+
+// dispatch-plan 人读输出（§7.2 终端推进通道；§7.5.5 范围 = waves + 全部 stop 卡）：
+// 默认（无 --json）输出 plan.human 人读推进指引（终端 Lead 直接照此行动）；--json 供编排工具
+// 消费结构化字段，两者并存互不影响。
+function stopHumanLines(stop, card, extra = {}) {
+  const lines = ['任务 ' + (card?.task ?? '') + ' · 阶段 ' + (card?.stage ?? '-') + ' · 状态：' + stop]
+  const nl = String.fromCharCode(10)
+  if (stop === 'awaiting-user') {
+    if (card?.question) lines.push('待用户决定：' + card.question)
+    for (const c of card?.choices ?? []) lines.push('  ' + c.n + '. ' + c.label + (c.desc ? '——' + c.desc : ''))
+    if (card?.blocked) lines.push('blocked 包：' + (Array.isArray(card.blocked) ? card.blocked.map(String).join('、') : String(card.blocked)))
+    if (card?.note) lines.push(card.note)
+  } else if (stop === 'wait-inflight') {
+    for (const d of extra.inflight ?? []) {
+      const key = d.dispatchKey ?? d.key
+      lines.push('- ' + key + '（' + d.role + ' 第 ' + d.round + ' 轮' + (d.package ? ' · 包 ' + d.package : '') + '）' + (d.registered === undefined ? ' · 登记状态未知（先核对再处置）' : d.registered ? ' · 已登记（等待交付）' : ' · 未登记（可补派' + (d.expectedAgentId ? '；续派走 send_message ' + d.expectedAgentId : '') + '）'))
+    }
+    if (card?.note) lines.push(card.note)
+  } else if (stop === 'blocked') {
+    for (const b of card?.blockers ?? []) {
+      const message = typeof b === 'string' ? b : (b.message ?? '')
+      const recovery = typeof b === 'string' ? '' : (b.recovery ?? '')
+      lines.push('- ' + message + (recovery ? nl + '  恢复：' + recovery : ''))
+    }
+    if (card?.note) lines.push(card.note)
+  } else {
+    // completed / archived 等终态：note/question 即全部
+    if (card?.note) lines.push(card.note)
+    else if (card?.question) lines.push(card.question)
+  }
+  return lines
 }
 
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
@@ -1122,9 +1408,13 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
     const resolved = await resolveTiers()
     const warnings = [...resolved.warnings]
-    const planStop = (stop, card, extra = {}) => ({ ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra })
+    const planStop = (stop, card, extra = {}) => {
+      const plan = { ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra }
+      if (!json) plan.human = stopHumanLines(stop, card, extra)
+      return plan
+    }
     for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
-      const task = await loadTask(projectRoot, name, { workflow, policy })
+      const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
       await ensureE2ePackages(task) // B：e2e 场景模板物化（幂等；advance 进入 e2e 后首轮生效）
       const state = deriveTask(task)
       if (state.next.kind === 'dispatch' && state.next.wave) {
@@ -1143,28 +1433,19 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
-        const agentMaps = (await readJson(path.join(task.root, 'agents.json'), { allowMissing: true }) ?? {}).mappings ?? {}
-        // F4 续派身份回溯（过渡形态，memberSlot 为终局后置）：沿 journal 倒序找同角色同包范围内
-        // 最近一个有映射的派发 key——send_message 续派不登记新 key，映射链必然间断，只看紧邻 key 必断链；
-        // 遇 stage-advanced 事件停止（不跨阶段串线）；跳过 superseded 波的 key（F3 排除面）。
-        // D3（评审 B-F3 限定放宽）：无包波（challenger/expert 的 review/verdict，package=null）按"同角色"匹配上一派发；
-        // 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。
-        const excludedKeys = supersededKeys(task.journal)
-        const prevKeyOf = (d) => {
-          let resolved = null
-          for (let i = task.journal.length - 1; i >= 0; i -= 1) {
-            const e = task.journal[i]
-            if (e.type === 'stage-advanced') break
-            if (e.type !== 'dispatched') continue
-            const detail = e.detail
-            if (detail.key === d.key) continue
-            if (detail.role !== d.role) continue
-            if (excludedKeys.has(detail.key)) continue
-            if ((d.package ?? null) !== null && (detail.package ?? null) !== d.package) continue
-            if (agentMaps[detail.key]) { resolved = detail.key; break }
-          }
-          return resolved
+        let agentMaps = {}
+        try {
+          agentMaps = ((await readJson(path.join(task.root, 'agents.json'), { allowMissing: true })) ?? {}).mappings ?? {}
+        } catch (error) {
+          // 账本损坏降级推进（I5 无死门）：续派回溯拿不到映射 → 波次导出走 expectedAgentIdMissing
+          // fresh 重建路径（派单卡自带 resumeNote，恢复边在场）；dispatch-plan 是唯一推进通道，
+          // 不得因派生映射文件损坏而整体抛错（那会让所有恢复路径死门）。
+          warnings.push('agents.json 损坏已降级（' + String(error?.message ?? error) + '）：续派映射不可用，续派波按 fresh 重建路径恢复；可用 tw agent-map 重建登记')
         }
+        // F4 续派身份回溯：journal 倒序找同角色同包范围内最近一个有映射的派发 key
+        // （限定细则与排除面见 continuationPrevKey 注释；与 wait-inflight 兜底重建共用同一实现）。
+        const excludedKeys = supersededKeys(task.journal)
+        const prevKeyOf = (d) => continuationPrevKey({ journal: task.journal, agentMaps, excludedKeys }, d)
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
           const hint = d.modelHint
@@ -1181,6 +1462,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
+            ...(d.promptFull ? { promptFull: d.promptFull } : {}),
             deliver,
             modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort } : {}), ...(hint.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
@@ -1197,16 +1479,18 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         if (!json) {
           plan.human = ['任务 ' + name + ' · 阶段 ' + card.stage + ' · ' + waves.length + ' 个派单']
           for (const w of waves) {
-            plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + (w.modelHint.model ?? '(未解析)') + '（' + w.modelHint.source + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
+            plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + (w.modelHint.model ?? '(未解析)') + '（' + w.modelHint.source + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + (w.promptFull ? String.fromCharCode(10) + '断链重建/空壳补发用全量变体（原会话不可用时以此为准）：' + String.fromCharCode(10) + w.promptFull : '') + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
           }
+          plan.human.push('派发后登记映射：tw agent-map --task ' + name + ' --key <派单key> --agent <childId>（DSH 内 tw-dispatch 会自动创建并登记，无需手工）')
         }
         return plan
       }
 
       if (card.transition === "advance") continue // stage-advanced 已写；锁内重推导下一阶段
+      if (card.transition === "re-sign-escalation") continue // 升档旧卡已作废（decided:superseded）；锁内重推导重新出卡
       if (card.transition === "complete") return planStop("completed", card)
       if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey, inflight: card.inflight ?? [] })
-      if (card.transition === "await-decision") return planStop("awaiting-user", card)
+      if (card.transition === "await-decision" || card.transition === "await-route") return planStop("awaiting-user", card)
       return planStop("blocked", card)
     }
     throw fail("STATE_CORRUPT", "dispatch-plan 推进循环超界（阶段图可能成环）")
@@ -1260,8 +1544,8 @@ function helpCard() {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
       "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（模型选择由 tw-tool-subagent 创建时直接指定）",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
-      run: "tw run --task <n> [--writable <路径>:<kind> ...]：推进一步（返回卡片或派单；路径以 / 结尾 = 目录授权，如 docs/:doc）",
-      "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable ...]：编排输入——推进到派发点或 stop，输出波次计划（prompt + tier + modelHint）",
+      run: "tw run --task <n>：只读查状态（当前状态卡 + 下一步指引；不写任务事实。推进用 tw-dispatch / dispatch-plan）",
+      "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable <路径>:<kind> ...]：推进一步——推进到派发点或 stop 卡，输出波次计划（prompt + tier + modelHint）；路径以 / 结尾 = 目录授权；无 --json 输出人读 human 字段",
       decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片",
       intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
@@ -1291,7 +1575,14 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
   try {
     switch (cmd) {
       case "open": return await cmdOpen({ ...common, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk })
-      case "run": return await cmdRun({ ...common, name: args.task, writable: collectWritable(argv) })
+      case "run": {
+        // run 只读化（§7.2）：--writable 是旧推进时代的参数，显式拒绝并指路 dispatch 通道（防旧习惯误用）
+        const legacyWritable = collectWritable(argv)
+        if (legacyWritable.length) {
+          throw fail("USAGE", "run 已只读，不接受 --writable；扩权重派/推进请用 tw-dispatch（writables 参数）或 tw dispatch-plan --writable <路径>:<kind>")
+        }
+        return await cmdRun({ ...common, name: args.task, writable: [] })
+      }
       case "decide": return await cmdDecide({ ...common, name: args.task, choice: Number(args.choice), note: args.note })
       case "intent": return await cmdIntent({ ...common, name: args.task, objective: args.objective, risk: args.risk, addConstraint: flag("add-constraint"), addExclusion: flag("add-exclusion") })
       case "route": return await cmdRoute({ ...common, name: args.task, route: args.route, decision: args.decision, basis: args.basis })
@@ -1318,7 +1609,7 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
         verdict: parseJsonArg(args.verdict, "--verdict"),
       } })
       default:
-        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/run/dispatch-plan/decide/intent/route/gate/models/init/restore/retire/migrate/archive；成员：deliver/review）")
+        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/dispatch-plan/run 查状态/decide/intent/route/gate/models/init/restore/retire/migrate/archive；成员：deliver/review）")
     }
   } catch (error) {
     if (error.card) return error.card
@@ -1355,11 +1646,17 @@ async function markTreeReadOnly(rootDir) {
 // advance/complete/blocked/wait-inflight 带轻量提醒。注入随每次卡片输出重新在场——
 // Lead 的汇报纪律不依赖 skill 一次性装载，会话变长也不稀释（认知对等修复）。
 // dispatch-plan 的嵌套 stop 卡（result.card）同样处理；拒绝卡无 status/transition 不命中。
+// run 只读化后 waves 派发计划（stop=null 且 waves 非空）是派发事实的唯一出口——派发简报纪律
+// 同样在此注入到 plan 顶层，纪律不随 run 撤推进而消失。
 export async function tw(argv, opts = {}) {
   const card = await twInner(argv, opts)
   if (card && typeof card === "object" && !Array.isArray(card)) {
     if (card.card && typeof card.card === "object" && !Array.isArray(card.card)) {
-      return { ...card, card: attachPresentation(card.card) }
+      const wrapped = { ...card, card: attachPresentation(card.card) }
+      if (wrapped.stop === null && Array.isArray(wrapped.waves) && wrapped.waves.length > 0 && !wrapped.presentation) {
+        wrapped.presentation = PRESENTATION_DISPATCH
+      }
+      return wrapped
     }
     return attachPresentation(card)
   }

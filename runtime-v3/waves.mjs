@@ -349,7 +349,8 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
     return { kind: "produce", role: "owner", round: Math.max(...owners.map((o) => o.round)), owners }
   }
   // 5) 有效 blocked 静止卡：评审/返工/新派发均无可派波时，被 blocked 挡住的包出用户卡
-  //（awaiting-user 静止；恢复 = 扩权重派：单 owner run --writable 新范围、多包 plan 重拆后 run；或用户决定结束）
+  //（awaiting-user 静止；恢复 = 扩权重派，入口在 dispatch 通道：单 owner 用新范围调 tw-dispatch / dispatch-plan、
+  // 多包 plan 重拆后推进；或用户决定结束）
   const blockedActive = active.filter((id) => blockedP.has(id))
   if (blockedActive.length) {
     const parts = blockedActive.map((id) => {
@@ -357,7 +358,7 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
       const brief = summary.slice(0, 160) + (summary.length > 160 ? "…" : "")
       return `${id == null ? "（单 owner）" : `包 ${id}`}：${brief || "（无说明）"}`
     })
-    const reason = `Owner 交付 blocked（无法在可写范围内完成）——${parts.join("；")}。恢复：扩大可写范围后重派（单 owner 直接 tw run --writable <新范围>；多包先 tw plan 重拆再 run），或由用户决定结束`
+    const reason = `Owner 交付 blocked（无法在可写范围内完成）——${parts.join("；")}。恢复：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或由用户决定结束`
     return { kind: "converge-user", reason, produceBlocked: blockedActive }
   }
   // 6) 活跃集空 → 门

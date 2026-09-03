@@ -69,11 +69,38 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
   }
   const sp = scenePolicy(policy, stageDef.teamScene)
   const stageReports = reports.filter((r) => r.stage === stageId)
-  // F9 迁移冲突卡待决期间任务静止：未决冲突内容不得继续参与推导/派发（run 不推进、不代答）
+  // B（返工终版 §二·B）：所有未决决定卡统一静止——升档/人工门/migrate 任一未决时任务静止
+  //（不推进、不派发、不重算派发阻塞判定：pending 卡优先于 produceBlocked/routeBlocker——修复
+  //「升档卡期间 run/dispatch 仍走 dispatch 分支重签」的渲染与执行错位）。next.pending 带账本原卡
+  //（decision-issued 的 detail）；渲染层一律用 pending.choices 与 pending.reason 同钉渲染（禁止重算，
+  // 防「渲染重算 choices、decide 用账本」两源错位）；指纹失效的作废/重签归 dispatch 通道（写侧）。
+  // migrate 冲突卡优先级保持最高（F9：未决冲突内容不得继续参与推导/派发）。
   const settledDecisions = new Set(journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
-  const pendingMigrate = journal.find((e) => e.type === "decision-issued" && e.detail?.migrate && !settledDecisions.has(e.detail.decisionId))
+  const openDecisions = journal.filter((e) => e.type === "decision-issued" && e.detail && !settledDecisions.has(e.detail.decisionId))
+  const pendingMigrate = openDecisions.find((e) => e.detail?.migrate)
   if (pendingMigrate) {
-    return { stage: stageId, status: "awaiting-user", wave: { kind: "converge-user", reason: pendingMigrate.detail.reason }, gate: null, next: { kind: "await-decision", reason: pendingMigrate.detail.reason, migratePending: true } }
+    return { stage: stageId, status: "awaiting-user", wave: { kind: "converge-user", reason: pendingMigrate.detail.reason }, gate: null, next: { kind: "await-decision", reason: pendingMigrate.detail.reason, pending: pendingMigrate.detail, migratePending: true } }
+  }
+  const pendingAny = openDecisions[0]
+  if (pendingAny) {
+    // 透传账本卡的上下文标记（gateId/reworkStalemate/reworkBlocked）：静止态的消费者（runStatusCard
+    // 渲染、runTransition 指纹失效重签——重签需按卡类型生成正确选项：僵局 3 选项 / blocked 2 选项 /
+    // 人工门 accept·rework）不重查 gate；migrate 卡经上方专属分支（migratePending）。
+    const d = pendingAny.detail
+    return {
+      stage: stageId,
+      status: "awaiting-user",
+      wave: { kind: "converge-user", reason: d.reason },
+      gate: null,
+      next: {
+        kind: "await-decision",
+        reason: d.reason,
+        pending: d,
+        ...(d.gateId ? { gateId: d.gateId } : {}),
+        ...(Array.isArray(d.reworkStalemate) ? { reworkStalemate: d.reworkStalemate } : {}),
+        ...(d.reworkBlocked ? { reworkBlocked: true } : {}),
+      },
+    }
   }
   const extraRounds = decisions.filter((d) => d.grant === "extra-round").length
   let wave = nextWave({ scenePolicy: sp, reports: stageReports, extraRounds, packages: state2Packages(packages), journal })

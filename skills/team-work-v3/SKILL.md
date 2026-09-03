@@ -1,6 +1,6 @@
 ---
 name: team-work
-description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱动多智能体研发工作流。用户要求代码审查、方案设计、实现、测试或任何阶段性团队协作时使用；Lead 依据本 skill 判断阶段入口、组团与审查强度。
+description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/review）驱动多智能体研发工作流。用户要求代码审查、方案设计、实现、测试或任何阶段性团队协作时使用；Lead 依据本 skill 判断阶段入口、组团与审查强度。
 ---
 
 # team-work（v3）
@@ -21,22 +21,24 @@ description: 用 tw CLI（open/run/decide/intent/archive + deliver/review）驱�
 
 ```bash
 tw open --name <名字> --objective "<目标一句话>" [--entry <stage>]   # 开房间；重名会拒绝并提示
-tw run --task <名字> [--writable <路径>:<kind> ...]                  # 推进一步；路径以 / 结尾 = 目录授权（如 docs/:doc）
+tw dispatch-plan --task <名字> [--writable <路径>:<kind> ...]        # 推进一步：输出波次派单或 stop 卡；路径以 / 结尾 = 目录授权（如 docs/:doc）
+tw run --task <名字>                                                  # 只读查状态：当前状态卡 + 下一步指引（不写任务事实）
 tw decide --task <名字> --choice <序号> [--note ...]                 # 回答当前卡片
 tw intent --task <名字> [--objective ...] [--add-constraint ...]     # 随时修订目标/约束
 tw archive --task <名字>                                              # 用户明确要求归档时
 ```
 
-- 每次 `run` 返回一张卡片：按它行动，不要预判步骤。`dispatch` 卡片给你派单全文和 key——**原样**转发给成员（后台 subagent），不要改写边界。
+- 推进是 dispatch 侧的单一写者：每次 `dispatch-plan` 推进一步并返回一张卡片（waves 派单数组或 stop 卡）——按它行动，不要预判步骤。DSH 内**一律先调 `tw-dispatch`**（单次调用完成开单+创建+登记）；waves 给你派单全文和 key——**原样**转发给成员，不要改写边界。无 DSH 插件的终端：`dispatch-plan` 即推进者，按其 human/waves 输出手工派发并 `tw agent-map` 登记。
+- `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
-- 成员完成的通知到达后再 `run`，消费报告并推进。
+- 成员完成的通知到达后再 `dispatch-plan`（DSH 内 `tw-dispatch`），消费报告并推进。
 - 向用户只报告：完成了什么、当前阶段、关键制品路径、风险/分歧、下一步。
 - **汇报说人话（认知对等硬约束）**：卡片自带的 `presentation` 字段是呈现纪律，每次汇报时机都在场——必须遵守，不因会话变长而淡化；`awaiting-user` 卡的 `progress` 字段是本阶段工作摘要（各包做了什么、评审结论、产出物路径），用作汇报素材但要用你自己的话完整表达。用户没看过你的工具调用与卡片原文：完整句子、业务语言，编号（波次/派单key/指纹）与内部术语（gate id、波类型）不得原样抛出，选项必须解释实际后果，禁止只报"选 1 还是 2"。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
 - 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。可写条目写目录（尾斜杠）即授权其下全部路径——派单前预估产出文件位置，目录授权比逐文件列举更稳。
-- **派单范围不够**（任务确需修改范围外文件才能完成）：成员以 `--outcome blocked` 交付（paths 留空），在 summary 写明需要扩权的路径与理由。你会收到 `next: re-scope` 静止卡——单 owner 直接带新的 `--writable` 重跑 run，多包先 `tw plan` 重拆（该卡不阻塞重拆）再 run；重派派单会自动内嵌上一轮 blocked 原因，成员不需要重述背景。
+- **派单范围不够**（任务确需修改范围外文件才能完成）：成员以 `--outcome blocked` 交付（paths 留空），在 summary 写明需要扩权的路径与理由。你会收到 `next: re-scope` 静止卡——单 owner 用新的可写范围推进（`tw-dispatch` 的 writables / `tw dispatch-plan --writable`），多包先 `tw plan` 重拆（该卡不阻塞重拆）再推进；重派派单会自动内嵌上一轮 blocked 原因，成员不需要重述背景。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 只评价这版交付本身；产品缺陷写 findings，不因此 rework 审查制品。

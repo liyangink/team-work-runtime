@@ -1,6 +1,8 @@
 // tw-tool-subagent.js — 定向选模委派工具（方案 docs/dsh-directed-delegation-plan.md，§9 第 3 条命名裁决）
 // 按档位（tiers 快照）或精确 provider/model/effort 创建后台可续聊子代理；复用 DSH 原生
-// startContinuable，不重写子代理引擎。§10.3 风险落点：
+// startContinuable / followup，不重写子代理引擎。确定性复用对账（sessionId 在场）走判定链四态
+//（用户终裁②③，docs/dispatch-rework-investigation.md §二·A：活→等待 / 冷归属一致→冷唤醒+判收单
+// 定增量或全量 / 冷异主→接管冲突 / 无记录→同 ID 重建投全量）。§10.3 风险落点：
 //   R1 effort 冷恢复——agentOptions 只承载 provider/model；effort 由 setup 贡献从持久化
 //      request/header.config.reasoningEffort 回读重建（见 inject.js recallFromHeader）；
 //   R2 单一来源——selection 与 agentOptions 由同一份 resolveCallConfig 结果派生，禁止双源解析；
@@ -64,8 +66,121 @@ function failCard(code, message) {
   return { ok: false, code, message }
 }
 
+// ── 会话判定原语（返工终版 docs/dispatch-rework-investigation.md §二·A；两处消费：本文件创建核心
+// 对账 + tw-dispatch 判定链）──────────────────────────────────────────────────────
+// 判定标准与宿主判重一致（startContinuable：活注册表+活会话，显式 childId 才加查持久快照）。
+// 「已收单」（有原上下文）的可靠信号 = 子会话 own-suffix 中存在 inserted 非空的 agent/inbox/spliced
+// 事件——判定只服务冷支（冷唤醒时选增量/全量变体）；活会话统一等待不读事件流（用户终裁②③：
+// 活=任务进行中，重入判活→等待永不重投；「活+未收单」经宿主 submitMaterialized 失败即完全回滚不存在）。
+// own-suffix = events.slice(header.seedLength ?? 0)（seed 是 fork 继承的父历史，不是本会话的工作）。
+// 保守方向钉死：形态不可判定一律按已收单——误判已收单的代价是投增量（成员可自辨），误判未收单
+// 的代价是向无上下文会话投不可执行的增量；宁可多带上下文。
+export function ownSuffixOf(session) {
+  const events = session?.events
+  if (!Array.isArray(events)) return null
+  const seed = Number(session?.header?.seedLength ?? 0)
+  return events.slice(Number.isSafeInteger(seed) && seed > 0 ? seed : 0)
+}
+
+// 活会话收单判定：own-suffix 有 inserted 非空的 inbox splice 即收过派单消息（descriptor-only = 未收单）。
+export function sessionReceived(session) {
+  const own = ownSuffixOf(session)
+  if (own === null) return true
+  return own.some((e) => e?.type === "agent/inbox/spliced" && Array.isArray(e?.data?.inserted) && e.data.inserted.length > 0)
+}
+
+// 冷持久判定（sessions.get 无命中时）：listSnapshots 匹配 id——轻量，仅 header+revision；
+// 未物化的崩溃壳（created-but-never-appended）不出现在列表，宿主判重同样不认它 → 同 ID 重建合法。
+// 返回：none（无冷记录，undetermined=true 表示持久服务不可用——按 none 走重建，宿主 DUPLICATE_CHILD
+// 兜底拒绝并报错可恢复）；foreign（header.parentSession 存在且 ≠ 调用方会话 → 接管冲突，不做
+// followup/重建——冷唤醒鉴权与显式 childId 判重两路必拒）；ours（归属一致 → followup 冷唤醒）。
+export async function coldSessionStatus({ persistence, parentSessionId }, childId) {
+  if (!persistence || typeof persistence.listSnapshots !== "function") return { status: "none", undetermined: true }
+  let snapshots
+  try {
+    snapshots = await persistence.listSnapshots()
+  } catch {
+    return { status: "none", undetermined: true }
+  }
+  const hit = (Array.isArray(snapshots) ? snapshots : []).find((s) => s?.header?.id === childId)
+  if (!hit) return { status: "none" }
+  const owner = hit.header.parentSession
+  if (owner !== undefined && owner !== null && owner !== parentSessionId) return { status: "foreign", header: hit.header }
+  return { status: "ours", header: hit.header }
+}
+
+// 冷会话收单判定（F-1 防双投：决定 followup 消息是补发正文还是轻量续行提示）：
+// readRaw 按需读回原始制品（detached 物理读，不触碰 coordinator/prepare 状态）；后端不支持
+// per-session 制品（supportsRawArtifacts=false，如 SQLite）或读取失败降级 inspect（全后端通用）。
+// 两者都不可得 → 保守按已收单（轻提示可人工恢复，正文重投不可逆）。
+export async function coldSessionReceived(persistence, childId) {
+  try {
+    if (persistence && typeof persistence.readRaw === "function" && persistence.supportsRawArtifacts !== false) {
+      const raw = await persistence.readRaw(childId)
+      if (!raw) return true
+      // 制品第一行是 header，其后每行一个事件；own-suffix 从事件 seedLength 起（行号 = seedLength+1）
+      const lines = String(raw.content ?? "").split("\n").filter((l) => l.trim() !== "")
+      const seed = Number(raw.meta?.seedLength ?? 0)
+      const start = Number.isSafeInteger(seed) && seed > 0 ? seed + 1 : 1
+      for (const line of lines.slice(start)) {
+        let event
+        try {
+          event = JSON.parse(line)
+        } catch {
+          return true // 撕裂/不可解析行：存在未知事件，保守按已收单
+        }
+        if (event?.type === "agent/inbox/spliced" && Array.isArray(event?.data?.inserted) && event.data.inserted.length > 0) return true
+      }
+      return false
+    }
+  } catch {
+    // 降级 inspect
+  }
+  if (persistence && typeof persistence.inspect === "function") {
+    try {
+      const looked = await persistence.inspect(childId)
+      return sessionReceived({ events: looked?.events, header: looked?.meta })
+    } catch {
+      return true
+    }
+  }
+  return true
+}
+
 function describe(error) {
   return String(error?.message ?? error)
+}
+
+// followup 投递原语（宿主 subagents.followup 的语义化封装；创建核心与 tw-dispatch 续派在场处置共用）：
+// 对活/冷会话均入队且接受即落盘（宿主契约）；冷会话走宿主 coldResume（inspect 读回 → 鉴权须精确
+// 直接父 → 重建 Agent → 消息入队）。错误按宿主错误码转译：UNAUTHORIZED=接管冲突（父会话不匹配）、
+// NOT_RESUMABLE=持久状态不可续投。返回 { ok, messageId } 或 { ok:false, code, message }。
+export async function followupChild({ subagents, parent, signal }, childId, text) {
+  if (!subagents || typeof subagents.followup !== "function") {
+    return { ok: false, code: "TW_SUB_FOLLOWUP_UNAVAILABLE", message: "subagents 服务缺 followup；无法向既有会话（" + childId + "）投递消息。请升级宿主后重试" }
+  }
+  let messageId
+  try {
+    messageId = await subagents.followup(parent, childId, [{ type: "text", text }], { source: { kind: "user" }, signal: signal ?? new AbortController().signal })
+  } catch (error) {
+    const code = error?.code
+    if (code === "UNAUTHORIZED") {
+      return {
+        ok: false,
+        code: "TW_SUB_TAKEOVER_CONFLICT",
+        message: "会话（" + childId + "）归属其他父会话（接管冲突）：本工具不做接管。处置：由原 Lead 会话继续（send_message），或 tw retire 作废该波后重新派发",
+      }
+    }
+    if (code === "NOT_RESUMABLE") {
+      return {
+        ok: false,
+        code: "TW_SUB_NOT_RESUMABLE",
+        message: "会话（" + childId + "）无法续投（NOT_RESUMABLE：持久状态不含可续聊描述符）。处置：tw retire 作废该波后重新派发（勿重试同 id）",
+      }
+    }
+    return { ok: false, code: "TW_SUB_FOLLOWUP_FAILED", message: "会话（" + childId + "）续投失败：" + describe(error) + "。原样重试安全（判定链幂等收敛）" }
+  }
+  return { ok: true, messageId }
 }
 
 // 纯函数：校验并标准化 target。成功返回 { ok:true, tier } 或 { ok:true, provider, model, effort? }；
@@ -156,15 +271,10 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
   if (!description) return failCard("TW_SUB_DESCRIPTION_REQUIRED", "description 必须是非空字符串（子代理标签）")
   const prompt = typeof input?.prompt === "string" ? input.prompt : ""
   if (!prompt.trim()) return failCard("TW_SUB_PROMPT_REQUIRED", "prompt 必须是非空字符串（完整任务指令）")
-  const target = normalizeTarget(input?.target)
-  if (!target.ok) return failCard(target.code, target.message)
   const exec = input?.exec
 
   // 宿主侧依赖运行时探测（§3.2：缺失时工具明确报错，不阻塞插件其他能力）。
-  const llm = getService("llm")
-  if (!llm || typeof llm.resolveCallConfig !== "function") {
-    return failCard("TW_SUB_LLM_UNAVAILABLE", "llm 服务不可用（缺 resolveCallConfig）；无法在创建前验证模型选择")
-  }
+  // 注意 llm 探测延迟到创建路径：确定性复用对账（followup/等待）不验证模型选择——会话自有配置。
   const subagents = getService("subagents")
   if (!subagents || typeof subagents.startContinuable !== "function") {
     return failCard("TW_SUB_SUBAGENTS_UNAVAILABLE", "subagents 服务不可用（缺 startContinuable）；无法创建可续聊子代理")
@@ -172,6 +282,80 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
   const sessions = getService("sessions")
   if (!sessions || typeof sessions.get !== "function" || typeof sessions.flush !== "function") {
     return failCard("TW_SUB_SESSIONS_UNAVAILABLE", "sessions 服务不可用（缺 get/flush）；无法确认启动持久化")
+  }
+  const sessionPersistence = getService("sessionPersistence")
+
+  const parent = exec?.agent
+  if (!parent) {
+    return failCard("TW_SUB_PARENT_MISSING", "缺少调用方 Agent（exec.agent 未定义）；请在会话工具调用上下文中使用")
+  }
+
+  // 确定性复用对账（判定链四态，用户终裁②③，docs/dispatch-rework-investigation.md §二·A；判定原语
+  // 与宿主判重标准一致）。「先登记后创建」的任何崩溃时点重入都收敛到同一会话，不产生第二个成员：
+  //   sessions.get 有（活）→ 归属检查（header.parentSession）：异主 → 接管冲突卡；归属一致 → 等待
+  //     （活 = 任务进行中，重入判活恒等待、永不重投——不读事件流：「活+未收单」经宿主
+  //     submitMaterialized 失败即完全回滚不存在）；
+  //   sessions.get 无 → sessionPersistence.listSnapshots 匹配 id：
+  //     foreign（header.parentSession ≠ 调用方会话）→ 接管冲突卡（不做 followup/重建——冷唤醒鉴权与
+  //       显式 childId 判重两路必被双拒；处置 = 原会话继续或 tw retire）；
+  //     ours（归属一致）→ followup 冷唤醒 + 缺什么补什么（readRaw 判收单定变体：曾收单=有上一轮
+  //       上下文→投本轮增量 / 从未收单→投全量——冷会话不在执行，本轮派单必未投过）；
+  //     none（含未物化崩溃壳）→ 同 ID 重建（投全量变体），落到下方正常创建路径（宿主显式 childId 判重兜底）。
+  const reuseId = typeof input?.sessionId === "string" && input.sessionId.trim() ? input.sessionId.trim() : null
+  const followupSignal = exec?.signal ?? new AbortController().signal
+  const deliverFollowup = async (text, resume) => {
+    const sent = await followupChild({ subagents, parent, signal: followupSignal }, reuseId, text)
+    if (!sent.ok) return sent
+    return { ok: true, sessionId: reuseId, messageId: sent.messageId, refollowed: true, resume, source: "reconciled" }
+  }
+  // 全量变体缺省回退（与 tw-dispatch handleContinuation 同款降级）：promptFull 仅供续派条目（新会话/
+  // 无上下文冷会话投递用）；通用委派缺省时一切投递用 prompt。
+  const promptFullOf = () => (typeof input?.promptFull === "string" && input.promptFull.trim() ? input.promptFull : prompt)
+  if (reuseId) {
+    // 判定链四态（用户终裁②③，docs/dispatch-rework-investigation.md §二·A）：活（归属一致）→等待 /
+    // 冷归属一致→唤醒+缺什么补什么 / 异主（活或冷）→接管冲突卡 / 无记录→同 ID 重建。
+    const live = sessions.get(reuseId)
+    if (live !== undefined && live !== null) {
+      // 归属检查（与冷支同款保守）：异主活会话不是「本 Lead 的任务进行中」——出接管冲突卡提示
+      // 处置，不做等待/投递/重建（冷唤醒鉴权与同 id 重建判重两路必被宿主拒绝）。
+      const owner = live?.header?.parentSession
+      if (owner !== undefined && owner !== null && owner !== parent?.id) {
+        return failCard(
+          "TW_SUB_TAKEOVER_CONFLICT",
+          "会话（" + reuseId + "）在场但归属其他父会话（parentSession=" + String(owner) + "≠ 当前 " + String(parent?.id) +
+            "，接管冲突）：本工具不做接管。处置：由原 Lead 会话继续，或 tw retire 作废该波后重新派发"
+        )
+      }
+      // 活会话统一等待（用户终裁②）：活 = 任务进行中（正在处理本轮，或等子代——子代停止时宿主注入
+      // 父级通知、逐级传导触发 Lead），通知链保证不僵死；重入判活→等待、永不重投（防成员重复执行
+      // 整轮工作）。不读事件流、不投递；「活+未收单」形态经宿主 submitMaterialized 失败即完全回滚
+      //（continuation catch→dispose）不存在，无需分辨收单状态。
+      return { ok: true, sessionId: reuseId, reused: true, source: "reconciled" }
+    }
+    const cold = await coldSessionStatus({ persistence: sessionPersistence, parentSessionId: parent?.id }, reuseId)
+    if (cold.status === "foreign") {
+      return failCard(
+        "TW_SUB_TAKEOVER_CONFLICT",
+        "会话（" + reuseId + "）是冷持久会话且归属其他父会话（parentSession=" + String(cold.header.parentSession) +
+          "≠ 当前 " + String(parent?.id) + "，接管冲突）：本工具不做接管（冷唤醒鉴权与同 ID 重建判重两路必被宿主拒绝）。处置：由原 Lead 会话继续，或 tw retire 作废该波后重新派发"
+      )
+    }
+    if (cold.status === "ours") {
+      // 冷归属一致 → 冷唤醒 + 缺什么补什么：冷会话不在执行（判定与投递互斥，本轮派单必未投过——
+      // 「曾收单」只代表有上一轮上下文）。判收单定变体：有上下文投增量（prompt）、无上下文投全量
+      //（promptFull，缺省回退 prompt——通用委派无变体概念）。
+      const received = await coldSessionReceived(sessionPersistence, reuseId)
+      return received ? deliverFollowup(prompt, "incremental") : deliverFollowup(promptFullOf(), "full")
+    }
+    // none（含未物化崩溃壳）：同 ID 重建 → 落到下方正常创建路径（重建投全量变体：新会话无原上下文）
+  }
+
+  // ── 创建路径（以下验证链只服务「同 ID 重建 / 全新创建」；followup/等待路径已在上面对账返回）──
+  const target = normalizeTarget(input?.target)
+  if (!target.ok) return failCard(target.code, target.message)
+  const llm = getService("llm")
+  if (!llm || typeof llm.resolveCallConfig !== "function") {
+    return failCard("TW_SUB_LLM_UNAVAILABLE", "llm 服务不可用（缺 resolveCallConfig）；无法在创建前验证模型选择")
   }
 
   // 解析选择：档位 → tiers 快照第一候选（unresolved 显式报错）；显式 → 原样。
@@ -264,13 +448,10 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     )
   }
 
-  const parent = exec?.agent
-  if (!parent) {
-    return failCard("TW_SUB_PARENT_MISSING", "缺少调用方 Agent（exec.agent 未定义）；请在会话工具调用上下文中使用")
-  }
-
-  // §3.4 sessionId：插件生成 UUID v4，不是模型参数；重复/冲突由 startContinuable 拒绝并清理。
-  const sessionId = randomUUID()
+  // §3.4 sessionId：插件生成 UUID v4，不是模型参数（确定性复用时由派单 key 推导）；重复/冲突由 startContinuable 拒绝并清理。
+  // 同 ID 重建投全量变体（promptFull 缺省回退 prompt）：重建目标是无原上下文的新会话，续派条目的
+  // 增量正文不可执行（§9.3）；通用委派与正常波（prompt 即全量）行为不变。
+  const sessionId = reuseId ?? randomUUID()
   directSelections.set(sessionId, selection)
   let start
   try {
@@ -279,7 +460,7 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
       label: description,
       childId: sessionId,
       request: {
-        prompt: [{ type: "text", text: prompt }],
+        prompt: [{ type: "text", text: promptFullOf() }],
         parent,
         agentOptions,
       },

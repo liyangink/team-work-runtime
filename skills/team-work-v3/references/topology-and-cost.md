@@ -27,7 +27,7 @@
 
 ## 角色（与 tw 工具的对应）
 
-- **Lead**：流程与完整性核对，不做技术裁决；`tw open/plan/run/decide/intent/route` 的调用者，派单的转发者。
+- **Lead**：流程与完整性核对，不做技术裁决；`tw open/plan/dispatch-plan/run 查状态/decide/intent/route` 的调用者，派单的转发者（DSH 内经 tw-dispatch 派发）。
 - **Owner**：唯一范围与制品负责人；`tw deliver` 交付，回应轮 = 同路径原地修订或证据反驳。
 - **Challenger**：非作者攻击事实/推理/边界/失败路径；只出 findings 与 recommendation，不改制品；组合评审的 findings 标包归属。
 - **Expert（裁决者）**：核心场景技术裁决；`tw review --verdict`；制品变化强制重新裁决（新鲜度）。
@@ -41,4 +41,4 @@
 
 ## 三轮收敛
 
-每轮都有挑战者：Owner 产出 → Challenger 可验证问题 → Owner 独立核验修订 → 核心场景 Expert 裁决。第三轮只验证关闭条件与残余风险，不重新发散。三轮未收敛 `tw run` 会给出 [追加一轮 / 结束任务] 卡片，由用户决定；追加必须目标明确。
+每轮都有挑战者：Owner 产出 → Challenger 可验证问题 → Owner 独立核验修订 → 核心场景 Expert 裁决。第三轮只验证关闭条件与残余风险，不重新发散。三轮未收敛，`tw-dispatch` / `tw dispatch-plan` 推进会给出 [追加一轮 / 结束任务] 卡片，由用户决定；追加必须目标明确。

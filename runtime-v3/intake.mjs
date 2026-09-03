@@ -9,7 +9,7 @@ import { readStableArtifact } from "./persistence/file-artifact-repository.mjs"
 import { artifactsFingerprint } from "./gate.mjs"
 import { projectRounds, inflightBatch, supersededKeys, waveIdOf } from "./waves.mjs"
 import { currentStageOf } from "./derive.mjs"
-import { readJson } from "./store.mjs"
+import { readJson, rebuildArtifacts } from "./store.mjs"
 import { writableMatch } from "./domain/writable.mjs"
 
 function reject(reasons) {
@@ -30,19 +30,29 @@ export function findDispatch(journal, dispatchKey) {
   return journal.find((e) => e.type === "dispatched" && e.detail?.key === dispatchKey) ?? null
 }
 
-// 执行时从磁盘重读最新事实（并发提交与跨进程重试都以此为准确保正确）
+// 执行时从磁盘重读最新事实（并发提交与跨进程重试都以此为准确保正确）。
+// artifacts.json 是派生索引（I3）：缺失/损坏都不抛——抛错会让 deliver/review 死门（无修复指引的裸
+// RUNTIME_ERROR，违反 P2 与方案 §8.1 #5 的锁内自愈声明）。降级用 rebuildArtifacts 从不可变事实
+// （reports+snapshots）重建，与 loadTask 重建路径同源同序；本函数只在任务锁内（deliver/review 入口）
+// 执行——deliver 落盘本就全量重写 artifacts.json，重建结果随本次交付固化（锁内自愈），review 内存
+// 重建即够（taskSha 口径与健康账本一致）。
 async function freshState(task) {
   const journalRaw = await readFile(path.join(task.root, "journal.jsonl"), "utf8").catch(() => "")
   const journal = journalRaw.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line))
-  let artifacts = { items: [] }
-  try {
-    artifacts = JSON.parse(await readFile(path.join(task.root, "artifacts.json"), "utf8"))
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error
-  }
   const reports = []
   for (const entry of await readdir(path.join(task.root, "reports")).catch(() => [])) {
     if (entry.endsWith(".json")) reports.push(await readJson(path.join(task.root, "reports", entry)))
+  }
+  let artifacts = null
+  try {
+    artifacts = JSON.parse(await readFile(path.join(task.root, "artifacts.json"), "utf8"))
+  } catch {
+    artifacts = null
+  }
+  if (!artifacts || !Array.isArray(artifacts.items)) {
+    // E：重建返回 { items, degraded }——deliver 全量重写 artifacts.json，跳过项不产出错误事实且
+    // 可经重跑 rebuildArtifacts 追溯；review 内存重建即够（taskSha 口径与健康账本一致）
+    artifacts = { items: (await rebuildArtifacts(task.root, reports, journal)).items }
   }
   return { journal, artifacts, reports }
 }
@@ -100,9 +110,9 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
     reasons.push(`dispatchKey ${dispatchKey} 不对应有效的 Owner 派单。${dispatch ? `该 key 属于 ${dispatch.detail.role} 派单（轮次 ${dispatch.detail.round}${dispatch.detail.package ? "，包 " + dispatch.detail.package : ""}）——deliver 只接受 owner 派单 key，你可能用了评审者的 key。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
-  // F3：superseded 波的 key 拒绝（作废恢复边：重新 run 取新卡；I5 拒绝必有出路）
+  // F3：superseded 波的 key 拒绝（作废恢复边：重新推进取新卡；I5 拒绝必有出路）
   if (dispatch && supersededKeys(fresh.journal).has(dispatchKey)) {
-    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受交付：请重新 tw run 取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
+    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受交付：请重新 tw-dispatch / tw dispatch-plan 推进取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
     throw reject(reasons)
   }
   // F7：同 key 重交 = key+payloadDigest 幂等；payload 变化 = ver+1 修订（身份 = key+ver，最新 ver 正文在单文件）
@@ -161,7 +171,18 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
   const ver = prior ? (prior.ver ?? 1) + 1 : 1
   const report = { reportId, dispatchKey, role: "owner", kind: "deliver", round: dispatch.detail.round, stage, package: dispatch.detail.package ?? null, ...(waveIdOf(fresh.journal, dispatchKey) ? { waveId: waveIdOf(fresh.journal, dispatchKey) } : {}), ver, payloadDigest, payload: payloadNow, at }
   for (const { rel, digest, content } of stables) {
-    await atomicJson(path.join(task.root, "snapshots", `${digest}.json`), { digest, path: rel, content, at })
+    // E（返工终版 §二·E）：同 digest 共享同一快照文件（文件名即 digest）——不同路径交付相同内容时
+    // path 标签不得互相覆盖（覆盖会让重建三源丢失先交付路径的 digest 关联）。保留 paths 全集标签，
+    // path 字段仍是最新路径（旧读者兼容），重建按 paths 索引。
+    const snapFile = path.join(task.root, "snapshots", `${digest}.json`)
+    let prior = null
+    try {
+      prior = JSON.parse(await readFile(snapFile, "utf8"))
+    } catch {
+      prior = null
+    }
+    const labels = new Set([...(Array.isArray(prior?.paths) ? prior.paths : []), ...(prior?.path ? [prior.path] : []), rel])
+    await atomicJson(snapFile, { digest, path: rel, paths: [...labels], content, at })
   }
   await atomicJson(path.join(task.root, "reports", `${reportId}.json`), report)
   const items = fresh.artifacts.items.filter((item) => !normalized.includes(item.path))
@@ -191,9 +212,9 @@ async function reviewLocked({ projectRoot, task, dispatchKey, payload }) {
     reasons.push(`dispatchKey ${dispatchKey} 不对应有效的评审派单。${dispatch ? `该 key 属于 ${dispatch.detail.role === "owner" ? "owner 交付派单（轮次 " + dispatch.detail.round + (dispatch.detail.package ? "，包 " + dispatch.detail.package : "") + "）——review 只接受 challenger/expert 派单 key" : "未知角色派单"}。` : inflightHint(fresh.journal, fresh.reports)} 请从你的派单文本原样复制 --key 的值。`)
     throw reject(reasons)
   }
-  // F3：superseded 波的 key 拒绝（作废恢复边：重新 run 取新卡）
+  // F3：superseded 波的 key 拒绝（作废恢复边：重新推进取新卡）
   if (dispatch && supersededKeys(fresh.journal).has(dispatchKey)) {
-    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受评审：请重新 tw run 取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
+    reasons.push(`dispatchKey ${dispatchKey} 对应的波已作废（tw retire 或迁移恢复）。该 key 不再接受评审：请重新 tw-dispatch / tw dispatch-plan 推进取新卡；作废原因见任务 journal 的 dispatch-superseded 事件。`)
     throw reject(reasons)
   }
   // F7：同 key 重交 = key+payloadDigest 幂等；payload 变化 = ver+1 修订

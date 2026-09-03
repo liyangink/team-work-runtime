@@ -79,61 +79,61 @@ test("run 路径惰性化：非派发路径零引导 I/O，派发与在途重建
   assert.equal(io(), 0, "任务不存在路径零引导 I/O")
 
   // ② 真正派发（owner，--writable none 无产物派单）：恰好 1 次
-  const d = await call(["run", "--task", "lazy-t", "--writable", "none"])
-  assert.equal(d.next, "dispatch")
+  const d = await call(["dispatch-plan", "--task", "lazy-t", "--writable", "none"])
+  assert.equal(d.stop, null)
+  assert.equal(d.waves.length, 1)
   assert.equal(io(), 1, "派发路径恰好 1 次引导 I/O")
-  assert.match(d.dispatch.prompt, /先调研和理解/, "派发注入角色引导")
+  assert.match(d.waves[0].prompt, /先调研和理解/, "派发注入角色引导")
 
-  // ③ 在途补发重建（已派发未交付再 run → wait-inflight 卡内嵌重建文本）：恰好 1 次
-  const inflight = await call(["run", "--task", "lazy-t"])
-  assert.equal(inflight.next, "wait")
+  // ③ 在途补发重建（已派发未交付再 dispatch-plan → wait-inflight stop 卡内嵌重建文本）：恰好 1 次
+  const inflight = await call(["dispatch-plan", "--task", "lazy-t"])
+  assert.equal(inflight.stop, "wait-inflight")
   assert.equal(io(), 2, "在途重建路径恰好 1 次引导 I/O")
   assert.match(inflight.inflight[0].prompt, /先调研和理解/, "在途重建文本注入引导")
 
   // ④ 交付后 challenger 派发：恰好 1 次
-  await call(["deliver", "--task", "lazy-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "完成"])
-  const c = await call(["run", "--task", "lazy-t"])
-  assert.equal(c.dispatch.role, "challenger")
+  await call(["deliver", "--task", "lazy-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成"])
+  const c = await call(["dispatch-plan", "--task", "lazy-t"])
+  assert.equal(c.waves[0].role, "challenger")
   assert.equal(io(), 3, "评审派发路径恰好 1 次引导 I/O")
 
-  // ⑤ 评审 accept 后 advance 转移（research → implementation）：零引导 I/O
-  await call(["review", "--task", "lazy-t", "--key", c.dispatch.key, "--recommendation", "accept", "--summary", "通过"])
-  const adv = await call(["run", "--task", "lazy-t"])
-  assert.equal(adv.transition, "advance")
-  assert.equal(io(), 3, "advance 非派发转移零引导 I/O")
+  // ⑤ 评审 accept 后 advance 转移（research → implementation）：run 只读化后 advance 中间卡消失，
+  // dispatch-plan 锁内 continue 直达下一阶段派发点（转移本身零引导 I/O，落点派发付 1 次）
+  await call(["review", "--task", "lazy-t", "--key", c.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "通过"])
+  const adv = await call(["dispatch-plan", "--task", "lazy-t", "--writable", "src.mjs:source"])
+  assert.equal(adv.stop, null)
+  assert.equal(adv.stage, "implementation")
+  assert.equal(adv.waves[0].role, "owner")
+  assert.equal(io(), 4, "advance 转移零引导 I/O，落点派发恰好 1 次")
 
-  // ⑥ implementation 阶段 owner 派发：恰好 1 次
-  const d2 = await call(["run", "--task", "lazy-t", "--writable", "src.mjs:source"])
-  assert.equal(d2.dispatch.role, "owner")
-  assert.equal(io(), 4, "下一阶段派发路径恰好 1 次引导 I/O")
-
-  // ⑦ 完成链路：deliver → challenger accept → advance → complete，均非派发
+  // ⑥ implementation 阶段交付后 challenger 派发：恰好 1 次
   await writeFile(path.join(projectRoot, "src.mjs"), "export const x = 1", "utf8")
-  await call(["deliver", "--task", "lazy-t", "--key", d2.dispatch.key, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
-  const c2 = await call(["run", "--task", "lazy-t"])
-  assert.equal(c2.dispatch.role, "challenger")
+  await call(["deliver", "--task", "lazy-t", "--key", adv.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
+  const c2 = await call(["dispatch-plan", "--task", "lazy-t"])
+  assert.equal(c2.waves[0].role, "challenger")
   assert.equal(io(), 5, "implementation 阶段评审派发恰好 1 次引导 I/O")
-  await call(["review", "--task", "lazy-t", "--key", c2.dispatch.key, "--recommendation", "accept", "--summary", "通过"])
-  const adv2 = await call(["run", "--task", "lazy-t"])
-  assert.equal(adv2.transition, "advance")
-  assert.equal(io(), 5, "advance 转移零引导 I/O")
+  await call(["review", "--task", "lazy-t", "--key", c2.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "通过"])
+  const adv2 = await call(["dispatch-plan", "--task", "lazy-t", "--writable", "none"])
+  assert.equal(adv2.stop, null)
+  assert.equal(adv2.stage, "finish")
+  assert.equal(adv2.waves[0].role, "owner")
+  assert.equal(io(), 6, "finish 阶段落点派发恰好 1 次引导 I/O")
 
-  // ⑦b finish 阶段收尾链：owner 派发 → deliver → challenger 派发 → accept → 终态
-  const d3 = await call(["run", "--task", "lazy-t", "--writable", "none"])
-  assert.equal(d3.dispatch.role, "owner")
-  assert.equal(io(), 6, "finish 阶段派发恰好 1 次引导 I/O")
-  await call(["deliver", "--task", "lazy-t", "--key", d3.dispatch.key, "--outcome", "delivered", "--summary", "收尾"])
-  const c3 = await call(["run", "--task", "lazy-t"])
-  assert.equal(c3.dispatch.role, "challenger")
+  // ⑦b finish 阶段收尾链：deliver → challenger 派发 → accept → 终态
+  await call(["deliver", "--task", "lazy-t", "--key", adv2.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "收尾"])
+  const c3 = await call(["dispatch-plan", "--task", "lazy-t"])
+  assert.equal(c3.waves[0].role, "challenger")
   assert.equal(io(), 7, "finish 阶段评审派发恰好 1 次引导 I/O")
-  await call(["review", "--task", "lazy-t", "--key", c3.dispatch.key, "--recommendation", "accept", "--summary", "通过"])
-  const done = await call(["run", "--task", "lazy-t"])
-  assert.equal(done.status, "completed")
-  assert.equal(io(), 7, "终态卡零引导 I/O")
+  await call(["review", "--task", "lazy-t", "--key", c3.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "通过"])
+  const done = await call(["dispatch-plan", "--task", "lazy-t"])
+  assert.equal(done.stop, "completed")
+  assert.equal(done.card.status, "completed")
+  assert.equal(io(), 7, "终态完成卡零引导 I/O")
 
-  // ⑧ 幂等完成卡（重复 run 返回同一完成卡）：零引导 I/O
+  // ⑧ 幂等完成卡（run 只读幂等返回同一完成卡）：零引导 I/O
   const again = await call(["run", "--task", "lazy-t"])
   assert.equal(again.status, "completed")
+  assert.equal(again.next, "archive")
   assert.equal(io(), 7, "幂等完成卡零引导 I/O")
 })
 
@@ -176,20 +176,24 @@ test("awaiting-user 静止路径（升档审批卡）零引导 I/O，批准后�
   mock.method(console, "warn", (...args) => warns.push(args.join(" ")))
   const io = () => warns.length
 
-  // 包 tier（expert）高于场景默认档（junior）→ run 出升档审批卡（awaiting-user 静止，不派发）
+  // 包 tier（expert）高于场景默认档（junior）→ dispatch-plan 出升档审批卡（awaiting-user 静止 stop，不派发；
+  // 决定卡首签发生在 dispatch-plan 推进时，run 只读不签发）
   const p = await call(["plan", "--task", "esc-t", "--packages", JSON.stringify([{ id: "core", writable: ["a.mjs:source"], done: ["完成 core"], tier: "expert" }])])
   assert.equal(p.ok, true)
-  const r = await call(["run", "--task", "esc-t"])
-  assert.equal(r.status, "awaiting-user")
-  assert.equal(r.next, "decide")
+  const r = await call(["dispatch-plan", "--task", "esc-t"])
+  assert.equal(r.stop, "awaiting-user")
+  assert.equal(r.waves.length, 0)
+  assert.ok(r.card.decisionId, "决定卡在 card 下（首签归 dispatch 通道）")
+  assert.equal(r.card.next, "decide")
   assert.equal(io(), 0, "升档审批静止卡零引导 I/O")
 
   // 批准升档后真正派发：恰好 1 次
   await call(["decide", "--task", "esc-t", "--choice", "1"])
-  const d = await call(["run", "--task", "esc-t"])
-  assert.equal(d.next, "dispatch")
+  const d = await call(["dispatch-plan", "--task", "esc-t"])
+  assert.equal(d.stop, null)
+  assert.equal(d.waves.length, 1)
   assert.equal(io(), 1, "审批后派发恰好 1 次引导 I/O")
-  assert.match(d.dispatch.prompt, /先调研和理解/, "审批后派发注入引导")
+  assert.match(d.waves[0].prompt, /先调研和理解/, "审批后派发注入引导")
 })
 
 test("blocked 卡路径（门失败且非人工阻塞）零引导 I/O", async () => {
@@ -203,29 +207,29 @@ test("blocked 卡路径（门失败且非人工阻塞）零引导 I/O", async ()
   mock.method(console, "warn", (...args) => warns.push(args.join(" ")))
   const io = () => warns.length
 
-  // ① research 阶段完整收敛（派发 ×2），advance 到 implementation：非派发路径零 I/O
-  const r1 = await call(["run", "--task", "blk-t", "--writable", "none"])
-  assert.equal(r1.next, "dispatch")
+  // ① research 阶段完整收敛（派发 ×2），advance 直达 implementation 派发点：
+  // advance 转移零 I/O，落点派发付 1 次
+  const r1 = await call(["dispatch-plan", "--task", "blk-t", "--writable", "none"])
+  assert.equal(r1.stop, null)
   assert.equal(io(), 1, "research 派发恰好 1 次引导 I/O")
-  await call(["deliver", "--task", "blk-t", "--key", r1.dispatch.key, "--outcome", "delivered", "--summary", "完成"])
-  const rc = await call(["run", "--task", "blk-t"])
-  assert.equal(rc.dispatch.role, "challenger")
+  await call(["deliver", "--task", "blk-t", "--key", r1.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成"])
+  const rc = await call(["dispatch-plan", "--task", "blk-t"])
+  assert.equal(rc.waves[0].role, "challenger")
   assert.equal(io(), 2, "research 评审派发恰好 1 次引导 I/O")
-  await call(["review", "--task", "blk-t", "--key", rc.dispatch.key, "--recommendation", "accept", "--summary", "通过"])
-  const adv = await call(["run", "--task", "blk-t"])
-  assert.equal(adv.transition, "advance")
-  assert.equal(io(), 2, "advance 转移零引导 I/O")
+  await call(["review", "--task", "blk-t", "--key", rc.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "通过"])
+  const adv = await call(["dispatch-plan", "--task", "blk-t", "--writable", "src.mjs:source"])
+  assert.equal(adv.stop, null)
+  assert.equal(adv.stage, "implementation")
+  assert.equal(adv.waves[0].role, "owner")
+  assert.equal(io(), 3, "advance 转移零引导 I/O，落点派发恰好 1 次")
 
-  // ② implementation 阶段派发并交付：deliver 携带 fail 检查（intake 接受，门禁判 blocker）
-  const d = await call(["run", "--task", "blk-t", "--writable", "src.mjs:source"])
-  assert.equal(d.dispatch.role, "owner")
-  assert.equal(io(), 3, "implementation 派发恰好 1 次引导 I/O")
+  // ② implementation 阶段交付：deliver 携带 fail 检查（intake 接受，门禁判 blocker）
   await writeFile(path.join(projectRoot, "src.mjs"), "export const x = 1", "utf8")
-  await call(["deliver", "--task", "blk-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs", "--checks", '[{"name":"lint","result":"fail"}]'])
-  const c = await call(["run", "--task", "blk-t"])
-  assert.equal(c.dispatch.role, "challenger")
+  await call(["deliver", "--task", "blk-t", "--key", adv.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs", "--checks", '[{"name":"lint","result":"fail"}]'])
+  const c = await call(["dispatch-plan", "--task", "blk-t"])
+  assert.equal(c.waves[0].role, "challenger")
   assert.equal(io(), 4, "implementation 评审派发恰好 1 次引导 I/O")
-  await call(["review", "--task", "blk-t", "--key", c.dispatch.key, "--recommendation", "accept", "--summary", "通过"])
+  await call(["review", "--task", "blk-t", "--key", c.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "通过"])
 
   // ③ 门失败（检查未通过，无 awaitingUser blocker）→ blocked 卡：零引导 I/O
   const b = await call(["run", "--task", "blk-t"])
@@ -243,18 +247,18 @@ test("热变语义：修改覆盖层引导文件后下一次派发生效（无�
   const call = caller(projectRoot)
   await openTask(projectRoot, "hot-t", { objective: "实现模块 X", entry: "implementation" })
 
-  const d = await call(["run", "--task", "hot-t", "--writable", "src.mjs:source"])
-  assert.match(d.dispatch.prompt, /第一版覆盖纪律/, "首次派发注入当前覆盖内容")
-  assert.doesNotMatch(d.dispatch.prompt, /第二版覆盖纪律/, "新内容尚未写入")
+  const d = await call(["dispatch-plan", "--task", "hot-t", "--writable", "src.mjs:source"])
+  assert.match(d.waves[0].prompt, /第一版覆盖纪律/, "首次派发注入当前覆盖内容")
+  assert.doesNotMatch(d.waves[0].prompt, /第二版覆盖纪律/, "新内容尚未写入")
 
   // 交付后修改覆盖文件，respond 续派（同一任务第二次派发）应读到新内容
   await writeFile(path.join(projectRoot, "src.mjs"), "export const x = 1", "utf8")
-  await call(["deliver", "--task", "hot-t", "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
-  const c = await call(["run", "--task", "hot-t"])
-  await call(["review", "--task", "hot-t", "--key", c.dispatch.key, "--recommendation", "rework", "--summary", "返工"])
+  await call(["deliver", "--task", "hot-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
+  const c = await call(["dispatch-plan", "--task", "hot-t"])
+  await call(["review", "--task", "hot-t", "--key", c.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "返工"])
   await writeFile(path.join(projectRoot, "team-work/guidance/scenes/implementation.md"), "- 第二版覆盖纪律。", "utf8")
-  const rw = await call(["run", "--task", "hot-t", "--writable", "src.mjs:source"])
-  assert.equal(rw.dispatch.kind, "respond")
-  assert.match(rw.dispatch.prompt, /第二版覆盖纪律/, "修改引导文件后下次派发生效（热变）")
-  assert.doesNotMatch(rw.dispatch.prompt, /第一版覆盖纪律/, "旧内容不残留（无模块级缓存）")
+  const rw = await call(["dispatch-plan", "--task", "hot-t", "--writable", "src.mjs:source"])
+  assert.equal(rw.waves[0].kind, "respond")
+  assert.match(rw.waves[0].prompt, /第二版覆盖纪律/, "修改引导文件后下次派发生效（热变）")
+  assert.doesNotMatch(rw.waves[0].prompt, /第一版覆盖纪律/, "旧内容不残留（无模块级缓存）")
 })

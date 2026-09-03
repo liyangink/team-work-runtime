@@ -302,19 +302,21 @@ test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略
   assert.equal(again.stop, "wait-inflight", "在途波次不重复派发")
 })
 
-test("run 派单同样固化全局配置模型快照（防 9b0b92c 回归：run 丢 hint → agent-map 无快照 → 注入静默失效）", async () => {
+test("派发波次同样固化全局配置模型快照（防 9b0b92c 回归：派发丢 hint → agent-map 无快照 → 注入静默失效）", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "run-hint-t")
-  const card = await call(["run", "--task", "run-hint-t", "--writable", "R.md:code-review"])
-  assert.equal(card.next, "dispatch")
-  const hint = card.dispatch?.modelHint
-  assert.ok(hint?.provider && hint?.model, "run 派单卡带 modelHint（全局配置快照）")
+  const plan = await call(["dispatch-plan", "--task", "run-hint-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(plan.stop, null)
+  const hint = plan.waves[0]?.modelHint
+  assert.ok(hint?.provider && hint?.model, "派发波次带 modelHint（全局配置快照）")
   assert.equal(hint.source, "global-settings")
   const task = await loadTask(root, "run-hint-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const dispatched = task.journal.filter((e) => e.type === "dispatched")
   assert.equal(dispatched.length, 1)
-  assert.deepEqual(dispatched[0].detail.modelHint, hint, "journal dispatched 事实与派单卡同一快照")
+  assert.equal(dispatched[0].detail.modelHint.provider, hint.provider, "journal dispatched 事实与派发波次同一快照")
+  assert.equal(dispatched[0].detail.modelHint.model, hint.model, "journal dispatched 事实与派发波次同一快照")
+  assert.equal(dispatched[0].detail.modelHint.source, hint.source, "journal dispatched 事实与派发波次同一快照")
 })
 
 test("dispatch-plan：无全局模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
@@ -409,10 +411,10 @@ test("verdict 派单必须内嵌工具调用指令", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "vd-t")
-  const first = await call(["run", "--task", "vd-t", "--writable", "R.md:code-review"])
+  const first = await call(["dispatch-plan", "--task", "vd-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  await call(["deliver", "--task", "vd-t", "--key", first.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
-  await call(["review", "--task", "vd-t", "--key", (await call(["run", "--task", "vd-t"])).dispatch.key, "--recommendation", "accept", "--summary", "s"])
+  await call(["deliver", "--task", "vd-t", "--key", first.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  await call(["review", "--task", "vd-t", "--key", (await call(["dispatch-plan", "--task", "vd-t", "--json"])).waves[0].dispatchKey, "--recommendation", "accept", "--summary", "s"])
   const plan = await call(["dispatch-plan", "--task", "vd-t", "--json"])
   assert.equal(plan.waves[0].kind, "verdict")
   assert.match(plan.waves[0].prompt, /review --task vd-t --key /)
@@ -424,17 +426,18 @@ test("dispatch-plan stop:blocked 的 blockers 保持对象数组", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "blk-t")
-  const owner = await call(["run", "--task", "blk-t", "--writable", "R.md:code-review"])
+  const owner = await call(["dispatch-plan", "--task", "blk-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  await call(["deliver", "--task", "blk-t", "--key", owner.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md", "--checks", '[{"name":"lint","result":"fail"}]'])
+  await call(["deliver", "--task", "blk-t", "--key", owner.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md", "--checks", '[{"name":"lint","result":"fail"}]'])
   const task = await loadTask(root, "blk-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const at = new Date().toISOString()
-  const base = { dispatchKey: owner.dispatch.key, round: 1, stage: "code-review", taskSha: "x" }
+  const base = { dispatchKey: owner.waves[0].dispatchKey, round: 1, stage: "code-review", taskSha: "x" }
   await writeFile(path.join(task.root, "reports", "rc.json"), JSON.stringify({ reportId: "rc", role: "challenger", kind: "review", ...base, payload: { summary: "s", recommendation: "accept" }, at }))
   await writeFile(path.join(task.root, "reports", "re.json"), JSON.stringify({ reportId: "re", role: "expert", kind: "review", ...base, payload: { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } }, at }))
   await call(["route", "--task", "blk-t", "--route", "e2e", "--decision", "skip", "--basis", "测试"])
-  const gate = await call(["run", "--task", "blk-t"])
-  assert.equal(gate.status, "awaiting-user")
+  const gate = await call(["dispatch-plan", "--task", "blk-t", "--json"])
+  assert.equal(gate.stop, "awaiting-user")
+  assert.ok(gate.card.decisionId, "人工门决定卡由 dispatch 通道首签")
   await call(["decide", "--task", "blk-t", "--choice", "1"])
   const plan = await call(["dispatch-plan", "--task", "blk-t", "--json"])
   assert.equal(plan.stop, "blocked")
@@ -468,8 +471,8 @@ test("TW_CMD 覆盖派单内的成员工具调用指令", async () => {
   const previous = process.env.TW_CMD
   process.env.TW_CMD = "twx"
   try {
-    const card = await call(["run", "--task", "cmd-t", "--writable", "R.md:code-review"])
-    assert.match(card.dispatch.prompt, /twx deliver --task cmd-t/)
+    const card = await call(["dispatch-plan", "--task", "cmd-t", "--writable", "R.md:code-review", "--json"])
+    assert.match(card.waves[0].prompt, /twx deliver --task cmd-t/)
   } finally {
     if (previous === undefined) delete process.env.TW_CMD
     else process.env.TW_CMD = previous
@@ -480,10 +483,10 @@ test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", as
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "idem-t")
-  const dispatch = await call(["run", "--task", "idem-t", "--writable", "R.md:code-review"])
+  const plan = await call(["dispatch-plan", "--task", "idem-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
-  await call(["deliver", "--task", "idem-t", "--key", dispatch.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
-  const again = await call(["deliver", "--task", "idem-t", "--key", dispatch.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  await call(["deliver", "--task", "idem-t", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const again = await call(["deliver", "--task", "idem-t", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   assert.equal(again.idempotent, true)
   const task = await loadTask(root, "idem-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   assert.equal(task.journal.filter((event) => event.type === "report-accepted").length, 1)

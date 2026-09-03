@@ -7,12 +7,12 @@
 **波次推进一律先调 `tw-dispatch`（{ task, note?, writables? }）**——单次调用完成一个波次的完整派发：
 
 1. 内部子进程调 `tw dispatch-plan --task <名> --json`（writables 透传）推进到派发点或 stop；
-2. 波次机不在派发点时（awaiting-user / wait-inflight / completed / blocked / archived 卡，含拒绝卡）**原样透传卡片**，不创建任何子代理——Lead 按卡片行动；
-3. 在派发点时对每张派单自动完成三步：按 wave.modelHint 创建子代理（target 直取 provider/model/effort，**不重选档位**）→ `tw agent-map` 登记 dispatchKey→childId 续派映射 → 标签按派单事实自动拼接（见「成员标签」）。
+2. 波次机不在派发点时（awaiting-user / completed / blocked / archived 卡，含拒绝卡）**原样透传卡片**，不创建任何子代理——Lead 按卡片行动；wait-inflight 卡是唯一例外：按条目自动兜底处置（见 stop 处理节）；
+3. 在派发点时对每张派单自动完成「先登记后创建」（防双发机器保障）：`tw agent-map` 先登记 dispatchKey→**确定性 sessionId**（从任务名+派单 key 推导，同 key 重试恒同 id）→ 按 wave.modelHint 创建子代理（target 直取 provider/model/effort，**不重选档位**；创建前经宿主会话**判定链**对账：活会话已收单→等待不重复投递；活会话未收单/冷持久归属一致→followup 补发或冷唤醒；冷持久异主→接管冲突卡；无记录→同 id 重建）→ 标签按派单事实自动拼接（见「成员标签」）。登记失败发生在创建之前，原样重试安全、不会双发。
 
 返回逐项结果 `[{key, sessionId, provider/model/effort, 标签, registered}]`。单张失败不回滚已成功项，按该项 message 的指引恢复（登记失败可用 tw agent-map 补登记；勿重复创建，避免重复派单）。
 
-**Lead 推进循环 = 反复调 tw-dispatch 直到终态卡片**，不再需要「先 run/dispatch-plan 看卡、再决定怎么派」的双工具交替。
+**Lead 推进循环 = 反复调 tw-dispatch 直到终态卡片**，不再需要「先看卡、再决定怎么派」的双工具交替。`tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；无 DSH 插件的终端直接用 `tw dispatch-plan`（人读输出）作为推进通道。
 
 三工具分工（情境判据是「有无进行中的任务波次」，不依赖记忆）：
 
@@ -22,10 +22,10 @@
 | 非工作流委派：只读子派单、用户 @档位、并行调查、独立审查等 | tw-tool-subagent |
 | 任务簿记：决定、门禁查询、交付、评审、补登记 | tw |
 
-## 续派：send_message（不经 tw-dispatch）
+## 续派：followup 机器投递（Lead 主动追问用 send_message）
 
-- continuation=true 且有 expectedAgentId：对该 subagent **send_message**（消息 = wave.prompt 增量派单全文）；**不要开新 agent**。tw-dispatch 对这类波不创建，只返回 send_message 指引（含 expectedAgentId）；
-- send_message 失败/会话不可用：降级为 fresh 新建——dispatch-plan 对映射缺失的续派波输出 expectedAgentIdMissing + resumeNote，此时重新 tw-dispatch 即按创建路径新建子代理并登记新映射；用户点名换人（replace-owner）走同一通道。
+- continuation=true 且有 expectedAgentId：tw-dispatch 按判定链处置——在场（已收单，成员有原上下文）→ **工具直接 followup** 投本轮增量派单正文（机器投递，与 send_message 同为续聊通道；Lead 主动追问/催办仍可用 send_message）；在场但空壳或冷持久未收单（无原上下文）→ followup **全量变体**（wave.promptFull，目标/约束/排除内嵌）；冷持久异主 → 接管冲突卡（由原 Lead 会话继续，或 tw retire 后重派）；断链（会话已不存在）→ 机器自动 fresh 重建（登记确定性 sessionId + 按本波 modelHint 创建，**投全量变体**——新成员无原上下文，增量单不可执行；key 映射回填，结果卡标注 fresh_rebuilt 与原 agentId）；
+- 用户点名换人（replace-owner）或映射缺失（expectedAgentIdMissing + resumeNote）：同一 fresh 重建通道。
 
 ## 评审修订纪律（D5）
 
@@ -34,7 +34,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## stop 处理（tw-dispatch 透传卡片后按型行动）
 
 - stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
-- stop: wait-inflight：有成员未交付，卡内嵌 inflight[]（原派单全文）——有 expectedAgentId 则 send_message 补派；无（映射缺失）则 tw-tool-subagent 按 prompt 全量新建 fresh 子代理（target 取该派单 modelHint）并 tw agent-map 登记新映射；send_message 失败走同一新建降级；
+- stop: wait-inflight：**tw-dispatch 已自动逐条处置**（runtime 在 inflight 条目上投影 registered/mappedAgentId/expectedAgentId/modelHint/promptFull 判定事实）——已登记（registered=true）→ 判定链处置登记会话：已收单→等待；活会话未收单/冷持久归属一致→followup 补发或冷唤醒（冷会话已收单只发轻量续行提示，不重发正文防重复执行）；冷持久异主→接管冲突卡；无记录→同 id 重建（崩溃窗口机器化收敛，无双发）；续派且有 expectedAgentId → 在场 followup 投本轮派单（增量/全量按上下文在场性）、断链自动 fresh 重建（全量变体）；未登记 → 登记确定性 sessionId + 补派（结果标注「补派」，附 tw retire 提示）。仅当条目缺 registered（agents.json 缺失/损坏降级透传）才需手工：tw agent-map --key <key> --agent <childId> 补登记（**账本损坏时该命令自动重建账本**，历史映射丢失的续派走 fresh 路径），确认子代理未创建则直接重新 tw-dispatch（按未登记自动补派）；modelHint 不可解析且本波不应执行 → tw retire 回收该波；
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后重新 tw-dispatch。
 

@@ -1,4 +1,4 @@
-// 并发回归（复核修复验证）：并发 deliver 不丢登记、并发 run 不双派发、并发 decide 不双记
+// 并发回归（复核修复验证）：并发 deliver 不丢登记、并发 dispatch-plan 推进不双派发、并发 decide 不双记
 import test from "node:test"
 import assert from "assert/strict"
 import {mkdtemp, writeFile, readFile, utimes} from "node:fs/promises"
@@ -32,16 +32,18 @@ test("并发 deliver：两个不同 key 同时交付，登记互不丢失", asyn
   assert.equal(after.reports.length, 2)
 })
 
-test("并发 run：同波次只派发一次（一个 dispatch key）", async () => {
+test("并发 dispatch-plan：同波次只派发一次（一个 dispatch key）", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-conc-"))
   const call = (argv) => tw(argv, { projectRoot })
   await call(["open", "--name", "conc-run", "--objective", "o", "--entry", "code-review"])
   const [c1, c2] = await Promise.all([
-    call(["run", "--task", "conc-run", "--writable", "R.md:code-review"]),
-    call(["run", "--task", "conc-run", "--writable", "R.md:code-review"]),
+    call(["dispatch-plan", "--task", "conc-run", "--writable", "R.md:code-review"]),
+    call(["dispatch-plan", "--task", "conc-run", "--writable", "R.md:code-review"]),
   ])
-  const dispatches = [c1, c2].filter((c) => c.next === "dispatch")
-  assert.equal(dispatches.length, 1, "并发 run 只有一方完成派发（复核缺陷 4：曾双重派发），另一方应为后续状态卡")
+  const dispatches = [c1, c2].filter((c) => c.stop === null && c.waves.length > 0)
+  assert.equal(dispatches.length, 1, "并发推进只有一方拿到派单（复核缺陷 4：曾双重派发），另一方应为 wait-inflight 状态卡")
+  const other = [c1, c2].find((c) => !(c.stop === null && c.waves.length > 0))
+  assert.equal(other.stop, "wait-inflight", "另一方锁内重推导得到在途重建卡：" + JSON.stringify(other))
   const task = await loadTask(projectRoot, "conc-run", { workflow: FIX_WORKFLOW, FIX_POLICY })
   const dispatchedEvents = task.journal.filter((e) => e.type === "dispatched")
   assert.equal(dispatchedEvents.length, 1, "journal 只有一条 dispatched")

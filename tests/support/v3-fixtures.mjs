@@ -13,6 +13,19 @@ export const FIX_WORKFLOW = {
 }
 export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" }, scenes: { "code-review": { core: true } } }
 
+// dispatch-plan 在派发点强制校验全局 tier 解析（run 只读化后是唯一推进通道）——本进程默认装一份
+// 临时 settings（三档齐全）。个别测试文件可自带更专 settings 再覆盖 DSH_SETTINGS（后设生效）。
+const fxSettingsFile = path.join(tmpdir(), `tw-v3-fx-tiers-${process.pid}-${Date.now()}.yaml`)
+await writeFile(fxSettingsFile, [
+  "team-work-dsh:",
+  "  tiers:",
+  "    junior: { provider: fx-junior, model: fx-junior }",
+  "    senior: { provider: fx-senior, model: fx-senior }",
+  "    expert: { provider: fx-expert, model: fx-expert }",
+  "",
+].join("\n"))
+process.env.DSH_SETTINGS = fxSettingsFile
+
 export async function makeProject({ workflow = FIX_WORKFLOW, policy = FIX_POLICY } = {}) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-fx-"))
   if (workflow) await mkdir(path.join(projectRoot, "workflow/definitions"), { recursive: true }).then(() => writeFile(path.join(projectRoot, "workflow/definitions/engineering.json"), JSON.stringify(workflow)))
@@ -56,17 +69,19 @@ export async function seedReviewReport(projectRoot, name, { role, recommendation
 export async function seedConvergedStage(projectRoot, name) {
   const call = caller(projectRoot)
   await openTask(projectRoot, name)
-  const d = await call(["run", "--task", name, "--writable", "R.md:code-review"])
+  const plan = await call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review"])
+  if (!plan.waves?.length) throw new Error("seedConvergedStage: dispatch-plan 未产出派单：" + JSON.stringify(plan))
+  const d = plan.waves[0]
   await writeFile(path.join(projectRoot, "R.md"), "报告", "utf8")
-  await call(["deliver", "--task", name, "--key", d.dispatch.key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  await call(["deliver", "--task", name, "--key", d.dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   const task = await loadTask(projectRoot, name, { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const seedAt = new Date().toISOString() // 晚于真实 deliver，保持裁决新鲜
-  const base = { dispatchKey: d.dispatch.key, round: 1, stage: "code-review", taskSha: "x" }
+  const base = { dispatchKey: d.dispatchKey, round: 1, stage: "code-review", taskSha: "x" }
   const review = (role, payload) => ({ reportId: role, role, kind: "review", ...base, payload, at: seedAt })
   await writeFile(path.join(task.root, "reports", "rc.json"), JSON.stringify(review("challenger", { summary: "s", recommendation: "accept" })))
   await writeFile(path.join(task.root, "reports", "re.json"), JSON.stringify(review("expert", { summary: "s", recommendation: "accept", verdict: { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" } })))
   await call(["route", "--task", name, "--route", "e2e", "--decision", "skip", "--basis", "夹具跳过"])
-  return { call, task, dispatchKey: d.dispatch.key }
+  return { call, task, dispatchKey: d.dispatchKey }
 }
 
 // 纯函数层报告构造器（gate/derive 测试共用）；时间戳随轮次单调（裁决新鲜度依赖 at）

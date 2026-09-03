@@ -29,9 +29,10 @@
 └─ sessions.get 无 → sessionPersistence.listSnapshots 匹配 id：
      有且 header.parentSession ≠ 当前调用方会话 → 接管冲突卡（指 tw retire --wave
          或由原会话继续；不做 followup/重建——两路必被鉴权/判重双拒）
-     有且归属一致 → readRaw 读回判 own-suffix：
-         已收单 → 等待
-         未收单 → followup 冷唤醒补发正文
+     有且归属一致 → followup 冷唤醒（readRaw 判收单决定消息内容）：
+         未收单 → 消息=派单正文（补发）
+         已收单 → 消息=轻量续行提示（「继续当前工作并报告状态」，附派单 key 供对照；
+                  不重发正文防重复执行；成员有会话上下文可自辨进度）
      无（含未物化崩溃壳）→ 同 ID 重建
 ```
 

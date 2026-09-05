@@ -41,7 +41,7 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   for (const { factory } of registrations) {
     const plugin = factory(() => ({}))
     assert.equal(typeof plugin?.apply, "function", "factory(require) 须返回带 apply 的插件对象")
-    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "settingsScope", "inputTriggers"], "须声明模型查询、全局 settingsScope 与 @ 候选源服务；logger 是 ctx 内建属性")
+    assert.deepEqual(Array.from(plugin.inject), ["slots", "sessions", "connection", "remote", "remote.session", "remote.llm", "settingsScope", "inputTriggers"], "须声明模型查询、remote 模型目录、全局 settingsScope 与 @ 候选源服务；logger 是 ctx 内建属性")
   }
 })
 
@@ -159,17 +159,17 @@ test("I5 Web 插件配置卡：绑定 settingsScope、候选行保存为数组�
       inject(_slot, install) { install() },
       register(options, component) { slotRegistrations.push({ options, component }); return () => {} },
     },
-    connection: {
-      api: {
-        llm: {
-          async providers() {
-            apiCalls.push("providers")
-            return { result: { ok: true, value: { providers: [{ provider: "provider-a", displayName: "Provider A", active: true }] } } }
-          },
-          async models() {
-            apiCalls.push("models")
-            return { result: { ok: true, value: { groups: [{ id: "provider-a", name: "Provider A", models: [{ id: "catalog-model", name: "Catalog model", reasoning: { efforts: [{ id: "high", name: "High" }] } }, { id: "catalog-model-two", name: "Catalog model two" }] }], failures: [{ provider: "provider-b", message: "暂不可用" }] } } }
-          },
+    remote: {
+      llm: {
+        async listProviders() {
+          apiCalls.push("providers")
+          return { ok: true, value: [{ id: "provider-a", name: "Provider A" }] }
+        },
+      },
+      session: {
+        async modelCatalog() {
+          apiCalls.push("models")
+          return { ok: true, value: { groups: [{ id: "provider-a", name: "Provider A", models: [{ id: "catalog-model", name: "Catalog model", reasoning: { efforts: [{ id: "high", name: "High" }] } }, { id: "catalog-model-two", name: "Catalog model two" }] }], failures: [{ id: "provider-b", name: "Provider B", message: "暂不可用" }] } }
         },
       },
     },
@@ -300,15 +300,15 @@ test("I5 Web 插件配置卡：模型目录 RPC 被拒绝时，阻止保存并�
       inject(_slot, install) { install() },
       register(options, component) { slotRegistrations.push({ options, component }); return () => {} },
     },
-    connection: {
-      api: {
-        llm: {
-          async providers() {
-            return { result: { ok: true, value: { providers: [{ provider: "provider-a", active: true }] } } }
-          },
-          async models() {
-            return { result: { ok: false, error: { message: "模型目录服务暂不可用" } } }
-          },
+    remote: {
+      llm: {
+        async listProviders() {
+          return { ok: true, value: [{ id: "provider-a", name: "Provider A" }] }
+        },
+      },
+      session: {
+        async modelCatalog() {
+          return { ok: false, error: { message: "模型目录服务暂不可用" } }
         },
       },
     },
@@ -397,22 +397,26 @@ test("I5 Web 插件配置卡：候选必须通过 Provider、模型目录与 eff
       inject(_slot, install) { install() },
       register(options, component) { slots.push({ options, component }); return () => {} },
     },
-    connection: { api: { llm: {
-      async providers() {
-        return { result: { ok: true, value: { providers: [
-          { provider: "provider-a", active: true },
-          { provider: "provider-b", active: true },
-          { provider: "provider-c", active: true },
-          { provider: "provider-inactive", active: false },
-        ] } } }
+    remote: {
+      llm: {
+        async listProviders() {
+          // 最新版契约只列 active 路由；inactive 的 provider 不出现在列表中
+          return { ok: true, value: [
+            { id: "provider-a", name: "Provider A" },
+            { id: "provider-b", name: "Provider B" },
+            { id: "provider-c", name: "Provider C" },
+          ] }
+        },
       },
-      async models() {
-        return { result: { ok: true, value: {
-          groups: [{ id: "provider-a", models: [{ id: "catalog-model", reasoning: { efforts: [{ id: "high" }] } }] }],
-          failures: [{ provider: "provider-b", message: "目录服务不可用" }],
-        } } }
+      session: {
+        async modelCatalog() {
+          return { ok: true, value: {
+            groups: [{ id: "provider-a", models: [{ id: "catalog-model", reasoning: { efforts: [{ id: "high" }] } }] }],
+            failures: [{ id: "provider-b", name: "Provider B", message: "目录服务不可用" }],
+          } }
+        },
       },
-    } } },
+    },
     logger: { warn() {} },
   })
 
@@ -794,10 +798,10 @@ test("I2 frontmatter 解析：name/description 提取与引号剥离", () => {
   assert.deepEqual(parseFrontmatter("无 frontmatter"), {})
 })
 test("I5 全局 tiers 设置契约：允许 unresolved；一经配置必须三档完整且兼容候选数组", async () => {
-  // 桩 installSettingsSection：断言三方——schema 是函数、setSource 是函数、hooks 形状在场。
+  // 桩 installSection：断言三方——schema 是函数、setSource 是函数、hooks 形状在场。
   const calls = []
   let receivedSource = null
-  const fakeInstallSettingsSection = (_ctx, ns, schema, entry, hooks) => {
+  const fakeInstallSection = (_owner, ns, schema, entry, hooks) => {
     calls.push({ ns, schema, entry, hooks })
     // 模拟 service 契约：把「返回当前快照」的 thunk 交给 setSource（对应 scope.get()）
     hooks.setSource((receivedSource = () => ({ seen: true })))
@@ -828,20 +832,19 @@ test("I5 全局 tiers 设置契约：允许 unresolved；一经配置必须三�
       return schema
     },
   }
-  const importSettings = async () => ({
-    installSettingsSection: fakeInstallSettingsSection,
-    settingsNamespace: (ns) => ns,
+  const injectSettings = (callback) => callback({
+    installSection: fakeInstallSection,
   })
   const importSchemastery = async () => ({ default: fakeZ })
 
   const ctx = { logger: { warn() {} } }
   const entry = { tiers: {} }
-  const getConfig = installPluginSettings(ctx, entry, { importSettings, importSchemastery })
+  const getConfig = installPluginSettings(ctx, entry, { injectSettings, importSchemastery })
 
   // fire-and-forget 注册需要一拍：让异步 IIFE 跑完
   await new Promise((r) => setTimeout(r, 20))
 
-  assert.equal(calls.length, 1, "installSettingsSection 被调用一次")
+  assert.equal(calls.length, 1, "installSection 被调用一次")
   assert.equal(calls[0].ns, SETTINGS_NS, "namespace 直传")
   assert.equal(typeof calls[0].schema, "function", "schema 必须是可调用函数（非裸对象，否则 service resolve 抛 TypeError）")
   assert.deepEqual(Object.keys(calls[0].entry), ["tiers"], "入口初值只含 tiers")
@@ -900,9 +903,8 @@ test("I5 真实 Schemastery：tiers schema rehydrate 后仍可执行空/完整/�
 
   let installed
   installPluginSettings({ logger: { warn() {} } }, { tiers: {} }, {
-    importSettings: async () => ({
-      installSettingsSection(_ctx, _namespace, schema, _entry, hooks) { installed = { schema, hooks } },
-      settingsNamespace: (namespace) => namespace,
+    injectSettings: (callback) => callback({
+      installSection(_owner, _namespace, schema, _entry, hooks) { installed = { schema, hooks } },
     }),
     importSchemastery: async () => ({ default: z }),
   })
@@ -950,35 +952,62 @@ test("I5 真实 Schemastery：tiers schema rehydrate 后仍可执行空/完整/�
   }), { tiers: {} }, "客户端重建后继续剥离遗留键")
 })
 
-test("I5 installPluginSettings 降级：模块不存在静默、其他异常 warn、两 import 任一失败整段降级", async () => {
-  // 模块不存在（ERR_MODULE_NOT_FOUND）→ 静默（无 warn）、getConfig 返回 entry
-  const warnsNotFound = []
-  const ctxNF = { logger: { warn: (...a) => warnsNotFound.push(a) } }
-  const g1 = installPluginSettings(ctxNF, { tiers: {} }, {
-    importSettings: async () => { const e = new Error("Cannot find package '@deepseek-ai/dsh-settings'"); e.code = "ERR_MODULE_NOT_FOUND"; throw e },
-    importSchemastery: async () => { throw new Error("unreachable") },
+test("I5 installPluginSettings 降级：settings 服务缺失静默、schemastery 异常 warn、installSection 异常 warn", async () => {
+  // settings 服务缺失（injectSettings 回调不触发）→ 静默、getConfig 返回 entry
+  const warnsNoService = []
+  const ctxNS = { logger: { warn: (...a) => warnsNoService.push(a) } }
+  const g1 = installPluginSettings(ctxNS, { tiers: {} }, {
+    injectSettings: () => {},
+    importSchemastery: async () => ({ default: {} }),
   })
   await new Promise((r) => setTimeout(r, 10))
-  assert.deepEqual(g1(), { tiers: {} }, "无服务 → getConfig 返回 entry")
-  assert.equal(warnsNotFound.length, 0, "模块不存在 → 静默不 warn")
+  assert.deepEqual(g1(), { tiers: {} }, "settings 服务缺失 → getConfig 返回 entry")
+  assert.equal(warnsNoService.length, 0, "服务缺失 → 静默不 warn")
 
-  // schemastery 缺失（其他异常非模块缺失）→ warn 留痕再降级
+  // schemastery 缺失（非模块缺失异常）→ warn 留痕再降级
   const warnsOther = []
   const ctxO = { logger: { warn: (...a) => warnsOther.push(a) } }
   const g2 = installPluginSettings(ctxO, { tiers: {} }, {
-    importSettings: async () => ({ installSettingsSection: () => {}, settingsNamespace: (n) => n }),
+    injectSettings: () => { throw new Error("unreachable") },
     importSchemastery: async () => { throw new Error("schemastery broken") },
   })
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(g2(), { tiers: {} }, "schemastery 失败 → 整段降级返回 entry")
   assert.equal(warnsOther.length, 1, "非模块缺失异常 → warn 留痕一次")
 
-  // installSettingsSection 本身抛错 → warn 留痕，getConfig 仍返回 entry（不阻断主链路）
+  // installSection 抛错 → warn 留痕，getConfig 仍返回 entry（不阻断主链路）
   const warnsReg = []
   const ctxR = { logger: { warn: (...a) => warnsReg.push(a) } }
+  const node = (kind, extra = {}) => ({
+    kind,
+    ...extra,
+    required() { this.requiredCalled = true; return this },
+    min(value) { this.minValue = value; return this },
+    description(value) { this.descriptionText = value; return this },
+  })
+  const fakeZ = {
+    string: () => node("string"),
+    array: (inner) => node("array", { inner }),
+    union: (items) => node("union", { items }),
+    object: (shape) => {
+      const schema = function (value) { return value ?? {} }
+      schema.shape = shape
+      schema.description = function (value) { schema.descriptionText = value; return schema }
+      return schema
+    },
+    transform: (inner, callback) => {
+      const schema = function (value) { return callback(inner(value)) }
+      schema.inner = inner
+      schema.callback = callback
+      schema.toJSON = () => ({ type: "transform", inner: { type: "object", dict: inner.shape } })
+      return schema
+    },
+  }
   const g3 = installPluginSettings(ctxR, { tiers: {} }, {
-    importSettings: async () => ({ installSettingsSection: () => { throw new Error("dup namespace") }, settingsNamespace: (n) => n }),
-    importSchemastery: async () => ({ default: { object: () => function () {}, array: () => ({ min: () => ({}) }), union: () => ({}), string: () => ({ required: () => ({ min: () => ({}) }) }) } }),
+    injectSettings: (callback) => callback({
+      installSection: () => { throw new Error("dup namespace") },
+    }),
+    importSchemastery: async () => ({ default: fakeZ }),
   })
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(g3(), { tiers: {} }, "注册异常 → 返回 entry")

@@ -59,7 +59,9 @@ var factory = function (require) {
   ].join("")
   // inputTriggers 必须显式声明：客户端 ctx 只注入已声明服务（对齐 dsh-client-ui-skill 的做法），
   // 未声明时 ctx.get 拿不到、@ 档位候选静默降级。DSH Web 宿主该服务为输入框内置能力。
-  var inject = ["slots", "sessions", "connection", "settingsScope", "inputTriggers"]
+  // remote/remote.llm/remote.session：最新版模型目录契约（listProviders + modelCatalog）；
+  // connection 保留给子代理模型席位徽标的 sessions.models RPC。
+  var inject = ["slots", "sessions", "connection", "remote", "remote.session", "remote.llm", "settingsScope", "inputTriggers"]
 
   function getService(ctx, name) {
     // Cordis 对 ctx.<service> 实施 inject 属性守卫；可选服务必须先走 ctx.get，
@@ -465,9 +467,12 @@ var factory = function (require) {
     var setCatalog = state[1]
     React.useEffect(function () {
       var cancelled = false
-      var connection = getService(ctx, "connection")
-      var api = connection && connection.api
-      if (!api || !api.llm || typeof api.llm.providers !== "function") {
+      // 最新版宿主契约：remote.llm.listProviders()（active 路由目录）+ remote.session.modelCatalog()
+      // （模型目录含 reasoning.efforts）；旧 connection.api.llm.providers/models 已随宿主移除。
+      var remote = getService(ctx, "remote")
+      var llm = remote && remote.llm
+      var session = remote && remote.session
+      if (!llm || typeof llm.listProviders !== "function") {
         setCatalog({
           status: "error",
           providers: [],
@@ -479,10 +484,12 @@ var factory = function (require) {
         })
         return
       }
-      Promise.resolve(api.llm.providers({})).then(function (response) {
+      Promise.resolve(llm.listProviders()).then(function (response) {
         if (cancelled) return
         var providerValue = unwrapRpc(response)
-        var providers = Array.isArray(providerValue.providers) ? providerValue.providers : []
+        var providers = (Array.isArray(providerValue) ? providerValue : []).map(function (entry) {
+          return { provider: entry.id, displayName: entry.name, active: true }
+        })
         var ready = {
           status: "ready",
           providers: providers,
@@ -493,17 +500,19 @@ var factory = function (require) {
           modelError: "",
         }
         setCatalog(ready)
-        if (typeof api.llm.models !== "function") {
+        if (!session || typeof session.modelCatalog !== "function") {
           setCatalog({ ...ready, modelStatus: "error", modelError: "模型目录接口不可用" })
           return
         }
-        Promise.resolve(api.llm.models({})).then(function (modelResponse) {
+        Promise.resolve(session.modelCatalog()).then(function (catalogResponse) {
           if (cancelled) return
-          var modelValue = unwrapRpc(modelResponse)
+          var catalogValue = unwrapRpc(catalogResponse)
           setCatalog({
             ...ready,
-            groups: Array.isArray(modelValue.groups) ? modelValue.groups : [],
-            failures: Array.isArray(modelValue.failures) ? modelValue.failures : [],
+            groups: Array.isArray(catalogValue.groups) ? catalogValue.groups : [],
+            failures: (Array.isArray(catalogValue.failures) ? catalogValue.failures : []).map(function (entry) {
+              return { provider: entry.id, name: entry.name, message: entry.message }
+            }),
             modelStatus: "ready",
           })
         }).catch(function (error) {

@@ -2,8 +2,8 @@ node_modules/
 .DS_Store
 .team-work/
 .npm-cache-tmp/
-# 插件包构建产物（npm pack 输出）
-packages/dsh-plugin/*.tgz
+# 插件包构建产物（npm pack 输出；根目录 tgz 是本地 profile file: 安装制品）
+*.tgz
 
 # 插件构建产物（仅 skill 拷贝，服务插件单包 npm 通道；git/根包通道免构建直载 src）
 packages/dsh-plugin/dist/

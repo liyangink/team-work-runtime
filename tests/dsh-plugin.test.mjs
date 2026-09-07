@@ -788,6 +788,71 @@ test("I4 DSH 0.1.1-rc+ 寻址快照丢失时以会话 store 的 subagent.address
   assert.equal(parentRendered, null, "无 subagent 事实且未寻址的父会话仍不渲染徽标")
 })
 
+test("I4 DSH 0.1.2 kit 形态：useSession + useProjection(modelSelection) 渲染徽标（props.session 缺失）", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const React = {
+    createElement(type, props, children) { return { type, props: { ...props, children } } },
+    useState(initial) { return [typeof initial === "function" ? initial() : initial, () => {}] },
+    useEffect() {},
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  let contribution
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    get() { return undefined },
+    logger: { warn() {} },
+  })
+
+  const injected = contribution.options.inject("child-session")
+  // 0.1.2 形态：ownerProps 为 {}（无 props.session），kit 提供 useSession（business Session 快照）
+  // 与 useProjection（modelSelection 投影 face）。
+  const storeSnapshot = {
+    running: false,
+    subagent: { address: { parentSessionId: "parent-session", childSessionId: "child-session", mode: "continuable" } },
+  }
+  var projectionSnapshot = { lastUsed: { provider: "provider-proj", model: "model-proj", reasoningEffort: "high" }, next: null }
+  const props = {
+    ...injected,
+    sessionId: "child-session",
+    useSession(selector) { return selector(storeSnapshot) },
+    useProjection(_key, map) { return map(projectionSnapshot) },
+  }
+  const rendered = contribution.component(props)
+  assert.equal(rendered?.props?.children, "provider-proj/model-proj · 推理 high", "0.1.2 kit 投影通道渲染模型与 effort")
+
+  // pending（next）优先于 lastUsed —— 与官方 ModelDirectory 的 current 语义一致
+  projectionSnapshot = { lastUsed: { provider: "p-old", model: "m-old" }, next: { provider: "provider-next", model: "model-next", reasoningEffort: "max" } }
+  assert.equal(contribution.component(props)?.props?.children, "provider-next/model-next · 推理 max", "next 优先于 lastUsed")
+
+  // 主会话（无 subagent 事实且未寻址）不渲染
+  const parentProps = {
+    ...injected,
+    sessionId: "parent-session",
+    useSession(selector) { return selector({ running: false, subagent: null }) },
+    useProjection(_key, map) { return map(projectionSnapshot) },
+  }
+  assert.equal(contribution.component(parentProps), null, "0.1.2 主会话不渲染徽标")
+
+  // 投影缺席（快照 undefined）时优雅降级不渲染、不抛错
+  const absentProps = {
+    ...injected,
+    sessionId: "child-session",
+    useSession(selector) { return selector(storeSnapshot) },
+    useProjection() { return undefined },
+  }
+  assert.equal(contribution.component(absentProps), null, "投影能力缺席时优雅降级")
+})
+
 test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {
   const file = "../package.json"
   const metadata = JSON.parse(await readFile(new URL(file, import.meta.url), "utf8"))

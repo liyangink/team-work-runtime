@@ -153,18 +153,30 @@ var factory = function (require) {
           },
         }, function SubagentModelBadge(props) {
           var h = React.createElement
+          // 双宿主数据链（0.1.2-rc.1 源码实证）：session 槽位组件的 standard kit 内建
+          // useSession hook（0.1.1 = client-runtime store 快照，含 views/nodes/subagent/running；
+          // 0.1.2 = business Session 快照，含 subagent.address/running）与（仅 0.1.2）
+          // useProjection keyed hook —— binding.session.projections.faceOf("modelSelection")，
+          // 官方模型选择投影：view = {lastUsed, next}，lastUsed 由 request/header.config 推导
+          // （provider/model/reasoningEffort）。0.1.2 的 conversation.input.right 实参为 {}
+          // （props.session 已被宿主移除），0.1.1 保留 ownerProps zone 形态作为 kit hook 缺席
+          // （单测 mock）时的回退。同一宿主版本内 props.useSession/useProjection 的存在性恒定，
+          // 下方的条件 hook 调用不会在同一组件实例上产生 hook 序列抖动。
+          var useSessionHook = props && typeof props.useSession === "function" ? props.useSession : null
+          var useProjectionHook = props && typeof props.useProjection === "function" ? props.useProjection : null
           var session = props && props.session
-          var running = session && session.running
-          // 子代理会话判定（DSH 0.1.1-rc+ 适配）：会话 store 快照自带 subagent.address
-          // （configureSubagent 设定，select/selectSubagent 均会更新，随 store 响应式重渲）。
-          // 旧的 addressed 取自 slot inject 执行时刻的 sessions.subagentAddress() 快照——
-          // 它只反映宿主进程内的导航寻址状态且被宿主按 (entry, info) 缓存：宿主重启后
-          // restored 地址仅恢复最后一只、寻址晚于首次渲染时不刷新，曾导致子代理徽标
-          // 间歇性不显示模型与 effort。两信号任一在场即按子代理会话渲染。
-          var address = session && session.subagent && session.subagent.address
+          var address = useSessionHook
+            ? useSessionHook(function (s) { return s && s.subagent ? s.subagent.address : null })
+            : (session && session.subagent && session.subagent.address)
+          var running = useSessionHook
+            ? useSessionHook(function (s) { return s ? s.running : undefined })
+            : (session && session.running)
           var isSubagent = !!address || !!(props && props.addressed)
+          var projected = useProjectionHook && isSubagent
+            ? normalizeSelection(useProjectionHook("modelSelection", function (snap) { return snap && (snap.next ?? snap.lastUsed) }))
+            : null
           var selected = useSessionModel(React, ctx, isSubagent ? props.sessionId : null, running)
-          var current = isSubagent ? modelFromSession(session) || selected : null
+          var current = isSubagent ? (modelFromSession(session) || projected || selected) : null
           if (!current) return null
           var label = current.provider + "/" + current.model + (current.reasoningEffort ? " · 推理 " + current.reasoningEffort : "")
           return h("span", {
@@ -718,6 +730,19 @@ var factory = function (require) {
 
   function listId(kind, tier, index) {
     return "tw-" + kind + "-" + tier + "-" + index
+  }
+
+  // 投影选择的规范形（0.1.2 modelSelection 投影的 view 元素）：
+  // {provider, model, reasoningEffort?}；非对象或缺 provider/model 返回 null。
+  function normalizeSelection(value) {
+    if (!value || typeof value !== "object") return null
+    if (typeof value.provider !== "string" || !value.provider) return null
+    if (typeof value.model !== "string" || !value.model) return null
+    return {
+      provider: value.provider,
+      model: value.model,
+      ...(typeof value.reasoningEffort === "string" && value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}),
+    }
   }
 
   function modelFromSession(session) {

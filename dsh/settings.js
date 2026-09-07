@@ -1,6 +1,7 @@
 // settings.js — 根市场制品的 DSH 全局档位配置与热更新快照。
-// 宿主契约：@deepseek-ai/dsh-settings 的 installSettingsSection(ctx, ns, schema, entry, hooks)
-// 在 settings 服务可用时注册一个 schema；不可用时保留 entry，插件其他能力照常降级运行。
+// 宿主契约：ctx.inject(["settings"], cb) 动态注入 ctx.settings 服务，再调用其
+// installSection(owner, ns, schema, entry, hooks) 注册区段（对齐 dsh-agent-default-model）。
+// 服务不可用时保留 entry，插件其他能力照常降级运行。
 
 export const SETTINGS_NS = "team-work-dsh"
 export const TIER_NAMES = Object.freeze(["junior", "senior", "expert"])
@@ -135,21 +136,19 @@ function makeSchema(z) {
   return z.transform(section, serializedTiersTransform)
 }
 
-// 注册插件配置区段：同步返回读取当前快照的 thunk；内部异步装载 settings 服务。
-// 无服务或注册失败时返回 entry，避免可选设置能力阻断宿主插件。
+// 注册插件配置区段：同步返回读取当前快照的 thunk；内部异步解析 schemastery 后
+// 经 ctx.inject 动态注入 settings 服务并注册。无服务或注册失败时返回 entry，
+// 避免可选设置能力阻断宿主插件。
 export function installPluginSettings(ctx, entry, deps = {}) {
-  const importSettings = deps.importSettings ?? (() => import("@deepseek-ai/dsh-settings"))
   const importSchemastery = deps.importSchemastery ?? (() => import("@deepseek-ai/schemastery"))
+  const injectSettings = deps.injectSettings ?? ((callback) => {
+    // settings 服务是可选项：缺失时回调不触发，source 保持 entry（静默降级）。
+    if (typeof ctx.inject !== "function") return
+    ctx.inject(["settings"], (settingsCtx) => callback(settingsCtx?.settings))
+  })
   let source = () => entry
 
   void (async () => {
-    let settingsMod
-    try {
-      settingsMod = await importSettings()
-    } catch (error) {
-      warnUnlessMissing(ctx, "@deepseek-ai/dsh-settings", error)
-      return
-    }
     let z
     try {
       z = (await importSchemastery()).default
@@ -158,15 +157,16 @@ export function installPluginSettings(ctx, entry, deps = {}) {
       return
     }
     try {
-      const { installSettingsSection, settingsNamespace } = settingsMod
-      if (typeof installSettingsSection !== "function" || typeof settingsNamespace !== "function") {
-        ctx.logger?.warn?.("team-work-dsh: settings 模块缺少 installSettingsSection/settingsNamespace，跳过区段注册")
-        return
-      }
-      installSettingsSection(ctx, settingsNamespace(SETTINGS_NS), makeSchema(z), entry, {
-        setSource: (current) => { source = current },
-        onChange: () => {},
-        validate: validateTiers,
+      injectSettings((settings) => {
+        if (!settings || typeof settings.installSection !== "function") {
+          ctx.logger?.warn?.("team-work-dsh: settings 服务不可用，跳过区段注册")
+          return
+        }
+        settings.installSection(ctx, SETTINGS_NS, makeSchema(z), entry, {
+          setSource: (current) => { source = current },
+          onChange: () => {},
+          validate: validateTiers,
+        })
       })
     } catch (error) {
       ctx.logger?.warn?.("team-work-dsh: settings 区段注册失败：" + String(error?.message ?? error))

@@ -151,9 +151,18 @@ var factory = function (require) {
           },
         }, function SubagentModelBadge(props) {
           var h = React.createElement
-          var running = props && props.session && props.session.running
-          var selected = useSessionModel(React, ctx, props && props.addressed ? props.sessionId : null, running)
-          var current = props && props.addressed ? modelFromSession(props.session) || selected : null
+          var session = props && props.session
+          var running = session && session.running
+          // 子代理会话判定（DSH 0.1.1-rc+ 适配）：会话 store 快照自带 subagent.address
+          // （configureSubagent 设定，select/selectSubagent 均会更新，随 store 响应式重渲）。
+          // 旧的 addressed 取自 slot inject 执行时刻的 sessions.subagentAddress() 快照——
+          // 它只反映宿主进程内的导航寻址状态且被宿主按 (entry, info) 缓存：宿主重启后
+          // restored 地址仅恢复最后一只、寻址晚于首次渲染时不刷新，曾导致子代理徽标
+          // 间歇性不显示模型与 effort。两信号任一在场即按子代理会话渲染。
+          var address = session && session.subagent && session.subagent.address
+          var isSubagent = !!address || !!(props && props.addressed)
+          var selected = useSessionModel(React, ctx, isSubagent ? props.sessionId : null, running)
+          var current = isSubagent ? modelFromSession(session) || selected : null
           if (!current) return null
           var label = current.provider + "/" + current.model + (current.reasoningEffort ? " · 推理 " + current.reasoningEffort : "")
           return h("span", {

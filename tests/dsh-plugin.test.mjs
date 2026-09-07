@@ -679,6 +679,55 @@ test("I4 addressed 子代理的模型 RPC 不可用时显示会话真实请求�
   assert.equal(afterRejection?.props?.children, "provider-recorded/model-recorded · 推理 xhigh", "RPC 拒绝不清除真实请求记录")
 })
 
+test("I4 DSH 0.1.1-rc+ 寻址快照丢失时以会话 store 的 subagent.address 渲染徽标", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+
+  const React = {
+    createElement(type, props, children) { return { type, props: { ...props, children } } },
+    useState(initial) { return [initial, () => {}] },
+    useEffect() {},
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  let contribution
+  plugin.apply({
+    // 宿主重启或寻址晚于 slot inject 首次执行：subagentAddress 快照丢失（addressed=false），
+    // 但会话 store 快照自带 configureSubagent 写入的 subagent.address——徽标必须仍渲染。
+    sessions: { subagentAddress() { return undefined } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { contribution = { options, component } },
+    },
+    get() { return undefined },
+    logger: { warn() {} },
+  })
+
+  const injected = contribution.options.inject("child-session")
+  assert.equal(injected.addressed, false, "前置：inject 时刻未寻址")
+  const rendered = contribution.component({
+    ...injected,
+    session: {
+      running: false,
+      subagent: { address: { parentSessionId: "parent-session", childSessionId: "child-session", mode: "continuable" }, parentAvailable: true },
+      nodes: [{ kind: "assistant", requestConfig: { provider: "provider-store", model: "model-store", reasoningEffort: "high" } }],
+    },
+  })
+  assert.equal(rendered?.props?.children, "provider-store/model-store · 推理 high", "store.subagent.address 在场时徽标不受寻址快照丢失影响")
+
+  const parentRendered = contribution.component({
+    ...injected,
+    session: {
+      running: false,
+      nodes: [{ kind: "assistant", requestConfig: { provider: "parent-provider", model: "parent-model", reasoningEffort: "high" } }],
+    },
+  })
+  assert.equal(parentRendered, null, "无 subagent 事实且未寻址的父会话仍不渲染徽标")
+})
+
 test("I2 发布包声明直接使用的 DSH 模型选择 peer", async () => {
   const file = "../package.json"
   const metadata = JSON.parse(await readFile(new URL(file, import.meta.url), "utf8"))

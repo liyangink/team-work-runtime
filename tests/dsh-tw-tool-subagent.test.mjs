@@ -230,7 +230,9 @@ test("execute 成功（档位带 effort）：spec 与返回卡（§4 创建过�
   assert.equal(spec.label, "评审方案")
   assert.deepEqual(spec.request.prompt, [{ type: "text", text: "请评审 X" }])
   assert.equal(spec.request.parent, EXEC.agent)
-  assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-s1" })
+  // 双宿主兼容（0.1.2 源码实证）：agentOptions 携带 reasoningEffort 直达宿主 buildRequest 的
+  // seedConfig 并随 descriptor v3 持久化；0.1.1 宿主忽略该字段（assertAgentOptions 只校验 maxTokens）。
+  assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-s1", reasoningEffort: "medium" })
   assert.equal(selections.size, 0, "成功路径后直接选择表须被清空（take 或兜底）")
 })
 
@@ -242,7 +244,7 @@ test("execute 成功（显式精确模型，无 effort）：schema 不向模型�
   )
   assert.equal(card.source, "explicit")
   assert.equal(card.effort, "low")
-  assert.deepEqual(started[0].request.agentOptions, { provider: "p-z", model: "p-z9".replace("p-z9", "m-z9") })
+  assert.deepEqual(started[0].request.agentOptions, { provider: "p-z", model: "m-z9", reasoningEffort: "low" })
   const props = Object.keys(tool.parameters.properties)
   assert.ok(!props.includes("sessionId") && !props.includes("id"), "sessionId 不是模型参数")
   assert.deepEqual(tool.parameters.required, ["description", "prompt", "target"])
@@ -454,6 +456,29 @@ test("创建核心对账：无记录（含未物化崩溃壳）→ 同 ID 重建
   assert.equal(rejected.ok, false)
   assert.equal(rejected.code, "TW_SUB_START_FAILED")
   assert.match(rejected.message, /already exists|DUPLICATE/)
+})
+
+test("创建核心对账（0.1.2 宿主形态）：followup 缺失时经 sendMessage(sender, targetId, content, {signal}) 映射冷唤醒", async () => {
+  const host = makeReconcileHost()
+  const sent = []
+  const originalFollowup = host.ctx.subagents.followup
+  // 0.1.2 形态（dsh-subagent 源码实证）：followup 改名 sendMessage，options 携带 signal
+  // （options.signal.throwIfAborted 在冷恢复路径被调用，缺失即抛 TypeError）。
+  delete host.ctx.subagents.followup
+  host.ctx.subagents.sendMessage = async (sender, targetId, content, options) => {
+    if (!options || !options.signal || typeof options.signal.throwIfAborted !== "function") {
+      throw new Error("sendMessage 需要 { signal } 形态的 options")
+    }
+    sent.push({ sender, targetId })
+    return originalFollowup(sender, targetId, content)
+  }
+  host.injectCold("fixed-sm", { received: "此前派单" })
+  const out = await reconcile(host, { sessionId: "fixed-sm" })
+  assert.equal(out.ok, true, "0.1.2 形态下冷唤醒经 sendMessage 投递成功")
+  assert.equal(out.resume, "incremental", "已收单冷会话投增量语义不变")
+  assert.equal(host.followups.length, 1, "正文到达同一会话队列")
+  assert.equal(sent[0].targetId, "fixed-sm")
+  assert.equal(sent[0].sender, RECONCILE_EXEC.agent, "sender 即调用方 Agent（原 parent 参数位）")
 })
 
 test("创建核心对账：followup 的 UNAUTHORIZED 转译接管冲突（活会话异主的竞态窗口）", async () => {

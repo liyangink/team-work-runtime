@@ -313,7 +313,8 @@ test("modelHint 带 effort 时 target 透传 effort，创建核心验证后生�
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(out.dispatched[0].ok, true)
   assert.equal(out.dispatched[0].effort, "high")
-  assert.deepEqual(started[0].request.agentOptions, { provider: "p-c", model: "m-e1" })
+  // 双宿主兼容：agentOptions 带 reasoningEffort（0.1.2 生效直达 seedConfig；0.1.1 忽略由注入通道兜底）。
+  assert.deepEqual(started[0].request.agentOptions, { provider: "p-c", model: "m-e1", reasoningEffort: "high" })
 })
 
 test("writables 省略时 dispatch-plan 不带 --writable 参数", async () => {

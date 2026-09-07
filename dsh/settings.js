@@ -141,6 +141,7 @@ function makeSchema(z) {
 // 避免可选设置能力阻断宿主插件。
 export function installPluginSettings(ctx, entry, deps = {}) {
   const importSchemastery = deps.importSchemastery ?? (() => import("@deepseek-ai/schemastery"))
+  const importSettings = deps.importSettings ?? (() => import("@deepseek-ai/dsh-settings"))
   const injectSettings = deps.injectSettings ?? ((callback) => {
     // settings 服务是可选项：缺失时回调不触发，source 保持 entry（静默降级）。
     if (typeof ctx.inject !== "function") return
@@ -158,14 +159,29 @@ export function installPluginSettings(ctx, entry, deps = {}) {
     }
     try {
       injectSettings((settings) => {
-        if (!settings || typeof settings.installSection !== "function") {
-          ctx.logger?.warn?.("team-work-dsh: settings 服务不可用，跳过区段注册")
-          return
-        }
-        settings.installSection(ctx, SETTINGS_NS, makeSchema(z), entry, {
+        const hooks = {
           setSource: (current) => { source = current },
           onChange: () => {},
           validate: validateTiers,
+        }
+        const schema = makeSchema(z)
+        // 双宿主注册路径（源码实证）：0.1.2 的 SettingsProvider.installSection(owner, ns,
+        // schema, entry, hooks)；<=0.1.1 的服务实例无该方法，回退模块导出的
+        // installSettingsSection(ctx, settingsNamespace(ns), ...)（0.1.2 已删除该导出）。
+        // 两路径的 hooks 契约（setSource/onChange/validate）完全一致。
+        if (settings && typeof settings.installSection === "function") {
+          settings.installSection(ctx, SETTINGS_NS, schema, entry, hooks)
+          return
+        }
+        importSettings().then((settingsMod) => {
+          const { installSettingsSection, settingsNamespace } = settingsMod ?? {}
+          if (typeof installSettingsSection !== "function") {
+            ctx.logger?.warn?.("team-work-dsh: settings 服务无 installSection 且模块无 installSettingsSection，跳过区段注册")
+            return
+          }
+          installSettingsSection(ctx, typeof settingsNamespace === "function" ? settingsNamespace(SETTINGS_NS) : SETTINGS_NS, schema, entry, hooks)
+        }).catch((error) => {
+          warnUnlessMissing(ctx, "@deepseek-ai/dsh-settings", error)
         })
       })
     } catch (error) {

@@ -476,12 +476,57 @@ var factory = function (require) {
     var setCatalog = state[1]
     React.useEffect(function () {
       var cancelled = false
-      // 最新版宿主契约：remote.llm.listProviders()（active 路由目录）+ remote.session.modelCatalog()
-      // （模型目录含 reasoning.efforts）；旧 connection.api.llm.providers/models 已随宿主移除。
+      // 双宿主目录源（0.1.2 源码实证）：remote.llm.listProviders()（active 路由目录）+
+      // remote.session.modelCatalog()（模型目录含 reasoning.efforts）；宿主 <=0.1.1 无 remote 面，
+      // 回退 connection.api.llm.providers({})/models({})（旧接口已随 0.1.2 移除）。两源解析为
+      // 同一规范形：providers=[{provider,displayName,active}]、models={groups,failures:[{provider,message}]}。
       var remote = getService(ctx, "remote")
       var llm = remote && remote.llm
       var session = remote && remote.session
-      if (!llm || typeof llm.listProviders !== "function") {
+      var connection = getService(ctx, "connection")
+      var api = connection && connection.api
+      var loadProviders = null
+      var parseProviders = null
+      var loadModels = null
+      var parseModels = null
+      if (llm && typeof llm.listProviders === "function") {
+        loadProviders = function () { return Promise.resolve(llm.listProviders()) }
+        parseProviders = function (response) {
+          var value = unwrapRpc(response)
+          return (Array.isArray(value) ? value : []).map(function (entry) {
+            return { provider: entry.id, displayName: entry.name, active: true }
+          })
+        }
+        if (session && typeof session.modelCatalog === "function") {
+          loadModels = function () { return Promise.resolve(session.modelCatalog()) }
+          parseModels = function (response) {
+            var value = unwrapRpc(response)
+            return {
+              groups: Array.isArray(value.groups) ? value.groups : [],
+              failures: (Array.isArray(value.failures) ? value.failures : []).map(function (entry) {
+                return { provider: entry.id, name: entry.name, message: entry.message }
+              }),
+            }
+          }
+        }
+      } else if (api && api.llm && typeof api.llm.providers === "function") {
+        loadProviders = function () { return Promise.resolve(api.llm.providers({})) }
+        parseProviders = function (response) {
+          var value = unwrapRpc(response)
+          return Array.isArray(value.providers) ? value.providers : []
+        }
+        if (typeof api.llm.models === "function") {
+          loadModels = function () { return Promise.resolve(api.llm.models({})) }
+          parseModels = function (response) {
+            var value = unwrapRpc(response)
+            return {
+              groups: Array.isArray(value.groups) ? value.groups : [],
+              failures: Array.isArray(value.failures) ? value.failures : [],
+            }
+          }
+        }
+      }
+      if (!loadProviders) {
         setCatalog({
           status: "error",
           providers: [],
@@ -493,12 +538,9 @@ var factory = function (require) {
         })
         return
       }
-      Promise.resolve(llm.listProviders()).then(function (response) {
+      loadProviders().then(function (response) {
         if (cancelled) return
-        var providerValue = unwrapRpc(response)
-        var providers = (Array.isArray(providerValue) ? providerValue : []).map(function (entry) {
-          return { provider: entry.id, displayName: entry.name, active: true }
-        })
+        var providers = parseProviders(response)
         var ready = {
           status: "ready",
           providers: providers,
@@ -509,19 +551,17 @@ var factory = function (require) {
           modelError: "",
         }
         setCatalog(ready)
-        if (!session || typeof session.modelCatalog !== "function") {
+        if (!loadModels) {
           setCatalog({ ...ready, modelStatus: "error", modelError: "模型目录接口不可用" })
           return
         }
-        Promise.resolve(session.modelCatalog()).then(function (catalogResponse) {
+        loadModels().then(function (catalogResponse) {
           if (cancelled) return
-          var catalogValue = unwrapRpc(catalogResponse)
+          var parsed = parseModels(catalogResponse)
           setCatalog({
             ...ready,
-            groups: Array.isArray(catalogValue.groups) ? catalogValue.groups : [],
-            failures: (Array.isArray(catalogValue.failures) ? catalogValue.failures : []).map(function (entry) {
-              return { provider: entry.id, name: entry.name, message: entry.message }
-            }),
+            groups: parsed.groups,
+            failures: parsed.failures,
             modelStatus: "ready",
           })
         }).catch(function (error) {

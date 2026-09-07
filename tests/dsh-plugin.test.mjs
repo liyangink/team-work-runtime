@@ -45,6 +45,62 @@ test("I4 client 工厂遵守 DSH 契约：factory(require) 直接返回 Cordis �
   }
 })
 
+test("I5 Web 插件配置卡（0.1.1 宿主形态）：remote 面缺失时回退 connection.api.llm.providers/models 加载目录", async () => {
+  const registrations = []
+  const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
+  vm.runInNewContext(source, {
+    globalThis: {},
+    window: { __ModuleLoader__: { load(registration) { registrations.push(registration) } } },
+  })
+  const hookState = []
+  let hookIndex = 0
+  const effects = []
+  const React = {
+    createElement(type, props, ...children) { return { type, props: { ...(props ?? {}), children: children.flat(Infinity) } } },
+    useState(initial) {
+      const index = hookIndex++
+      if (!(index in hookState)) hookState[index] = typeof initial === "function" ? initial() : initial
+      return [hookState[index], (next) => { hookState[index] = typeof next === "function" ? next(hookState[index]) : next }]
+    },
+    useEffect(effect) { hookIndex += 1; effects.push(effect) },
+  }
+  const plugin = registrations[0].factory((id) => id === "react" ? React : {})
+  const slotRegistrations = []
+  plugin.apply({
+    sessions: { subagentAddress() { return undefined } },
+    settingsScope: { bind() { return { getSnapshot() { return { status: "ready", writable: true, value: {} } } } } },
+    slots: {
+      inject(_slot, install) { install() },
+      register(options, component) { slotRegistrations.push({ options, component }); return () => {} },
+    },
+    // 0.1.1 宿主：无 remote/remote.llm/remote.session 服务，目录走 connection.api.llm 旧 RPC。
+    connection: { api: { llm: {
+      async providers() {
+        return { result: { ok: true, value: { providers: [{ provider: "provider-a", displayName: "Provider A", active: true }] } } }
+      },
+      async models() {
+        return { result: { ok: true, value: { groups: [{ id: "provider-a", models: [{ id: "legacy-model", name: "Legacy model", reasoning: { efforts: [{ id: "high", name: "High" }] } }] }], failures: [{ provider: "provider-b", message: "目录暂不可用" }] } } }
+      },
+    } } },
+    logger: { warn() {} },
+  })
+  const configCard = slotRegistrations.find(({ options }) => options.name === "settings.plugin.item")
+  const props = configCard.options.inject()
+  hookIndex = 0
+  const collapsed = configCard.component(props)
+  for (const effect of effects.splice(0)) effect()
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const header = findTree(collapsed, (node) => node.type === "button" && node.props?.["aria-expanded"] === false)
+  header.props.onClick()
+  hookIndex = 0
+  const tree = configCard.component(props)
+  assert.match(JSON.stringify(tree), /provider-a/, "0.1.1 回退路径下 Provider 列表加载成功")
+  assert.match(JSON.stringify(tree), /部分 Provider 的模型目录不可用/, "0.1.1 回退路径下模型目录（含 failures）加载成功")
+  assert.doesNotMatch(JSON.stringify(tree), /Provider 列表读取失败|模型目录读取失败|正在读取模型目录/, "不得报目录读取失败或停在加载态")
+})
+
 test("I5 Web 插件配置卡：继承 DSH 标题与说明两行卡片形态", async () => {
   const registrations = []
   const source = await readFile(new URL("../dsh/client/badge.js", import.meta.url), "utf8")
@@ -1061,6 +1117,35 @@ test("I5 installPluginSettings 降级：settings 服务缺失静默、schemaster
   await new Promise((r) => setTimeout(r, 10))
   assert.deepEqual(g3(), { tiers: {} }, "注册异常 → 返回 entry")
   assert.equal(warnsReg.length, 1, "注册异常 warn 留痕一次")
+})
+
+test("I5 settings 双宿主注册：服务无 installSection（<=0.1.1 宿主）时回退模块导出 installSettingsSection", async () => {
+  const installed = []
+  const setByHook = []
+  const ctx = {
+    logger: { warn() {} },
+  }
+  const read = installPluginSettings(ctx, { tiers: {} }, {
+    injectSettings: (callback) => callback({ register: () => ({}) }),
+    importSchemastery: async () => ({
+      default: {
+        string: () => ({ required() { return this }, min() { return this }, description() { return this } }),
+        array: () => ({ min() { return this }, description() { return this } }),
+        union: () => ({ description() { return this } }),
+        object: () => { const s = () => ({}); s.description = () => s; return s },
+        transform: (inner, callback2) => { const s = () => callback2({}); s.toJSON = () => ({}); return s },
+      },
+    }),
+    importSettings: async () => ({
+      installSettingsSection: (consumerCtx, ns, schema, entry, hooks) => installed.push({ ns, hooks }),
+      settingsNamespace: (ns) => "ns-" + ns,
+    }),
+  })
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(installed.length, 1, "0.1.1 宿主（服务无 installSection）→ 模块导出路径注册一次")
+  assert.equal(installed[0].ns, "ns-team-work-dsh", "ns 经 settingsNamespace 解析")
+  installed[0].hooks.setSource(() => ({ tiers: { junior: [] } }))
+  assert.deepEqual(read(), { tiers: { junior: [] } }, "旧路径 setSource 接线生效")
 })
 
 test("I5 旧项目匹配与运行入口配置已彻底移除", async () => {

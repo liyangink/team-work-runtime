@@ -156,12 +156,19 @@ function describe(error) {
 // 直接父 → 重建 Agent → 消息入队）。错误按宿主错误码转译：UNAUTHORIZED=接管冲突（父会话不匹配）、
 // NOT_RESUMABLE=持久状态不可续投。返回 { ok, messageId } 或 { ok:false, code, message }。
 export async function followupChild({ subagents, parent, signal }, childId, text) {
-  if (!subagents || typeof subagents.followup !== "function") {
-    return { ok: false, code: "TW_SUB_FOLLOWUP_UNAVAILABLE", message: "subagents 服务缺 followup；无法向既有会话（" + childId + "）投递消息。请升级宿主后重试" }
+  // 双宿主版本兼容（dsh-subagent 源码实证）：0.1.1 的 followup(parent, childId, content, {source, signal})
+  // 在 0.1.2 改名为 sendMessage(sender, targetId, content, {signal})——sender 即调用方 Agent，
+  // 投递语义等价（活会话 steer 入队 / 冷会话 coldResume），错误码 UNAUTHORIZED/NOT_RESUMABLE 一致。
+  if (!subagents || (typeof subagents.followup !== "function" && typeof subagents.sendMessage !== "function")) {
+    return { ok: false, code: "TW_SUB_FOLLOWUP_UNAVAILABLE", message: "subagents 服务缺 followup/sendMessage；无法向既有会话（" + childId + "）投递消息。请升级宿主后重试" }
   }
   let messageId
   try {
-    messageId = await subagents.followup(parent, childId, [{ type: "text", text }], { source: { kind: "user" }, signal: signal ?? new AbortController().signal })
+    const content = [{ type: "text", text }]
+    const effectiveSignal = signal ?? new AbortController().signal
+    messageId = typeof subagents.followup === "function"
+      ? await subagents.followup(parent, childId, content, { source: { kind: "user" }, signal: effectiveSignal })
+      : await subagents.sendMessage(parent, childId, content, { signal: effectiveSignal })
   } catch (error) {
     const code = error?.code
     if (code === "UNAUTHORIZED") {
@@ -416,7 +423,14 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     model: resolvedCall.model,
     ...(resolvedCall.reasoningEffort ? { reasoningEffort: resolvedCall.reasoningEffort } : {}),
   }
-  const agentOptions = { provider: resolvedCall.provider, model: resolvedCall.model }
+  // 双宿主版本兼容：0.1.2 的 agentOptions.reasoningEffort 直接进 buildRequest 的 seedConfig
+  // （首请求即生效）并随 descriptor v3 持久化、冷恢复重建；0.1.1 忽略该字段（宿主
+  // assertAgentOptions 只校验 maxTokens），effort 由 setup 注入通道兜底——两版本均安全。
+  const agentOptions = {
+    provider: resolvedCall.provider,
+    model: resolvedCall.model,
+    ...(resolvedCall.reasoningEffort ? { reasoningEffort: resolvedCall.reasoningEffort } : {}),
+  }
 
   // R3 provider 钉死 + 能力校验（仿 dsh-tool-subagent：缺 prepareContinuable 创建前失败）。
   const provider =

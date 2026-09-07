@@ -59,17 +59,29 @@ export async function apply(ctx, config = {}, deps = {}) {
       return false
     }
   }
-  const installerReady = await tryResolveInstaller(true)
-  // 1) 成员模型/effort 注入（continuable 子代 fresh+resume；⓪直接选择通道 take-once +
-  //    ①request/header 回读双通道——标签链已于二阶段切换删除）。
-  try {
-    setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, {
-      installerNow: () => resolvedInstaller,
-      directSelections,
-    }))
-    setupRegistered = true
-  } catch (error) {
-    ctx.logger?.warn?.("team-work-dsh: 模型注入注册失败：" + String(error?.message ?? error))
+  // 1) 成员模型/effort 注入——双宿主版本兼容：
+  //    0.1.1：registerContinuableSetup + installModelSelection（直接选择通道 take-once +
+  //    request/header 回读双通道——标签链已于二阶段切换删除）；
+  //    0.1.2（dsh-subagent 源码实证）：SetupRegistry/registerContinuableSetup 已移除，宿主原生
+  //    接管全部注入职责——startContinuable 的 agentOptions.reasoningEffort 直接进 buildRequest
+  //    的 seedConfig（首请求即生效），descriptor v3 持久化 provider/model/effort 并在冷恢复时
+  //    重建 agentOptions。setup 通道缺失不是故障：跳过注册并按「宿主原生路由」放行创建门槛。
+  const hostNativeModelRouting = typeof ctx.subagents?.registerContinuableSetup !== "function"
+  if (hostNativeModelRouting) {
+    ctx.logger?.info?.("team-work-dsh: 宿主无 continuable setup 通道（>=0.1.2 形态），成员模型/effort 经宿主原生 agentOptions 路由")
+  }
+  let installerReady = false
+  if (!hostNativeModelRouting) {
+    installerReady = await tryResolveInstaller(true)
+    try {
+      setupDisposer = ctx.subagents.registerContinuableSetup(makeInjectContribution(ctx, {
+        installerNow: () => resolvedInstaller,
+        directSelections,
+      }))
+      setupRegistered = true
+    } catch (error) {
+      ctx.logger?.warn?.("team-work-dsh: 模型注入注册失败：" + String(error?.message ?? error))
+    }
   }
   const scheduleInstallerRetry = () => {
     if (stopped || resolvedInstaller || !setupRegistered) return
@@ -98,7 +110,7 @@ export async function apply(ctx, config = {}, deps = {}) {
     ctx.tools.register(twToolSubagentDefinition(ctx, {
       tiersSource,
       directSelections,
-      isModelInjectionReady: () => setupRegistered && typeof resolvedInstaller === "function",
+      isModelInjectionReady: () => hostNativeModelRouting || (setupRegistered && typeof resolvedInstaller === "function"),
     }))
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: tw-tool-subagent 工具注册失败：" + String(error?.message ?? error))
@@ -109,7 +121,7 @@ export async function apply(ctx, config = {}, deps = {}) {
     ctx.tools.register(twDispatchDefinition(ctx, {
       tiersSource,
       directSelections,
-      isModelInjectionReady: () => setupRegistered && typeof resolvedInstaller === "function",
+      isModelInjectionReady: () => hostNativeModelRouting || (setupRegistered && typeof resolvedInstaller === "function"),
     }))
   } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: tw-dispatch 工具注册失败：" + String(error?.message ?? error))

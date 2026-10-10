@@ -20,7 +20,7 @@
 
 ### 1. 安装
 
-`1.0.9` 适配 DSH `0.2.0-rc.2`，尚未发布到市场；当前市场版本不代表已包含以下新版适配。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
+`1.1.0` 适配 DSH `0.2.0-rc.2`，包含人工审查摘要优化、默认灵活交叉审查和成员派单职责修复，尚未发布到市场。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
 
 **方式一：DSH 市场**：在市场搜索并安装 `team-work-runtime`；使用新版适配前先确认安装包已包含本次变更。
 

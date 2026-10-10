@@ -28,6 +28,59 @@ const IMPL_POLICY = {
   scenes: { implementation: {}, test: {}, finish: {} },
 }
 
+test("方案场景：Owner、Challenger、返工和在途重建均带同一决策标准", async () => {
+  const projectRoot = await makeProject({
+    workflow: { stages: [{ id: "design", label: "方案设计", outputs: ["design"], teamScene: "design" }], gates: [], terminalStages: [] },
+    policy: { ...IMPL_POLICY, scenes: { design: {} } },
+  })
+  const call = caller(projectRoot)
+  await openTask(projectRoot, "design-t", { objective: "设计示例模块", entry: "design" })
+  const d = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design"])
+  assert.match(d.waves[0].prompt, /场景指引（design）/)
+  assert.match(d.waves[0].prompt, /首屏/)
+  assert.match(d.waves[0].prompt, /Owner 自检/)
+  assert.doesNotMatch(d.waves[0].prompt, /场景指引（design-review）/)
+  await writeFile(path.join(projectRoot, "DESIGN.md"), "# 方案\n示例设计", "utf8")
+  await call(["deliver", "--task", "design-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成方案", "--paths", "DESIGN.md"])
+  const r = await call(["dispatch-plan", "--task", "design-t"])
+  assert.equal(r.waves[0].role, "challenger")
+  assert.match(r.waves[0].prompt, /能否据此决定/)
+  await call(["review", "--task", "design-t", "--key", r.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "补充取舍依据"])
+  const rw = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design"])
+  assert.equal(rw.waves[0].kind, "respond")
+  assert.match(rw.waves[0].prompt, /本轮变化/)
+  const status = await call(["run", "--task", "design-t"])
+  const inflight = await call(["dispatch-plan", "--task", "design-t"])
+  assert.equal(inflight.stop, "wait-inflight")
+  for (const card of [status, inflight]) assert.match(card.inflight[0].prompt, /场景指引（design）/)
+})
+
+test("方案审查场景：审查派单不要求第二份方案，项目同名覆盖继续生效", async () => {
+  const projectRoot = await makeProject({
+    workflow: { stages: [{ id: "design-review", label: "方案审查", outputs: ["design-review"], teamScene: "design-review" }], gates: [], terminalStages: [] },
+    policy: { ...IMPL_POLICY, scenes: { "design-review": {} } },
+  })
+  const call = caller(projectRoot)
+  await openTask(projectRoot, "review-t", { objective: "审查示例方案", entry: "design-review" })
+  const d = await call(["dispatch-plan", "--task", "review-t", "--writable", "REVIEW.md:design-review"])
+  assert.match(d.waves[0].prompt, /场景指引（design-review）/)
+  assert.match(d.waves[0].prompt, /不另写一份方案/)
+  assert.doesNotMatch(d.waves[0].prompt, /场景指引（design）/)
+  await writeFile(path.join(projectRoot, "REVIEW.md"), "# 审查报告\n示例发现", "utf8")
+  await call(["deliver", "--task", "review-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成审查", "--paths", "REVIEW.md"])
+  const r = await call(["dispatch-plan", "--task", "review-t"])
+  assert.equal(r.waves[0].role, "challenger")
+  assert.match(r.waves[0].prompt, /具体缺口/)
+  await mkdir(path.join(projectRoot, "team-work/guidance/scenes"), { recursive: true })
+  await writeFile(path.join(projectRoot, "team-work/guidance/scenes/design-review.md"), "- 项目审查标准：核对兼容依据。", "utf8")
+  const g = await loadGuidance(projectRoot)
+  assert.equal(g.scenes["design-review"], "- 项目审查标准：核对兼容依据。")
+  assert.ok(g.scenes.design, "未覆盖的设计场景保留基线")
+  const inflight = await call(["dispatch-plan", "--task", "review-t"])
+  assert.match(inflight.inflight[0].prompt, /核对兼容依据/)
+  assert.doesNotMatch(inflight.inflight[0].prompt, /不另写一份方案/)
+})
+
 test("loadGuidance：项目无自定义目录时使用包内基线（角色+场景两级）", async () => {
   const projectRoot = await makeProject()
   const g = await loadGuidance(projectRoot)

@@ -211,6 +211,11 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   // 完整呈现纪律 + 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
   assert.match(gate.presentation, /呈现纪律/)
   assert.match(gate.presentation, /不得原样抛给用户/)
+  assert.match(gate.presentation, /首次.*批准什么/)
+  assert.match(gate.presentation, /后续.*本轮变化.*依据.*原结论.*重新批准/)
+  assert.match(gate.presentation, /缺少.*比较.*明确说明.*不得.*臆造.*已批准/)
+  assert.match(gate.presentation, /进行版本对比时.*缺少.*比较.*明确说明/)
+  assert.match(gate.presentation, /引用既有批准结论时.*缺少.*批准记录.*明确说明/)
   assert.match(gate.progress, /完成八视角审查/)
   assert.match(gate.progress, /REPORT\.md/)
   assert.match(gate.progress, /证据链完整/)
@@ -224,6 +229,7 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   const plan = await call(["dispatch-plan", "--task", "present-check", "--json"])
   assert.equal(plan.stop, "awaiting-user")
   assert.match(plan.card.presentation, /呈现纪律/)
+  assert.equal(plan.card.presentation, gate.presentation, "run 与 dispatch 的决定呈现规则一致")
   assert.equal(plan.card.progress, gate.progress)
 
   // accept → completed：进展转折卡带轻量提醒（完成由 dispatch 通道落盘）

@@ -5,7 +5,7 @@ Runtime 生成派单时按「角色 + 场景」自动注入公共引导，让成
 ## 检索层级
 
 - 角色引导：`team-work/guidance/roles/<role>.md`，键 = 派单角色（owner | challenger | expert）。注入所有对应角色的派单（含续派与在途重建）。
-- 场景引导：`team-work/guidance/scenes/<sceneId>.md`，键 = 阶段声明的 `teamScene`（如 implementation、test）。注入该场景阶段的所有派单——Owner 按此执行，Challenger/Expert 按同样标准审视。
+- 场景引导：`team-work/guidance/scenes/<sceneId>.md`，键 = 阶段声明的 `teamScene`（如 design、design-review、implementation、test）。注入该场景阶段的所有派单——Owner 按此执行，Challenger/Expert 按同样标准审视；design-review 区分方案标准与审查报告职责，不另造方案。
 - 缺失的目录/文件静默跳过，不阻塞派发；引导文本是数据不是代码，不参与门禁判定。
 
 ## 分层覆盖

@@ -1,6 +1,6 @@
 {
   "name": "team-work-runtime",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "平台无关的多智能体研发 Harness：任务目录即状态，工具调用即检查点，门只在阶段流转",
   "repository": {
     "type": "git",
@@ -60,9 +60,10 @@
     "dsh",
     "ai-agent"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4"
+  },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.1.0-rc",
-    "@deepseek-ai/dsh-agent": ">=0.1.0-rc"
+    "@deepseek-ai/dsh": "0.2.0-rc.2"
   }
 }

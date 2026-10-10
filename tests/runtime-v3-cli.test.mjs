@@ -10,17 +10,25 @@ import path from "node:path"
 import { tw } from "../runtime-v3/cli.mjs"
 import { artifactsFingerprint } from "../runtime-v3/gate.mjs"
 
-// dispatch-plan 在派发点强制校验全局 tier 解析（run 只读化后是唯一推进通道）——本文件自带临时 settings
-const settingsFile = path.join(tmpdir(), `tw-cli-tiers-${process.pid}-${Date.now()}.yaml`)
-await writeFile(settingsFile, [
-  "team-work-dsh:",
-  "  tiers:",
-  "    junior: { provider: cli-junior, model: cli-junior }",
-  "    senior: { provider: cli-senior, model: cli-senior }",
-  "    expert: { provider: cli-expert, model: cli-expert }",
-  "",
-].join("\n"))
-process.env.DSH_SETTINGS = settingsFile
+// dispatch-plan 在派发点校验调用快照；本文件自带完整三档。
+process.env.TW_DSH_CONFIG = JSON.stringify({
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": {
+      "provider": "cli-junior",
+      "model": "cli-junior"
+    },
+    "senior": {
+      "provider": "cli-senior",
+      "model": "cli-senior"
+    },
+    "expert": {
+      "provider": "cli-expert",
+      "model": "cli-expert"
+    }
+  }
+})
 
 test("code-review 介入全链路（CLI 序列）", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-cli-"))

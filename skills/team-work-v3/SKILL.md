@@ -29,6 +29,9 @@ tw archive --task <名字>                                              # 用户
 ```
 
 - 推进是 dispatch 侧的单一写者：每次 `dispatch-plan` 推进一步并返回一张卡片（waves 派单数组或 stop 卡）——按它行动，不要预判步骤。DSH 内**一律先调 `tw-dispatch`**（单次调用完成开单+创建+登记）；waves 给你派单全文和 key——**原样**转发给成员，不要改写边界。无 DSH 插件的终端：`dispatch-plan` 即推进者，按其 human/waves 输出手工派发并 `tw agent-map` 登记。
+- **工具分工**：正式波次成员用 `tw-dispatch`；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
+- **配置来源**：当前 profile 的插件 Config 提供 tiers，同一 profile 跨项目共享且无项目覆盖。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 精确模型快照；`tw models` 查看当前 entry/profile 来源。
+- **续聊与深度**：原生后台 `continuable` 的 `subagentId` 才是可供 `send_message` 使用的会话 ID，`jobId/runId` 不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
 - 成员完成的通知到达后再 `dispatch-plan`（DSH 内 `tw-dispatch`），消费报告并推进。
@@ -44,3 +47,4 @@ tw archive --task <名字>                                              # 用户
 - `recommendation` 只评价这版交付本身；产品缺陷写 findings，不因此 rework 审查制品。
 - 派单文本会按角色/场景自动注入公共引导（角色指引 + 场景指引，见 [派单引导库](references/guidance.md)）：引导是纪律提示，与派单边界冲突时以派单边界为准。
 - 上下文与派单全文已内嵌：成员不需要也不应该读取 `.team-work` 内部状态或扫描项目外路径。
+- 只读助手经原生工具派发，明确 junior 档与可写范围为空；结果由发起成员核验整合，不登记为正式波次成员。

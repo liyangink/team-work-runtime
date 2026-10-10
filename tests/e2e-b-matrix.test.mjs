@@ -11,18 +11,27 @@ import test from "node:test"
 import { tw } from "../runtime-v3/cli.mjs"
 import { makeProject, caller } from "./support/v3-fixtures.mjs"
 
-const settingsFile = path.join(tmpdir(), `tw-e2e-b-tiers-${process.pid}-${Date.now()}.yaml`)
-const BASE_SETTINGS = `
-team-work-dsh:
-  tiers:
-    junior: { provider: e2e-junior, model: e2e-junior }
-    senior: { provider: e2e-senior, model: e2e-senior }
-    expert: { provider: e2e-expert, model: e2e-expert }
-`
-await writeFile(settingsFile, BASE_SETTINGS)
-process.env.DSH_SETTINGS = settingsFile
+const BASE_CONFIG = {
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": {
+      "provider": "e2e-junior",
+      "model": "e2e-junior"
+    },
+    "senior": {
+      "provider": "e2e-senior",
+      "model": "e2e-senior"
+    },
+    "expert": {
+      "provider": "e2e-expert",
+      "model": "e2e-expert"
+    }
+  }
+}
+process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
 
-test("E2E-B F-3：无项目 dsh.json、无插件时，全局 tier 配置可完成派发与交付", async () => {
+test("E2E-B F-3：无项目 dsh.json、无插件时，调用快照 tier 配置可完成派发与交付", async () => {
   const root = await makeProject()
   const call = caller(root)
   await call(["open", "--name", "f3", "--objective", "全流程", "--entry", "code-review"])
@@ -136,21 +145,34 @@ test("E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → �
   assert.equal(w2.waves[0].package, "execution", "依赖解锁第二包")
 })
 
-test("E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 全局候选池生效", async () => {
+test("E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 调用快照候选池生效", async () => {
   const root = await makeProject()
-  await writeFile(settingsFile, `
-team-work-dsh:
-  tiers:
-    junior:
-      - provider: pool-a
-        model: fam-one
-        family: one
-      - provider: pool-b
-        model: fam-two
-        family: two
-    senior: { provider: pool-senior, model: sen-m }
-    expert: { provider: pool-expert, model: exp-m }
-`)
+  process.env.TW_DSH_CONFIG = JSON.stringify({
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": [
+      {
+        "provider": "pool-a",
+        "model": "fam-one",
+        "family": "one"
+      },
+      {
+        "provider": "pool-b",
+        "model": "fam-two",
+        "family": "two"
+      }
+    ],
+    "senior": {
+      "provider": "pool-senior",
+      "model": "sen-m"
+    },
+    "expert": {
+      "provider": "pool-expert",
+      "model": "exp-m"
+    }
+  }
+})
   try {
     const call = caller(root)
     const plans = {}
@@ -162,7 +184,7 @@ team-work-dsh:
     const keyB = plans["iso-b"].waves[0].dispatchKey
     await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
     await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
-    assert.equal(plans["iso-a"].waves[0].modelHint.model, "fam-one", "F-4 全局池首选")
+    assert.equal(plans["iso-a"].waves[0].modelHint.model, "fam-one", "F-4 调用快照池首选")
     assert.equal(plans["iso-b"].waves[0].modelHint.model, "fam-one", "不同波次各自从首选开始")
     const agentsA = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-a", "agents.json"), "utf8"))
     const agentsB = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-b", "agents.json"), "utf8"))
@@ -173,6 +195,6 @@ team-work-dsh:
     assert.equal(Object.hasOwn(agentsA.mappings, keyB), false, "A 任务文件不含 B 任务映射")
     assert.equal(Object.hasOwn(agentsB.mappings, keyA), false, "B 任务文件不含 A 任务映射")
   } finally {
-    await writeFile(settingsFile, BASE_SETTINGS)
+    process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
   }
 })

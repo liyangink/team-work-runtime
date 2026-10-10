@@ -1,6 +1,6 @@
-# DSH 编排：Lead 派发操作规程（v3.3；工作流派发工具 tw-dispatch）
+# DSH 编排：Lead 派发操作规程（DSH 0.2.0-rc.2）
 
-平台事实：workflow 的 agent() 一次性无句柄（不能承载持续角色）；**续聊原语 = 后台 subagent（持久 id、可命名）+ send_message（仅 depth-1 直接子代）**。因此：凡需要多轮续派的成员（owner 修 rework、challenger 复审、expert 重裁），首次派发就必须在 Lead 层开子代理；workflow 只用于一次性扇出。
+正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`；原生后台 `continuable` 返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。一次性后台 `jobId` 与前台 `runId` 不作续聊身份。
 
 ## 波次推进：一律 tw-dispatch
 
@@ -8,23 +8,26 @@
 
 1. 内部子进程调 `tw dispatch-plan --task <名> --json`（writables 透传）推进到派发点或 stop；
 2. 波次机不在派发点时（awaiting-user / completed / blocked / archived 卡，含拒绝卡）**原样透传卡片**，不创建任何子代理——Lead 按卡片行动；wait-inflight 卡是唯一例外：按条目自动兜底处置（见 stop 处理节）；
-3. 在派发点时对每张派单自动完成「先登记后创建」（防双发机器保障）：`tw agent-map` 先登记 dispatchKey→**确定性 sessionId**（从任务名+派单 key 推导，同 key 重试恒同 id）→ 按 wave.modelHint 创建子代理（target 直取 provider/model/effort，**不重选档位**；创建前经宿主会话**判定链**对账：活会话已收单→等待不重复投递；活会话未收单/冷持久归属一致→followup 补发或冷唤醒；冷持久异主→接管冲突卡；无记录→同 id 重建）→ 标签按派单事实自动拼接（见「成员标签」）。登记失败发生在创建之前，原样重试安全、不会双发。
+3. 在派发点时对每张派单先登记 dispatchKey→确定性 sessionId（从任务名和派单 key 推导），再按 wave.modelHint 的精确 provider/model/effort 创建成员，不重选档位。重试先核对同 ID：同父活会话等待；同父冷会话读取自身事件后通过宿主 `sendMessage` 续投；异主拒绝接管；确实无记录才同 ID 重建。读取不确定时保留映射并返回恢复指引，不把未知当不存在。标签由派单事实自动拼接。
 
 返回逐项结果 `[{key, sessionId, provider/model/effort, 标签, registered}]`。单张失败不回滚已成功项，按该项 message 的指引恢复（登记失败可用 tw agent-map 补登记；勿重复创建，避免重复派单）。
 
+创建后的持久化确认失败不等于未创建：保留 sessionId 与映射，先核对同 ID 现状。防重复创建不承诺正文跨中断恰好投递一次；回执丢失或读取不确定时不要另建成员或自动重复投正文。
+
 **Lead 推进循环 = 反复调 tw-dispatch 直到终态卡片**，不再需要「先看卡、再决定怎么派」的双工具交替。`tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；无 DSH 插件的终端直接用 `tw dispatch-plan`（人读输出）作为推进通道。
 
-三工具分工（情境判据是「有无进行中的任务波次」，不依赖记忆）：
+工具分工以工作用途区分；任务期间开的助手仍属于普通委派：
 
 | 情境 | 工具 |
 | --- | --- |
 | 正在推进 team-work 任务（派波次成员/推进一步） | tw-dispatch |
-| 非工作流委派：只读子派单、用户 @档位、并行调查、独立审查等 | tw-tool-subagent |
+| 普通委派：只读子派单、用户 @档位、并行调查、成员内部助手等 | 原生 subagent / subagent_fork |
+| 主动追问已有子会话 | 原生 send_message |
 | 任务簿记：决定、门禁查询、交付、评审、补登记 | tw |
 
-## 续派：followup 机器投递（Lead 主动追问用 send_message）
+## 续派：宿主 sendMessage（Lead 主动追问用 send_message）
 
-- continuation=true 且有 expectedAgentId：tw-dispatch 按判定链处置——在场（已收单，成员有原上下文）→ **工具直接 followup** 投本轮增量派单正文（机器投递，与 send_message 同为续聊通道；Lead 主动追问/催办仍可用 send_message）；在场但空壳或冷持久未收单（无原上下文）→ followup **全量变体**（wave.promptFull，目标/约束/排除内嵌）；冷持久异主 → 接管冲突卡（由原 Lead 会话继续，或 tw retire 后重派）；断链（会话已不存在）→ 机器自动 fresh 重建（登记确定性 sessionId + 按本波 modelHint 创建，**投全量变体**——新成员无原上下文，增量单不可执行；key 映射回填，结果卡标注 fresh_rebuilt 与原 agentId）；
+- continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投本轮增量，无上下文则投 wave.promptFull 全量变体。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelHint 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
 - 用户点名换人（replace-owner）或映射缺失（expectedAgentIdMissing + resumeNote）：同一 fresh 重建通道。
 
 ## 评审修订纪律（D5）
@@ -34,7 +37,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## stop 处理（tw-dispatch 透传卡片后按型行动）
 
 - stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
-- stop: wait-inflight：**tw-dispatch 已自动逐条处置**（runtime 在 inflight 条目上投影 registered/mappedAgentId/expectedAgentId/modelHint/promptFull 判定事实）——已登记（registered=true）→ 判定链处置登记会话：已收单→等待；活会话未收单/冷持久归属一致→followup 补发或冷唤醒（冷会话已收单只发轻量续行提示，不重发正文防重复执行）；冷持久异主→接管冲突卡；无记录→同 id 重建（崩溃窗口机器化收敛，无双发）；续派且有 expectedAgentId → 在场 followup 投本轮派单（增量/全量按上下文在场性）、断链自动 fresh 重建（全量变体）；未登记 → 登记确定性 sessionId + 补派（结果标注「补派」，附 tw retire 提示）。仅当条目缺 registered（agents.json 缺失/损坏降级透传）才需手工：tw agent-map --key <key> --agent <childId> 补登记（**账本损坏时该命令自动重建账本**，历史映射丢失的续派走 fresh 路径），确认子代理未创建则直接重新 tw-dispatch（按未登记自动补派）；modelHint 不可解析且本波不应执行 → tw retire 回收该波；
+- stop: wait-inflight：tw-dispatch 逐条核对已登记或可续会话，按上述活/冷/异主/不存在四种现状恢复。未登记的派单先登记确定性 ID 再补派；缺 registered 判定字段或读取不确定时不自动补派，按卡片指引修复。agents.json 损坏时可通过 tw agent-map 重建登记；modelHint 不可解析且该波不应执行时用 tw retire 作废；
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后重新 tw-dispatch。
 
@@ -57,13 +60,16 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## risk 与选人
 
 - tw open --risk critical|high|normal（或 tw intent --risk 修订）：critical→expert Owner、high→senior（只升不降；challenger/expert 不变）。判断：不可逆/数据迁移/安全敏感/核心跨模块 → critical；常规 → normal；
-- 模型只来自 DSH 全局 settings 的 `team-work-dsh.tiers`（`tw models` 查看来源）：可在 DSH Web 的"插件配置"页编辑；档位兼容单个候选对象或候选数组，同波多 owner 自动优先不同模型家族，`effort` 可选。每个候选必须有非空 provider/model；全局配置变化只影响后续 dispatch-plan，已派发波次沿用其记录的 modelHint 快照。项目 `.team-work/platform/dsh.json` 不参与读取或创建，遗留文件可手动删除；任务级 `agents.json` 只保存 dispatchKey→childId 续派映射（模型选择由 tw-dispatch 创建子代理时经 target 直取 modelHint，不经 agents.json 中转）。
+- 模型来自当前 profile 的插件 Config `team-work-dsh.tiers`；同一 profile 跨项目共用，无项目覆盖。宿主每次操作通过 `TW_DSH_CONFIG` 传快照，`tw models` 显示 entry/profile 来源。三档兼容单对象或数组，provider/model 必填，family/effort 可选；同波优先不同家族，配置热变只影响后续波次，已派模型快照留在 journal。任务级 agents.json 只保存 mappings。
+- 无宿主终端由编排调用方显式提供 `TW_DSH_CONFIG` JSON `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}`；不自动读旧 YAML 或项目 dsh.json、不写缓存。缺输入的选模返回 unresolved，平台无关操作仍可使用；
+- 升级前备份旧 settings.yaml 与当前 profile 配置：宿主首次导入可能覆盖已有 tiers。旧文件已改名为 settings.yaml.imported 但导入失败时不自动重导，核对旧 tiers 后通过新页面保存；
+- 宿主默认 maxDepth=1；正式成员再开只读助手需要用户允许至少两层，插件不自行提高上限，助手不得继续委托。
 
-## 主动选档（tw-tool-subagent；非工作流委派）
+## 主动选档（原生普通委派）
 
-- 输入框 `@junior` / `@senior` / `@expert` 候选与自然语言（如"让 senior 处理 X"）都只是表达选档意图的两种输入方式，实际委派统一由 **tw-tool-subagent** 执行；team-work 波次成员不适用（一律 tw-dispatch）；
+- 输入框 `@junior` / `@senior` / `@expert` 与自然语言都表达选档意图，读取当前已保存的第一候选后以精确 provider/model 调原生 subagent；effort 转为 reasoning_effort。档位缺失明确 unresolved，不换成默认模型。正式波次成员一律 tw-dispatch；
 - 档位价值主张：junior 速度优势显著、单位成本最低（批量探索/信息收集/初稿类默认）；senior 推理与性价比平衡（大多数常规开发任务默认）；expert 最强推理、最贵（只在高难度设计/疑难定位/关键技术裁决时用）；
-- 与原生 subagent 的分工：不选模型、接受继承平台默认选择，或需要前台/一次性模式/继承父会话上下文（subagent_fork）时用原生工具；继续已存在的子会话用 send_message。
+- 普通精准选模受宿主开关和允许列表限制，旧会话可能须新建后才获得新权限。先查 list_subagent_models 路由；枚举目录未列出不代表不允许，应按 provider+model 精确查询并区分权限拒绝与解析失败。客户端没有精确只读校验 RPC，未广告候选保留草稿，不能据此声称模型不存在；正式创建仍由宿主 resolveCallConfig 实核。
 
 ## 成员标签（由 tw-dispatch 自动生成）
 
@@ -75,5 +81,5 @@ DSH 所有后台任务在**统一的子代理列表**混排，且侧栏从尾部
 
 示例：`CR·owner@store · 模块说明 #task-a` / `CR·chal · 文档整合评审 #task-a` / `IMPL·owner@api · task-a-owner-r1 #task-a`（缺省 note 形态）。
 
-- 只读子派单（tw-tool-subagent 直发，不经 tw-dispatch）仍按此格式手工写标签，前缀 `RO`：如 `CR·RO · 并发扫描`（一次性只读，非团队成员，无任务段）；
-- **标签是纯展示语义**：模型选择由创建时 target 直达、续派映射由 tw agent-map 登记，标签写错只影响人读分组与检索，不影响模型注入、续派与任务推进。固定格式仅为侧栏跨任务列表的人读分组保留。
+- 只读子派单由原生工具派发，可用 `RO` 标签如 `CR·RO · 并发扫描`；它不是正式团队成员，不登记到任务波次；
+- 标签只用于展示；精确模型在创建时传给宿主，续派映射由 tw agent-map 登记，标签不承担机器寻址。

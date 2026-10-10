@@ -3,23 +3,18 @@
 // 单独登记 mappings。本文件保留最小残留断言，防止标签写端被无意恢复。
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdtemp, readFile, access, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, access } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { tw } from "../runtime-v3/cli.mjs"
 
 // dispatch-plan 在派发点强制校验全局 tiers——本文件独立于 v3-fixtures，进程级装一份临时 settings。
-const thSettingsFile = path.join(os.tmpdir(), `tw-tag-tiers-${process.pid}-${Date.now()}.yaml`)
-await writeFile(thSettingsFile, [
-  "team-work-dsh:",
-  "  tiers:",
-  "    junior: { provider: th-junior, model: th-junior }",
-  "    senior: { provider: th-senior, model: th-senior }",
-  "    expert: { provider: th-expert, model: th-expert }",
-  "",
-].join("\n"))
-process.env.DSH_SETTINGS = thSettingsFile
+process.env.TW_DSH_CONFIG = JSON.stringify({ entryId: "team-work-dsh", profile: "profile-example", tiers: {
+  junior: { provider: "provider-example", model: "model-junior" },
+  senior: { provider: "provider-example", model: "model-senior" },
+  expert: { provider: "provider-example", model: "model-expert" },
+} })
 
 test("写端清理：cli 不再导出 tagLabel/persistTagHints（标签落盘链已删）", async () => {
   const cli = await import("../runtime-v3/cli.mjs")

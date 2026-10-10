@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 是什么 | 波次类型：owner 交付 / challenger 挑战 / expert 裁决 | 模型预算：junior / senior / expert |
 | 由谁定 | 波次机；**每轮每角色恰好一个成员**（结构事实，非用量限制） | 派发点：场景默认档 + 包 tier 覆盖 + risk 兜底 |
-| 对应工具 | deliver / review / review --verdict | DSH 全局 `team-work-dsh.tiers` 候选池（同波家族去重挑选） |
+| 对应工具 | deliver / review / review --verdict | 当前 DSH profile 的 `team-work-dsh.tiers` 候选池（同波家族去重挑选） |
 
 映射事实（policy 默认）：owner 波用场景默认档（junior 居多），包 tier 可覆盖（高于默认触发升档审批卡）；challenger 波固定 challengerTier（默认 senior——挑战是质量闸门，不随包降档）；裁决波固定 expert 档（核心场景最后一道闸）。
 
@@ -36,7 +36,9 @@
 
 - 哪些场景有裁决波由 policy `core: true` 决定（design/spec/design-review/spec-review/code-review/e2e）；
 - 并行成员数 = 当波包数，受 policy `concurrencySoftLimit`（4）约束；拆包多于该值时波次机自动分波推进；
-- 每档候选池来自全局 `team-work-dsh.tiers`：兼容单对象或数组，provider/model 必填，family 与 effort 可选；同波多 owner 自动家族去重选模（候选池序 + diversityWithinTier）。项目 `dsh.json` 已废弃，`agents.json` 只保留子代理映射与已派发快照；
+- 每档候选池来自当前 profile 的 `team-work-dsh.tiers`：同一 profile 的项目共用，无项目覆盖；兼容单对象或数组，provider/model 必填，family 与 effort 可选。同波多 owner 自动家族去重选模；宿主每次操作取快照，变化只影响后波，已派波次的精确模型快照在 journal。任务 `agents.json` 只保存派单到子会话的 mappings；
+- 无宿主终端由调用方通过 `TW_DSH_CONFIG` 显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，不读旧 YAML 或项目 `dsh.json`；`tw models` 显示来源；
+- 普通选档委派、只读助手和 `@` 候选使用原生工具，tiers 的 effort 转为 `reasoning_effort`。枚举目录不等于允许名单，目录未列出时可按 provider+model 精确查询；正式波次由 `tw-dispatch` 创建前交宿主核验精确模型；
 - 非 core 场景遇高风险事实冲突：用 risk/包 tier 升 owner 档 + 只读子派单采第二意见，不虚构"临时加裁决者"路径。
 
 ## 三轮收敛

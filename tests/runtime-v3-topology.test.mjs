@@ -15,16 +15,25 @@ const PKGS = JSON.stringify([
   { id: "overview", writable: ["O.md:code-review"], done: ["汇总各包结论、解决冲突、不丢信息"], dependsOn: ["store", "intake"] },
 ])
 
-const settingsFile = path.join(tmpdir(), `tw-topology-tiers-${process.pid}-${Date.now()}.yaml`)
-const BASE_SETTINGS = `
-team-work-dsh:
-  tiers:
-    junior: { provider: topology-junior, model: topology-junior }
-    senior: { provider: topology-senior, model: topology-senior }
-    expert: { provider: topology-expert, model: topology-expert }
-`
-await writeFile(settingsFile, BASE_SETTINGS)
-process.env.DSH_SETTINGS = settingsFile
+const BASE_CONFIG = {
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": {
+      "provider": "topology-junior",
+      "model": "topology-junior"
+    },
+    "senior": {
+      "provider": "topology-senior",
+      "model": "topology-senior"
+    },
+    "expert": {
+      "provider": "topology-expert",
+      "model": "topology-expert"
+    }
+  }
+}
+process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
 
 test("tw plan：机械验收通过登记 packages.json + journal；重叠/成环/缺标准拒绝", async () => {
   const root = await makeProject()
@@ -618,20 +627,33 @@ test("候选池 + 家族去重：同档多 owner 派发优先不同模型家族"
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "pool-t")
-  // 全局 junior 池：两个不同家族候选；项目 dsh.json 不参与选择。
-  await writeFile(settingsFile, `
-team-work-dsh:
-  tiers:
-    junior:
-      - provider: pool-a
-        model: familyone-lite
-        family: familyone
-      - provider: pool-b
-        model: familytwo-lite
-        family: familytwo
-    senior: { provider: pool-senior, model: pool-senior }
-    expert: { provider: pool-expert, model: pool-expert }
-`)
+  // 调用快照 junior 池：两个不同家族候选；项目 dsh.json 不参与选择。
+  process.env.TW_DSH_CONFIG = JSON.stringify({
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": [
+      {
+        "provider": "pool-a",
+        "model": "familyone-lite",
+        "family": "familyone"
+      },
+      {
+        "provider": "pool-b",
+        "model": "familytwo-lite",
+        "family": "familytwo"
+      }
+    ],
+    "senior": {
+      "provider": "pool-senior",
+      "model": "pool-senior"
+    },
+    "expert": {
+      "provider": "pool-expert",
+      "model": "pool-expert"
+    }
+  }
+})
   try {
     await call(["plan", "--task", "pool-t", "--packages", PKGS])
     const plan = await call(["dispatch-plan", "--task", "pool-t", "--json"])
@@ -652,6 +674,6 @@ team-work-dsh:
     assert.equal(agents.mappings[second.dispatchKey], "child-two")
     assert.equal(agents.modelHints, undefined, "agents.json 收敛纯 mappings（模型快照不经注册表中转）")
   } finally {
-    await writeFile(settingsFile, BASE_SETTINGS)
+    process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
   }
 })

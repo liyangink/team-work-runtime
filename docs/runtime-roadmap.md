@@ -4,6 +4,10 @@
 
 ## v3 里程碑（工具中心重写）
 
+- **1.0.9 发版验证**：用户已授权升版、提交推送与本地打包安装；完整自动套件 260 项通过，0 失败、0 跳过，包含错误诊断修正。市场发布不在本次范围；真实 LLM、跨进程续聊与最终页面视觉仍待用户验收。
+
+- **DSH 0.2.0-rc.2 适配、自动验证与独立代码复核已完成；未发布**：下线旧委派工具和注入链，仅注册 tw/tw-dispatch；普通委派、@ 选档和成员内部助手统一使用原生工具。正式波次保留精确模型快照、确定性会话 ID、先登记后创建与冷恢复；配置改为当前 profile 的热更新 Config，同一 profile 跨项目共用，通过 TW_DSH_CONFIG 逐次传给 CLI，无宿主终端显式输入且无旧 YAML 回退。新配置页保留冲突草稿，目录未列出不代表模型不存在或不允许，创建前由宿主精确核验。诊断修正前全套 259 项通过、0 失败、0 跳过；修正后含新增用例的专项 4 项通过，未重复全套。Spec 与 Standards 均接受，诊断问题已确认关闭。隔离 Web 插件和三档表单加载、可见页面编辑/保存、官方 ConfigForms 空配置/完整配置往返均通过；pack dry-run 的 44 个 entries 不含旧委派工具或注入实现。真实 LLM、跨进程续聊与最终页面视觉待用户验收。范围、配置迁移风险和恢复限制见 [`dsh-020-adaptation-plan.md`](dsh-020-adaptation-plan.md)。下列旧版平台实现记录仅用于追溯，不代表新版实机验收。
+
 - 规约冻结：P1–P6 原则、I1–I10 不变量、台账 20 课处置映射、目录约定与归档、模块判决——已完成；
 - 核心实现：waves/gate/derive/store/intake、tw CLI 九命令（open/run/decide/intent/route/archive/gate/deliver/review）、bin/tw.mjs 入口——已完成；
 - DSH 绑定：唯一 skill team-work-v3（Lead 判断指引 + 成员纪律）、派发经后台 subagent——已落地；
@@ -104,7 +108,7 @@ memberSlot 成员独立槽位、轮次预算任务级参数（"只跑一轮"）�
 
 ## v3.1 DSH 适配：编排引擎与成本映射（规划 2026-08-21 第二稿，修正两处认知偏差）
 
-> **迁移说明（当前实现）**：本节保留最初方案与平台调研，不能把其中的项目 `dsh.json`、`agent-default`、`projectRoots` 或 `twBin` 叙述当作当前行为。现在唯一的 tier→模型配置源是 DSH 全局 settings 的 `team-work-dsh.tiers`，由 DSH Web“插件配置”页管理；`injectionEnabled`、`projectRoots`、`twBin` 已从 schema 和运行链移除且不兼容读取。注入和 `tw` 工具只以子会话 cwd 定位项目的 `agents.json`，该文件仍是运行时映射事实。遗留 YAML 键和项目 `dsh.json` 可由用户手动删除。
+> **迁移说明（当前实现）**：本节保留最初方案与旧版平台调研。当前工具分工与配置读取以 [DSH 0.2.0-rc.2 适配方案](dsh-020-adaptation-plan.md) 为准：仅 tw/tw-dispatch，普通委派与助手用原生工具；tiers 写入当前 profile 的插件 Config，每次操作传调用快照，无项目覆盖或旧 YAML 回退。任务 agents.json 只保存 mappings，精确模型快照在 journal；旧模型注入、全局 settings 和标签寻址的说明均为历史。
 
 ### 设计原则（修正稿）
 
@@ -116,7 +120,7 @@ memberSlot 成员独立槽位、轮次预算任务级参数（"只跑一轮"）�
 ### Phase 1：编排绑定（目标形态，待实测）
 
 1. **`tw dispatch-plan --task <name>`**（runtime 侧新增）：输出当前可派发波次的机器可读描述 `[{dispatchKey, role, tier, kind, round, prompt, writable[], dependsOn[]}]`——编排脚本的唯一输入；波次推进逻辑（waves.mjs 纯函数）不变，门与人工门语义不变。
-2. **tier→模型配置（当前实现）**：DSH 全局 settings 的 `team-work-dsh.tiers` 是唯一来源，DSH Web“插件配置”页负责编辑。`junior`、`senior`、`expert` 必须同时完整；每档兼容单个候选对象或候选数组，provider/model 非空必填，family/effort 可选。运行时按候选池并在同波优先不同 family 挑选，dispatch-plan 写入精确 modelHint 快照；`tw init` 只安装 skill，不生成映射。角色消费档位：Owner 用场景 `ownerTier`，**Challenger 用场景 `challengerTier`（默认 senior）**，Expert 用 expert。**只读子派单（原 v2 助手）= junior 档 + writable 为空 + parallel() 并行**，不设专属角色。
+2. **tier→模型配置（当前实现）**：当前 profile 的插件 Config `team-work-dsh.tiers` 是来源，DSH Web 原生插件配置页负责编辑；同一 profile 跨项目共用，每次操作通过 TW_DSH_CONFIG 传快照，无宿主终端显式提供。`junior`、`senior`、`expert` 必须同时完整；每档兼容单个候选对象或候选数组，provider/model 非空必填，family/effort 可选。运行时按候选池并在同波优先不同 family 挑选，dispatch-plan 写入精确 modelHint 快照；`tw init` 只安装 skill，不生成映射。角色消费档位：Owner 用场景 `ownerTier`，**Challenger 用场景 `challengerTier`（默认 senior）**，Expert 用 expert。**只读子派单 = 原生工具按 junior 档派发 + writable 为空**，不设专属角色。
 3. **编排脚本模板**（skill references 提供，Lead 经 workflow 工具执行）：读映射 + dispatch-plan → 循环 {并行派发无依赖波次（`agent(prompt, modelByTier[tier])`，成员在 agent 内调 `tw deliver/review --key`）→ `tw dispatch-plan` 消费推进（`tw run` 只读查状态）} 直到 gate/awaiting-user 返回卡片。
 4. **review 复杂拓扑模板**：八视角 Owner → 并行多 Challenger（`parallel`，按视角分组）→ Expert 裁决 → 门；重派轮在脚本内闭环（rework 波次由 dispatch-plan 顺序导出）。
 5. skill 投递：`tw init` 安装到项目 `.dsh/skills/`（DSH filesystem provider 扫描该根）。

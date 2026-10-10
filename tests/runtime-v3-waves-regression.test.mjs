@@ -17,17 +17,25 @@ import { projectRounds, inflightBatch, waveGroups, supersededKeys, effectiveBloc
 import { humanDecisionFresh } from "../runtime-v3/gate.mjs"
 import { makeProject, caller, openTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
-// dispatch-plan 需要全局 tier 解析（与 topology 测试同款临时 settings）
-const settingsFile = path.join(tmpdir(), `tw-waves-tiers-${process.pid}-${Date.now()}.yaml`)
-await writeFile(settingsFile, [
-  "team-work-dsh:",
-  "  tiers:",
-  "    junior: { provider: wv-junior, model: wv-junior }",
-  "    senior: { provider: wv-senior, model: wv-senior }",
-  "    expert: { provider: wv-expert, model: wv-expert }",
-  "",
-].join("\n"))
-process.env.DSH_SETTINGS = settingsFile
+// dispatch-plan 需要完整三档调用快照。
+process.env.TW_DSH_CONFIG = JSON.stringify({
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": {
+      "provider": "wv-junior",
+      "model": "wv-junior"
+    },
+    "senior": {
+      "provider": "wv-senior",
+      "model": "wv-senior"
+    },
+    "expert": {
+      "provider": "wv-expert",
+      "model": "wv-expert"
+    }
+  }
+})
 
 const KEY_RE = /^d\d+-[0-9a-f]{6}$/
 const VERDICT = { outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" }

@@ -21,7 +21,7 @@ test("v3 assets exist and historical trees are removed (git history preserves th
   for (const present of ["runtime-v3/cli.mjs", "bin/tw.mjs", "dsh/index.js", "dsh/client/badge.js", "cordis.patch.yml", "tests/e2e-root.test.mjs", "skills/team-work-v3/SKILL.md", "docs/runtime-v3-charter.md"]) {
     await assert.doesNotReject(access(path.join(projectRoot, present)), present)
   }
-  for (const removed of ["plugins/opencode", "installer", "runtime", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2", "packages/dsh-plugin", "scripts/install-local.mjs", "scripts/uninstall-local.mjs", "scripts/e2e-c1.mjs", "docs/phase3-plugin-plan.md", "docs/pre-phase3-plan.md"]) {
+  for (const removed of ["plugins/opencode", "installer", "runtime", "runtime/application", "runtime/domain/reducer.mjs", "schemas/v2", "tests/v2", "packages/dsh-plugin", "scripts/install-local.mjs", "scripts/uninstall-local.mjs", "scripts/e2e-c1.mjs", "docs/phase3-plugin-plan.md", "docs/pre-phase3-plan.md", "dsh/inject.js", "dsh/tw-tool-subagent.js"]) {
     await assert.rejects(access(path.join(projectRoot, removed)), (error) => error.code === "ENOENT", removed)
   }
 })
@@ -36,7 +36,9 @@ test("package metadata is intact (install simulation once caught corruption)", a
   assert.equal(pkg.main, "./dsh/index.js", "唯一根制品直接提供 DSH host 入口")
   assert.equal(pkg.exports?.["./client"], "./dsh/client/badge.js", "唯一根制品直接提供 Web client")
   assert.equal(pkg.dsh?.bundle?.patch, "./cordis.patch.yml", "唯一根制品声明 DSH bundle patch")
-  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh-agent"], ">=0.1.0-rc", "唯一根制品声明直接使用的宿主 peer")
+  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh"], "0.2.0-rc.2", "只声明已核验的新版宿主")
+  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh-agent"], undefined, "模型注入安装器已下线")
+  assert.equal(pkg.dependencies?.["@deepseek-ai/schemastery"], "~3.18.4", "直接使用的 schema 依赖在根制品声明")
   assert.ok(!pkg.files.some((entry) => entry.startsWith("packages/")), "唯一根制品不得收编旧 packages 子包")
   for (const entry of ["bin/", "cordis.patch.yml", "dsh/", "runtime-v3/", "skills/team-work-v3/", "workflow/definitions/", "team-work/policies/"]) {
     assert.ok(pkg.files.includes(entry), `files 缺 ${entry}`)
@@ -48,7 +50,7 @@ test("dsh orchestration template stays consistent with skill surface", async () 
   assert.match(skill, /dsh-orchestration\.md/, "SKILL.md 链接编排模板")
   const template = await read("skills/team-work-v3/references/dsh-orchestration.md")
   assert.match(template, /dispatch-plan/)
-  assert.match(template, /agent\(/)
+  assert.match(template, /tw-dispatch/)
   assert.match(template, /modelHint/)
 })
 

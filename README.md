@@ -20,25 +20,27 @@
 
 ### 1. 安装
 
-**方式一：DSH 市场（推荐）**：在市场搜索并安装 `team-work-runtime`，装完即用。
+`1.0.9` 适配 DSH `0.2.0-rc.2`，尚未发布到市场；当前市场版本不代表已包含以下新版适配。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
 
-**方式二：CLI 安装**（对指定 profile，`web` 即 Web 界面所用的 profile）：
+**方式一：DSH 市场**：在市场搜索并安装 `team-work-runtime`；使用新版适配前先确认安装包已包含本次变更。
+
+**方式二：CLI 安装**（显式指定实际使用的 profile；以下 `profile-demo` 是脱敏占位名）：
 
 ```bash
-dsh plugin --profile web add team-work-runtime     # 安装
-dsh plugin --profile web remove team-work-runtime  # 卸载
+dsh plugin --profile profile-demo add team-work-runtime     # 安装
+dsh plugin --profile profile-demo remove team-work-runtime  # 卸载
 ```
 
 **方式三：本地打包**（源码用户）：
 
 ```bash
 npm pack   # 在仓库根执行，产出 team-work-runtime-<版本>.tgz
-dsh plugin --profile web add ./team-work-runtime-<版本>.tgz   # 安装本地包，卸载命令同上
+dsh plugin --profile profile-demo add ./team-work-runtime-<版本>.tgz   # 安装本地包，卸载命令同上
 ```
 
 ### 2. 配置三档模型（两分钟）
 
-DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型：
+DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型。新版配置写入当前 profile：同一 profile 内所有项目共用 tiers，没有项目覆盖，也不自动同步其他 profile。
 
 | 档位 | 干什么活 | 选模建议 |
 | --- | --- | --- |
@@ -46,15 +48,33 @@ DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型
 | `senior` | 方案设计、审查挑战 | 均衡可靠的模型 |
 | `expert` | 高风险环节技术裁决 | 最强模型；最贵，只在裁决时上场 |
 
-```yaml
-team-work-dsh:
-  tiers:
-    junior: [{ provider: <provider-id>, model: <model-id> }]
-    senior: [{ provider: <provider-id>, model: <model-id>, effort: <optional-effort-id> }]
-    expert: [{ provider: <provider-id>, model: <model-id> }]
+以下展示 tiers 的数据形状；示例模型需替换为该 profile 中实际可用的 provider/model：
+
+```json
+{
+  "junior": [{ "provider": "provider-demo", "model": "model-lite" }],
+  "senior": [{ "provider": "provider-demo", "model": "model-balanced", "effort": "high" }],
+  "expert": [{ "provider": "provider-demo", "model": "model-reasoning" }]
+}
 ```
 
-三档必须齐全，漏配时运行会收到带指引的提醒卡片；每档可配多个候选，派发时优先错开模型家族。配置改动即时生效，只影响后续波次。
+空配置允许首次启动；开始配置后，三档必须齐全，每档兼容单对象或候选数组，provider/model 必填，family/effort 可选。派发优先错开模型家族；热更新只影响后续波次，已派发成员沿用 journal 中的精确模型快照。
+
+页面按模型目录验证已列出的候选；未列出不代表模型不存在或不允许。客户端没有精确只读校验 RPC，未列出的候选会保留草稿并提示通过原生 `list_subagent_models` 按 provider+model 精确查询，不会谎报保存成功。正式成员创建前仍由宿主 `llm.resolveCallConfig` 核验真实模型与显式 effort。保存冲突或失败保留本地草稿，重新核对当前配置后再提交。
+
+### 无宿主的终端输入
+
+DSH 内的 `tw` 和 `tw-dispatch` 每次操作从插件 Config 取快照。无宿主终端由编排调用方显式提供同形状的 `TW_DSH_CONFIG` JSON，不再自动读取 home 下的 YAML，也不猜测 profile：
+
+```bash
+TW_DSH_CONFIG='{"entryId":"team-work-dsh","profile":"profile-demo","tiers":{"junior":{"provider":"provider-demo","model":"model-lite"},"senior":{"provider":"provider-demo","model":"model-balanced"},"expert":{"provider":"provider-demo","model":"model-reasoning"}}}' tw models
+```
+
+该变量只是本次调用输入，不含 provider 密钥，不写长期缓存；profile 无法确定时显式写 `unresolved`。缺输入、JSON 损坏或缺档时，选模命令给出修复指引；开任务、查状态、交付和评审等平台无关操作仍可使用。
+
+### 从旧配置升级
+
+升级前分别备份旧 `settings.yaml` 与当前 profile 配置。DSH 首次导入会先把旧文件改名为 `settings.yaml.imported`，再尝试写入同名 entry；该过程可能覆盖 profile 已保存的 tiers。已经改名但导入失败时，宿主不会自动再次导入：只取旧 tiers，核对模型后通过新页面保存。插件不从旧文件兜底、不删除旧配置。本次源码适配不直接更改用户 profile、升级宿主或重装插件。
 
 ### 3. 第一次使用
 
@@ -131,9 +151,17 @@ Lead ──组建团队──▶ 成员子代理：Owner → Challenger → 核�
 | **Workflow**（`workflow/definitions/`） | 研发路线图：阶段、合法流转边、门禁、SPEC/E2E 路由——改流程改数据，不改代码 |
 | **Team-work**（`team-work/`） | 团队手册：哪个场景用哪档人、几轮收敛、审查视角、成本权重 |
 | **CoreRuntime**（`runtime-v3/` + `bin/tw.mjs`） | 唯一引擎：波次推进、门禁推导、任务目录读写、交付/评审检查 |
-| **DSH 绑定**（`dsh/`） | 插件本体：skill 装载、tw 工具、tier→模型注入、插件配置页 |
+| **DSH 绑定**（`dsh/`） | skill 装载、tw/tw-dispatch、精确模型派发与当前 profile 的插件配置页 |
 
 > Runtime 不实现派发循环与 DAG 调度——编排是 DSH 平台职责；Runtime 只提供波次事实与验收。任务数据始终留在你项目的 `.team-work/`。
+
+DSH 内正式成员的派发与续派由 `tw-dispatch` 自动登记；普通委派、`@junior` / `@senior` / `@expert`、成员在任务期间开的只读助手使用原生 `subagent`，继承历史用 `subagent_fork`。tiers 的 `effort` 在原生调用中转换为 `reasoning_effort`。原生选模受宿主开关与允许列表约束；模型枚举目录只是参考，可按 provider+model 精确查询，旧会话权限可能要新建会话后才生效。
+
+原生后台 `continuable` 返回的 `subagentId` 是会话 ID，可用于 `send_message`；一次性后台的 `jobId` 和前台的 `runId` 不能当作续聊身份。宿主默认 `maxDepth=1`，若要允许正式成员再开只读助手，用户需允许至少两层；插件不自行提高限制，助手不得继续委托。
+
+正式派单重试复用同一会话 ID，防重复创建；冷恢复能核对自身日志中的本轮正文，已收到则只发续行提醒，只有旧上下文则投增量，无上下文则投全量。这不承诺正文跨中断恰好投递一次。回执或读取不确定时保留已有 ID，按恢复提示核对。
+
+`1.0.9` 全套 260 项通过，0 失败、0 跳过；Spec 与 Standards 独立复核通过。隔离 Web 的插件与三档配置表单加载、可见页面编辑/保存、官方 ConfigForms 空配置/完整配置往返、打包检查均通过。真实 LLM、跨进程续聊、最终页面和徽标视觉仍待用户验收，尚未发布到市场；详见 [新版适配方案](docs/dsh-020-adaptation-plan.md)。
 
 ## 更多资料
 

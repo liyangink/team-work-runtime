@@ -1,5 +1,7 @@
 # DSH 定向委派技术方案
 
+> 历史记录：本文中的旧委派工具、模型注入、配置读取和宿主会话接口已由 [DSH 0.2.0-rc.2 适配方案](dsh-020-adaptation-plan.md) 替代。下文保留当时的设计、裁决与验收证据，不作为当前调用规程；任务级映射、波次和门禁的不变量仍按当前仓库契约执行。
+
 状态：**已批准；第一阶段已实施，真实 DSH 验收 §7 七条中 1/2/3/4/5/6 已通过实机验证（2026-09-01，记录见 [dsh-delegation-acceptance.md](dsh-delegation-acceptance.md)），第 7 项（主动选档行为）待真实使用样本积累；第二阶段切链已实施（2026-09-06，自动回归全绿；旧字段只读兼容窗口经增量裁决取消，见 §9 第 6 条）**。方案经 Challenger/Expert 多轮评审与人工门批准（dec-2ffeb0，2026-08-31，评审任务 `dsh-directed-delegation` 已归档）；批准后经两轮用户裁决增量：① 工具及实现/测试命名改为 `tw-tool-subagent`（短横线，对齐 DSH 工具目录命名，见 §9 第 3 条）；② 新增 §3.7 档位价值主张与主动委派（见 §9 第 4 条）。第一阶段落点：`dsh/tw-tool-subagent.js`、`dsh/inject.js`（直接选择 + header 回读通道）、`dsh/index.js`（装配 + systemPrompt section）、`dsh/client/badge.js`（@ 候选）、`tests/dsh-tw-tool-subagent.test.mjs`。
 
 ## 1. 方案结论

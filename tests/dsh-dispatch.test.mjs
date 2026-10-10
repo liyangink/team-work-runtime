@@ -1,10 +1,9 @@
-// dsh-dispatch.test.mjs — tw-dispatch 工作流派发工具测试（方案 docs/dsh-dispatch-tool-plan.md §5 自动测试）
-// 覆盖：非派发卡透传（awaiting-user/wait-inflight/completed/拒绝/防御空波）、三步集成
-// （dispatch-plan → 创建核心 → agent-map）、标签拼接（含缺省 note）、多包逐项串行、
-// 登记失败补登记指引、创建失败回收语义、continuation 波归属、三工具分工文案同源。
-// 纯 fake ctx 与 fake runTw（不依赖 DSH 运行时与真实 tw 子进程）；创建核心走真实实现验证复用链路。
 import assert from "node:assert/strict"
 import test from "node:test"
+import { mkdtemp } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import z from "@deepseek-ai/schemastery"
 
 import {
   TOOL_NAME,
@@ -15,14 +14,130 @@ import {
   twDispatchDefinition,
   twDispatchToolDescription,
 } from "../dsh/tw-dispatch.js"
-import { decisionTableText, systemPromptSection, toolDescriptionText, twToolSubagentDefinition } from "../dsh/tw-tool-subagent.js"
+import { Config, readDshConfigSnapshot, decisionTableText, systemPromptSection } from "../dsh/settings.js"
+import { twToolDefinition } from "../dsh/tw-tool.js"
 import * as hostPlugin from "../dsh/index.js"
 
 const EXEC = { agent: { id: "parent-agent-1", session: { header: { cwd: "/proj" } } } }
 
-// ── fake 工厂 ────────────────────────────────────────────────────────────────
+test("插件 Config 根 object，空配置启动，热读取保留原始三档形状及 profile", () => {
+  assert.equal(Config.type, "object")
+  assert.equal(Config.dict.tiers.meta.volatile, true)
+  assert.deepEqual(Config({}).tiers.get(), {})
+  let value = { junior: { provider: "provider-example", model: "model-a" }, senior: [{ provider: "provider-example", model: "model-b" }], expert: { provider: "provider-example", model: "model-c", effort: "high" } }
+  const config = { tiers: { get: () => value } }
+  const ctx = { get: (name) => name === "profileContext" ? { name: "profile-example" } : undefined }
+  const first = readDshConfigSnapshot(ctx, config)
+  value.junior.model = "model-updated"
+  assert.equal(first.tiers.junior.model, "model-a")
+  assert.equal(readDshConfigSnapshot(ctx, config).tiers.junior.model, "model-updated")
+  assert.equal(first.entryId, "team-work-dsh")
+  assert.equal(first.profile, "profile-example")
+  assert.equal(readDshConfigSnapshot({}, {}).profile, "unresolved")
+  assert.throws(() => Config({ tiers: { junior: value.junior } }))
+  assert.throws(() => Config({ tiers: { ...value, expert: { provider: " ", model: "model-example" } } }))
+})
 
-// 派发计划（stop=null）样例，形状对齐 runtime-v3/cli.mjs cmdDispatchPlan 输出。
+test("配置表单经宿主去 volatile 后二次 JSON 序列化可在客户端校验", () => {
+  const form = new z(Config.toJSON())
+  const walk = (node) => { delete node.meta.volatile; for (const child of Object.values(node.dict ?? {})) walk(child); if (node.inner) walk(node.inner); for (const child of node.list ?? []) walk(child) }
+  walk(form)
+  const client = new z(JSON.parse(JSON.stringify(form.toJSON())))
+  const complete = { junior: { provider: "provider-example", model: "model-a" }, senior: [{ provider: "provider-example", model: "model-b" }], expert: { provider: "provider-example", model: "model-c", effort: "high" } }
+  assert.deepEqual(client({ tiers: {} }), { tiers: {} })
+  assert.deepEqual(client({ tiers: complete }), { tiers: complete })
+  for (const invalid of [{ junior: complete.junior }, { ...complete, other: complete.junior }, { ...complete, junior: { ...complete.junior, other: "value" } }, { ...complete, expert: [] }]) assert.throws(() => client({ tiers: invalid }))
+})
+
+test("tw 与 dispatch 调用只取一次快照，各子进程参数共用该快照且不改进程环境", async () => {
+  const h = makeCtx()
+  const original = process.env.TW_DSH_CONFIG
+  let reads = 0
+  const snapshot = { tiers: {}, entryId: "team-work-dsh", profile: "profile-example" }
+  const configSnapshot = () => { reads++; return snapshot }
+  const cards = []
+  const dispatch = twDispatchDefinition(h.ctx, { configSnapshot, runTw: async (args, cwd, config) => { cards.push(config); return args[0] === "dispatch-plan" ? planCard([ownerWave()]) : { ok: true } } })
+  await dispatch.execute({ task: "demo-t" }, EXEC)
+  assert.equal(reads, 1)
+  assert.equal(cards.length, 2)
+  assert.equal(cards[0], cards[1])
+  const tw = twToolDefinition({ configSnapshot, runTw: async (_executable, _args, _cwd, config) => { assert.equal(config, snapshot); return { ok: true } } })
+  await tw.execute({ args: ["models"] }, EXEC)
+  assert.equal(reads, 2)
+  assert.equal(process.env.TW_DSH_CONFIG, original)
+})
+
+test("冷续派发送前登记新 key，登记失败不发正文", async () => {
+  const wave = ownerWave({ dispatchKey: "d5-continuation", continuation: true, expectedAgentId: "prior-example" })
+  const h = makeCtx()
+  h.injectCold("prior-example", { received: "上一轮正文" })
+  const { runTw, calls } = makeRunTw(planCard([wave]), { failCommands: { "agent-map": { ok: false, message: "登记失败" } } })
+  const tool = twDispatchDefinition(h.ctx, { runTw })
+  const result = await tool.execute({ task: "demo-t" }, EXEC)
+  assert.equal(result.dispatched[0].code, "TW_DISPATCH_REGISTER_FAILED")
+  assert.equal(h.followups.length, 0)
+  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d5-continuation", "--agent", "prior-example"])
+})
+
+test("真实 tw 子进程收到宿主调用快照，不读取旧配置", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-config-test-"))
+  const tiers = { junior: { provider: "provider-example", model: "model-junior" }, senior: { provider: "provider-example", model: "model-senior" }, expert: { provider: "provider-example", model: "model-expert" } }
+  const tool = twToolDefinition({ configSnapshot: () => ({ tiers, entryId: "team-work-dsh", profile: "profile-example" }) })
+  const result = await tool.execute({ args: ["models"] }, { agent: { session: { header: { cwd: root } } } })
+  assert.equal(result.ok, true)
+  assert.equal(result.source, "dsh-plugin-config")
+  assert.equal(result.profile, "profile-example")
+  assert.equal(result.entryId, "team-work-dsh")
+  assert.equal(result.tiers.find((tier) => tier.tier === "junior").model, "model-junior")
+})
+
+test("registered 在途冷重试已含同轮正文，仅续行提示", async () => {
+  const item = { ...ownerWave(), registered: true, mappedAgentId: "prior-example" }
+  const { runTw } = makeRunTw({ ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [item] })
+  const h = makeCtx()
+  h.injectCold("prior-example", { received: item.prompt })
+  const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
+  assert.equal(result.inflight[0].resume, "reminder")
+  assert.match(h.followups[0].text, /已收到本轮派单正文/)
+})
+
+test("预登记新 key 但本轮正文未送达时，旧上下文不能误选轻提示", async () => {
+  const item = { ...ownerWave({ dispatchKey: "d5-next-round", continuation: true, prompt: "本轮增量正文", promptFull: "本轮全量正文" }), registered: true, mappedAgentId: "prior-example" }
+  const { runTw, calls } = makeRunTw({ ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [item] })
+  const h = makeCtx()
+  h.injectCold("prior-example", { received: "上一轮派单正文" })
+  const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
+  assert.equal(result.inflight[0].resume, "incremental")
+  assert.equal(h.followups[0].text, "本轮增量正文")
+  assert.equal(calls.filter((call) => call.cmd === "agent-map").length, 0)
+})
+
+test("新 continuation 冷会话已收本轮全量时，先登记同父映射再轻量续行", async () => {
+  const wave = ownerWave({ dispatchKey: "d5-next-round", continuation: true, expectedAgentId: "prior-example", prompt: "本轮增量正文", promptFull: "本轮全量正文" })
+  const { runTw, calls } = makeRunTw(planCard([wave]))
+  const h = makeCtx()
+  h.injectCold("prior-example", { received: wave.promptFull })
+  const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
+  assert.equal(result.dispatched[0].resume, "reminder")
+  assert.match(h.followups[0].text, /已收到本轮派单正文/)
+  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d5-next-round", "--agent", "prior-example"])
+})
+
+test("续派 unknown 保留具体存储错误原因，阻止登记与补投", async () => {
+  const wave = ownerWave({ continuation: true, expectedAgentId: "prior-example" })
+  const { runTw, calls } = makeRunTw(planCard([wave]))
+  const h = makeCtx()
+  h.ctx.sessionPersistence.stat = async () => { throw new Error("存储读取失败：EACCES") }
+  const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
+  const card = result.dispatched[0]
+  assert.equal(card.code, "TW_SUB_SESSION_UNKNOWN")
+  assert.equal(card.sessionId, "prior-example")
+  assert.match(card.message, /存储读取失败：EACCES/)
+  assert.equal(calls.filter((call) => call.cmd === "agent-map").length, 0)
+  assert.equal(h.followups.length, 0)
+  assert.equal(h.started.length, 0)
+})
+
 function planCard(waves, extra = {}) {
   return { ok: true, task: "demo-t", stage: "implementation", stop: null, waves, card: { status: "dispatch", next: "await-reports" }, ...extra }
 }
@@ -43,13 +158,11 @@ function ownerWave(overrides = {}) {
   }
 }
 
-// fake CLI：记录每次调用；按命令分派卡片。failCommands 按命令名强制返回失败卡。
 function makeRunTw(plan, { failCommands = {}, onCall } = {}) {
   const calls = []
   const runTw = async (args, cwd) => {
     calls.push({ cmd: args[0], args, cwd })
     if (onCall) onCall(args[0])
-    // failCommands 值可为卡片（命中即失败）或判定函数（返回卡片才失败，null 放行）。
     const fail = typeof failCommands[args[0]] === "function" ? failCommands[args[0]](args) : failCommands[args[0]]
     if (fail) return fail
     if (args[0] === "dispatch-plan") return plan
@@ -59,25 +172,14 @@ function makeRunTw(plan, { failCommands = {}, onCall } = {}) {
   return { runTw, calls }
 }
 
-// fake 宿主 ctx（返工终版 docs/dispatch-rework-investigation.md §三：5 条宿主行为契约快照，
-// 宿主升级需复核；与 dsh-tw-tool-subagent.test.mjs 的对账场景同款语义）：
-// 1) sessions.get 只反映活会话（live Map）；
-// 2) listSnapshots 只列已物化会话（store Map；created-but-never-appended 不出现——注入
-//    materialized=false 即崩溃壳形态）；
-// 3) followup 对活/冷会话均入队且接受即落盘（write-behind ≤200ms 时延不模拟——模拟的是崩溃
-//    截断的静态形态；冷会话 followup = 鉴权（须精确直接父）→ 重建 Agent → 消息入队）；
-// 4) events 形态：header.seedLength + seed 事件（descriptor-only）与 own-suffix 的
-//    agent/inbox/spliced(inserted) 粒度；header 带 parentSession 字段；UNAUTHORIZED /
-//    DUPLICATE_CHILD / NOT_RESUMABLE 行为与宿主错误码一致（接管冲突支可验证）；
-// 5) readRaw 按需读回（冷支判收单；第一行 header，其后每行一个事件）。
 function makeCtx(overrides = {}) {
   const started = []
   const drained = []
   const followups = []
   const live = new Map() // 活会话（id → { id, header, events }）——sessions.get 的唯一事实源
-  const store = new Map() // 已物化持久（id → { header, events }）——listSnapshots/readRaw 的事实源
+  const store = new Map() // 已物化持久（id → { header, events }）——stat/只读 handle 的事实源
   let msgSeq = 0
-  const headerOf = (id, parentSession, seedLength = 0) => ({ id, version: 0, createdAt: 0, parentSession, seedLength, origin: "subagent" })
+  const headerOf = (id, parentSession) => ({ id, version: 3, createdAt: 0, parentSession, origin: "subagent" })
   const splice = (session, text) => {
     session.events.push({
       type: "agent/inbox/spliced",
@@ -87,16 +189,16 @@ function makeCtx(overrides = {}) {
     })
   }
   const persist = (session) => {
-    store.set(session.id, { header: { ...session.header }, events: session.events.map((e) => ({ ...e, data: structuredClone(e.data) })) })
+    store.set(session.id, { header: { ...session.header }, inheritedEventCount: session.inheritedEventCount ?? 0, events: session.events.map((e) => ({ ...e, data: structuredClone(e.data) })) })
   }
   const unauthorized = () => Object.assign(new Error("belongs to another parent session"), { code: "UNAUTHORIZED" })
   const ctx = {
     llm: { resolveCallConfig: async (config) => ({ ...config }) },
     subagents: {
+      resolveMaxDepth: () => 2,
       getProvider: () => ({ name: "spawn", prepareContinuable: async () => ({}) }),
       startContinuable: async (spec) => {
         const childId = spec.childId ?? "gen-" + (++msgSeq)
-        // 宿主判重：活会话 + （显式 childId 才查）持久快照 → DUPLICATE_CHILD
         if (live.has(childId) || (spec.childId !== undefined && store.has(childId))) {
           throw Object.assign(new Error('subagent "' + childId + '" already exists'), { code: "DUPLICATE_CHILD" })
         }
@@ -107,7 +209,7 @@ function makeCtx(overrides = {}) {
         persist(session) // 接受即落盘（契约 3）
         return { childId, messageId: "m-" + started.length }
       },
-      followup: async (parent, childId, content, options) => {
+      sendMessage: async (parent, childId, content, options) => {
         let session = live.get(childId)
         if (!session) {
           const cold = store.get(childId)
@@ -138,32 +240,26 @@ function makeCtx(overrides = {}) {
     sessionPersistence:
       overrides.sessionPersistence ?? {
         supportsRawArtifacts: true,
-        listSnapshots: async () => [...store.values()].map((s, i) => ({ header: { ...s.header }, revision: "r" + i })),
-        readRaw: async (id) => {
-          const s = store.get(id)
-          if (!s) return undefined
-          return { meta: { ...s.header }, filename: id + ".jsonl", content: [JSON.stringify(s.header), ...s.events.map((e) => JSON.stringify(e))].join("\n") }
-        },
-        inspect: async (id) => {
+        stat: async (id) => { const s = store.get(id); return s ? { header: { ...s.header }, revision: "revision-example" } : undefined },
+        open: async (id, access) => {
+          assert.equal(access, "read")
           const s = store.get(id)
           if (!s) throw Object.assign(new Error("not found"), { code: "NOT_RESUMABLE" })
-          return { meta: { ...s.header }, events: s.events.map((e) => ({ ...e, data: structuredClone(e.data) })) }
+          return { header: { ...s.header }, inheritedEventCount: s.inheritedEventCount, read: async () => ({ events: s.events.map((e) => ({ ...e, data: structuredClone(e.data) })) }), close: async () => {} }
         },
       },
     ...overrides,
   }
   return {
     ctx, started, drained, followups,
-    // 活会话注入：received=null 为 descriptor-only（未收单）；seedEvents/seedLength 构造 fork 形态
-    injectLive(id, { received = null, parentSession = EXEC.agent.id, seedLength = 0, seedEvents = [] } = {}) {
-      const session = { id, header: headerOf(id, parentSession, seedLength), events: [...seedEvents, { type: "subagent/descriptor", seq: seedEvents.length + 1, time: 0, data: { mode: "continuable" } }] }
+    injectLive(id, { received = null, parentSession = EXEC.agent.id, inheritedEventCount = 0, seedEvents = [] } = {}) {
+      const session = { id, header: headerOf(id, parentSession), inheritedEventCount, events: [...seedEvents, { type: "subagent/descriptor", seq: seedEvents.length + 1, time: 0, data: { mode: "continuable" } }] }
       if (received != null) splice(session, received)
       live.set(id, session)
       return session
     },
-    // 冷持久注入：materialized=false = 未物化崩溃壳（不出现在 listSnapshots——契约 2）
-    injectCold(id, { received = null, parentSession = EXEC.agent.id, materialized = true, seedLength = 0, seedEvents = [] } = {}) {
-      const session = { id, header: headerOf(id, parentSession, seedLength), events: [...seedEvents, { type: "subagent/descriptor", seq: seedEvents.length + 1, time: 0, data: { mode: "continuable" } }] }
+    injectCold(id, { received = null, parentSession = EXEC.agent.id, materialized = true, inheritedEventCount = 0, seedEvents = [] } = {}) {
+      const session = { id, header: headerOf(id, parentSession), inheritedEventCount, events: [...seedEvents, { type: "subagent/descriptor", seq: seedEvents.length + 1, time: 0, data: { mode: "continuable" } }] }
       if (received != null) splice(session, received)
       if (materialized) persist(session)
       return session
@@ -175,12 +271,9 @@ function makeCtx(overrides = {}) {
 
 function makeTool(deps = {}, ctxOverrides = {}) {
   const made = makeCtx(ctxOverrides)
-  const selections = deps.directSelections ?? new Map()
-  const tool = twDispatchDefinition(made.ctx, { directSelections: selections, ...deps })
-  return { tool, ...made, selections }
+  const tool = twDispatchDefinition(made.ctx, deps)
+  return { tool, ...made }
 }
-
-// ── 标签拼接（§3.3：四项机器段来自派单事实，唯一语义成分是 note） ────────────────
 
 test("buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表", () => {
   assert.equal(
@@ -211,8 +304,6 @@ test("buildDispatchLabel：简述缺省形态不含 #（任务段是唯一 # 定
   assert.equal(label.split("#").length, 2, "恰好一个任务段 #：" + label)
 })
 
-// ── 参数校验 ─────────────────────────────────────────────────────────────────
-
 test("参数校验：task 缺失 / writables 形状非法 / cwd 无法解析，均不触发 CLI 调用", async () => {
   const cliCalls = []
   const { tool } = makeTool({ runTw: async (args) => { cliCalls.push(args); throw new Error("不应调用 CLI") } })
@@ -225,8 +316,6 @@ test("参数校验：task 缺失 / writables 形状非法 / cwd 无法解析，�
   assert.equal(noCwd.code, "TW_DISPATCH_CWD_UNRESOLVED")
   assert.equal(cliCalls.length, 0)
 })
-
-// ── 非派发卡透传（§3.2：Lead 循环收敛为反复调用，卡片形态不变） ─────────────────
 
 test("透传：awaiting-user / completed / blocked / archived 卡原样返回，不创建子代理（wait-inflight 不再透传——§7.3 兜底，见下方三分支矩阵）", async () => {
   const awaiting = { ok: true, task: "demo-t", stage: "finish", stop: "awaiting-user", waves: [], card: { ok: true, status: "awaiting-user", question: "?", choices: ["accept", "rework"] } }
@@ -259,25 +348,14 @@ test("透传：CLI 拒绝卡（ok:false 含 fix 指引）与防御性空波计�
   }
 })
 
-// ── 三步集成成功路径（§5：dispatch-plan → 创建 → 登记） ────────────────────────
-
 test("三步集成：真实创建核心 + agent-map 登记；先登记后创建，确定性 sessionId；标签/注入选择/登记参数全部对齐", async () => {
   const plan = planCard([ownerWave()])
   const { runTw, calls } = makeRunTw(plan)
-  const { tool, ctx, started, selections } = makeTool({ runTw, tiersSource: () => ({}) })
-  // 创建核心写表 → 宿主 setup 贡献在 startContinuable 期间 take-once（此处以观察点模拟时机），
-  // 启动确认成功后核心清理表项。
-  let selectionAtStart
-  const origStart = ctx.subagents.startContinuable
-  ctx.subagents.startContinuable = async (spec) => {
-    selectionAtStart = selections.get(spec.childId)
-    return origStart(spec)
-  }
+  const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t", note: "接口改造", writables: [{ path: "src/", kind: "source" }] }, EXEC)
 
   assert.deepEqual(calls[0].args, ["dispatch-plan", "--task", "demo-t", "--json", "--writable", "src/:source"])
   assert.equal(calls[0].cwd, "/proj")
-  // 先登记后创建（§8）：calls[1] 是 agent-map（确定性 sessionId），创建在其后
   const fixedId = deterministicSessionId("demo-t", "d1-abc123")
   assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d1-abc123", "--agent", fixedId])
   assert.equal(started.length, 1)
@@ -286,8 +364,6 @@ test("三步集成：真实创建核心 + agent-map 登记；先登记后创建�
   assert.equal(spec.label, "IMPL·owner · 接口改造 #demo-t", "标签按派单事实 + note 自动拼接")
   assert.equal(spec.request.prompt[0].text, "派单全文 PROMPT", "prompt 原样转发")
   assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-j1" }, "target 直取 modelHint（effort 走直接选择）")
-  assert.deepEqual(selectionAtStart, { provider: "p-a", model: "m-j1" }, "直接选择经共享通道写入（宿主 take-once 时机在场）")
-  assert.equal(selections.size, 0, "启动确认成功后核心清理表项")
 
   assert.deepEqual(out, {
     ok: true,
@@ -313,7 +389,6 @@ test("modelHint 带 effort 时 target 透传 effort，创建核心验证后生�
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(out.dispatched[0].ok, true)
   assert.equal(out.dispatched[0].effort, "high")
-  // 双宿主兼容：agentOptions 带 reasoningEffort（0.1.2 生效直达 seedConfig；0.1.1 忽略由注入通道兜底）。
   assert.deepEqual(started[0].request.agentOptions, { provider: "p-c", model: "m-e1", reasoningEffort: "high" })
 })
 
@@ -323,8 +398,6 @@ test("writables 省略时 dispatch-plan 不带 --writable 参数", async () => {
   await tool.execute({ task: "demo-t" }, EXEC)
   assert.deepEqual(calls[0].args, ["dispatch-plan", "--task", "demo-t", "--json"])
 })
-
-// ── 多包逐项（§3.5：逐张串行创建+登记，返回数组） ─────────────────────────────
 
 test("多包波：两张派单逐张串行「登记→创建」（先登记后创建），结果逐项返回", async () => {
   const wave1 = ownerWave({ dispatchKey: "d1-p1", package: "store" })
@@ -345,7 +418,6 @@ test("多包波：两张派单逐张串行「登记→创建」（先登记后�
 
   assert.equal(out.dispatched.length, 2)
   assert.ok(out.dispatched.every((d) => d.ok && d.registered))
-  // 每张派单都是「登记 → 创建」，且 sessionId 是从 key 确定性推导的
   assert.deepEqual(
     order,
     [
@@ -362,13 +434,10 @@ test("多包波：两张派单逐张串行「登记→创建」（先登记后�
   assert.deepEqual(out.dispatched.map((d) => d.sessionId), started.map((s) => s.childId))
 })
 
-// ── 登记失败（§3.6：部分成功 + 补登记指引） ───────────────────────────────────
-
 test("登记失败：尚未创建子会话（先登记后创建），原样重试安全不双发；成功项不回滚", async () => {
   const plan = planCard([ownerWave({ dispatchKey: "d1-ok" }), ownerWave({ dispatchKey: "d2-mapfail", package: "api" })])
   const { runTw } = makeRunTw(plan, {
     failCommands: {
-      // 仅 d2-mapfail 的登记失败；d1-ok 的登记正常成功（验证部分成功语义）。
       "agent-map": (args) => (args[4] === "d2-mapfail" ? { ok: false, code: "USAGE", message: "key d2-mapfail 不是本任务的派单 key" } : null),
     },
   })
@@ -381,7 +450,6 @@ test("登记失败：尚未创建子会话（先登记后创建），原样重�
   const bad = out.dispatched[1]
   assert.equal(bad.ok, false)
   assert.equal(bad.code, "TW_DISPATCH_REGISTER_FAILED")
-  // §8 语义升级：登记失败发生在创建之前——没有任何子会话残留，重试安全（旧序会留下在跑会话 + 双发窗口）
   assert.equal(bad.sessionId, undefined, "未创建子会话")
   assert.equal(started.length, 1, "仅成功那张派单创建了子会话")
   assert.equal(drained.length, 0, "登记失败不触发回收语义")
@@ -389,12 +457,9 @@ test("登记失败：尚未创建子会话（先登记后创建），原样重�
   assert.match(bad.message, /tw retire --task demo-t --wave wv1/)
 })
 
-// ── 创建失败（§3.6：该项错误卡；已创建子会话按核心回收语义处理；不登记） ──────────
-
 test("创建失败：模型验证失败不留子会话（映射已登记，确定性对账使重试幂等）；继续处理后续派单", async () => {
   const plan = planCard([ownerWave({ dispatchKey: "d1-bad", modelHint: { provider: "p-x", model: "gone", source: "global-settings" } }), ownerWave({ dispatchKey: "d2-next" })])
   const { ctx } = makeCtx()
-  // 仅 p-x/gone 不可解析；第二张派单的模型正常（验证逐项继续）。
   ctx.llm.resolveCallConfig = async (config) => {
     if (config.model === "gone") throw new Error("unknown model: gone")
     return { ...config }
@@ -406,16 +471,17 @@ test("创建失败：模型验证失败不留子会话（映射已登记，确�
   assert.equal(out.dispatched[0].ok, false)
   assert.equal(out.dispatched[0].code, "TW_SUB_MODEL_INVALID")
   assert.match(out.dispatched[0].message, /未创建子会话/)
-  assert.match(out.dispatched[0].message, /原样重试安全（判定链幂等收敛）/)
+  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
   assert.equal(out.dispatched[0].sessionId, deterministicSessionId("demo-t", "d1-bad"), "回执带确定性 sessionId（已登记未创建）")
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2, "两张派单都先登记（§8：登记在验证之前）")
   assert.equal(out.dispatched[1].ok, true, "单张失败不阻断后续")
   assert.equal(out.failures, 1)
 })
 
-test("创建失败：startContinuable 抛错 → 清理待注入选择；映射已登记、重试安全", async () => {
+test("创建失败：startContinuable 抛错，保留映射与确定性 ID", async () => {
   const { ctx } = makeCtx({
     subagents: {
+      resolveMaxDepth: () => 2,
       getProvider: () => ({ prepareContinuable: async () => ({}) }),
       startContinuable: async () => { throw new Error("host exploded") },
       drainContinuableChildren: async () => {},
@@ -427,25 +493,22 @@ test("创建失败：startContinuable 抛错 → 清理待注入选择；映射�
   assert.equal(out.dispatched[0].code, "TW_SUB_START_FAILED")
   assert.equal(out.dispatched[0].sessionId, deterministicSessionId("demo-t", "d1-abc123"))
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记已发生（先登记后创建）")
-  assert.match(out.dispatched[0].message, /原样重试安全/)
+  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
 })
 
-test("创建失败：flush 未确认 → 核心回收未确认子会话（drain 被调）；重试时确定性对账走同 id 重建", async () => {
-  // 默认 fake（对账期 missing、确认期在场）+ flush 恒 false：命中「创建后启动未确认持久化」失败路径
+test("创建已接收：flush 未确认保留成员，重试先对账同 ID", async () => {
   const { ctx } = makeCtx()
   ctx.sessions.flush = async () => false
   const { runTw, calls } = makeRunTw(planCard([ownerWave()]))
   const tool = twDispatchDefinition(ctx, { runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(out.dispatched[0].code, "TW_SUB_NOT_PERSISTED")
-  assert.match(out.dispatched[0].message, /已停止并释放未确认子会话/)
+  assert.match(out.dispatched[0].message, /初始消息已接收但持久化尚未确认/)
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记已发生（先登记后创建）")
-  assert.match(out.dispatched[0].message, /原样重试安全/)
+  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
 })
 
-// ── continuation 波归属（判定链四态：活→等待 / 冷归属一致→冷唤醒投增量或全量 / 断链→全量重建）──
-
-test("continuation 且有 expectedAgentId（会话在场）：统一等待不重投（用户终裁②），不创建不登记", async () => {
+test("continuation 且有 expectedAgentId（会话在场）：统一等待不重投（用户终裁②），登记本轮映射，不创建不重投", async () => {
   const wave = ownerWave({ dispatchKey: "d5-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "child-uuid-7", prompt: "本轮增量派单正文" })
   const { runTw, calls } = makeRunTw(planCard([wave]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
@@ -459,11 +522,10 @@ test("continuation 且有 expectedAgentId（会话在场）：统一等待不重
   assert.equal(item.expectedAgentId, "child-uuid-7")
   assert.equal(item.action, "wait")
   assert.equal(item.sessionId, "child-uuid-7")
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0, "续派在场不登记新映射")
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "同父续派登记本轮 key→原会话")
   assert.match(item.message, /等待成员完成通知/)
   assert.match(item.message, /催单用 send_message/)
 
-  // 重入幂等：再次调用仍等待、仍不投递（活→等待是重入稳定态）
   const again = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(again.dispatched[0].action, "wait")
   assert.equal(followups.length, 0)
@@ -483,7 +545,6 @@ test("continuation 在场（含空壳形态）：统一等待——活+未收单
 })
 
 test("continuation 冷持久（归属一致）：判收单定增量或全量（用户终裁②冷唤醒语义）", async () => {
-  // 曾收单（有上一轮上下文）→ 冷唤醒投本轮增量变体
   const waveA = ownerWave({ dispatchKey: "d5c-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "cold-prior-1", prompt: "本轮增量派单正文", promptFull: "全量变体：目标+约束+排除内嵌" })
   const ra = makeRunTw(planCard([waveA]))
   const ta = makeTool({ runTw: ra.runTw })
@@ -497,7 +558,6 @@ test("continuation 冷持久（归属一致）：判收单定增量或全量（�
   assert.equal(ta.followups.length, 1)
   assert.equal(ta.followups[0].text, "本轮增量派单正文", "曾收单=有原上下文：投增量变体")
 
-  // 从未收单（无上下文）→ 冷唤醒投全量变体
   const waveB = ownerWave({ dispatchKey: "d5d-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "cold-prior-2", prompt: "本轮增量派单正文", promptFull: "全量变体：目标+约束+排除内嵌" })
   const rb = makeRunTw(planCard([waveB]))
   const tb = makeTool({ runTw: rb.runTw })
@@ -554,14 +614,9 @@ test("continuation 但映射缺失（expectedAgentIdMissing）：走登记+创�
   assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d6-fresh", "--agent", deterministicSessionId("demo-t", "d6-fresh")])
 })
 
-
-// ── §7.3 wait-inflight 兜底矩阵（崩溃窗口恢复；三分支优先级 §7.5.8） ─────────────
-
-// wait-inflight stop 卡样例（形状对齐 runtime-v3/cli.mjs cmdDispatchPlan 的 planStop 平铺 extra）
 function inflightCard(items, extra = {}) {
   return { ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", waves: [], dispatchKey: items[0]?.key ?? "d1-x", inflight: items, card: { status: "wait-inflight" }, ...extra }
 }
-// inflight 条目样例（形状对齐 cli.mjs inflightDispatches：模型快照/registered 判定事实由 runtime 投影）
 function inflightItem(overrides = {}) {
   return { key: "d1-abc123", waveId: "wv1", role: "owner", tier: "junior", round: 1, kind: "produce", continuation: false, prompt: "原派单全文", modelHint: { provider: "p-a", model: "m-j1", source: "global-settings" }, registered: false, ...overrides }
 }
@@ -687,11 +742,10 @@ test("兜底·registered=true 且冷持久异主（接管冲突）→ 冲突卡�
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
 })
 
-test("兜底·registered=true 且为未物化崩溃壳（listSnapshots 无记录）→ 同 id 重建合法（宿主判重不认崩溃壳）", async () => {
+test("兜底·registered=true 且为未物化崩溃壳（stat 无记录）→ 同 id 重建合法（宿主判重不认崩溃壳）", async () => {
   const item = inflightItem({ registered: true, mappedAgentId: "mapped-shell" })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, storeIds } = makeTool({ runTw })
-  // 未物化：live 无、store 无（created-but-never-appended 不出现在 listSnapshots——契约 2）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
@@ -701,11 +755,6 @@ test("兜底·registered=true 且为未物化崩溃壳（listSnapshots 无记录
   assert.ok(storeIds().includes("mapped-shell"), "创建后经持久化确认物化")
 })
 
-// ── Challenger r4 定点回归：分支 2 对续派条目选用全量变体（二阶恢复窗口） ────────────
-// 触发链：续派断链 fresh 重建登记成功但创建瞬态失败（如 TW_SUB_START_FAILED）后重入——
-// registered=true + mappedAgentId 优先命中分支 2（优先于续派分支 3），投正文的三条路径
-//（descriptor-only 补发/冷未收单补发/无记录重建）目标会话都无原上下文，增量变体不可执行。
-
 test("兜底·分支 2 二阶窗口（续派·无记录重建）：registered=true 且 continuation → 同 id 重建投全量变体", async () => {
   const item = inflightItem({
     registered: true, mappedAgentId: "mapped-rebuild-1",
@@ -714,7 +763,6 @@ test("兜底·分支 2 二阶窗口（续派·无记录重建）：registered=tr
   })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, followups } = makeTool({ runTw })
-  // 无记录：live 无、store 无（断链重建登记成功但创建失败的崩溃窗口重入态）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
@@ -759,7 +807,7 @@ test("兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：�
   assert.equal(followups.length, 0, "活会话统一等待（全量/增量都不投，重入恒等待）")
 })
 
-test("兜底·续派：registered=false 且 expectedAgentId 在场 → 统一等待不重投，不创建不登记", async () => {
+test("兜底·续派：registered=false 且 expectedAgentId 在场 → 统一等待不重投，登记本轮映射，不创建不重投", async () => {
   const item = inflightItem({ continuation: true, expectedAgentId: "child-uuid-7", registered: false, prompt: "本轮增量派单正文" })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
@@ -771,7 +819,7 @@ test("兜底·续派：registered=false 且 expectedAgentId 在场 → 统一等
   assert.equal(entry.action, "wait")
   assert.equal(entry.expectedAgentId, "child-uuid-7")
   assert.match(entry.message, /等待成员完成通知/)
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1)
 })
 
 test("兜底·自动补派：registered=false 非续派 → 登记确定性 sessionId + 创建，结果标注补派并附 retire 提示", async () => {
@@ -906,22 +954,17 @@ test("兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0, "已登记项零写：不重复登记不回写")
 })
 
-// ── 三工具分工文案同源（§3.7：说明与 systemPrompt 同表，机制保证不漂移） ──────────
-
-test("分工文案同源：tw-dispatch / tw-tool-subagent 工具说明 / systemPrompt section 引用同一 decisionTableText", () => {
+test("分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch", () => {
   const table = decisionTableText()
-  assert.match(table, /正在推进 team-work 任务（派波次成员\/推进一步） → tw-dispatch/)
-  assert.match(table, /非工作流委派：只读子派单、用户 @档位、并行调查、独立审查等 → tw-tool-subagent/)
-  assert.match(table, /任务簿记：决定、门禁查询、交付、评审、补登记 → tw/)
+  assert.match(table, /正式任务.*tw-dispatch/)
+  assert.match(table, /成员内部只读助手：原生 subagent/)
+  assert.match(table, /list_subagent_models.*精确查询/)
 
   assert.ok(twDispatchToolDescription().includes(table), "tw-dispatch 工具说明含同表")
-  assert.ok(toolDescriptionText().includes(table), "tw-tool-subagent 工具说明含同表")
-  assert.ok(systemPromptSection().text.includes(table), "systemPrompt section 含同表")
+  assert.ok(systemPromptSection({}, {}).text().includes(table), "systemPrompt section 含同表")
 
   const dispatchDef = twDispatchDefinition({}, {})
-  const subDef = twToolSubagentDefinition({}, {})
   assert.equal(dispatchDef.description, twDispatchToolDescription())
-  assert.equal(subDef.description, toolDescriptionText())
 })
 
 test("工具定义形态：名称/并发安全/参数面只收语义（key、modelHint、标签均不向模型索要）", () => {
@@ -934,16 +977,13 @@ test("工具定义形态：名称/并发安全/参数面只收语义（key、mod
   assert.deepEqual(def.parameters.required, ["task"])
 })
 
-// ── index 装配：三工具注册且共享同一份直接选择表 ───────────────────────────────
-
-test("index 装配：三工具注册；tw-dispatch 创建核心的 take-once 语义不受影响", async () => {
+test("index 装配只注册 tw 和 tw-dispatch，不装配旧注入", async () => {
   const registered = []
   const ctx = {
     logger: { warn() {}, info() {} },
     tools: { register(def) { registered.push(def) } },
     subagents: {
-      registerContinuableSetup() { return () => {} },
-      getProvider: () => ({ prepareContinuable: async () => ({}) }),
+            getProvider: () => ({ prepareContinuable: async () => ({}) }),
       startContinuable: async (spec) => ({ childId: spec.childId, messageId: "m1" }),
       drainContinuableChildren: async () => {},
     },
@@ -952,20 +992,16 @@ test("index 装配：三工具注册；tw-dispatch 创建核心的 take-once 语
     sessionPersistence: {},
   }
   const dispose = await hostPlugin.apply(ctx, {}, {
-    resolveInstaller: async () => (_childCtx, _selection) => () => {},
-    installPluginSettings: () => () => ({}),
     registerEmbeddedSkill: async () => {},
   })
   try {
-    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-tool-subagent", "tw-dispatch"])
+    assert.deepEqual(registered.map((d) => d.name), ["tw", "tw-dispatch"])
     const { runTw, calls } = makeRunTw(planCard([ownerWave()]))
-    const selections = new Map()
-    // 以同形 deps 重建定义（index 传入 tiersSource/directSelections/isModelInjectionReady 的形状已由注册断言与既有 index 测试覆盖）
-    const tool = twDispatchDefinition(ctx, { runTw, directSelections: selections })
+    const { ctx: newCtx } = makeCtx()
+    const tool = twDispatchDefinition(newCtx, { runTw })
     const out = await tool.execute({ task: "demo-t" }, EXEC)
     assert.equal(out.dispatched[0].ok, true, JSON.stringify(out))
     assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1)
-    assert.equal(selections.size, 0, "创建核心确认后清理直接选择（take-once 语义不受影响）")
   } finally {
     if (typeof dispose === "function") dispose()
   }

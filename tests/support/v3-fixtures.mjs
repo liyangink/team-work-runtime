@@ -13,18 +13,26 @@ export const FIX_WORKFLOW = {
 }
 export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" }, scenes: { "code-review": { core: true } } }
 
-// dispatch-plan 在派发点强制校验全局 tier 解析（run 只读化后是唯一推进通道）——本进程默认装一份
-// 临时 settings（三档齐全）。个别测试文件可自带更专 settings 再覆盖 DSH_SETTINGS（后设生效）。
-const fxSettingsFile = path.join(tmpdir(), `tw-v3-fx-tiers-${process.pid}-${Date.now()}.yaml`)
-await writeFile(fxSettingsFile, [
-  "team-work-dsh:",
-  "  tiers:",
-  "    junior: { provider: fx-junior, model: fx-junior }",
-  "    senior: { provider: fx-senior, model: fx-senior }",
-  "    expert: { provider: fx-expert, model: fx-expert }",
-  "",
-].join("\n"))
-process.env.DSH_SETTINGS = fxSettingsFile
+// dispatch-plan 在派发点校验调用快照。本进程默认提供完整三档；
+// 个别测试文件可覆盖 TW_DSH_CONFIG，隔离测试负责恢复环境。
+process.env.TW_DSH_CONFIG = JSON.stringify({
+  "entryId": "team-work-dsh",
+  "profile": "fixture-profile",
+  "tiers": {
+    "junior": {
+      "provider": "fx-junior",
+      "model": "fx-junior"
+    },
+    "senior": {
+      "provider": "fx-senior",
+      "model": "fx-senior"
+    },
+    "expert": {
+      "provider": "fx-expert",
+      "model": "fx-expert"
+    }
+  }
+})
 
 export async function makeProject({ workflow = FIX_WORKFLOW, policy = FIX_POLICY } = {}) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-fx-"))

@@ -1,4 +1,4 @@
-// DSH 绑定：全局 settings tier 解析、dispatch-plan、models、init 与模型快照。
+// DSH 绑定：调用配置快照解析、dispatch-plan、models、init 与模型快照。
 import assert from "node:assert/strict"
 import { writeFile, readFile, access, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -7,31 +7,19 @@ import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
-import { parseTeamWorkDshSettings, resolveTiers, validateTierSettings, TIERS } from "../runtime-v3/dsh-map.mjs"
+import { resolveTiers, validateTierSettings, TIERS } from "../runtime-v3/dsh-map.mjs"
 import { FIX_WORKFLOW, FIX_POLICY, makeProject, caller, openTask, seedConvergedStage } from "./support/v3-fixtures.mjs"
 
-const settingsFile = path.join(tmpdir(), `tw-global-tiers-${process.pid}-${Date.now()}.yaml`)
-const BASE_SETTINGS = `
-unrelated-section:
-  enabled: true
-team-work-dsh:
-  tiers:
-    junior:
-      provider: vendor-junior
-      model: model-junior
-    senior:
-      provider: vendor-senior
-      model: model-senior
-    expert:
-      provider: vendor-expert
-      model: model-expert
-`
-await writeFile(settingsFile, BASE_SETTINGS)
-process.env.DSH_SETTINGS = settingsFile
-
-async function setSettings(text) {
-  await writeFile(settingsFile, text)
+const BASE_CONFIG = {
+  entryId: "team-work-dsh", profile: "fixture-profile", tiers: {
+    junior: { provider: "vendor-junior", model: "model-junior" },
+    senior: { provider: "vendor-senior", model: "model-senior" },
+    expert: { provider: "vendor-expert", model: "model-expert" },
+  },
 }
+process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
+
+async function setConfig(config) { process.env.TW_DSH_CONFIG = JSON.stringify(config) }
 
 async function hasFile(file) {
   return access(file).then(() => true, () => false)
@@ -53,228 +41,128 @@ async function withEnvironment(values, action) {
   }
 }
 
-test("全局 settings：解析 team-work-dsh.tiers 的引号、注释、对象与数组", () => {
-  const tiers = parseTeamWorkDshSettings(`
-other-section:
-  ignored: true
-team-work-dsh:
-  # 此区段是 runtime 的唯一模型配置来源
-  injectionEnabled: true # 旧根键由插件迁移；runtime 不将其作为 tier
-  projectRoots: [legacy-root]
-  twBin: legacy-tw
-  tiers:
-    junior: { provider: "vendor-one", model: 'model-one' } # 行尾注释
-    senior:
-      - provider: vendor-two
-        model: model-two
-        family: two
-    expert: [{ provider: vendor-three, model: model-three, effort: high }]
-`)
-  assert.deepEqual(JSON.parse(JSON.stringify(tiers)), {
-    junior: { provider: "vendor-one", model: "model-one" },
-    senior: [{ provider: "vendor-two", model: "model-two", family: "two" }],
-    expert: [{ provider: "vendor-three", model: "model-three", effort: "high" }],
-  })
-})
-
-test("全局 settings：block 与 flow 特殊 tier 键保持自有并标记 MAP_INVALID", () => {
-  const block = (key) => `
-team-work-dsh:
-  tiers:
-    ${key}:
-      twYamlTierPolluted: true
-      junior: { provider: isolated-provider, model: isolated-junior }
-      senior: { provider: isolated-provider, model: isolated-senior }
-      expert: { provider: isolated-provider, model: isolated-expert }
-`
-  const flow = (key) => `team-work-dsh: { tiers: { ${key}: { twYamlTierPolluted: true, junior: { provider: isolated-provider, model: isolated-junior }, senior: { provider: isolated-provider, model: isolated-senior }, expert: { provider: isolated-provider, model: isolated-expert } } } }`
-  for (const [style, source] of [["block", block], ["flow", flow]]) {
-    for (const key of ["__proto__", "constructor", "prototype"]) {
-      const tiers = parseTeamWorkDshSettings(source(key))
-      assert.equal(Object.getPrototypeOf(tiers), null, `${style}/${key} tier 映射没有原型`)
-      assert.equal(Object.hasOwn(tiers, key), true, `${style}/${key} 是自有未知键`)
-      for (const tier of TIERS) assert.equal(Object.hasOwn(tiers, tier), false, `${style}/${key} 不继承 ${tier}`)
-      const invalid = validateTierSettings(tiers, { file: settingsFile })
-      for (const tier of TIERS) assert.equal(invalid.tiers[tier].source, "unresolved")
-      assert.match(invalid.warnings.join("\n"), /MAP_INVALID/)
-      assert.match(invalid.warnings.join("\n"), new RegExp(`未知档位.*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))
-    }
-  }
-  assert.equal(Object.hasOwn(Object.prototype, "twYamlTierPolluted"), false, "YAML 不能污染 Object.prototype")
-})
-
-test("全局 settings：继承 tier 或候选 provider/model 不能通过完整性", () => {
-  const inheritedTiers = Object.create({
-    junior: { provider: "inherited-provider", model: "inherited-junior" },
-    senior: { provider: "inherited-provider", model: "inherited-senior" },
-    expert: { provider: "inherited-provider", model: "inherited-expert" },
-  })
-  const missingOwnTiers = validateTierSettings(inheritedTiers, { file: settingsFile })
-  for (const tier of TIERS) assert.equal(missingOwnTiers.tiers[tier].source, "unresolved")
-
-  const tiers = Object.create(null)
-  tiers.junior = Object.create({ provider: "inherited-provider", model: "inherited-junior" })
-  tiers.senior = { provider: "own-provider", model: "own-senior" }
-  tiers.expert = { provider: "own-provider", model: "own-expert" }
-  const inheritedCandidate = validateTierSettings(tiers, { file: settingsFile })
-  assert.equal(inheritedCandidate.tiers.junior.source, "unresolved")
-  assert.equal(inheritedCandidate.tiers.senior.source, "global-settings")
-  assert.match(inheritedCandidate.warnings.join("\n"), /provider 与 model 必须是非空字符串/)
-
-  const yamlSources = [
-    `
-team-work-dsh:
-  tiers:
-    junior:
-      __proto__: { provider: inherited-provider, model: inherited-junior }
-    senior: { provider: own-provider, model: own-senior }
-    expert: { provider: own-provider, model: own-expert }
-`,
-    `team-work-dsh: { tiers: { junior: { __proto__: { provider: inherited-provider, model: inherited-junior } }, senior: { provider: own-provider, model: own-senior }, expert: { provider: own-provider, model: own-expert } } }`,
-  ]
-  for (const source of yamlSources) {
-    const parsed = parseTeamWorkDshSettings(source)
-    assert.equal(Object.getPrototypeOf(parsed.junior), null)
-    const rejected = validateTierSettings(parsed, { file: settingsFile })
-    assert.equal(rejected.tiers.junior.source, "unresolved")
-  }
-})
-
-test("dispatch-plan：__proto__ tier 映射 MAP_INVALID 且零派发", async () => {
-  const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "prototype-tier")
-  await setSettings(`team-work-dsh: { tiers: { __proto__: { junior: { provider: isolated-provider, model: isolated-junior }, senior: { provider: isolated-provider, model: isolated-senior }, expert: { provider: isolated-provider, model: isolated-expert } } } }`)
-  try {
-    const plan = await call(["dispatch-plan", "--task", "prototype-tier", "--writable", "R.md:code-review", "--json"])
-    assert.equal(plan.stop, "blocked")
-    assert.match(plan.warnings.join("\n"), /MAP_INVALID/)
-    assert.match(plan.warnings.join("\n"), /未知档位.*__proto__/)
-    const task = await loadTask(root, "prototype-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-    assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
-  } finally {
-    await setSettings(BASE_SETTINGS)
-  }
-})
-
-test("全局 settings：三档候选池是唯一解析来源，缺档显式 unresolved", async () => {
-  const file = path.join(tmpdir(), `tw-global-partial-${process.pid}-${Date.now()}.yaml`)
-  await writeFile(file, `
-team-work-dsh:
-  tiers:
-    junior:
-      provider: vendor-junior
-      model: model-junior
-    senior:
-      - provider: vendor-senior-a
-        model: model-senior-a
-        family: senior-a
-      - provider: vendor-senior-b
-        model: model-senior-b
-        family: senior-b
-`)
-  const resolved = await resolveTiers({ settingsFile: file })
-  assert.equal(resolved.file, file)
+test("调用快照：完整三档从插件配置解析并携带 entry/profile 来源", async () => {
+  const resolved = await resolveTiers({ configSnapshot: {
+    entryId: "team-work-dsh", profile: "fixture-profile", tiers: {
+      junior: { provider: "vendor-junior", model: "model-junior" },
+      senior: [{ provider: "vendor-senior", model: "model-senior", effort: "high" }],
+      expert: { provider: "vendor-expert", model: "model-expert" },
+    },
+  } })
+  assert.equal(resolved.source, "dsh-plugin-config")
+  assert.equal(resolved.entryId, "team-work-dsh")
+  assert.equal(resolved.profile, "fixture-profile")
+  assert.equal(Object.hasOwn(resolved, "file"), false)
   assert.equal(resolved.tiers.junior.model, "model-junior")
-  assert.equal(resolved.tiers.junior.source, "global-settings")
-  assert.deepEqual(resolved.tiers.senior.pool.map((candidate) => candidate.model), ["model-senior-a", "model-senior-b"])
-  assert.equal(resolved.tiers.expert.source, "unresolved")
-  assert.match(resolved.warnings.join("\n"), /expert/)
+  assert.equal(resolved.tiers.senior.effort, "high")
+  assert.equal(resolved.tiers.expert.source, "dsh-plugin-config")
+  assert.deepEqual(resolved.warnings, [])
 })
 
-test("全局 settings：provider/model 必填，损坏项与缺失文件都不回退", async () => {
-  const invalid = validateTierSettings({
-    junior: { provider: "vendor-junior", model: "model-junior" },
-    senior: { provider: "", model: "model-senior" },
-    expert: { provider: "vendor-expert" },
-  }, { file: settingsFile })
-  assert.equal(invalid.tiers.junior.source, "global-settings")
-  assert.equal(invalid.tiers.senior.source, "unresolved")
-  assert.equal(invalid.tiers.expert.source, "unresolved")
-  assert.match(invalid.warnings.join("\n"), /provider 与 model 必须是非空字符串/)
-
-  const missing = await resolveTiers({ settingsFile: path.join(tmpdir(), `no-global-settings-${Date.now()}.yaml`) })
-  for (const tier of TIERS) assert.equal(missing.tiers[tier].source, "unresolved")
-  assert.match(missing.warnings.join("\n"), /未找到全局 DSH settings/)
+test("调用快照：环境 JSON 生效，缺失或损坏只返回 unresolved", async () => {
+  await withEnvironment({ TW_DSH_CONFIG: JSON.stringify({ entryId: "team-work-dsh", profile: "env-profile", tiers: {
+    junior: { provider: "snapshot-provider", model: "snapshot-junior" },
+    senior: { provider: "snapshot-provider", model: "snapshot-senior" },
+    expert: { provider: "snapshot-provider", model: "snapshot-expert" },
+  } }) }, async () => {
+    assert.equal((await resolveTiers()).tiers.junior.model, "snapshot-junior")
+  })
+  for (const input of [undefined, "{invalid", "null", "[]", '{"tiers":{}}']) {
+    await withEnvironment({ TW_DSH_CONFIG: input }, async () => {
+      const resolved = await resolveTiers()
+      for (const tier of TIERS) assert.equal(resolved.tiers[tier].source, "unresolved")
+      assert.equal(resolved.profile, "unresolved")
+      assert.match(resolved.warnings.join("\n"), /TW_DSH_CONFIG/)
+      assert.equal(Object.hasOwn(resolved, "file"), false)
+    })
+  }
 })
 
-test("全局 settings：未知档位使映射 MAP_INVALID，models 显示且 dispatch-plan 阻断", async () => {
-  const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "unknown-tier")
-  await setSettings(`
-team-work-dsh:
-  tiers:
-    junior: { provider: vendor-junior, model: model-junior }
-    senior: { provider: vendor-senior, model: model-senior }
-    expert: { provider: vendor-expert, model: model-expert }
-    legacy: { provider: vendor-legacy, model: model-legacy }
-`)
-  try {
-    const resolved = await resolveTiers()
+test("调用快照：未知封套字段和继承来源不当成可信输入", async () => {
+  for (const configSnapshot of [{ ...BASE_CONFIG, extra: true }, Object.create(BASE_CONFIG)]) {
+    const resolved = await resolveTiers({ configSnapshot })
+    for (const tier of TIERS) assert.equal(resolved.tiers[tier].source, "unresolved")
+    assert.match(resolved.warnings.join("\n"), /TW_DSH_CONFIG/)
+  }
+})
+
+test("调用快照：特殊未知档位拒绝派发且不污染原型", async () => {
+  for (const key of ["__proto__", "constructor", "prototype", "legacy"]) {
+    const tiers = JSON.parse('{"' + key + '": {"polluted":true}}')
+    const resolved = await resolveTiers({ configSnapshot: { ...BASE_CONFIG, tiers } })
     for (const tier of TIERS) assert.equal(resolved.tiers[tier].source, "unresolved")
     assert.match(resolved.warnings.join("\n"), /MAP_INVALID/)
-    assert.match(resolved.warnings.join("\n"), /未知档位.*legacy/)
-    assert.match(resolved.warnings.join("\n"), /只允许 junior、senior、expert/)
+    assert.ok(resolved.warnings.some((warning) => warning.includes(key)))
+    const root = await makeProject()
+    const call = caller(root)
+    await openTask(root, "unknown-tier")
+    await withEnvironment({ TW_DSH_CONFIG: JSON.stringify({ ...BASE_CONFIG, tiers }) }, async () => {
+      const models = await call(["models"])
+      assert.match(models.warnings.join("\n"), /MAP_INVALID/)
+      const plan = await call(["dispatch-plan", "--task", "unknown-tier", "--writable", "R.md:code-review", "--json"])
+      assert.equal(plan.stop, "blocked")
+      const task = await loadTask(root, "unknown-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+      assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
+    })
+  }
+  assert.equal(Object.hasOwn(Object.prototype, "polluted"), false)
+})
 
-    const models = await call(["models"])
-    assert.match(models.warnings.join("\n"), /MAP_INVALID/)
-    assert.match(models.warnings.join("\n"), /未知档位.*legacy/)
+test("调用快照：继承档位或 provider/model 不能通过完整性", () => {
+  const inherited = validateTierSettings(Object.create(BASE_CONFIG.tiers))
+  for (const tier of TIERS) assert.equal(inherited.tiers[tier].source, "unresolved")
+  const invalid = validateTierSettings({ ...BASE_CONFIG.tiers, junior: Object.create(BASE_CONFIG.tiers.junior) })
+  assert.equal(invalid.tiers.junior.source, "unresolved")
+  assert.equal(invalid.tiers.senior.source, "dsh-plugin-config")
+  assert.match(invalid.warnings.join("\n"), /provider 与 model 必须是非空字符串/)
+})
 
-    const plan = await call(["dispatch-plan", "--task", "unknown-tier", "--writable", "R.md:code-review", "--json"])
-    assert.equal(plan.stop, "blocked")
-    assert.equal(plan.card.status, "blocked")
-    assert.match(plan.warnings.join("\n"), /MAP_INVALID/)
-    const task = await loadTask(root, "unknown-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-    assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
-  } finally {
-    await setSettings(BASE_SETTINGS)
+test("调用快照：缺档与无效候选明确 unresolved，不猜测默认", async () => {
+  const resolved = await resolveTiers({ configSnapshot: { ...BASE_CONFIG, tiers: {
+    junior: BASE_CONFIG.tiers.junior,
+    senior: [{ provider: "vendor-a", model: "model-a" }, { provider: "vendor-b", model: "model-b" }],
+  } } })
+  assert.equal(resolved.tiers.junior.model, "model-junior")
+  assert.deepEqual(resolved.tiers.senior.pool.map((item) => item.model), ["model-a", "model-b"])
+  assert.equal(resolved.tiers.expert.source, "unresolved")
+  assert.match(resolved.warnings.join("\n"), /expert/)
+  for (const candidate of [{ provider: "", model: "model" }, { provider: "vendor" }, { provider: "vendor", model: "model", extra: true }]) {
+    const invalid = validateTierSettings({ ...BASE_CONFIG.tiers, junior: candidate })
+    assert.equal(invalid.tiers.junior.source, "unresolved")
+    assert.match(invalid.warnings.join("\n"), /provider 与 model 必须是非空字符串|未知字段/)
   }
 })
 
-test("settings 路径优先级：显式 > DSH_SETTINGS > DSH_HOME，并由 models/dispatch-plan 共用", async () => {
-  const home = path.join(tmpdir(), `tw-dsh-home-${process.pid}-${Date.now()}`)
-  const homeFile = path.join(home, "settings.yaml")
-  const envFile = path.join(tmpdir(), `tw-dsh-env-${process.pid}-${Date.now()}.yaml`)
-  const explicitFile = path.join(tmpdir(), `tw-dsh-explicit-${process.pid}-${Date.now()}.yaml`)
-  const settingsFor = (model) => `
-team-work-dsh:
-  tiers:
-    junior: { provider: priority-vendor, model: ${model} }
-    senior: { provider: priority-vendor, model: ${model}-senior }
-    expert: { provider: priority-vendor, model: ${model}-expert }
-`
+test("调用快照：旧 settings 文件与显式旧参数均不读取，环境隔离后恢复", async () => {
+  const home = path.join(tmpdir(), `tw-dsh-legacy-${process.pid}-${Date.now()}`)
   await mkdir(home, { recursive: true })
-  await Promise.all([
-    writeFile(homeFile, settingsFor("home-model")),
-    writeFile(envFile, settingsFor("env-model")),
-    writeFile(explicitFile, settingsFor("explicit-model")),
-  ])
-
-  await withEnvironment({ DSH_SETTINGS: envFile, DSH_HOME: home }, async () => {
-    assert.equal((await resolveTiers()).file, envFile)
-    assert.equal((await resolveTiers({ settingsFile: explicitFile })).file, explicitFile)
+  const file = path.join(home, "settings.yaml")
+  const old = "team-work-dsh:\n  tiers:\n    junior: { provider: legacy-vendor, model: legacy-model }\n"
+  await writeFile(file, old)
+  const initial = process.env.TW_DSH_CONFIG
+  await withEnvironment({ DSH_SETTINGS: file, DSH_HOME: home, TW_DSH_CONFIG: undefined }, async () => {
+    const resolved = await resolveTiers({ settingsFile: file })
+    for (const tier of TIERS) assert.equal(resolved.tiers[tier].source, "unresolved")
+    assert.match(resolved.warnings.join("\n"), /未提供 TW_DSH_CONFIG/)
   })
-  await withEnvironment({ DSH_SETTINGS: undefined, DSH_HOME: home }, async () => {
-    const resolved = await resolveTiers()
-    assert.equal(resolved.file, homeFile)
-    assert.equal(resolved.tiers.junior.model, "home-model")
-
+  await withEnvironment({ DSH_SETTINGS: file, DSH_HOME: home, TW_DSH_CONFIG: JSON.stringify({ ...BASE_CONFIG, profile: "snapshot-profile" }) }, async () => {
+    const resolved = await resolveTiers({ settingsFile: file })
+    assert.equal(resolved.tiers.junior.model, "model-junior")
+    assert.equal(resolved.profile, "snapshot-profile")
     const root = await makeProject()
     const call = caller(root)
     const models = await call(["models"])
-    assert.equal(models.file, homeFile)
-    assert.equal(models.tiers.find((tier) => tier.tier === "junior").model, "home-model")
-
-    await openTask(root, "home-source")
-    const plan = await call(["dispatch-plan", "--task", "home-source", "--writable", "R.md:code-review", "--json"])
-    assert.equal(plan.modelSettings.file, homeFile)
-    assert.equal(plan.waves[0].modelHint.model, "home-model")
+    assert.equal(models.profile, "snapshot-profile")
+    assert.equal(Object.hasOwn(models, "file"), false)
+    await openTask(root, "snapshot-source")
+    const plan = await call(["dispatch-plan", "--task", "snapshot-source", "--writable", "R.md:code-review", "--json"])
+    assert.deepEqual(plan.modelSettings, { source: "dsh-plugin-config", entryId: "team-work-dsh", profile: "snapshot-profile" })
   })
-  assert.equal(process.env.DSH_SETTINGS, settingsFile, "测试后恢复默认 DSH_SETTINGS")
+  assert.equal(process.env.TW_DSH_CONFIG, initial)
+  assert.equal(await readFile(file, "utf8"), old)
 })
 
-test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略", async () => {
+test("dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全忽略", async () => {
   const root = await makeProject()
   const legacy = path.join(root, ".team-work", "platform", "dsh.json")
   await mkdir(path.dirname(legacy), { recursive: true })
@@ -290,8 +178,8 @@ test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略
   const wave = plan.waves[0]
   assert.equal(wave.role, "owner")
   assert.equal(wave.modelHint.model, "model-junior")
-  assert.equal(wave.modelHint.source, "global-settings")
-  assert.deepEqual(plan.modelSettings, { source: "global-settings", file: settingsFile, path: "team-work-dsh.tiers" })
+  assert.equal(wave.modelHint.source, "dsh-plugin-config")
+  assert.deepEqual(plan.modelSettings, { source: "dsh-plugin-config", entryId: "team-work-dsh", profile: "fixture-profile" })
   assert.equal(await readFile(legacy, "utf8"), legacyContent, "遗留文件未被读取后覆盖或改写")
 
   const task = await loadTask(root, "plan-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
@@ -302,15 +190,92 @@ test("dispatch-plan：全局映射生效，遗留项目 dsh.json 被完全忽略
   assert.equal(again.stop, "wait-inflight", "在途波次不重复派发")
 })
 
-test("派发波次同样固化全局配置模型快照（防 9b0b92c 回归：派发丢 hint → agent-map 无快照 → 注入静默失效）", async () => {
+test("派发人读卡：显示实际 entry/profile 来源", async () => {
+  const root = await makeProject()
+  await openTask(root, "source-card")
+  const plan = await caller(root)(["dispatch-plan", "--task", "source-card", "--writable", "R.md:code-review"])
+  assert.match(plan.human.join("\n"), /team-work-dsh/)
+  assert.match(plan.human.join("\n"), /fixture-profile/)
+})
+
+test("调用快照热变：前波沿用快照，后波读取新配置且保留可选 effort", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "hot-config")
+  const first = await call(["dispatch-plan", "--task", "hot-config", "--writable", "R.md:code-review", "--json"])
+  const oldHint = first.waves[0].modelHint
+  const changed = { ...BASE_CONFIG, profile: "updated-profile", tiers: {
+    junior: { provider: "updated-vendor", model: "updated-junior" },
+    senior: { provider: "updated-vendor", model: "updated-senior", effort: "high" },
+    expert: { provider: "updated-vendor", model: "updated-expert" },
+  } }
+  await withEnvironment({ TW_DSH_CONFIG: JSON.stringify(changed) }, async () => {
+    const waiting = await call(["dispatch-plan", "--task", "hot-config", "--json"])
+    assert.equal(waiting.stop, "wait-inflight")
+    assert.deepEqual(waiting.inflight[0].modelHint, oldHint)
+    await writeFile(path.join(root, "R.md"), "报告")
+    const delivered = await call(["deliver", "--task", "hot-config", "--key", first.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成报告", "--paths", "R.md"])
+    assert.equal(delivered.accepted, true)
+    const next = await call(["dispatch-plan", "--task", "hot-config", "--json"])
+    assert.equal(next.waves[0].modelHint.model, "updated-senior")
+    assert.equal(next.waves[0].modelHint.effort, "high")
+    assert.equal(next.modelSettings.profile, "updated-profile")
+    const task = await loadTask(root, "hot-config", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    const dispatched = task.journal.filter((event) => event.type === "dispatched")
+    assert.deepEqual(dispatched[0].detail.modelHint, oldHint)
+    assert.equal(dispatched[1].detail.modelHint.model, "updated-senior")
+  })
+})
+
+test("旧 journal modelHint：配置变化或快照缺失都不重选已记录的精确模型", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "legacy-hint")
+  const first = await call(["dispatch-plan", "--task", "legacy-hint", "--writable", "R.md:code-review", "--json"])
+  const journalFile = path.join(root, ".team-work/tasks/legacy-hint/journal.jsonl")
+  const events = (await readFile(journalFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+  const recorded = { provider: "recorded-vendor", model: "recorded-model", source: "global-settings", effort: "low" }
+  events.find((event) => event.type === "dispatched").detail.modelHint = recorded
+  await writeFile(journalFile, events.map((event) => JSON.stringify(event)).join("\n") + "\n")
+  for (const input of [JSON.stringify(BASE_CONFIG), undefined]) {
+    await withEnvironment({ TW_DSH_CONFIG: input }, async () => {
+      const waiting = await call(["dispatch-plan", "--task", "legacy-hint", "--json"])
+      assert.equal(waiting.stop, "wait-inflight")
+      assert.equal(waiting.inflight[0].dispatchKey, first.waves[0].dispatchKey)
+      assert.deepEqual(waiting.inflight[0].modelHint, recorded)
+    })
+  }
+})
+
+test("平台无关操作：缺配置快照仍可开任务、查状态、交付和评审", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "deliver-without-config")
+  const owner = await call(["dispatch-plan", "--task", "deliver-without-config", "--writable", "D.md:code-review", "--json"])
+  await openTask(root, "review-without-config")
+  const reviewOwner = await call(["dispatch-plan", "--task", "review-without-config", "--writable", "R.md:code-review", "--json"])
+  await writeFile(path.join(root, "R.md"), "评审报告")
+  await call(["deliver", "--task", "review-without-config", "--key", reviewOwner.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "R.md"])
+  const reviewer = await call(["dispatch-plan", "--task", "review-without-config", "--json"])
+  await withEnvironment({ TW_DSH_CONFIG: undefined }, async () => {
+    assert.equal((await call(["open", "--name", "plain-task", "--objective", "平台无关", "--entry", "code-review"])).ok, true)
+    assert.equal((await call(["run", "--task", "plain-task"])).ok, true)
+    assert.equal((await call(["gate", "--task", "plain-task"])).ok, true)
+    await writeFile(path.join(root, "D.md"), "交付报告")
+    assert.equal((await call(["deliver", "--task", "deliver-without-config", "--key", owner.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "D.md"])).accepted, true)
+    assert.equal((await call(["review", "--task", "review-without-config", "--key", reviewer.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "独立核验通过"])).accepted, true)
+  })
+})
+
+test("派发波次固化精确模型快照", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "run-hint-t")
   const plan = await call(["dispatch-plan", "--task", "run-hint-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.stop, null)
   const hint = plan.waves[0]?.modelHint
-  assert.ok(hint?.provider && hint?.model, "派发波次带 modelHint（全局配置快照）")
-  assert.equal(hint.source, "global-settings")
+  assert.ok(hint?.provider && hint?.model, "派发波次带 modelHint（调用快照配置快照）")
+  assert.equal(hint.source, "dsh-plugin-config")
   const task = await loadTask(root, "run-hint-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const dispatched = task.journal.filter((e) => e.type === "dispatched")
   assert.equal(dispatched.length, 1)
@@ -319,23 +284,24 @@ test("派发波次同样固化全局配置模型快照（防 9b0b92c 回归：�
   assert.equal(dispatched[0].detail.modelHint.source, hint.source, "journal dispatched 事实与派发波次同一快照")
 })
 
-test("dispatch-plan：无全局模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
+test("dispatch-plan：无调用快照模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "no-models")
-  await setSettings("team-work-dsh:\n  tiers: {}\n")
+  await setConfig({ ...BASE_CONFIG, tiers: {} })
   try {
     const plan = await call(["dispatch-plan", "--task", "no-models", "--writable", "R.md:code-review", "--json"])
     assert.equal(plan.ok, true)
     assert.equal(plan.stop, "blocked")
     assert.equal(plan.card.status, "blocked")
     assert.equal(plan.card.next, "configure-models")
+    assert.deepEqual(plan.card.modelSettings, { source: "dsh-plugin-config", entryId: "team-work-dsh", profile: "fixture-profile" })
     assert.equal(plan.card.blockers[0].code, "MODEL_CONFIG_UNRESOLVED")
     assert.match(plan.card.blockers[0].recovery, /team-work-dsh\.tiers/)
     const task = await loadTask(root, "no-models", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
     assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
   } finally {
-    await setSettings(BASE_SETTINGS)
+    await setConfig(BASE_CONFIG)
   }
 })
 
@@ -369,14 +335,16 @@ test("dispatch-plan：门过即跨阶段推进并派发下一阶段首波", asyn
   assert.equal(plan.waves[0].modelHint.model, "model-junior")
 })
 
-test("models 只读全局来源；init 只安装 skill，不创建项目 dsh.json", async () => {
+test("models 只读调用快照来源；init 只安装 skill，不创建项目 dsh.json", async () => {
   const root = await makeProject()
   const call = caller(root)
   const dshFile = path.join(root, ".team-work", "platform", "dsh.json")
   const models = await call(["models"])
   assert.equal(models.ok, true)
-  assert.equal(models.source, "global-settings")
-  assert.equal(models.file, settingsFile)
+  assert.equal(models.source, "dsh-plugin-config")
+  assert.equal(models.entryId, "team-work-dsh")
+  assert.equal(models.profile, "fixture-profile")
+  assert.equal(Object.hasOwn(models, "file"), false)
   assert.equal(models.tiers.find((tier) => tier.tier === "senior").model, "model-senior")
   assert.equal(await hasFile(dshFile), false, "models 不创建项目映射")
 
@@ -391,19 +359,27 @@ test("models 只读全局来源；init 只安装 skill，不创建项目 dsh.jso
   assert.equal(second.skill.action, "skipped")
 })
 
-test("effort 预留字段：全局候选条目透传", async () => {
-  await setSettings(`
-team-work-dsh:
-  tiers:
-    junior: { provider: vendor-junior, model: model-junior }
-    senior: { provider: vendor-senior, model: model-senior, effort: high }
-    expert: { provider: vendor-expert, model: model-expert }
-`)
+test("可选 effort：调用快照候选条目透传", async () => {
+  await setConfig({ ...BASE_CONFIG, tiers: {
+  "junior": {
+    "provider": "vendor-junior",
+    "model": "model-junior"
+  },
+  "senior": {
+    "provider": "vendor-senior",
+    "model": "model-senior",
+    "effort": "high"
+  },
+  "expert": {
+    "provider": "vendor-expert",
+    "model": "model-expert"
+  }
+} })
   try {
     const resolved = await resolveTiers()
     assert.equal(resolved.tiers.senior.effort, "high")
   } finally {
-    await setSettings(BASE_SETTINGS)
+    await setConfig(BASE_CONFIG)
   }
 })
 
@@ -449,11 +425,11 @@ test("agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 
   const call = caller(root)
   await openTask(root, "snapshot-t")
   const plan = await call(["dispatch-plan", "--task", "snapshot-t", "--writable", "R.md:code-review", "--json"])
-  assert.ok(plan.waves[0].modelHint?.provider && plan.waves[0].modelHint?.model, "dispatch-plan 仍输出 modelHint（tw-tool-subagent 的 target 来源）")
+  assert.ok(plan.waves[0].modelHint?.provider && plan.waves[0].modelHint?.model, "dispatch-plan 仍输出 modelHint（tw-dispatch 的创建来源）")
   const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
   assert.equal(mapped.ok, true)
   assert.equal(mapped.agent, "child-a")
-  assert.equal(mapped.modelHint, undefined, "agent-map 不再返回模型快照（模型选择由 tw-tool-subagent 创建时直接指定）")
+  assert.equal(mapped.modelHint, undefined, "agent-map 不再返回模型快照（模型选择由 tw-dispatch 创建时直接指定）")
   const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "snapshot-t", "agents.json"), "utf8"))
   assert.equal(agents.mappings[plan.waves[0].dispatchKey], "child-a")
   assert.equal(agents.modelHints, undefined, "agents.json 不再落盘 modelHints")
@@ -492,12 +468,14 @@ test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", as
   assert.equal(task.journal.filter((event) => event.type === "report-accepted").length, 1)
 })
 
-test("help：全局模型来源与全部命令在场", async () => {
+test("help：调用快照模型来源与全部命令在场", async () => {
   const help = await tw(["help"])
   for (const command of ["open", "run", "dispatch-plan", "decide", "intent", "route", "gate", "models", "init", "restore", "archive", "deliver", "review"]) {
     assert.ok(help.commands[command], command)
   }
   const notes = help.notes.join("\n")
   assert.match(notes, /team-work-dsh\.tiers/)
-  assert.match(notes, /显式 settingsFile（内部调用参数） > DSH_SETTINGS > \$DSH_HOME\/settings\.yaml > ~\/\.dsh\/settings\.yaml/)
+  assert.match(notes, /TW_DSH_CONFIG/)
+  assert.match(notes, /entryId.*profile/)
+  assert.doesNotMatch(notes, /settingsFile|DSH_SETTINGS|settings\.yaml/)
 })

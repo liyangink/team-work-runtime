@@ -1,45 +1,61 @@
-// 唯一市场制品装载验证：根 package.json → bundle patch → DSH loader。
+// 唯一市场制品：官方初始化的隔离 profile + 显式新版 CLI 装配与 schema 验证。
 import { execFile } from "node:child_process"
-import { cp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
+import { readFile, mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
 import { promisify } from "node:util"
+import { pathToFileURL, fileURLToPath } from "node:url"
 import os from "node:os"
 import path from "node:path"
-import { test } from "node:test"
+import test from "node:test"
 import assert from "node:assert/strict"
 
 const run = promisify(execFile)
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
-test("唯一根制品：bundle 声明 → dump-config 装配树命中 + 零 warn", async () => {
-  const home = path.join(os.tmpdir(), "tw-dsh-root-" + Date.now())
-  const src = path.join(os.homedir(), ".dsh")
-  const profileDir = path.join(home, "profiles", "web")
-  await mkdir(profileDir, { recursive: true })
-  for (const file of ["cordis.patch.yml", "cordis.yml", "pnpm-workspace.yaml"]) {
-    await cp(path.join(src, "profiles", "web", file), path.join(profileDir, file)).catch(() => {})
-  }
-  const pkg = {
-    name: "dsh-profile-web",
-    private: true,
-    dependencies: { "team-work-runtime": "file:" + repoRoot },
-    dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "team-work-runtime"] } },
-  }
-  await writeFile(path.join(profileDir, "package.json"), JSON.stringify(pkg, null, 2))
-  const nodeModules = path.join(profileDir, "node_modules")
-  await mkdir(nodeModules, { recursive: true })
-  await symlink(repoRoot, path.join(nodeModules, "team-work-runtime"), "dir")
-  await symlink(path.join(src, "profiles", "node_modules", "@deepseek-ai"), path.join(nodeModules, "@deepseek-ai"), "dir").catch(() => {})
-
+test("唯一根制品：新版隔离 profile 的 bundle 与 Config schema 可装配", async (t) => {
+  const host = process.env.DSH_TEST_HOST
+  if (!host) { t.skip("未指定 DSH_TEST_HOST；新版隔离装配验证未执行"); return }
+  const hostPackage = JSON.parse(await readFile(path.join(host, "package.json"), "utf8"))
+  assert.equal(hostPackage.name, "@deepseek-ai/dsh")
+  assert.equal(hostPackage.version, "0.2.0-rc.2")
+  const home = await mkdtemp(path.join(os.tmpdir(), "twr-dsh-profile-"))
+  const profileName = "profile-demo"
+  const profileDir = path.join(home, "profiles", profileName)
   try {
-    const { stdout, stderr } = await run("dsh", ["--profile", "web", "--dump-config"], {
-      env: { ...process.env, DSH_HOME: home },
-      timeout: 90000,
-    }).catch((error) => ({ stdout: String(error.stdout ?? ""), stderr: String(error.stderr ?? "") }))
-    const out = String(stdout)
-    assert.ok(out.includes("id: team-work-dsh") && out.includes("name: team-work-runtime"),
-      "装配树须含唯一根制品 entry：" + out.slice(-400))
-    assert.ok(!String(stderr).includes("team-work"), "stderr 不得含插件相关 warn：" + String(stderr).slice(0, 300))
+    const { initializeProfileFromDefault } = await import(pathToFileURL(path.join(host, "lib", "profile-boot.js")).href)
+    initializeProfileFromDefault(profileName, "web", home)
+    const manifestPath = path.join(profileDir, "package.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    manifest.dependencies["team-work-runtime"] = "file:" + repoRoot
+    manifest.dsh.profile.bundles.push("team-work-runtime")
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
+    const modules = path.join(profileDir, "node_modules")
+    await mkdir(modules, { recursive: true })
+    await symlink(repoRoot, path.join(modules, "team-work-runtime"), "dir")
+    await symlink(path.dirname(host), path.join(modules, "@deepseek-ai"), "dir")
+    const bin = path.join(host, hostPackage.bin.dsh)
+    const env = { ...process.env, DSH_HOME: home }
+    const composed = await run(process.execPath, [bin, "--profile", profileName, "--dump-config"], { env, cwd: repoRoot, timeout: 30000 })
+    assert.match(composed.stdout, /id: team-work-dsh/)
+    assert.match(composed.stdout, /name: team-work-runtime/)
+    assert.doesNotMatch(composed.stderr, /team-work/)
+    // 完整 Web 模板含宿主自己的 group alias，schema CLI 对这些载体另有报错。
+    // 此处独立核验根制品 Config；完整 Web 装配已由上方 dump-config 验证。
+    manifest.dsh.profile.bundles = ["team-work-runtime"]
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
+    const schema = await run(process.execPath, [bin, "--profile", profileName, "--dump-config-schema"], { env, cwd: repoRoot, timeout: 30000, maxBuffer: 8 * 1024 * 1024 }).catch((error) => {
+      assert.equal(error.code, 1)
+      assert.match(error.stderr, /^dsh: warning: \[\/0\] config\/tiers\/1: native schema type intersect is not statically projected\s*$/)
+      return { stdout: error.stdout, stderr: error.stderr }
+    })
+    assert.match(schema.stdout, /team-work-dsh/)
+    assert.match(schema.stdout, /tiers/)
+    assert.doesNotMatch(schema.stderr, /team-work/)
+    const projected = JSON.parse(schema.stdout)
+    assert.equal(projected["x-cordis"].complete, false, "JSON Schema 明确不承诺投影 tiers intersect")
+    assert.equal(projected["x-cordis"].diagnostics.length, 1)
+    assert.equal(projected["x-cordis"].diagnostics[0].level, "warning")
+    t.diagnostic("宿主输出 schema，但 tiers intersect 仍需原生 Schemastery 校验；这不是零警告的完整静态投影。")
   } finally {
-    await rm(home, { recursive: true, force: true }).catch(() => {})
+    await rm(home, { recursive: true, force: true })
   }
 })

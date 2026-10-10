@@ -16,9 +16,9 @@ export function resolveChildCwd(exec) {
 
 const TW_TIMEOUT_MS = 120000
 
-function runTw(executable, args, cwd, timeoutMs = TW_TIMEOUT_MS) {
+export function runTw(executable, args, cwd, snapshot, timeoutMs = TW_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [executable, ...args], { cwd, env: process.env })
+    const child = spawn(process.execPath, [executable, ...args], { cwd, env: { ...process.env, TW_DSH_CONFIG: JSON.stringify(snapshot) } })
     let done = false
     let out = ""
     let err = ""
@@ -48,7 +48,7 @@ function runTw(executable, args, cwd, timeoutMs = TW_TIMEOUT_MS) {
   })
 }
 
-export function twToolDefinition() {
+export function twToolDefinition(deps = {}) {
   return {
     name: "tw",
     timeoutMs: TW_TIMEOUT_MS,
@@ -61,6 +61,10 @@ export function twToolDefinition() {
       required: ["args"],
     },
     async execute(params, exec) {
+      let snapshot
+      try { snapshot = (deps.configSnapshot ?? (() => ({ tiers: {}, entryId: "team-work-dsh", profile: "unresolved" })))() } catch (error) {
+        return { ok: false, code: "TW_DSH_CONFIG_UNRESOLVED", message: "配置快照读取失败：" + String(error?.message ?? error) }
+      }
       const cwd = resolveChildCwd(exec)
       if (!cwd) {
         return {
@@ -70,7 +74,7 @@ export function twToolDefinition() {
         }
       }
       const args = Array.isArray(params?.args) ? params.args.map(String) : []
-      return runTw(resolveTwExecutable(), args, cwd)
+      return (deps.runTw ?? runTw)(resolveTwExecutable(), args, cwd, snapshot)
     },
     output: {
       schema: { type: "object" },

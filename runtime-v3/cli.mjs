@@ -76,7 +76,7 @@ function fixHint(code) {
     DECISION_STALE: "读取最新卡片（tw run 查看；重签经 tw-dispatch / tw dispatch-plan）后按其中的选项序号重新 decide",
     ENTRY_UNKNOWN: "--entry 必须是 workflow 声明的阶段之一",
     DISPATCH_INPUT_REQUIRED: "Owner 波次派发需要 --writable <path>:<kind>（可多次；路径以 / 结尾 = 目录授权，如 docs/:doc）",
-    MAP_INVALID: "在 DSH 全局 settings.yaml 的 team-work-dsh.tiers 配置 junior/senior/expert；每档提供非空 provider 与 model（可为候选数组）",
+    MAP_INVALID: "在 DSH 当前 profile 的插件配置页补齐 team-work-dsh.tiers 的 junior/senior/expert；每档提供非空 provider/model。无宿主终端由调用方通过 TW_DSH_CONFIG 提供配置快照",
     STATE_CORRUPT: "控制文件损坏：任务事实在 reports/journal，可重推导；遗留 dsh.json 不参与读取",
     RETIRE_UNKNOWN_WAVE: "tw run 或 dispatch-plan 的 wait-inflight 卡片输出当前波 waveId；请核对后重试",
     RETIRE_SETTLED_WAVE: "该波已全部交付（已结波），无需作废；要解除未交付在途请核对 waveId（run 卡片列出当前未结波）",
@@ -235,7 +235,7 @@ function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
 // 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）。
 // §7.3 兜底三字段（dispatch 自身崩溃窗口的恢复事实，由 runtime 锁内投影——绑定层不直读账本）。
 // 调用方约束：必须在任务锁内调用（registered 查 agents.json 与 journal 读取要求同一临界区）。
-// - modelHint：journal dispatched 快照回填；老 journal 无快照时按重建 tier 从当前全局 tiers 解析降级
+// - modelHint：journal dispatched 快照回填；老 journal 无快照时按重建 tier 从本次调用快照解析降级
 //   （§7.5.7 降级链）；仍不可解析置 modelHintUnresolved（消费方不得据此创建，指 tw retire --wave 回收）；
 // - expectedAgentId：仅续派条目——continuationPrevKey 回溯老 key 查 mappings；
 // - promptFull：仅续派条目——全量 prompt 变体（C②：断链 fresh 重建/空壳补发用，绑定层只选用不拼装）；
@@ -258,7 +258,7 @@ async function inflightDispatches(task, stageId, guidance = null) {
   const resolvedTiers = await resolveTiers()
   return inflight.open.map((d) => {
     const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, guidance).dispatch
-    // modelHint 回填降级链：journal 快照 → 按重建 tier 从当前全局 tiers 解析 → 不可解析标记（指 retire）
+    // modelHint 回填降级链：journal 快照 → 按重建 tier 从调用快照解析 → 不可解析标记（指 retire）
     let modelHint = d.modelHint && d.modelHint.provider && d.modelHint.model ? d.modelHint : null
     let modelHintUnresolved = false
     if (!modelHint) {
@@ -611,12 +611,13 @@ function modelConfigurationCard({ name, state, resolved, missing }) {
     stage: state.stage,
     status: 'blocked',
     next: 'configure-models',
+    modelSettings: { source: resolved.source, entryId: resolved.entryId, profile: resolved.profile },
     blockers: [{
       code: 'MODEL_CONFIG_UNRESOLVED',
-      message: `DSH 全局模型配置未解析：${summary}`,
-      recovery: `编辑 ${resolved.file} 的 team-work-dsh.tiers，补齐 junior、senior、expert 的 provider/model 后重试 tw dispatch-plan。`,
+      message: `DSH 插件模型配置未解析：${summary}（entry ${resolved.entryId}，profile ${resolved.profile}）`,
+      recovery: `在 DSH 当前 profile 的插件配置页补齐 team-work-dsh.tiers 的 junior、senior、expert provider/model 后重试 tw-dispatch；无宿主终端由调用方通过 TW_DSH_CONFIG 提供 {tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} JSON 快照后重试 tw dispatch-plan。`,
     }],
-    note: '未写入派发事实；修复全局配置后可原样重试。',
+    note: '未写入派发事实；修复当前 profile 的配置或调用快照后可原样重试。',
   }
 }
 
@@ -1317,14 +1318,14 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
 
 
 // agent-map（v3.2/F5；定向委派第二阶段收敛为纯续派登记）：登记 dispatchKey → 平台 subagent id。
-// 任务级注册表 task.root/agents.json 只保存 mappings——模型选择由 tw-tool-subagent 在创建子代理时直接指定
+// 任务级注册表 task.root/agents.json 只保存 mappings——模型选择由 tw-dispatch 在创建子代理时直接指定
 // （provider/model 落 agentOptions、effort 走首请求 selection），不经 agents.json 中转；modelHint 快照仍在
 // journal 的 dispatched 事实内（dispatch-plan 导出给 Lead 当 target 用）。
 // 续派波经 dispatch-plan 导出 expectedAgentId（同包同角色上一派发的映射）——Lead 据此 send_message 续原会话。
 async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择在创建子代理时由 tw-tool-subagent 直接指定（target 取 dispatch-plan 的 modelHint）')
+  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择在创建子代理时由 tw-dispatch 采用 dispatch-plan 的 modelHint')
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
@@ -1353,7 +1354,7 @@ async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
     return {
       ok: true, task: name, key, agent,
       ...(registryRebuilt ? { registryRebuilt } : {}),
-      note: '已登记派单映射（dispatchKey→childId，续派 send_message 用）；模型选择由 tw-tool-subagent 创建子代理时直接指定' +
+      note: '已登记派单映射（dispatchKey→childId，续派 send_message 用）；模型选择由 tw-dispatch 创建子代理时直接指定' +
         (registryRebuilt ? '；agents.json 此前损坏已重建（历史映射丢失，相关续派按 fresh 重建路径恢复）' : ''),
     }
   })
@@ -1458,7 +1459,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
             ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
-            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话映射：用 tw-tool-subagent 新建子代理（target 取本派单 modelHint）后 tw agent-map --key <本key> --agent <新childId> 登记；若复用原派单 key，务必回填新 childId 覆盖旧映射（R3：fresh 复用同一 key 必须回填新 childId）' } : {}),
+            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话映射：由 tw-dispatch 按本派单 modelHint 新建成员并登记；无宿主编排层须按精确模型创建后 tw agent-map --key <本key> --agent <新childId> 登记。复用原派单 key 时回填新 childId 覆盖旧映射' } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
@@ -1473,11 +1474,12 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
           ok: true, task: name, stage: card.stage, stop: null,
           waves,
           card: { status: card.status, next: card.next },
-          modelSettings: { source: 'global-settings', file: resolved.file, path: 'team-work-dsh.tiers' },
+          modelSettings: { source: resolved.source, entryId: resolved.entryId, profile: resolved.profile },
           ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}),
         }
         if (!json) {
           plan.human = ['任务 ' + name + ' · 阶段 ' + card.stage + ' · ' + waves.length + ' 个派单']
+          plan.human.push('模型配置来源：' + resolved.entryId + ' · profile ' + resolved.profile)
           for (const w of waves) {
             plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + (w.modelHint.model ?? '(未解析)') + '（' + w.modelHint.source + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + (w.promptFull ? String.fromCharCode(10) + '断链重建/空壳补发用全量变体（原会话不可用时以此为准）：' + String.fromCharCode(10) + w.promptFull : '') + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
           }
@@ -1502,11 +1504,12 @@ async function cmdModels({ projectRoot }) {
   const resolved = await resolveTiers()
   return {
     ok: true,
-    source: 'global-settings',
-    file: resolved.file,
+    source: resolved.source,
+    entryId: resolved.entryId,
+    profile: resolved.profile,
     tiers: TIERS.map((t) => ({ tier: t, ...resolved.tiers[t] })),
     ...(resolved.warnings.length ? { warnings: resolved.warnings } : {}),
-    note: '只读全局 DSH settings：team-work-dsh.tiers 是唯一 tier→模型配置来源；本命令不会读取或创建项目 dsh.json。',
+    note: '只读本次调用的 DSH 插件配置快照：entryId/profile 标明配置来源；无宿主终端由调用方通过 TW_DSH_CONFIG 提供快照。',
   }
 }
 
@@ -1532,7 +1535,7 @@ async function cmdInit({ projectRoot, force = false }) {
   return {
     ok: true,
     skill,
-    note: "init 只是便捷命令：装载 Lead 判断指引 skill；模型配置只由全局 DSH settings 管理。",
+    note: "init 只是便捷命令：装载 Lead 判断指引 skill；模型配置由 DSH 当前 profile 的插件配置管理。",
   }
 }
 
@@ -1542,7 +1545,7 @@ function helpCard() {
     ok: true,
     commands: {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
-      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（模型选择由 tw-tool-subagent 创建时直接指定）",
+      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（tw-dispatch 创建时采用精确模型）",
             open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
       run: "tw run --task <n>：只读查状态（当前状态卡 + 下一步指引；不写任务事实。推进用 tw-dispatch / dispatch-plan）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable <路径>:<kind> ...]：推进一步——推进到派发点或 stop 卡，输出波次计划（prompt + tier + modelHint）；路径以 / 结尾 = 目录授权；无 --json 输出人读 human 字段",
@@ -1550,7 +1553,7 @@ function helpCard() {
       intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
       gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
-      models: "tw models：只读全局 DSH settings 中的 tier→模型解析结果",
+      models: "tw models：只读调用配置快照的 tier→模型解析结果与 entry/profile 来源",
       init: "tw init [--force]：可选——只装载 skill 到 .dsh/skills/",
       restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
       retire: "tw retire --task <n> --wave <wvN> --reason <原因>：作废未结波（仅 Lead；解除在途，已交付报告保留审计）",
@@ -1561,7 +1564,7 @@ function helpCard() {
     },
     notes: [
       "卡片即接口：按返回卡片行动，不预判步骤；拒绝输出自带修复指引",
-      "tier→模型唯一来源为 team-work-dsh.tiers；settings 路径优先级：显式 settingsFile（内部调用参数） > DSH_SETTINGS > $DSH_HOME/settings.yaml > ~/.dsh/settings.yaml；遗留项目 dsh.json 不读取也不创建",
+      'tier→模型来源为当前 profile 的 team-work-dsh.tiers；宿主每次调用提供 TW_DSH_CONFIG JSON={tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} 快照。无宿主终端由调用方显式提供相同输入；缺失、损坏或缺档返回 unresolved，不读取旧配置文件或写缓存',
     ],
   }
 }

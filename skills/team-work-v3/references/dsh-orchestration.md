@@ -1,5 +1,7 @@
 # DSH 编排：Lead 派发操作规程（DSH 0.2.0-rc.2）
 
+本篇的开任务、拆包与正式波次派发操作仅供 Lead。已收到角色、边界与 deliver/review 指令的成员按本派单执行，不重建审查团队。成员可用原生工具就本职责内的限定小问题开 junior 只读助手，消息带完整范围、可写为空与禁止继续委托的要求；不复制总目标，不派完整审查团队，由发起者核验整合结果。
+
 正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`；原生后台 `continuable` 返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。一次性后台 `jobId` 与前台 `runId` 不作续聊身份。
 
 ## 波次推进：一律 tw-dispatch
@@ -20,7 +22,7 @@
 
 | 情境 | 工具 |
 | --- | --- |
-| 正在推进 team-work 任务（派波次成员/推进一步） | tw-dispatch |
+| Lead 正在推进 team-work 任务（派波次成员/推进一步） | tw-dispatch |
 | 普通委派：只读子派单、用户 @档位、并行调查、成员内部助手等 | 原生 subagent / subagent_fork |
 | 主动追问已有子会话 | 原生 send_message |
 | 任务簿记：决定、门禁查询、交付、评审、补登记 | tw |
@@ -56,6 +58,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 - dependsOn 汇总包 = 整合 Owner：完成标准必须含"合并各包结论、解决冲突、不丢信息"；
 - 登记：tw plan --task <名> --packages '<JSON>'（形状 [{id, writable:["路径:kind"], done:["标准"], dependsOn:["包id"]}]）；待决卡片或在途派发时会被拒绝（先处理再拆；blocked 静止卡除外——重拆扩权正是它的恢复通道）；
 - 复杂目标可先开只读子派单收集事实辅助判断拆分边界。
+- 审查默认正式轻量交叉，一个 Owner 与非作者 Challenger 即可从互补角度核验，core Expert 照旧；不按视角数招募成员。确需独立交付才由 Lead 拆包，done 写明本包职责。复杂完整代码交付等确需全面覆盖或用户明确要求时由 Lead 组织一次八视角，返工先复核变更与关联视角，不每个成员、每轮重新展开。
 
 ## risk 与选人
 

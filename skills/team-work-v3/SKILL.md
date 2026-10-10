@@ -5,6 +5,12 @@ description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/rev
 
 # team-work（v3）
 
+## 成员入口（先识别身份）
+
+已收到带角色、范围与 deliver/review 交付指令的派单时，你是已分配成员：直接遵守本派单和下文「成员纪律」，不执行 Lead 的开任务、拆包或派发正式波次操作。任务总目标是背景，本包完成标准与边界才是你的职责；组合 Challenger/Expert 审本轮已交付包的组合。不得重建整个审查团队或自行再招募八视角团队；已分配的完整检查内容照常完成。
+
+需要辅助时，只就本职责内的限定小问题开 junior 只读助手，可写范围为空、不得继续委托，由你核验整合；它不承担完整审查、不替代 deliver/review 与非作者挑战、核心 Expert 裁决。消息转发也要携带完整职责边界，不把总目标直接复制成助手派单。以下判断与操作指引供 Lead 使用。
+
 房间与门：成员在房间里自由工作（派单内嵌全部上下文），检查只发生在两处——**交付工具调用内**（同步、单次、全量）和**阶段门**（产出物在场、检查通过、非作者评审在场）。你不管理任何运行时状态；任务目录（`.team-work/tasks/<name>/`）就是状态。
 
 ## 判断指引（Lead 依据用户语义决定，不由工具强制）
@@ -12,10 +18,10 @@ description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/rev
 - **选入口**：审查请求 → `code-review`；新功能/改动 → `research` 或直接 `implementation`（已有明确方案时）；测试补充 → `test`；方案讨论 → `design`。显式 `--entry` = 任务只运行到该阶段验收；缺省 research = 完整工作流。
 - **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier：默认 junior**——廉价档胜任绝大多数常规作业，审查链兜底；仅按失败成本升档：错误难发现/返工贵 → senior，不可逆/安全敏感 → expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡；成员执行中力有不逮可经 unresolved 上抛建议升档）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
 - **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（未显式定 tier 的包兜底升 expert 且免审批；包级判断仍以 tw plan 的显式 tier 优先）；较高风险 → `high`；常规缺省 normal。
-- **审查强度**：默认轻量；安全敏感、跨模块、用户点名严格、生产缺陷复盘时要求完整八视角。
+- **审查强度**：默认正式轻量交叉审查，按本次问题选少量互补视角；一个 Owner 聚焦改动，非作者 Challenger 交叉核验，核心 Expert 照旧，不固定人数或包数。复杂完整代码交付、复杂状态与并发、高失败成本且范围确需全面覆盖，或用户明确要求时，才由 Lead 组织一次完整八视角；跨几个文件或某个敏感点本身不触发八视角。方案审查选需求、取舍、接口、失败恢复等相关方向。返工先查变更及关联视角，新范围或系统风险再重判覆盖。
 - **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与档位（junior/senior/expert 预算）正交——裁决者每轮一个（波次机结构），expert 档的 owner 包完全正常，见拓扑与成本篇。
 
-场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；代码审查八视角与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；派单内按角色/场景自动注入的公共引导库见 **[派单引导库](references/guidance.md)**。
+场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；审查覆盖与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；派单内按角色/场景自动注入的公共引导库见 **[派单引导库](references/guidance.md)**。
 
 ## Lead 操作
 
@@ -29,7 +35,7 @@ tw archive --task <名字>                                              # 用户
 ```
 
 - 推进是 dispatch 侧的单一写者：每次 `dispatch-plan` 推进一步并返回一张卡片（waves 派单数组或 stop 卡）——按它行动，不要预判步骤。DSH 内**一律先调 `tw-dispatch`**（单次调用完成开单+创建+登记）；waves 给你派单全文和 key——**原样**转发给成员，不要改写边界。无 DSH 插件的终端：`dispatch-plan` 即推进者，按其 human/waves 输出手工派发并 `tw agent-map` 登记。
-- **工具分工**：正式波次成员用 `tw-dispatch`；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
+- **工具分工**：Lead 用 `tw-dispatch` 派发正式波次成员；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。成员辅助须遵守上文成员入口的限定范围与禁止继续委托要求。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
 - **配置来源**：当前 profile 的插件 Config 提供 tiers，同一 profile 跨项目共享且无项目覆盖。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 精确模型快照；`tw models` 查看当前 entry/profile 来源。
 - **续聊与深度**：原生后台 `continuable` 的 `subagentId` 才是可供 `send_message` 使用的会话 ID，`jobId/runId` 不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。

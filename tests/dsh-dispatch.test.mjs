@@ -957,7 +957,9 @@ test("兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 
 test("分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch", () => {
   const table = decisionTableText()
   assert.match(table, /正式任务.*tw-dispatch/)
+  assert.match(table, /仅由 Lead 执行/, "正式组团由 Lead 承担")
   assert.match(table, /成员内部只读助手：原生 subagent/)
+  assert.match(table, /限定小问题.*不得继续委托/, "成员仍可开有范围的辅助，不能递归招募")
   assert.match(table, /list_subagent_models.*精确查询/)
 
   assert.ok(twDispatchToolDescription().includes(table), "tw-dispatch 工具说明含同表")

@@ -20,7 +20,7 @@
       "ownerTier": "junior",
       "challengerTier": "senior",
       "core": true,
-      "requiredPerspectives": [
+      "availablePerspectives": [
         "requirements-and-change-summary",
         "defects-and-security",
         "error-handling",

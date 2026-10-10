@@ -1,6 +1,6 @@
 // 引导库与派单注入测试：检索层级、分层覆盖、按角色/场景注入、续派与在途重建。
 import assert from "node:assert/strict"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, writeFile, readFile } from "node:fs/promises"
 import path from "node:path"
 import test, { mock } from "node:test"
 
@@ -27,6 +27,127 @@ const IMPL_POLICY = {
   riskTiers: { critical: "expert", high: "senior" },
   scenes: { implementation: {}, test: {}, finish: {} },
 }
+
+test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归重建审查团队", async () => {
+  const projectRoot = await makeProject()
+  const call = caller(projectRoot)
+  const objective = "对示例变更完成八视角审查，每个视角独立交付证据"
+  const perspectives = ["需求", "缺陷安全", "错误处理", "逻辑", "测试", "类型", "规范", "影响"]
+  const packages = perspectives.map((perspective, index) => ({
+    id: "perspective-" + (index + 1),
+    writable: ["FINDINGS-" + (index + 1) + ".md:code-review"],
+    done: ["仅核验" + perspective + "视角并记录可定位证据"],
+    dependsOn: [],
+  }))
+  await openTask(projectRoot, "perspective-t", { objective })
+  const planned = await call(["plan", "--task", "perspective-t", "--packages", JSON.stringify(packages)])
+  assert.equal(planned.ok, true)
+  const dispatched = await call(["dispatch-plan", "--task", "perspective-t"])
+  assert.equal(dispatched.waves.length, 8)
+  for (const wave of dispatched.waves) {
+    const ownPackage = packages.find((pkg) => pkg.id === wave.package)
+    assert.equal(wave.role, "owner")
+    assert.ok(wave.prompt.includes(objective), "总目标作为上下文保留")
+    assert.ok(wave.prompt.includes(ownPackage.done[0]), "当前视角的完成标准必须随派单到达 Owner：" + wave.package)
+    for (const other of packages.filter((pkg) => pkg.id !== wave.package)) {
+      assert.ok(!wave.prompt.includes(other.done[0]), "其他包的完成标准不扩张当前 Owner 职责")
+    }
+    assert.match(wave.prompt, /仅承担.*本包|只承担.*本包|仅负责.*本包/, "总目标不得覆盖已分配的包职责")
+    assert.match(wave.prompt, /不得.*(?:重建|重开|再建).*审查团队/, "已拆包后不得递归重建整套审查团队")
+    assert.match(wave.prompt, /只读助手|只读子派单/, "仍允许限定范围的只读探索辅助")
+    assert.match(wave.prompt, /不得继续委托|不继续委托/, "只读辅助不得继续递归派发")
+    assert.doesNotMatch(wave.prompt, /组合评审\/裁决仍覆盖/, "单包 Owner 不接组合职责")
+  }
+  const current = dispatched.waves.find((wave) => wave.package === "perspective-1")
+  await call(["agent-map", "--task", "perspective-t", "--key", current.dispatchKey, "--agent", "fixture-owner"])
+  const inflight = await call(["dispatch-plan", "--task", "perspective-t"])
+  assert.equal(inflight.stop, "wait-inflight")
+  for (const wave of inflight.inflight) {
+    assert.match(wave.prompt, /不得重建整个审查团队/)
+    assert.ok(wave.prompt.includes(packages.find((pkg) => pkg.id === wave.package).done[0]))
+  }
+  for (const wave of dispatched.waves) {
+    const file = packages.find((pkg) => pkg.id === wave.package).writable[0].split(":")[0]
+    await writeFile(path.join(projectRoot, file), "# 审查证据\n" + wave.package, "utf8")
+    assert.equal((await call(["deliver", "--task", "perspective-t", "--key", wave.dispatchKey, "--outcome", "delivered", "--summary", "本包审查完成", "--paths", file])).accepted, true)
+  }
+  const challenger = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
+  assert.equal(challenger.scope, "consolidation")
+  assert.match(challenger.prompt, /组合评审.*本轮全部已交付包/)
+  assert.doesNotMatch(challenger.prompt, /仅承担本包/)
+  assert.match(challenger.prompt, /不得重建整个审查团队/)
+  await call(["review", "--task", "perspective-t", "--key", challenger.dispatchKey, "--recommendation", "rework", "--summary", "补需求证据", "--findings", JSON.stringify([{ package: "perspective-1", severity: "risk", statement: "缺少需求证据" }])])
+  const respond = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
+  assert.equal(respond.package, "perspective-1")
+  assert.equal(respond.continuation, true)
+  assert.equal(respond.expectedAgentId, "fixture-owner", "续派仍复用原成员映射")
+  assert.ok(!respond.prompt.includes(objective), "增量续派仍省略已知总目标")
+  assert.ok(respond.promptFull.includes(objective), "断链重建仍带完整背景")
+  const continuing = await call(["dispatch-plan", "--task", "perspective-t"])
+  for (const prompt of [respond.prompt, respond.promptFull, continuing.inflight[0].prompt, continuing.inflight[0].promptFull]) {
+    assert.match(prompt, /仅承担本包 perspective-1/)
+    assert.match(prompt, /不得重建整个审查团队/)
+    assert.ok(prompt.includes(packages[0].done[0]))
+    assert.ok(!prompt.includes(packages[1].done[0]))
+  }
+  await call(["deliver", "--task", "perspective-t", "--key", respond.dispatchKey, "--outcome", "delivered", "--summary", "补齐需求证据", "--paths", "FINDINGS-1.md"])
+  const crossReview = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
+  assert.equal(crossReview.scope, "consolidation")
+  await call(["review", "--task", "perspective-t", "--key", crossReview.dispatchKey, "--recommendation", "accept", "--summary", "组合核验通过"])
+  const expert = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
+  assert.equal(expert.role, "expert")
+  assert.match(expert.prompt, /组合评审\/裁决仍覆盖本轮已交付包/)
+  assert.match(expert.prompt, /不得重建整个审查团队/)
+  assert.doesNotMatch(expert.prompt, /仅承担本包/)
+  assert.match(expert.prompt, /review.*--verdict/)
+})
+
+test("轻量交叉审查：两类审查按相关视角执行，仍交付并经过 Challenger 与核心 Expert", async () => {
+  for (const scene of ["code-review", "design-review"]) {
+    const projectRoot = await makeProject({
+      workflow: { stages: [{ id: scene, label: "审查", outputs: [scene], teamScene: scene }], gates: [], terminalStages: [] },
+      policy: { ...IMPL_POLICY, scenes: { [scene]: { core: true } } },
+    })
+    const call = caller(projectRoot)
+    await openTask(projectRoot, "cross-t", { objective: "审查示例局部修改", entry: scene })
+    const dispatched = await call(["dispatch-plan", "--task", "cross-t", "--writable", "REVIEW.md:" + scene])
+    assert.equal(dispatched.waves.length, 1)
+    const owner = dispatched.waves[0]
+    assert.doesNotMatch(owner.prompt, /本包完成标准|你仅承担本包|组合评审\/裁决仍覆盖/, "无包派单不臆造包、视角或组合职责")
+    assert.match(owner.prompt, /默认.*轻量交叉审查/, "小场景不必按固定八视角拆包")
+    assert.match(owner.prompt, /少量互补视角/, "视角按问题选择")
+    assert.match(owner.prompt, /返工.*变更.*关联视角/, "返工不默认重开全部视角")
+    assert.match(owner.prompt, /正式.*deliver/, "轻量审查仍属正式交付")
+    if (scene === "code-review") assert.match(owner.prompt, /复杂完整.*代码交付|复杂状态.*并发/, "完整八视角有实质范围依据")
+    else assert.match(owner.prompt, /不套用代码.*八视角/, "方案审查按方案问题选择")
+    await writeFile(path.join(projectRoot, "REVIEW.md"), "# 审查\n范围与证据", "utf8")
+    const delivered = await call(["deliver", "--task", "cross-t", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "审查完成", "--paths", "REVIEW.md"])
+    assert.equal(delivered.accepted, true)
+    const challenger = (await call(["dispatch-plan", "--task", "cross-t"])).waves[0]
+    assert.equal(challenger.role, "challenger")
+    assert.match(challenger.prompt, /已分配.*challenger.*不是 Lead/)
+    assert.match(challenger.prompt, /不得重建整个审查团队/)
+    await call(["review", "--task", "cross-t", "--key", challenger.dispatchKey, "--recommendation", "accept", "--summary", "独立核验通过"])
+    const expert = (await call(["dispatch-plan", "--task", "cross-t"])).waves[0]
+    assert.equal(expert.role, "expert")
+    assert.match(expert.prompt, /已分配.*expert.*不是 Lead/)
+    assert.match(expert.prompt, /review.*--verdict/)
+  }
+})
+
+test("成员装载 skill：先遵守已分配职责，Lead 指引按问题选择正式审查覆盖", async () => {
+  const skill = await readFile(new URL("../skills/team-work-v3/SKILL.md", import.meta.url), "utf8")
+  const entry = skill.slice(0, skill.indexOf("## 判断指引"))
+  assert.match(entry, /成员入口/, "先识别派单成员身份再进入 Lead 指引")
+  assert.match(entry, /不执行 Lead.*开任务.*拆包.*正式波次/, "成员不得递归执行组团规程")
+  const scenarios = await readFile(new URL("../skills/team-work-v3/references/scenarios.md", import.meta.url), "utf8")
+  assert.match(scenarios, /默认.*正式轻量交叉审查/)
+  assert.match(scenarios, /一个 Owner.*Challenger/)
+  assert.doesNotMatch(scenarios, /预算只影响由谁承担，不能删减视角|非全视角抽查.*RO/)
+  const policy = JSON.parse(await readFile(new URL("../team-work/policies/default.json", import.meta.url), "utf8"))
+  assert.equal(policy.scenes["code-review"].requiredPerspectives, undefined, "可选视角目录不得声称是强制门禁")
+  assert.equal(policy.scenes["code-review"].availablePerspectives.length, 8, "保留完整审查的可选方向")
+})
 
 test("方案场景：Owner、Challenger、返工和在途重建均带同一决策标准", async () => {
   const projectRoot = await makeProject({
@@ -191,10 +312,12 @@ test("派单注入：续派与在途重建同样携带引导", async () => {
 })
 
 test("派单注入：无引导文件的场景只注入角色引导，缺失静默跳过", async () => {
-  // 默认夹具只有 code-review 场景，包内 guidance 无 scenes/code-review.md
-  const projectRoot = await makeProject()
+  const projectRoot = await makeProject({
+    workflow: { stages: [{ id: "custom-review", label: "扩展审查", outputs: ["code-review"], teamScene: "custom-review" }], gates: [], terminalStages: [] },
+    policy: { ...IMPL_POLICY, scenes: { "custom-review": {} } },
+  })
   const call = caller(projectRoot)
-  await openTask(projectRoot, "no-scene", { objective: "审查", entry: "code-review" })
+  await openTask(projectRoot, "no-scene", { objective: "审查", entry: "custom-review" })
   const d = await call(["dispatch-plan", "--task", "no-scene", "--writable", "R.md:code-review"])
   assert.match(d.waves[0].prompt, /## 角色指引（owner）/m)
   assert.doesNotMatch(d.waves[0].prompt, /## 场景指引/m, "缺失场景引导静默跳过，不阻塞派发")

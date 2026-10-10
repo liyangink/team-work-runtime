@@ -345,6 +345,7 @@ function lastOwnerBlockedSummary(task, pkg) {
 function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const pkg = detail.package ?? null
+  const currentPackage = pkg == null ? null : task.packages?.find((p) => p.id === pkg)
   const boundaries = detail.writable.map(({ path: p, artifactKind }) => p + (p.endsWith('/') ? '（目录授权：其下路径均可写）' : '') + (pkg ? '（包 ' + pkg + '，产出物 ' + artifactKind + '）' : '（产出物 ' + artifactKind + '）'))
   const lastBlocked = (wave.kind === 'produce' || wave.kind === 'respond') ? lastOwnerBlockedSummary(task, pkg) : null
   const deliverCmd = twCommand() + ' deliver --task ' + task.name + ' --key ' + detail.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
@@ -354,19 +355,28 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '')
   const roleHint = guidance?.roles?.[wave.role]
   const sceneHint = guidance?.scenes?.[stageDef.teamScene]
+  const memberBoundary = [
+    '## 成员职责边界',
+    '你是已分配的 ' + wave.role + ' 成员，不是 Lead。不得重建整个审查团队或自行再招募八视角团队；不得自行开任务、拆包或派发正式波次。已分配的完整检查内容照常完成。',
+    wave.role === 'owner' && pkg ? '你仅承担本包 ' + pkg + '；总目标中的其他包与团队组织要求由 Lead 处理。' : '仅承担本派单声明的职责。',
+    wave.scope === 'consolidation' || (wave.kind === 'verdict' && task.packages?.length) ? '组合评审/裁决仍覆盖本轮已交付包的组合制品。' : '',
+    '需要辅助时，可就本职责内的限定小问题委托 junior 只读助手：可写范围为空，不作完整审查、不替代正式 deliver/review；助手不得继续委托。你必须核验并整合结果。转发消息也须带完整职责边界，不得把总目标直接复制成助手派单。',
+  ].filter(Boolean).join('\n')
   // 意图上下文三段（C② 全量变体的内嵌内容；非 continuation 派单的 prompt 本身就是全量）
   const contextParts = [
-    '目标：' + task.intent.objective,
+    '任务总目标（背景；你的职责以本派单角色、范围和完成标准为准）：' + task.intent.objective,
     task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : '',
     task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : '',
   ]
   const headParts = [
     intro,
     headLine,
+    memberBoundary,
     roleHint ? '## 角色指引（' + wave.role + '）\n' + roleHint : '',
     sceneHint ? '## 场景指引（' + stageDef.teamScene + '）\n' + sceneHint : '',
   ]
   const tailParts = [
+    wave.role === 'owner' && Array.isArray(currentPackage?.done) && currentPackage.done.length ? '本包完成标准：\n' + currentPackage.done.map((d) => '- ' + d).join('\n') : '',
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     // §4 写边界补强（phase3 方案）：声明越界后果——三层防线可见化（派单纪律/ deliver 校验/快照恢复）
     wave.role === 'owner' ? '可写范围外的修改会被 deliver 拒绝；已越界污染的产出物可在恢复轮回滚（tw restore 快照恢复）。不要尝试绕过。' : '',

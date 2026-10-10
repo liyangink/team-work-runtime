@@ -201,7 +201,7 @@ test("tw plan 重拆窗口：在途派发时拒绝", async () => {
 test("多包全链路：并行派发 → 批次在途 → 组合评审 → 选择性重派(continuation) → 依赖解锁 → 人工门", async () => {
   const root = await makeProject()
   const call = caller(root)
-  await openTask(root, "multi-t")
+  await openTask(root, "multi-t", { objective: "审查示例模块的协作边界" })
   await call(["plan", "--task", "multi-t", "--packages", PKGS])
 
   // 1) 首波：store+intake 并行（overview 依赖未满足）
@@ -240,7 +240,7 @@ test("多包全链路：并行派发 → 批次在途 → 组合评审 → 选�
   assert.equal(d3.waves[0].continuation, true, "store 续派")
   assert.match(d3.waves[0].prompt, /# 续派/, "增量派单标头")
   assert.match(d3.waves[0].prompt, /store 论据不足/, "意见内嵌")
-  assert.doesNotMatch(d3.waves[0].prompt, /目标：/, "续派不重述全量目标")
+  assert.doesNotMatch(d3.waves[0].prompt, /任务总目标（背景[^）]*）：|审查示例模块的协作边界/, "续派不重述全量背景标题或目标正文")
 
   // 5) store 修订交付 → 评审（reviewedPackages 快照自动落盘，含轮次）→ accept → verdict
   await writeFile(path.join(root, "S.md"), "store v2", "utf8")

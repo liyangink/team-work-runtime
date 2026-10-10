@@ -530,9 +530,9 @@ test("dispatch-plan 导出 promptFull：续派派单附全量变体（objective/
   assert.equal(respond.stop, null)
   const wave = respond.waves[0]
   assert.equal(wave.continuation, true)
-  assert.ok(!/目标：/.test(wave.prompt), "增量正文不内嵌目标（成员有原上下文）")
+  assert.doesNotMatch(wave.prompt, /任务总目标（背景[^）]*）：|修复判定链并补全测试/, "增量正文不内嵌背景标题或目标正文（成员有原上下文）")
   assert.ok(wave.promptFull, "续派派单附全量变体")
-  assert.match(wave.promptFull, /目标：修复判定链并补全测试/)
+  assert.match(wave.promptFull, /任务总目标（背景[^）]*）：修复判定链并补全测试/)
   assert.match(wave.promptFull, /约束：/)
   assert.match(wave.promptFull, /排除：/)
   assert.match(wave.promptFull, /全量变体/)
@@ -542,7 +542,7 @@ test("dispatch-plan 导出 promptFull：续派派单附全量变体（objective/
   assert.equal(inflightCard.transition, "wait-inflight")
   const entry = inflightCard.inflight.find((d) => d.key === wave.dispatchKey)
   assert.ok(entry, "在途条目在场")
-  assert.match(entry.promptFull, /目标：修复判定链并补全测试/, "inflight 投影带全量变体（绑定层只选用不拼装）")
+  assert.match(entry.promptFull, /任务总目标（背景[^）]*）：修复判定链并补全测试/, "inflight 投影带全量变体（绑定层只选用不拼装）")
 })
 
 // ── 返工终版 §二·E 补：快照损坏容错（用户终裁①，Challenger r5 死门封堵） ─────────────

@@ -5,7 +5,7 @@
 | | 角色 role | 档位 tier |
 | --- | --- | --- |
 | 是什么 | 波次类型：owner 交付 / challenger 挑战 / expert 裁决 | 模型预算：junior / senior / expert |
-| 由谁定 | 波次机；**每轮每角色恰好一个成员**（结构事实，非用量限制） | 派发点：场景默认档 + 包 tier 覆盖 + risk 兜底 |
+| 由谁定 | 波次机；Owner 按包派发，组合挑战与核心裁决沿用单成员链 | 派发点：场景默认档 + 包 tier 覆盖 + risk 兜底 |
 | 对应工具 | deliver / review / review --verdict | 当前 DSH profile 的 `team-work-dsh.tiers` 候选池（同波家族去重挑选） |
 
 映射事实（policy 默认）：owner 波用场景默认档（junior 居多），包 tier 可覆盖（高于默认触发升档审批卡）；challenger 波固定 challengerTier（默认 senior——挑战是质量闸门，不随包降档）；裁决波固定 expert 档（核心场景最后一道闸）。
@@ -27,10 +27,13 @@
 
 ## 角色（与 tw 工具的对应）
 
+- 已收到带角色、范围与交付指令的派单就是成员；不执行 Lead 的开任务、拆包和正式波次派发，不因总目标或八视角目录重建团队。只读助手仅查本职责内的限定小问题，junior、可写为空、不得继续委托，由成员核验整合。
 - **Lead**：流程与完整性核对，不做技术裁决；`tw open/plan/dispatch-plan/run 查状态/decide/intent/route` 的调用者，派单的转发者（DSH 内经 tw-dispatch 派发）。
 - **Owner**：唯一范围与制品负责人；`tw deliver` 交付，回应轮 = 同路径原地修订或证据反驳。
 - **Challenger**：非作者攻击事实/推理/边界/失败路径；只出 findings 与 recommendation，不改制品；组合评审的 findings 标包归属。
 - **Expert（裁决者）**：核心场景技术裁决；`tw review --verdict`；制品变化强制重新裁决（新鲜度）。
+
+审查默认正式轻量交叉：一个 Owner 与非作者 Challenger 从相关互补视角工作，核心 Expert 照旧。交叉视角不要求一视角一包；Lead 仅在范围确需独立交付时拆包。完整八视角由 Lead 按实际复杂度、失败成本与用户要求组织一次，返工先复核变更及关联视角；覆盖选择是语义判断，不是 Runtime 自动选档。
 
 ## 并发与多样性事实
 

@@ -4,6 +4,8 @@
 
 正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`；原生后台 `continuable` 返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。一次性后台 `jobId` 与前台 `runId` 不作续聊身份。
 
+原样转发 Runtime 派单，两种正文都已带当前验收基线；绑定层只选用，不拼装、删减或自行提高条件。intent/done/可写目录不是扩需求授权，确需扩大范围时 Lead 先请用户明确批准，再更新现有意图、方案或包计划，遵守原人工门与 SPEC 约束。意见分流和报告纪律见[场景指导](scenarios.md#验收基线与意见分流)。
+
 ## 波次推进：一律 tw-dispatch
 
 **波次推进一律先调 `tw-dispatch`（{ task, note?, writables? }）**——单次调用完成一个波次的完整派发：
@@ -29,7 +31,7 @@
 
 ## 续派：宿主 sendMessage（Lead 主动追问用 send_message）
 
-- continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投本轮增量，无上下文则投 wave.promptFull 全量变体。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelHint 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
+- continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投 wave.prompt 续派正文，无上下文则投 wave.promptFull 全量变体。两种正文均含当前基线。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelHint 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
 - 用户点名换人（replace-owner）或映射缺失（expectedAgentIdMissing + resumeNote）：同一 fresh 重建通道。
 
 ## 评审修订纪律（D5）

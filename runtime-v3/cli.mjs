@@ -177,7 +177,7 @@ function reworkContext(task, stageId, pkg = null) {
     sections.push('### Expert 裁决（' + v.outcome + '）\n' + v.rationale + '\n建议：' + v.recommendedAction)
   }
   if (humanRework) sections.push('### 用户决定：返工\n' + (humanRework.note ?? '用户在人工门要求返工；结合上述意见修订交付。'))
-  return sections.length ? '## 本轮返工/回应原因\n\n' + sections.join('\n\n') : ''
+  return sections.length ? '## 本轮返工/回应原因\n\n以下是意见和裁决上下文，不是全部必须修复的清单。Owner 独立核验本轮阻塞，以证据修正或反驳；非阻塞建议与范围外发现按分流规则处置，扩大需求须先获用户明确批准。\n\n' + sections.join('\n\n') : ''
 }
 
 // 派单 PATH 注入（Phase 1 过渡）：成员环境未必有 tw 于 PATH——解析本包 bin 绝对路径写入交付指令；
@@ -362,11 +362,16 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     wave.scope === 'consolidation' || (wave.kind === 'verdict' && task.packages?.length) ? '组合评审/裁决仍覆盖本轮已交付包的组合制品。' : '',
     '需要辅助时，可就本职责内的限定小问题委托 junior 只读助手：可写范围为空，不作完整审查、不替代正式 deliver/review；助手不得继续委托。你必须核验并整合结果。转发消息也须带完整职责边界，不得把总目标直接复制成助手派单。',
   ].filter(Boolean).join('\n')
-  // 意图上下文三段（C② 全量变体的内嵌内容；非 continuation 派单的 prompt 本身就是全量）
+  // 当前验收基线由同一事实投影，两种正文及在途重建都携带一次。
   const contextParts = [
+    '## 本轮验收基线',
     '任务总目标（背景；你的职责以本派单角色、范围和完成标准为准）：' + task.intent.objective,
     task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : '',
     task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : '',
+    wave.role === 'owner' && Array.isArray(currentPackage?.done) && currentPackage.done.length ? '本包完成标准：\n' + currentPackage.done.map((d) => '- ' + d).join('\n') : '',
+    (wave.role === 'challenger' || wave.role === 'expert') && task.packages?.some((p) => Array.isArray(p.done) && p.done.length)
+      ? '各包完成标准（仅验收已交付包）：\n' + task.packages.filter((p) => Array.isArray(p.done) && p.done.length).map((p) => p.id + '：\n' + p.done.map((d) => '- ' + d).join('\n')).join('\n')
+      : '',
   ]
   const headParts = [
     intro,
@@ -376,7 +381,6 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     sceneHint ? '## 场景指引（' + stageDef.teamScene + '）\n' + sceneHint : '',
   ]
   const tailParts = [
-    wave.role === 'owner' && Array.isArray(currentPackage?.done) && currentPackage.done.length ? '本包完成标准：\n' + currentPackage.done.map((d) => '- ' + d).join('\n') : '',
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     // §4 写边界补强（phase3 方案）：声明越界后果——三层防线可见化（派单纪律/ deliver 校验/快照恢复）
     wave.role === 'owner' ? '可写范围外的修改会被 deliver 拒绝；已越界污染的产出物可在恢复轮回滚（tw restore 快照恢复）。不要尝试绕过。' : '',
@@ -387,7 +391,7 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
       ? '本任务包计划：' + task.packages.map((p) => {
           const delivered = task.reports.some((r) => r.kind === 'deliver' && r.package === p.id)
           return p.id + (delivered ? '（已交付）' : '（未交付' + ((p.dependsOn ?? []).length ? '，依赖满足后自动派发' : '') + '）')
-        }).join('、') + '——未交付包不构成 rework 依据；对完整性的顾虑写进 findings 或 unresolved。'
+        }).join('、') + '——未交付包不构成 rework 依据；仅用于了解计划，对完整性的非阻塞顾虑写进 summary 或已有交付物。'
       : '',
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
@@ -395,11 +399,9 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     lastBlocked ? '## 上一轮 blocked 原因\n' + lastBlocked + '\n本轮可写范围已由 Lead 重新声明；若仍无法完成，请再次以 --outcome blocked 交付并在 summary 写明还缺什么。' : '',
     '上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。',
   ]
-  // C② 全量 prompt 变体（返工终版 §二·C）：continuation 派单的增量正文假设成员有原上下文——
-  // 断链 fresh 重建 / 空壳（未收单）补发时新成员没有上下文，增量单不可执行。runtime 在导出层附
-  // promptFull（objective/constraints/exclusions 内嵌），绑定层只选用不拼装（P4 与 §7.1 评审先例）。
+  // 保留全量变体与恢复选择；续派也带当前基线，不依赖成员记忆旧条件。
   const join = (sections) => sections.filter(Boolean).join('\n\n')
-  const prompt = join([...headParts, ...(detail.continuation ? [] : contextParts), ...tailParts])
+  const prompt = join([...headParts, ...contextParts, ...tailParts])
   const promptFull = detail.continuation
     ? join([
         ['# 续派全量变体（key: ' + detail.key + '）——原会话上下文不可用时的自足派单', headLine],

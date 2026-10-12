@@ -232,22 +232,27 @@ test("多包全链路：并行派发 → 批次在途 → 组合评审 → 选�
   const sDeliver = mid.reports.find((r) => r.dispatchKey === kS)
   assert.equal(sDeliver.package, "store")
 
-  // 4) challenger rework 只指 store（findings 带归属）→ 选择性重派 + continuation
-  await call(["review", "--task", "multi-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "store 需修", "--findings", JSON.stringify([{ severity: "risk", statement: "store 论据不足", package: "store" }])])
+  // 4) store 本轮阻塞放 findings，intake 范围外发现留摘要，不扩大修复包集合。
+  const outside = "intake 的独立历史缺陷已记录；与本轮无直接必需关系，不属本轮修复清单"
+  const reworkReview = await call(["review", "--task", "multi-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "store 需补约定证据。" + outside, "--findings", JSON.stringify([{ severity: "blocker", statement: "store 论据不足", package: "store" }])])
+  assert.equal(reworkReview.accepted, true)
   const d3 = await call(["dispatch-plan", "--task", "multi-t"])
   assert.equal(d3.waves.length, 1, "只重派 store")
   assert.equal(d3.waves[0].package, "store")
   assert.equal(d3.waves[0].continuation, true, "store 续派")
   assert.match(d3.waves[0].prompt, /# 续派/, "增量派单标头")
   assert.match(d3.waves[0].prompt, /store 论据不足/, "意见内嵌")
-  assert.doesNotMatch(d3.waves[0].prompt, /任务总目标（背景[^）]*）：|审查示例模块的协作边界/, "续派不重述全量背景标题或目标正文")
+  assert.ok(d3.waves[0].prompt.includes(outside), "范围外发现仍原样保留，不靠文本标签删除报告")
+  assert.match(d3.waves[0].prompt, /不是全部必须修复的清单/)
+  assert.match(d3.waves[0].prompt, /任务总目标（背景[^）]*）：审查示例模块的协作边界/, "续派保留当前验收基线")
 
   // 5) store 修订交付 → 评审（reviewedPackages 快照自动落盘，含轮次）→ accept → verdict
   await writeFile(path.join(root, "S.md"), "store v2", "utf8")
   await call(["deliver", "--task", "multi-t", "--key", d3.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s3", "--paths", "S.md"])
   const d4 = await call(["dispatch-plan", "--task", "multi-t"])
   assert.equal(d4.waves[0].role, "challenger")
-  await call(["review", "--task", "multi-t", "--key", d4.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "ok"])
+  const accepted = await call(["review", "--task", "multi-t", "--key", d4.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "约定证据已关闭；intake 历史风险不影响本轮验收，保留记录", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 独立历史风险，不影响本轮验收", package: "intake" }])])
+  assert.equal(accepted.accepted, true, "accept 可以保留 risk，不要求零意见")
   const after = await loadTask(root, "multi-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const lastReview = after.reports.filter((r) => r.role === "challenger").at(-1)
   const snapS = lastReview.reviewedPackages.find((e) => e.package === "store")
@@ -299,7 +304,8 @@ test("dispatch-plan 波组导出：package/continuation/dependsOn/weight 字段"
 test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不按包过滤裁决）", async () => {
   const root = await makeProject()
   const call = caller(root)
-  await openTask(root, "erwd-t")
+  await openTask(root, "erwd-t", { objective: "核验示例组合制品" })
+  await call(["intent", "--task", "erwd-t", "--add-constraint", "维护示例接口承诺", "--add-exclusion", "不追加功能承诺"])
   await call(["plan", "--task", "erwd-t", "--packages", PKGS])
   const d1 = await call(["dispatch-plan", "--task", "erwd-t"])
   const kS = d1.waves.find((x) => x.package === "store").dispatchKey
@@ -311,12 +317,30 @@ test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不�
   const d2 = await call(["dispatch-plan", "--task", "erwd-t"])
   await call(["review", "--task", "erwd-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "ok"])
   const d3 = await call(["dispatch-plan", "--task", "erwd-t"])
+  await call(["agent-map", "--task", "erwd-t", "--key", d3.waves[0].dispatchKey, "--agent", "fixture-expert"])
   await call(["review", "--task", "erwd-t", "--key", d3.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "rework", rationale: "总览交付物缺失，模块文档本身可接受", confidence: "high", recommendedAction: "补齐缺失交付物" })])
   const d4 = await call(["dispatch-plan", "--task", "erwd-t"])
   assert.equal(d4.waves.length, 2, "verdict rework 无归属 → 全组 respond")
   for (const card of d4.waves) {
+    assert.match(card.prompt, /意见和裁决上下文.*不是全部必须修复的清单/, "保留裁决原文，同时提醒独立核验本轮阻塞")
     assert.match(card.prompt, /Expert 裁决（rework）/, "每个包的回应派单都带裁决原因")
     assert.match(card.prompt, /总览交付物缺失/, "裁决 rationale 内嵌")
+  }
+  for (const wave of d4.waves) {
+    const file = wave.package === "store" ? "S.md" : "I.md"
+    await writeFile(path.join(root, file), "修订后的示例证据", "utf8")
+    await call(["deliver", "--task", "erwd-t", "--key", wave.dispatchKey, "--outcome", "delivered", "--summary", "已核验并修订", "--paths", file])
+  }
+  const revised = (await call(["dispatch-plan", "--task", "erwd-t"])).waves[0]
+  await call(["review", "--task", "erwd-t", "--key", revised.dispatchKey, "--recommendation", "accept", "--summary", "复审通过"])
+  const expertAgain = (await call(["dispatch-plan", "--task", "erwd-t"])).waves[0]
+  assert.equal(expertAgain.continuation, true)
+  assert.equal(expertAgain.expectedAgentId, "fixture-expert")
+  const expertInflight = (await call(["dispatch-plan", "--task", "erwd-t"])).inflight[0]
+  for (const wave of [revised, expertAgain, expertInflight]) {
+    for (const prompt of [wave.prompt, wave.promptFull]) {
+      for (const fact of ["核验示例组合制品", "维护示例接口承诺", "不追加功能承诺", ...JSON.parse(PKGS).flatMap((pkg) => pkg.done)]) assert.equal(prompt.split(fact).length - 1, 1, "多包复审/重裁/在途两种正文保留一次基线：" + fact)
+    }
   }
 })
 
@@ -448,7 +472,8 @@ test("D2：拒绝文案带派单身份（key 错配提示在途清单；路径�
 test("D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatchKey", async () => {
   const root = await makeProject()
   const call = caller(root)
-  await openTask(root, "d34-t")
+  await openTask(root, "d34-t", { objective: "核验示例技术约定" })
+  await call(["intent", "--task", "d34-t", "--add-constraint", "保持示例契约", "--add-exclusion", "不开发额外能力"])
   const d = await call(["dispatch-plan", "--task", "d34-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
   await call(["deliver", "--task", "d34-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
@@ -468,6 +493,15 @@ test("D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatch
   assert.equal(ve2.role, "expert")
   assert.equal(ve2.continuation, true, "重裁为续派")
   assert.equal(ve2.expectedAgentId, "agent-exp-1", "verdict 波续派带 expectedAgentId（测试名与正文一致）")
+  const verdictInflight = (await call(["dispatch-plan", "--task", "d34-t"])).inflight[0]
+  assert.equal(verdictInflight.prompt, ve2.prompt)
+  assert.equal(verdictInflight.promptFull, ve2.promptFull)
+  for (const wave of [d.waves[0], rv.waves[0], ve.waves[0], k2, rv2.waves[0], ve2, verdictInflight]) {
+    for (const prompt of [wave.prompt, wave.promptFull].filter(Boolean)) {
+      for (const fact of ["核验示例技术约定", "保持示例契约", "不开发额外能力"]) assert.equal(prompt.split(fact).length - 1, 1, "无包首派/回应/复审/重裁各有一次当前基线：" + fact)
+      assert.doesNotMatch(prompt, /^本包完成标准：|^各包完成标准（/m, "无包角色不臆造 done")
+    }
+  }
   await call(["review", "--task", "d34-t", "--key", ve2.dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "accept", rationale: "r", confidence: "high", recommendedAction: "a" })])
   // 人工门：过掉再走 e2e-skip → completed
   await call(["route", "--task", "d34-t", "--route", "e2e", "--decision", "skip", "--basis", "x"])
@@ -498,6 +532,17 @@ test("D6：多包任务的评审/裁决派单内嵌包计划（未交付包不�
   const rv = await call(["dispatch-plan", "--task", "d6-t"])
   assert.match(rv.waves[0].prompt, new RegExp("本任务包计划：store（已交付）、intake（已交付）、overview（未交付，依赖满足后自动派发）"), "评审派单内嵌包计划事实")
   assert.match(rv.waves[0].prompt, /未交付包不构成 rework 依据/, "明确指引避免缺包误判")
+  for (const pkg of JSON.parse(PKGS)) {
+    for (const done of pkg.done) assert.equal(rv.waves[0].prompt.split(done).length - 1, 1, "评审者必须收到一次包完成标准：" + pkg.id)
+  }
+  await call(["review", "--task", "d6-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "已交付包符合约定"])
+  const expert = (await call(["dispatch-plan", "--task", "d6-t"])).waves[0]
+  assert.equal(expert.role, "expert")
+  assert.match(expert.prompt, /overview（未交付，依赖满足后自动派发）/)
+  assert.match(expert.prompt, /未交付包不构成 rework 依据/)
+  for (const pkg of JSON.parse(PKGS)) {
+    for (const done of pkg.done) assert.equal(expert.prompt.split(done).length - 1, 1, "裁决者拥有一次已交付与未交付包标准：" + pkg.id)
+  }
 })
 
 test("A：包 tier 字段——验收非法值拒绝；实际档 = max(包tier, risk)；缺省回落默认", async () => {

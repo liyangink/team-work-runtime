@@ -9,12 +9,15 @@ description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/rev
 
 已收到带角色、范围与 deliver/review 交付指令的派单时，你是已分配成员：直接遵守本派单和下文「成员纪律」，不执行 Lead 的开任务、拆包或派发正式波次操作。任务总目标是背景，本包完成标准与边界才是你的职责；组合 Challenger/Expert 审本轮已交付包的组合。不得重建整个审查团队或自行再招募八视角团队；已分配的完整检查内容照常完成。
 
+以本轮验收基线独立核验，只要求关闭本轮阻塞；非阻塞建议与范围外发现保留在摘要或已有交付物，扩大需求先获用户明确批准。具体分流、证据与返工纪律见[场景指导](references/scenarios.md#验收基线与意见分流)。
+
 需要辅助时，只就本职责内的限定小问题开 junior 只读助手，可写范围为空、不得继续委托，由你核验整合；它不承担完整审查、不替代 deliver/review 与非作者挑战、核心 Expert 裁决。消息转发也要携带完整职责边界，不把总目标直接复制成助手派单。以下判断与操作指引供 Lead 使用。
 
 房间与门：成员在房间里自由工作（派单内嵌全部上下文），检查只发生在两处——**交付工具调用内**（同步、单次、全量）和**阶段门**（产出物在场、检查通过、非作者评审在场）。你不管理任何运行时状态；任务目录（`.team-work/tasks/<name>/`）就是状态。
 
 ## 判断指引（Lead 依据用户语义决定，不由工具强制）
 
+- **验收基线**：用户需求与已批准方案是授权依据；在现有 intent 明确目标、约束、排除项，done 只细化原需求。派单统一携带当前基线，原样转发；改 intent、done 或可写路径不等于扩范围获批，确需扩大授权时先请用户明确决定，细则见场景指导。
 - **选入口**：审查请求 → `code-review`；新功能/改动 → `research` 或直接 `implementation`（已有明确方案时）；测试补充 → `test`；方案讨论 → `design`。显式 `--entry` = 任务只运行到该阶段验收；缺省 research = 完整工作流。
 - **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier：默认 junior**——廉价档胜任绝大多数常规作业，审查链兜底；仅按失败成本升档：错误难发现/返工贵 → senior，不可逆/安全敏感 → expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡；成员执行中力有不逮可经 unresolved 上抛建议升档）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
 - **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（未显式定 tier 的包兜底升 expert 且免审批；包级判断仍以 tw plan 的显式 tier 优先）；较高风险 → `high`；常规缺省 normal。
@@ -50,7 +53,7 @@ tw archive --task <名字>                                              # 用户
 - **派单范围不够**（任务确需修改范围外文件才能完成）：成员以 `--outcome blocked` 交付（paths 留空），在 summary 写明需要扩权的路径与理由。你会收到 `next: re-scope` 静止卡——单 owner 用新的可写范围推进（`tw-dispatch` 的 writables / `tw dispatch-plan --writable`），多包先 `tw plan` 重拆（该卡不阻塞重拆）再推进；重派派单会自动内嵌上一轮 blocked 原因，成员不需要重述背景。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
-- `recommendation` 只评价这版交付本身；产品缺陷写 findings，不因此 rework 审查制品。
+- `recommendation` 评价这版交付：实施交付违反需求可以返工；审查制品发现产品缺陷应报告，不因此要求审查 Owner 修产品，报告质量缺陷仍可返工。rework 的 findings 只放本轮关闭依据，其他发现放 summary 或已有交付物；详细规则见场景指导。
 - 派单文本会按角色/场景自动注入公共引导（角色指引 + 场景指引，见 [派单引导库](references/guidance.md)）：引导是纪律提示，与派单边界冲突时以派单边界为准。
 - 上下文与派单全文已内嵌：成员不需要也不应该读取 `.team-work` 内部状态或扫描项目外路径。
 - 只读助手经原生工具派发，明确 junior 档与可写范围为空；结果由发起成员核验整合，不登记为正式波次成员。

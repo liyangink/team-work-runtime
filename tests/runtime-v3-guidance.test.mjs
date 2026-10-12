@@ -28,6 +28,32 @@ const IMPL_POLICY = {
   scenes: { implementation: {}, test: {}, finish: {} },
 }
 
+function assertBaseline(prompt, facts) {
+  for (const fact of facts) assert.equal(prompt.split(fact).length - 1, 1, "验收事实恰好出现一次：" + fact)
+}
+
+test("实施派单：各角色按同一基线核验阻塞，保留证据反驳与扩范围前批准", async () => {
+  const projectRoot = await makeProject({ workflow: IMPL_WORKFLOW, policy: { ...IMPL_POLICY, scenes: { implementation: { core: true } } } })
+  const call = caller(projectRoot)
+  await openTask(projectRoot, "scope-t", { objective: "实现示例行为", entry: "implementation" })
+  const owner = (await call(["dispatch-plan", "--task", "scope-t", "--writable", "src.mjs:source"])).waves[0]
+  assert.match(owner.prompt, /验收基线/)
+  assert.match(owner.prompt, /证据.*反驳/)
+  assert.match(owner.prompt, /扩大.*用户.*明确批准/)
+  await writeFile(path.join(projectRoot, "src.mjs"), "export const value = 1", "utf8")
+  await call(["deliver", "--task", "scope-t", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "实现完成", "--paths", "src.mjs"])
+  const challenger = (await call(["dispatch-plan", "--task", "scope-t"])).waves[0]
+  assert.match(challenger.prompt, /rework.*findings.*只.*本轮.*关闭/)
+  assert.match(challenger.prompt, /现有.*保护.*不足/)
+  assert.match(challenger.prompt, /未找到.*不存在/)
+  assert.match(challenger.prompt, /实施.*违反.*需求.*返工/)
+  await call(["review", "--task", "scope-t", "--key", challenger.dispatchKey, "--recommendation", "accept", "--summary", "符合需求"])
+  const expert = (await call(["dispatch-plan", "--task", "scope-t"])).waves[0]
+  assert.match(expert.prompt, /技术风险.*修复授权/)
+  assert.match(expert.prompt, /真正.*关闭/)
+  assert.match(expert.prompt, /证据不足.*不能.*accept/)
+})
+
 test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归重建审查团队", async () => {
   const projectRoot = await makeProject()
   const call = caller(projectRoot)
@@ -40,6 +66,8 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
     dependsOn: [],
   }))
   await openTask(projectRoot, "perspective-t", { objective })
+  const baseline = [objective, "保留示例接口合同", "不增加示例产品功能"]
+  await call(["intent", "--task", "perspective-t", "--add-constraint", baseline[1], "--add-exclusion", baseline[2]])
   const planned = await call(["plan", "--task", "perspective-t", "--packages", JSON.stringify(packages)])
   assert.equal(planned.ok, true)
   const dispatched = await call(["dispatch-plan", "--task", "perspective-t"])
@@ -47,6 +75,7 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
   for (const wave of dispatched.waves) {
     const ownPackage = packages.find((pkg) => pkg.id === wave.package)
     assert.equal(wave.role, "owner")
+    assertBaseline(wave.prompt, [...baseline, ...ownPackage.done])
     assert.ok(wave.prompt.includes(objective), "总目标作为上下文保留")
     assert.ok(wave.prompt.includes(ownPackage.done[0]), "当前视角的完成标准必须随派单到达 Owner：" + wave.package)
     for (const other of packages.filter((pkg) => pkg.id !== wave.package)) {
@@ -63,6 +92,7 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
   const inflight = await call(["dispatch-plan", "--task", "perspective-t"])
   assert.equal(inflight.stop, "wait-inflight")
   for (const wave of inflight.inflight) {
+    assertBaseline(wave.prompt, baseline)
     assert.match(wave.prompt, /不得重建整个审查团队/)
     assert.ok(wave.prompt.includes(packages.find((pkg) => pkg.id === wave.package).done[0]))
   }
@@ -73,6 +103,7 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
   }
   const challenger = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
   assert.equal(challenger.scope, "consolidation")
+  assertBaseline(challenger.prompt, [...baseline, ...packages.flatMap((pkg) => pkg.done)])
   assert.match(challenger.prompt, /组合评审.*本轮全部已交付包/)
   assert.doesNotMatch(challenger.prompt, /仅承担本包/)
   assert.match(challenger.prompt, /不得重建整个审查团队/)
@@ -81,10 +112,11 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
   assert.equal(respond.package, "perspective-1")
   assert.equal(respond.continuation, true)
   assert.equal(respond.expectedAgentId, "fixture-owner", "续派仍复用原成员映射")
-  assert.ok(!respond.prompt.includes(objective), "增量续派仍省略已知总目标")
+  assert.ok(respond.prompt.includes(objective), "正常续派也携带当前总目标")
   assert.ok(respond.promptFull.includes(objective), "断链重建仍带完整背景")
   const continuing = await call(["dispatch-plan", "--task", "perspective-t"])
   for (const prompt of [respond.prompt, respond.promptFull, continuing.inflight[0].prompt, continuing.inflight[0].promptFull]) {
+    assertBaseline(prompt, [...baseline, packages[0].done[0]])
     assert.match(prompt, /仅承担本包 perspective-1/)
     assert.match(prompt, /不得重建整个审查团队/)
     assert.ok(prompt.includes(packages[0].done[0]))
@@ -93,9 +125,14 @@ test("八视角已拆包：Owner 保留总目标但仅承担本包，不递归�
   await call(["deliver", "--task", "perspective-t", "--key", respond.dispatchKey, "--outcome", "delivered", "--summary", "补齐需求证据", "--paths", "FINDINGS-1.md"])
   const crossReview = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
   assert.equal(crossReview.scope, "consolidation")
+  for (const prompt of [crossReview.prompt, crossReview.promptFull]) assertBaseline(prompt, [...baseline, ...packages.flatMap((pkg) => pkg.done)])
+  const reviewInflight = (await call(["dispatch-plan", "--task", "perspective-t"])).inflight[0]
+  assert.equal(reviewInflight.prompt, crossReview.prompt)
+  assert.equal(reviewInflight.promptFull, crossReview.promptFull)
   await call(["review", "--task", "perspective-t", "--key", crossReview.dispatchKey, "--recommendation", "accept", "--summary", "组合核验通过"])
   const expert = (await call(["dispatch-plan", "--task", "perspective-t"])).waves[0]
   assert.equal(expert.role, "expert")
+  assertBaseline(expert.prompt, [...baseline, ...packages.flatMap((pkg) => pkg.done)])
   assert.match(expert.prompt, /组合评审\/裁决仍覆盖本轮已交付包/)
   assert.match(expert.prompt, /不得重建整个审查团队/)
   assert.doesNotMatch(expert.prompt, /仅承担本包/)
@@ -113,7 +150,7 @@ test("轻量交叉审查：两类审查按相关视角执行，仍交付并经�
     const dispatched = await call(["dispatch-plan", "--task", "cross-t", "--writable", "REVIEW.md:" + scene])
     assert.equal(dispatched.waves.length, 1)
     const owner = dispatched.waves[0]
-    assert.doesNotMatch(owner.prompt, /本包完成标准|你仅承担本包|组合评审\/裁决仍覆盖/, "无包派单不臆造包、视角或组合职责")
+    assert.doesNotMatch(owner.prompt, /^本包完成标准：|^各包完成标准（|你仅承担本包|组合评审\/裁决仍覆盖/m, "无包派单不臆造包、视角或组合职责")
     assert.match(owner.prompt, /默认.*轻量交叉审查/, "小场景不必按固定八视角拆包")
     assert.match(owner.prompt, /少量互补视角/, "视角按问题选择")
     assert.match(owner.prompt, /返工.*变更.*关联视角/, "返工不默认重开全部视角")
@@ -147,6 +184,26 @@ test("成员装载 skill：先遵守已分配职责，Lead 指引按问题选择
   const policy = JSON.parse(await readFile(new URL("../team-work/policies/default.json", import.meta.url), "utf8"))
   assert.equal(policy.scenes["code-review"].requiredPerspectives, undefined, "可选视角目录不得声称是强制门禁")
   assert.equal(policy.scenes["code-review"].availablePerspectives.length, 8, "保留完整审查的可选方向")
+})
+
+test("场景派单：设计、审查、实施与测试各自按约定交付分流范围外发现", async () => {
+  const expectations = {
+    design: /改与不改.*审查边界.*建议.*不自动/,
+    "design-review": /约定需求.*不按理想系统/,
+    "code-review": /历史问题.*范围外.*已有保护/,
+    implementation: /更好实现.*不.*重构.*历史功能/,
+    test: /原需求.*修改风险.*独立历史问题.*新产品能力/,
+  }
+  for (const [scene, expectation] of Object.entries(expectations)) {
+    const projectRoot = await makeProject({
+      workflow: { stages: [{ id: scene, label: "示例阶段", outputs: ["doc"], teamScene: scene }], gates: [], terminalStages: [] },
+      policy: { ...IMPL_POLICY, scenes: { [scene]: {} } },
+    })
+    const call = caller(projectRoot)
+    await openTask(projectRoot, "scene-t", { objective: "完成约定交付", entry: scene })
+    const owner = (await call(["dispatch-plan", "--task", "scene-t", "--writable", "RESULT.md:doc"])).waves[0]
+    assert.match(owner.prompt, expectation, scene + " 的专业引导随派单到达")
+  }
 })
 
 test("方案场景：Owner、Challenger、返工和在途重建均带同一决策标准", async () => {
@@ -183,6 +240,7 @@ test("方案审查场景：审查派单不要求第二份方案，项目同名�
   })
   const call = caller(projectRoot)
   await openTask(projectRoot, "review-t", { objective: "审查示例方案", entry: "design-review" })
+  await call(["intent", "--task", "review-t", "--add-constraint", "只核验约定依据", "--add-exclusion", "不重写示例方案"])
   const d = await call(["dispatch-plan", "--task", "review-t", "--writable", "REVIEW.md:design-review"])
   assert.match(d.waves[0].prompt, /场景指引（design-review）/)
   assert.match(d.waves[0].prompt, /不另写一份方案/)
@@ -200,6 +258,7 @@ test("方案审查场景：审查派单不要求第二份方案，项目同名�
   const inflight = await call(["dispatch-plan", "--task", "review-t"])
   assert.match(inflight.inflight[0].prompt, /核对兼容依据/)
   assert.doesNotMatch(inflight.inflight[0].prompt, /不另写一份方案/)
+  assertBaseline(inflight.inflight[0].prompt, ["审查示例方案", "只核验约定依据", "不重写示例方案"])
 })
 
 test("loadGuidance：项目无自定义目录时使用包内基线（角色+场景两级）", async () => {
@@ -317,8 +376,10 @@ test("派单注入：无引导文件的场景只注入角色引导，缺失静�
     policy: { ...IMPL_POLICY, scenes: { "custom-review": {} } },
   })
   const call = caller(projectRoot)
-  await openTask(projectRoot, "no-scene", { objective: "审查", entry: "custom-review" })
+  await openTask(projectRoot, "no-scene", { objective: "核验自定义阶段合同", entry: "custom-review" })
+  await call(["intent", "--task", "no-scene", "--add-constraint", "保留公开边界", "--add-exclusion", "不补建治理能力"])
   const d = await call(["dispatch-plan", "--task", "no-scene", "--writable", "R.md:code-review"])
   assert.match(d.waves[0].prompt, /## 角色指引（owner）/m)
   assert.doesNotMatch(d.waves[0].prompt, /## 场景指引/m, "缺失场景引导静默跳过，不阻塞派发")
+  assertBaseline(d.waves[0].prompt, ["核验自定义阶段合同", "保留公开边界", "不补建治理能力"])
 })

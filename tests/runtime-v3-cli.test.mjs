@@ -515,7 +515,7 @@ test("run 无锁只读：锁目录只读时照常返回状态卡、盘上零变�
 
 // ── 返工终版 §二·C②：续派波导出全量 prompt 变体 ─────────────────────────────────
 
-test("dispatch-plan 导出 promptFull：续派派单附全量变体（objective/constraints/exclusions 内嵌），增量正文不含；inflight 重建同样携带", async () => {
+test("dispatch-plan 导出 promptFull：续派与在途重建的两种正文各含一次当前验收基线", async () => {
   const root = await makeProject()
   const call = caller(root)
   await openTask(root, "pfull-t", { objective: "修复判定链并补全测试" })
@@ -525,16 +525,20 @@ test("dispatch-plan 导出 promptFull：续派派单附全量变体（objective/
   await call(["deliver", "--task", "pfull-t", "--key", seeded.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   const review1 = await call(["dispatch-plan", "--task", "pfull-t"])
   await call(["review", "--task", "pfull-t", "--key", review1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["intent", "--task", "pfull-t", "--objective", "修复判定链并验证恢复", "--add-constraint", "保留恢复协议"])
   // respond 波 = 续派（continuation: true，成员有原上下文）
   const respond = await call(["dispatch-plan", "--task", "pfull-t", "--json", "--writable", "R.md:doc"])
   assert.equal(respond.stop, null)
   const wave = respond.waves[0]
   assert.equal(wave.continuation, true)
-  assert.doesNotMatch(wave.prompt, /任务总目标（背景[^）]*）：|修复判定链并补全测试/, "增量正文不内嵌背景标题或目标正文（成员有原上下文）")
   assert.ok(wave.promptFull, "续派派单附全量变体")
-  assert.match(wave.promptFull, /任务总目标（背景[^）]*）：修复判定链并补全测试/)
-  assert.match(wave.promptFull, /约束：/)
-  assert.match(wave.promptFull, /排除：/)
+  for (const prompt of [wave.prompt, wave.promptFull]) {
+    for (const fact of ["修复判定链并验证恢复", "不改无关文件", "保留恢复协议", "不碰 v2"]) {
+      assert.equal(prompt.split(fact).length - 1, 1, "当前基线事实恰好出现一次：" + fact)
+    }
+    assert.doesNotMatch(prompt, /修复判定链并补全测试/, "修订后的基线不保留旧目标")
+    assert.doesNotMatch(prompt, /^本包完成标准：|^各包完成标准（/m, "无包任务不臆造 done")
+  }
   assert.match(wave.promptFull, /全量变体/)
 
   // wait-inflight 重建（inflight 条目）同样携带 promptFull：断链 fresh 重建的恢复边数据源
@@ -542,7 +546,8 @@ test("dispatch-plan 导出 promptFull：续派派单附全量变体（objective/
   assert.equal(inflightCard.transition, "wait-inflight")
   const entry = inflightCard.inflight.find((d) => d.key === wave.dispatchKey)
   assert.ok(entry, "在途条目在场")
-  assert.match(entry.promptFull, /任务总目标（背景[^）]*）：修复判定链并补全测试/, "inflight 投影带全量变体（绑定层只选用不拼装）")
+  assert.equal(entry.prompt, wave.prompt)
+  assert.equal(entry.promptFull, wave.promptFull, "在途重建保留两种正文与恢复选择")
 })
 
 // ── 返工终版 §二·E 补：快照损坏容错（用户终裁①，Challenger r5 死门封堵） ─────────────

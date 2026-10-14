@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { createDirectedSubagent } from "../dsh/subagent-session.js"
+import { createDirectedSubagent, coldSessionReceived } from "../dsh/subagent-session.js"
 
 const parent = { id: "parent-example" }
-const input = { description: "成员", prompt: "完整派单", sessionId: "child-example", target: { provider: "provider-example", model: "model-example" }, exec: { agent: parent } }
+const input = { description: "成员", prompt: "完整派单", requiredGuidance: "公共短规则：结论与证据分清。", sessionId: "child-example", target: { provider: "provider-example", model: "model-example" }, exec: { agent: parent } }
 function host() {
   const live = new Map()
   const starts = []
@@ -39,6 +39,7 @@ test("新成员采用精确模型与宿主深度，允许宿主填充未指定 e
   assert.equal(result.ok, true)
   assert.equal(h.starts[0].request.maxDepth, 2)
   assert.deepEqual(h.starts[0].request.agentOptions, { provider: "provider-example", model: "model-example", reasoningEffort: "medium" })
+  assert.deepEqual(h.starts[0].request.prompt, [{ type: "text", text: input.prompt }, { type: "text", text: input.requiredGuidance }])
 })
 
 test("已接收但 flush=false 保留会话 ID，绝不回收已运行成员", async () => {
@@ -65,6 +66,7 @@ test("冷续派忽略继承事件，并在只读读取后关闭 handle", async (
   assert.equal(result.ok, true)
   assert.equal(result.resume, "full")
   assert.equal(h.sends[0][2][0].text, "全量")
+  assert.equal(h.sends[0][2][1].text, input.requiredGuidance)
   assert.equal(closed, 1)
   assert.equal(h.starts.length, 0)
 })
@@ -136,6 +138,7 @@ test("同派单冷重试已含本轮正文时只发送轻量续行提醒", async
   assert.equal(result.resume, "reminder")
   assert.notEqual(h.sends[0][2][0].text, input.prompt)
   assert.match(h.sends[0][2][0].text, /已收到本轮派单正文/)
+  assert.equal(h.sends[0][2][1].text, input.requiredGuidance)
   assert.equal(h.starts.length, 0)
 })
 
@@ -146,6 +149,27 @@ test("仅上一轮上下文的冷会话发送本轮增量，不误选轻提示",
   const result = await createDirectedSubagent(h.ctx, {}, { ...input, prompt: "本轮增量", promptFull: "本轮全量" })
   assert.equal(result.resume, "incremental")
   assert.equal(h.sends[0][2][0].text, "本轮增量")
+  assert.equal(h.sends[0][2][1].text, input.requiredGuidance)
+})
+
+test("仅规则更新不改变业务正文收单；活会话不追加规则，旧投影给诊断不设死门", async () => {
+  const h = host()
+  const events = [{ type: "agent/inbox/spliced", data: { inserted: [{ content: [{ type: "text", text: input.prompt }, { type: "text", text: "旧规则" }] }] } }]
+  h.ctx.sessionPersistence.stat = async () => ({ header: { id: input.sessionId, parentSession: parent.id } })
+  h.ctx.sessionPersistence.open = async () => ({ inheritedEventCount: 0, read: async () => ({ events }), close: async () => {} })
+  assert.deepEqual(await coldSessionReceived(h.ctx.sessionPersistence, input.sessionId, undefined, [input.prompt]), { ok: true, received: true, currentReceived: true })
+  const resumed = await createDirectedSubagent(h.ctx, {}, { ...input, requiredGuidance: "新规则" })
+  assert.equal(resumed.resume, "reminder")
+  assert.deepEqual(h.sends[0][2].map((block) => block.text), [h.sends[0][2][0].text, "新规则"])
+  assert.match(h.sends[0][2][0].text, /已收到本轮派单正文/)
+  const fresh = host()
+  const compatible = await createDirectedSubagent(fresh.ctx, {}, { ...input, requiredGuidance: undefined })
+  assert.equal(compatible.ok, true)
+  assert.match(fresh.starts[0].request.prompt[1].text, /自动规则未带入.*requiredGuidance/)
+  const live = await createDirectedSubagent(fresh.ctx, {}, { ...input, requiredGuidance: "再更新" })
+  assert.equal(live.reused, true)
+  assert.equal(fresh.starts.length, 1)
+  assert.equal(fresh.sends.length, 0)
 })
 
 test("日志中无法解释的消息内容拒绝续投，仍释放 handle", async () => {

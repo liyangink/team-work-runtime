@@ -44,8 +44,7 @@ tw archive --task <名字>                                              # 用户
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
 - 成员完成的通知到达后再 `dispatch-plan`（DSH 内 `tw-dispatch`），消费报告并推进。
-- 向用户只报告：完成了什么、当前阶段、关键制品路径、风险/分歧、下一步。
-- **汇报说人话**：遵守每张卡的 `presentation`，以 `progress` 为素材，自足说明决定及选项后果。首次说明批准什么，后续说明改变什么；完整方案、返工比较与现有审查链要求见[场景指导](references/scenarios.md#方案讨论)。
+- **自动表达规则**：成员的 `requiredGuidance` 与 Lead 卡片的 `presentation` 自动带入根包同源必读段，以现有 `progress` 为素材，不要求主动调用 clarity 技能。公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)；深看按工具给出的准确路径，不读取独立账本。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
@@ -54,6 +53,6 @@ tw archive --task <名字>                                              # 用户
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 评价这版交付：实施交付违反需求可以返工；审查制品发现产品缺陷应报告，不因此要求审查 Owner 修产品，报告质量缺陷仍可返工。rework 的 findings 只放本轮关闭依据，其他发现放 summary 或已有交付物；详细规则见场景指导。
-- 派单文本会按角色/场景自动注入公共引导（角色指引 + 场景指引，见 [派单引导库](references/guidance.md)）：引导是纪律提示，与派单边界冲突时以派单边界为准。
+- 派单按角色/场景带专业引导与同源明晰短段（见 [派单引导库](references/guidance.md)）；专业引导项目覆盖不替换包规范源，不改变派单授权和交付合同。规则缺失诊断不形成新门禁。
 - 上下文与派单全文已内嵌：成员不需要也不应该读取 `.team-work` 内部状态或扫描项目外路径。
 - 只读助手经原生工具派发，明确 junior 档与可写范围为空；结果由发起成员核验整合，不登记为正式波次成员。

@@ -2,7 +2,8 @@
 // 卡片输出为 JSON（Lead 在 DSH 里用 bash 调用并解析）；拒绝输出带修复指引（P2）。
 import { randomBytes } from "node:crypto"
 import { accessSync, constants } from "node:fs"
-import { readFile, rm, cp, mkdir, access } from "node:fs/promises"
+import { readFile, rm, mkdir, access, lstat, realpath, mkdtemp } from "node:fs/promises"
+import fsPromises from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -11,7 +12,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFingerprint, humanDecisionFresh } from "./gate.mjs"
 import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
-import { loadGuidance } from "./guidance.mjs"
+import { loadGuidance, createClarityGuidanceReader, memberNeedsClarityReview, requiredClarityText } from "./guidance.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 import { writableMatch, writablePathsOverlap } from "./domain/writable.mjs"
 
@@ -85,32 +86,20 @@ function fixHint(code) {
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
-// ── 汇报呈现纪律（稳定注入）─────────────────────────────────────────────
-// 病灶：Lead 向用户汇报是「人机对话」——用户没看过工具调用与卡片原文；会话越长，
-// Lead 越被卡片里的编号/术语同化，汇报退化成编号+黑话（认知不对等随轮数恶化）。
-// 因此呈现纪律不依赖 skill 一次性装载，而是随每次汇报时机的卡片输出重新在场：
-// awaiting-user（用户决定点）带完整纪律 + 阶段工作摘素材（progress）；
-// dispatch/进展转折卡带简报纪律。注入为纯静态文本（E2E-14 终态幂等不受影响）。
-const PRESENTATION_DECISION = [
-  "呈现纪律（向用户转述本卡片时必须遵守，不因会话变长而省略）：",
-  "- 用户未看过中间过程。结合 progress（若在场）自足汇报：首次说明批准什么或当前要决定什么、推荐与依据、交付和评审结论、风险分歧；涉及方案时，摘要与完整正文同篇。",
-  "- 后续修订先说本轮变化、依据、对原结论的影响及是否须重新批准；未变内容引用，保留决定所需背景与关键取舍，不把裸 diff 交给用户。",
-  "- 进行版本对比时，缺少可定位比较版本须明确说明，不得臆造变化；引用既有批准结论时，缺少批准记录须明确说明，不得声称已批准。已批准制品变化仍须现有重新确认。",
-  "- 用完整句子和自然语言；内部编号与黑话不得原样抛给用户，操作所需技术名称保留并解释。说明选项后果，不只报序号；团队可解决的问题不增人工门。",
-].join("\n")
+// 呈现入口只说明本卡沟通目的；通用规则从根包规范提取，避免静态常量副本。
+const PRESENTATION_DECISION = "呈现纪律：向用户说明当前要决定什么、推荐与依据、选项后果、核心阻碍及下一步；结合 progress 事实与完整产物，遵守下列同源规则。"
 const PRESENTATION_PROGRESS = "向用户汇报本卡片时用自然语言完整说明（做了什么、下一步会发生什么、需要用户做什么），不要输出卡片字段名或内部编号。"
 const PRESENTATION_DISPATCH = "向用户简报：本阶段派发了什么角色的成员做什么工作。派单全文（dispatch.prompt）原样转发给成员执行，不要复述给用户。"
 
-// 呈现注入（出口统一，单点全覆盖）：awaiting-user = 用户决定点（完整纪律）；
-// dispatch = 派发简报；advance/complete/blocked/wait-inflight = 进展转折。
-// 成员 deliver/review 回执、登记/查询类命令不命中（无这些字段），自然跳过。
-function attachPresentation(card) {
+// 决定/阻塞带公共与专项，其他实际汇报点仅公共；机械回执不命中。
+async function attachPresentation(card, readGuidance, stop = null, runProgress = false) {
   if (!card || typeof card !== "object" || Array.isArray(card) || card.presentation) return card
-  if (card.status === "awaiting-user") return { ...card, presentation: PRESENTATION_DECISION }
-  if (card.transition === "dispatch") return { ...card, presentation: PRESENTATION_DISPATCH }
-  if (card.transition === "advance" || card.transition === "complete" || card.transition === "blocked" || card.transition === "wait-inflight") {
-    return { ...card, presentation: PRESENTATION_PROGRESS }
-  }
+  const decision = [card.status, stop, card.transition].some((v) => v === "awaiting-user" || v === "blocked")
+  const dispatch = card.transition === "dispatch"
+  const progress = ["advance", "complete", "wait-inflight"].includes(card.transition) ||
+    [card.status, stop].some((v) => ["completed", "archived", "wait-inflight"].includes(v)) ||
+    (runProgress && card.status === "working" && card.next === "dispatch")
+  if (decision || dispatch || progress) return { ...card, presentation: (decision ? PRESENTATION_DECISION : dispatch ? PRESENTATION_DISPATCH : PRESENTATION_PROGRESS) + "\n\n" + await readGuidance({ review: decision }) }
   return card
 }
 
@@ -1525,30 +1514,96 @@ async function cmdModels({ projectRoot }) {
   }
 }
 
-// init（可选便捷命令）：只装载 skill 到 .dsh/skills/（DSH filesystem provider 扫描根）。
+// init：只处理三技能目录与公共单文件，逐项验证/暂存/替换，保留其他内容。
 // 核心流程（安装 → open → run）不需要它。
 async function cmdInit({ projectRoot, force = false }) {
-  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "skills", "team-work-v3")
-  const dest = path.join(projectRoot, ".dsh", "skills", "team-work-v3")
-  let skill
-  try {
-    await access(path.join(src, "SKILL.md"))
-    const exists = await access(path.join(dest, "SKILL.md")).then(() => true, () => false)
-    if (exists && !force) {
-      skill = { installedTo: path.relative(projectRoot, dest), action: "skipped", note: "已存在；--force 覆盖" }
-    } else {
-      await rm(dest, { recursive: true, force: true })
-      await cp(src, dest, { recursive: true })
-      skill = { installedTo: path.relative(projectRoot, dest), action: exists ? "overwritten" : "installed" }
+  const root = await realpath(projectRoot)
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  const targets = [
+    ["skill", "team-work-v3", true], ["writingSkill", "clarity-writing", true],
+    ["reviewSkill", "clarity-review", true], ["outputStandard", "clarity-guidance/output-standard.md", false],
+  ]
+  const inside = (p) => p === root || p.startsWith(root + path.sep)
+  const checkedTarget = async (dest) => {
+    let current = root
+    for (const part of path.relative(root, dest).split(path.sep)) {
+      current = path.join(current, part)
+      const info = await lstat(current).catch((error) => { if (error.code === "ENOENT") return null; throw error })
+      if (info && !inside(await realpath(current))) throw new Error("目标或父路径经符号链接越出项目根：" + current)
     }
-  } catch {
-    skill = { installedTo: null, action: "unavailable", note: "skill 源不在本安装布局内（npm files 应含 skills/team-work-v3/）" }
   }
-  return {
-    ok: true,
-    skill,
-    note: "init 只是便捷命令：装载 Lead 判断指引 skill；模型配置由 DSH 当前 profile 的插件配置管理。",
+  const result = { ok: true }
+  const validated = new Map()
+  const validateFile = (file, required = false) => {
+    if (!validated.has(file)) validated.set(file, (async () => {
+      try {
+        if (!(await lstat(file)).isFile()) throw new Error("资源须为普通文件")
+        const body = await readFile(file, "utf8")
+        if (!body.trim()) throw new Error("资源正文为空")
+        if (required) requiredClarityText(body)
+        return body
+      } catch (error) { throw new Error("资源 " + file + "：" + (error?.code ?? error?.message)) }
+    })())
+    return validated.get(file)
   }
+  const publicSource = path.join(packageRoot, "skills/clarity-guidance/output-standard.md")
+  for (const [key, relative, directory] of targets) {
+    const src = path.join(packageRoot, "skills", relative)
+    const dest = path.join(root, ".dsh", "skills", relative)
+    const installedTo = path.relative(root, dest)
+    let temporary = null
+    let backup = null
+    let published = false
+    try {
+      await checkedTarget(dest)
+      const existing = await lstat(dest).catch((error) => { if (error.code === "ENOENT") return null; throw error })
+      if (existing && !force) {
+        result[key] = { installedTo, action: "skipped", note: "保留已有目标（不按 SKILL.md 是否存在判断）；--force 仅覆盖此目标，无法据存在性确认与根包同版" }
+        continue
+      }
+      const sourceInfo = await lstat(src)
+      if (directory ? !sourceInfo.isDirectory() : !sourceInfo.isFile()) throw new Error("源类型不符合目标")
+      const files = [[directory ? path.join(src, "SKILL.md") : src, directory ? "SKILL.md" : "", !directory]]
+      if (key === "reviewSkill") for (const reference of ["review-rules", "standalone-records", "examples"]) files.push([path.join(src, "references", reference + ".md"), "references/" + reference + ".md", reference === "review-rules"])
+      if (key === "writingSkill" || key === "reviewSkill") files.push([publicSource, null, true])
+      const contents = await Promise.all(files.map(([file, , required]) => validateFile(file, required)))
+      await mkdir(path.dirname(dest), { recursive: true })
+      await checkedTarget(dest)
+      temporary = await mkdtemp(path.join(path.dirname(dest), ".tw-init-"))
+      const staged = path.join(temporary, "content")
+      await fsPromises.cp(src, staged, { recursive: directory })
+      for (let index = 0; index < files.length; index += 1) {
+        const [file, relative] = files[index]
+        const copy = relative === null ? path.join(temporary, "public-dependency.md") : directory ? path.join(staged, relative) : staged
+        if (relative === null) await fsPromises.cp(file, copy)
+        try {
+          if (!(await lstat(copy)).isFile() || await readFile(copy, "utf8") !== contents[index]) throw new Error("暂存副本与已验证源不一致")
+        } catch (error) { throw new Error("暂存资源 " + file + "：" + (error?.code ?? error?.message)) }
+      }
+      if (existing) {
+        const previous = path.join(temporary, "previous")
+        await fsPromises.rename(dest, previous)
+        backup = previous
+      }
+      try { await fsPromises.rename(staged, dest) } catch (error) {
+        if (backup) { await fsPromises.rename(backup, dest); backup = null }
+        throw error
+      }
+      published = true
+      result[key] = { installedTo, action: existing ? "overwritten" : "installed" }
+    } catch (error) {
+      result[key] = { installedTo: null, target: installedTo, action: "unavailable", note: "装载失败；源：" + src + "；原因：" + (error?.code ?? error?.message) + "。核对完整根包资源和目标权限后重试" }
+    } finally {
+      // 回滚失败时保留备份供恢复，绝不把最后有效内容当临时垃圾清理。
+      if (temporary && backup && !published) {
+        result[key].note += "；回滚失败，原内容备份保留在 " + backup
+      } else if (temporary) await rm(temporary, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+  const actions = targets.map(([key]) => result[key].action)
+  result.note = "init 仅装载三个技能目录与公共规范单文件，不创建配置或任务事实；--force 仅覆盖这四个目标，其他文件保留。" +
+    (actions.includes("unavailable") ? "存在部分失败，按逐项诊断恢复；不能声明完整同版。" : actions.includes("skipped") ? "含已有副本，版本混用待核；无法据存在性确认兼容。" : "四目标均来自当前根包；模型配置仍由 DSH 当前 profile 管理。")
+  return result
 }
 
 // help（P4：CLI 即接口，--help 与拒绝输出即完整 meta）
@@ -1566,7 +1621,7 @@ function helpCard() {
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
       gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
       models: "tw models：只读调用配置快照的 tier→模型解析结果与 entry/profile 来源",
-      init: "tw init [--force]：可选——只装载 skill 到 .dsh/skills/",
+      init: "tw init [--force]：装载 .dsh/skills/ 下 team-work-v3、clarity-writing、clarity-review 三目录及 clarity-guidance/output-standard.md 单文件；默认逐项保留，--force 只覆盖四目标，不清理其他文件",
       restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
       retire: "tw retire --task <n> --wave <wvN> --reason <原因>：作废未结波（仅 Lead；解除在途，已交付报告保留审计）",
       migrate: "tw migrate --task <n>：既有任务波身份迁移（追加 wave-assigned 事件；异 digest 冲突出选择卡）",
@@ -1656,26 +1711,55 @@ async function markTreeReadOnly(rootDir) {
   await chmod(rootDir, 0o555)
 }
 
-// tw 出口（唯一公共入口：bin、DSH tw-tool、测试都经此）——汇报呈现注入的统一后处理：
-// awaiting-user 用户决定点带完整呈现纪律（卡内另有 progress 素材），dispatch 带派发简报，
-// advance/complete/blocked/wait-inflight 带轻量提醒。注入随每次卡片输出重新在场——
-// Lead 的汇报纪律不依赖 skill 一次性装载，会话变长也不稀释（认知对等修复）。
-// dispatch-plan 的嵌套 stop 卡（result.card）同样处理；拒绝卡无 status/transition 不命中。
-// run 只读化后 waves 派发计划（stop=null 且 waves 非空）是派发事实的唯一出口——派发简报纪律
-// 同样在此注入到 plan 顶层，纪律不随 run 撤推进而消失。
+// 唯一公共出口同时覆盖 JSON 与终端人读；只读投影不参与任务事实或收单判重。
+// 业务正文保持原样，成员规则单独输出，绑定层在同一投递中追加一个 text 块。
 export async function tw(argv, opts = {}) {
-  const card = await twInner(argv, opts)
-  if (card && typeof card === "object" && !Array.isArray(card)) {
-    if (card.card && typeof card.card === "object" && !Array.isArray(card.card)) {
-      const wrapped = { ...card, card: attachPresentation(card.card) }
-      if (wrapped.stop === null && Array.isArray(wrapped.waves) && wrapped.waves.length > 0 && !wrapped.presentation) {
-        wrapped.presentation = PRESENTATION_DISPATCH
-      }
-      return wrapped
-    }
-    return attachPresentation(card)
+  let result = await twInner(argv, opts)
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result
+  const readGuidance = createClarityGuidanceReader()
+  const hasMembers = [result, result.card].some((card) => card?.dispatch || card?.dispatches?.length || card?.waves?.length || card?.inflight?.length)
+  let teamScene
+  if (hasMembers) {
+    const { workflow } = await loadDefinitions(opts.projectRoot ?? process.cwd())
+    teamScene = workflow.stages.find((stage) => stage.id === (result.stage ?? result.card?.stage))?.teamScene
   }
-  return card
+  const member = async (item) => ({ ...item, requiredGuidance: await readGuidance({ review: memberNeedsClarityReview(item, teamScene) }) })
+  const projectMembers = async (card) => {
+    if (!card || typeof card !== "object") return card
+    const projected = { ...card }
+    if (card.dispatch) projected.dispatch = await member(card.dispatch)
+    for (const key of ["dispatches", "waves", "inflight"]) {
+      if (Array.isArray(card[key]) && card[key].length) projected[key] = await Promise.all(card[key].map(member))
+    }
+    return projected
+  }
+  result = await projectMembers(result)
+  if (result.card && typeof result.card === "object") {
+    result.card = await projectMembers(result.card)
+    if (result.stop === null && result.waves?.length) {
+      result.presentation = PRESENTATION_DISPATCH + "\n\n" + await readGuidance()
+    } else result.card = await attachPresentation(result.card, readGuidance, result.stop)
+  } else result = await attachPresentation(result, readGuidance, null, argv[0] === "run")
+  if (argv[0] === "dispatch-plan" && !argv.includes("--json")) {
+    // 人读通道独立可用：成员只需原样投递下方的正文和规则，不手拼资源。
+    if (!result.human) result.human = stopHumanLines(result.stop, result.card ?? result, result)
+    const routes = new Map()
+    for (const item of [...(result.waves ?? []), ...(result.inflight ?? [])]) {
+      const key = item.dispatchKey ?? item.key
+      const position = result.human.push("成员 " + key + " 必读规则（与选定业务正文一起原样投递；仅随实际恢复投递，不催活会话）：\n" + item.requiredGuidance) - 1
+      routes.set(key, "完整成员必读规则见 human[" + position + "]；与选定业务正文一起原样投递。")
+      item.requiredGuidance = routes.get(key)
+    }
+    for (const item of result.card?.inflight ?? []) item.requiredGuidance = routes.get(item.dispatchKey ?? item.key) ?? item.requiredGuidance
+    const presentation = result.presentation ?? result.card?.presentation
+    if (presentation) {
+      const position = result.human.push(presentation) - 1
+      const route = presentation.split("\n\n")[0] + "\n完整呈现规则见 human[" + position + "]。"
+      if (result.presentation) result.presentation = route
+      else result.card.presentation = route
+    }
+  }
+  return result
 }
 
 export { cmdOpen, cmdRun, cmdDecide, cmdIntent, cmdGate, cmdArchive }

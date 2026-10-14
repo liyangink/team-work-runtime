@@ -14,7 +14,10 @@ export async function apply(ctx, config = {}, deps = {}) {
     const settings = optional("settings")
     if (typeof settings?.configure === "function") disposers.push(settings.configure({ auto: false }))
   } catch (error) { ctx.logger?.warn?.("team-work-dsh: 配置页面策略未启用：" + String(error?.message ?? error)) }
-  try { await (deps.registerEmbeddedSkill ?? registerEmbeddedSkill)(ctx, config) } catch (error) {
+  try {
+    const dispose = await (deps.registerEmbeddedSkill ?? registerEmbeddedSkill)(ctx, config)
+    if (typeof dispose === "function") disposers.push(dispose)
+  } catch (error) {
     ctx.logger?.warn?.("team-work-dsh: skill 注册未启用，可用 tw init 文件通道：" + String(error?.message ?? error))
   }
   const configSnapshot = () => readDshConfigSnapshot(ctx, config)
@@ -27,5 +30,12 @@ export async function apply(ctx, config = {}, deps = {}) {
     const systemPrompt = optional("systemPrompt")
     if (typeof systemPrompt?.section === "function") disposers.push(systemPrompt.section(systemPromptSection(ctx, config)))
   } catch (error) { ctx.logger?.warn?.("team-work-dsh: 委派指引未启用：" + String(error?.message ?? error)) }
-  return () => { for (const dispose of disposers.reverse()) if (typeof dispose === "function") dispose() }
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    for (const dispose of disposers.reverse()) if (typeof dispose === "function") {
+      try { dispose() } catch (error) { ctx.logger?.warn?.("team-work-dsh: 贡献释放失败：" + String(error?.message ?? error)) }
+    }
+  }
 }

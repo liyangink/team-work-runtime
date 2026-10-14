@@ -1,12 +1,14 @@
 // 新版客户端配置、档位输入与真实会话徽标的行为契约。
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
+import { readFile, mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
+import path from "node:path"
+import os from "node:os"
 import test from "node:test"
 import vm from "node:vm"
 import z from "@deepseek-ai/schemastery"
 import { Config, validateTiers, readDshConfigSnapshot, systemPromptSection } from "../dsh/settings.js"
 import { resolveTwExecutable, resolveChildCwd, twToolDefinition } from "../dsh/tw-tool.js"
-import { parseFrontmatter } from "../dsh/skill-embed.js"
+import { parseFrontmatter, registerEmbeddedSkill } from "../dsh/skill-embed.js"
 
 const tiers = () => ({
   junior: [{ provider: "provider-demo", model: "model-basic", family: "family-basic" }],
@@ -400,4 +402,46 @@ test("tw 工具与 skill：根制品寻址、缺 cwd 恢复、render 返回内�
   assert.equal(rendered[0].type, "text")
   assert.deepEqual(JSON.parse(rendered[0].text), { ok: true, message: "演示输出" })
   assert.deepEqual(parseFrontmatter("---\nname: demo\ndescription: '说明'\n---\n正文"), { name: "demo", description: "说明" })
+})
+
+test("三个随包技能独立注册与释放：默认根基址、自定义旧基址及失败隔离", async (t) => {
+  const specs = [], released = [], warnings = []
+  const ctx = { skills: { register(spec) { specs.push(spec); return () => released.push(spec.name) } }, logger: { warn(text) { warnings.push(text) } } }
+  const dispose = await registerEmbeddedSkill(ctx, {})
+  assert.deepEqual(specs.map((spec) => spec.name), ["team-work", "clarity-writing", "clarity-review"])
+  for (const [spec, directory] of specs.map((spec, i) => [spec, ["team-work-v3", "clarity-writing", "clarity-review"][i]])) {
+    assert.equal(spec.source, "team-work-runtime")
+    assert.equal(spec.resourceBase.path, path.resolve("skills", directory))
+    assert.equal(spec.content, await readFile(path.join(spec.resourceBase.path, "SKILL.md"), "utf8"))
+  }
+  dispose(); dispose()
+  assert.deepEqual(released, ["clarity-review", "clarity-writing", "team-work"])
+  const root = await mkdtemp(path.join(os.tmpdir(), "twr-custom-skill-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(path.join(root, "references"))
+  await writeFile(path.join(root, "SKILL.md"), "---\nname: team-work\ndescription: 自定义入口\n---\n正文")
+  specs.length = 0
+  const customOff = await registerEmbeddedSkill(ctx, { skillDir: root })
+  assert.equal(specs[0].resourceBase.path, path.join(root, "references"))
+  assert.equal(specs[1].resourceBase.path, path.resolve("skills/clarity-writing"))
+  customOff()
+  const selected = [], off = []
+  const isolated = { skills: { register(spec) { if (spec.name === "clarity-writing") throw new Error("条目失败"); selected.push(spec.name); return () => off.push(spec.name) } }, logger: ctx.logger }
+  const isolatedOff = await registerEmbeddedSkill(isolated, { skillDir: path.join(root, "missing") })
+  assert.deepEqual(selected, ["clarity-review"])
+  assert.ok(warnings.some((text) => /team-work.*ENOENT/.test(text)))
+  assert.ok(warnings.some((text) => /clarity-writing.*条目失败/.test(text)))
+  isolatedOff()
+  assert.deepEqual(off, ["clarity-review"])
+})
+
+test("插件技能一条失败不影响另两条和两工具，禁用收拢真实释放函数", async () => {
+  const plugin = await import("../dsh/index.js")
+  const registered = [], released = [], warnings = []
+  const ctx = { skills: { register(spec) { if (spec.name === "clarity-writing") throw new Error("失败示例"); registered.push(spec.name); return () => released.push(spec.name) } }, tools: { register(def) { registered.push(def.name); return () => released.push(def.name) } }, logger: { warn(text) { warnings.push(text) } } }
+  const dispose = await plugin.apply(ctx, {})
+  assert.deepEqual(registered, ["team-work", "clarity-review", "tw", "tw-dispatch"])
+  assert.ok(warnings.some((text) => /clarity-writing.*失败示例/.test(text)))
+  dispose()
+  assert.deepEqual(released, ["tw-dispatch", "tw", "clarity-review", "team-work"])
 })

@@ -1,10 +1,10 @@
 // 引导库与派单注入测试：检索层级、分层覆盖、按角色/场景注入、续派与在途重建。
 import assert from "node:assert/strict"
-import { mkdir, writeFile, readFile } from "node:fs/promises"
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises"
 import path from "node:path"
 import test, { mock } from "node:test"
 
-import { loadGuidance } from "../runtime-v3/guidance.mjs"
+import { loadGuidance, createClarityGuidanceReader, memberNeedsClarityReview } from "../runtime-v3/guidance.mjs"
 import { caller, makeProject, openTask } from "./support/v3-fixtures.mjs"
 
 // implementation → test 两阶段工作流（teamScene 与引导库场景键同名）
@@ -31,6 +31,93 @@ const IMPL_POLICY = {
 function assertBaseline(prompt, facts) {
   for (const fact of facts) assert.equal(prompt.split(fact).length - 1, 1, "验收事实恰好出现一次：" + fact)
 }
+
+test("clarity 同源短段：按需读取、操作内共享，下一操作更新且不加载详细正文", async () => {
+  const root = await makeProject()
+  const publicFile = path.join(root, "skills/clarity-guidance/output-standard.md")
+  const reviewFile = path.join(root, "skills/clarity-review/references/review-rules.md")
+  for (const file of [publicFile, reviewFile]) await mkdir(path.dirname(file), { recursive: true })
+  const resource = (body) => "详细前言\n<!-- clarity:required:begin -->\n" + body + "\n<!-- clarity:required:end -->\n不应自动带入的详细示例"
+  await writeFile(publicFile, resource("公共第一版"))
+  await writeFile(reviewFile, resource("专项第一版"))
+  const reads = []
+  const read = async (file, encoding) => { reads.push(file); return readFile(file, encoding) }
+  const get = createClarityGuidanceReader({ packageRoot: root, read })
+  const shared = await Promise.all([get(), get(), get({ review: true })])
+  assert.equal(reads.filter((p) => p === publicFile).length, 1)
+  assert.equal(reads.filter((p) => p === reviewFile).length, 1)
+  assert.ok(shared[0].includes("\n公共第一版\n"), "原文不改写、不截断")
+  assert.ok(shared[0].includes(publicFile), "完整规范准确路径可见")
+  assert.doesNotMatch(shared[0], /专项第一版|详细前言|不应自动带入/)
+  assert.match(shared[2], /专项第一版/)
+  await writeFile(publicFile, resource("公共第二版"))
+  assert.match(await get(), /公共第一版/, "一次操作内保持同源快照")
+  const next = createClarityGuidanceReader({ packageRoot: root, read })
+  assert.match(await next(), /公共第二版/, "下次操作不沿用缓存")
+  assert.equal(reads.filter((p) => p === reviewFile).length, 1, "仅公共时不读专项")
+})
+
+test("clarity 坏资源可见恢复：缺文件、目录、重复/倒置/空标记均不伪造备用规则", async () => {
+  const root = await makeProject()
+  const source = path.join(root, "skills/clarity-guidance/output-standard.md")
+  await mkdir(path.dirname(source), { recursive: true })
+  const check = async () => {
+    const result = await createClarityGuidanceReader({ packageRoot: root })()
+    assert.match(result, /规则未带入.*恢复：/s)
+    assert.ok(result.includes(source))
+    assert.doesNotMatch(result, /## clarity 公共必读/)
+  }
+  await check()
+  for (const text of ["缺少标记", "<!-- clarity:required:end -->正文<!-- clarity:required:begin -->", "<!-- clarity:required:begin --> <!-- clarity:required:end -->", "<!-- clarity:required:begin -->正文<!-- clarity:required:end --><!-- clarity:required:begin -->"]) {
+    await writeFile(source, text); await check()
+  }
+  await rm(source)
+  await mkdir(source)
+  await check()
+  const result = await createClarityGuidanceReader({ packageRoot: root, read: async () => { const error = new Error("拒绝读取"); error.code = "EACCES"; throw error } })()
+  assert.match(result, /EACCES/)
+})
+
+test("clarity 路由只用既有事实，不推测自定义场景", () => {
+  for (const scene of ["design", "design-review", "spec-review", "code-review"]) assert.equal(memberNeedsClarityReview({ role: "owner", kind: "produce" }, scene), true)
+  for (const scene of ["implementation", "research", "custom-review", undefined]) assert.equal(memberNeedsClarityReview({ role: "owner", kind: "produce" }, scene), false)
+  for (const kind of ["review", "verdict"]) assert.equal(memberNeedsClarityReview({ role: "custom", kind }, "custom"), true)
+})
+
+test("clarity 派单/续派/在途/human 自动投影且不改变业务正文，机械回执无规则", async () => {
+  const root = await makeProject({ workflow: IMPL_WORKFLOW, policy: IMPL_POLICY })
+  const call = caller(root)
+  await openTask(root, "clarity-t", { objective: "实现示例行为", entry: "implementation" })
+  const plan = await call(["dispatch-plan", "--task", "clarity-t", "--writable", "src.mjs:source", "--json"])
+  const owner = plan.waves[0]
+  assert.match(owner.requiredGuidance, /## clarity 公共必读/)
+  assert.doesNotMatch(owner.requiredGuidance, /## clarity 审阅必读/)
+  assert.doesNotMatch(owner.prompt, /## clarity 公共必读/)
+  assert.equal(plan.presentation.split("## clarity 公共必读").length - 1, 1)
+  assert.equal(plan.card.presentation, undefined, "Lead 只在顶层承载一次")
+  const terminal = await call(["dispatch-plan", "--task", "clarity-t"])
+  assert.ok(terminal.human.some((text) => text.includes(owner.requiredGuidance)))
+  assert.match(terminal.inflight[0].requiredGuidance, /见 human\[/)
+  const snapshot = await readFile(path.join(root, ".team-work/tasks/clarity-t/journal.jsonl"), "utf8")
+  const status = await call(["run", "--task", "clarity-t"])
+  assert.equal(status.inflight[0].requiredGuidance, owner.requiredGuidance)
+  assert.equal(status.inflight[0].prompt, owner.prompt)
+  assert.equal(await readFile(path.join(root, ".team-work/tasks/clarity-t/journal.jsonl"), "utf8"), snapshot, "规则投影不写任务事实")
+  await writeFile(path.join(root, "src.mjs"), "export const value = 1")
+  const delivery = await call(["deliver", "--task", "clarity-t", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
+  assert.equal(delivery.presentation, undefined)
+  const reviewer = (await call(["dispatch-plan", "--task", "clarity-t", "--json"])).waves[0]
+  assert.equal(reviewer.requiredGuidance.split("## clarity 审阅必读").length - 1, 1)
+  const reviewed = await call(["review", "--task", "clarity-t", "--key", reviewer.dispatchKey, "--recommendation", "rework", "--summary", "补证据"])
+  assert.equal(reviewed.accepted, true)
+  const continuing = await call(["dispatch-plan", "--task", "clarity-t", "--writable", "src.mjs:source", "--json"])
+  assert.equal(continuing.waves[0].requiredGuidance, owner.requiredGuidance)
+  assert.doesNotMatch(continuing.waves[0].promptFull, /## clarity 公共必读/)
+  const waiting = await call(["dispatch-plan", "--task", "clarity-t", "--json"])
+  assert.equal(waiting.inflight[0].requiredGuidance, owner.requiredGuidance)
+  assert.equal(waiting.card.presentation.split("## clarity 公共必读").length - 1, 1)
+  assert.equal(waiting.presentation, undefined, "嵌套汇报不重复顶层")
+})
 
 test("实施派单：各角色按同一基线核验阻塞，保留证据反驳与扩范围前批准", async () => {
   const projectRoot = await makeProject({ workflow: IMPL_WORKFLOW, policy: { ...IMPL_POLICY, scenes: { implementation: { core: true } } } })
@@ -213,9 +300,9 @@ test("方案场景：Owner、Challenger、返工和在途重建均带同一决�
   })
   const call = caller(projectRoot)
   await openTask(projectRoot, "design-t", { objective: "设计示例模块", entry: "design" })
-  const d = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design"])
+  const d = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design", "--json"])
   assert.match(d.waves[0].prompt, /场景指引（design）/)
-  assert.match(d.waves[0].prompt, /首屏/)
+  assert.match(d.waves[0].requiredGuidance, /入口可见/)
   assert.match(d.waves[0].prompt, /Owner 自检/)
   assert.doesNotMatch(d.waves[0].prompt, /场景指引（design-review）/)
   await writeFile(path.join(projectRoot, "DESIGN.md"), "# 方案\n示例设计", "utf8")
@@ -224,13 +311,16 @@ test("方案场景：Owner、Challenger、返工和在途重建均带同一决�
   assert.equal(r.waves[0].role, "challenger")
   assert.match(r.waves[0].prompt, /能否据此决定/)
   await call(["review", "--task", "design-t", "--key", r.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "补充取舍依据"])
-  const rw = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design"])
+  const rw = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design", "--json"])
   assert.equal(rw.waves[0].kind, "respond")
-  assert.match(rw.waves[0].prompt, /本轮变化/)
+  assert.match(rw.waves[0].requiredGuidance, /修订.*本轮改变.*依据.*原结论/)
   const status = await call(["run", "--task", "design-t"])
-  const inflight = await call(["dispatch-plan", "--task", "design-t"])
+  const inflight = await call(["dispatch-plan", "--task", "design-t", "--json"])
   assert.equal(inflight.stop, "wait-inflight")
-  for (const card of [status, inflight]) assert.match(card.inflight[0].prompt, /场景指引（design）/)
+  for (const card of [status, inflight]) {
+    assert.match(card.inflight[0].prompt, /场景指引（design）/)
+    assert.equal(card.inflight[0].requiredGuidance, rw.waves[0].requiredGuidance)
+  }
 })
 
 test("方案审查场景：审查派单不要求第二份方案，项目同名覆盖继续生效", async () => {
@@ -243,22 +333,23 @@ test("方案审查场景：审查派单不要求第二份方案，项目同名�
   await call(["intent", "--task", "review-t", "--add-constraint", "只核验约定依据", "--add-exclusion", "不重写示例方案"])
   const d = await call(["dispatch-plan", "--task", "review-t", "--writable", "REVIEW.md:design-review"])
   assert.match(d.waves[0].prompt, /场景指引（design-review）/)
-  assert.match(d.waves[0].prompt, /不另写一份方案/)
+  assert.match(d.waves[0].prompt, /不另写(?:一份)?方案/)
   assert.doesNotMatch(d.waves[0].prompt, /场景指引（design）/)
   await writeFile(path.join(projectRoot, "REVIEW.md"), "# 审查报告\n示例发现", "utf8")
   await call(["deliver", "--task", "review-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成审查", "--paths", "REVIEW.md"])
-  const r = await call(["dispatch-plan", "--task", "review-t"])
+  const r = await call(["dispatch-plan", "--task", "review-t", "--json"])
   assert.equal(r.waves[0].role, "challenger")
-  assert.match(r.waves[0].prompt, /具体缺口/)
+  assert.match(r.waves[0].prompt, /给证据.*缺口.*最小修正/)
   await mkdir(path.join(projectRoot, "team-work/guidance/scenes"), { recursive: true })
   await writeFile(path.join(projectRoot, "team-work/guidance/scenes/design-review.md"), "- 项目审查标准：核对兼容依据。", "utf8")
   const g = await loadGuidance(projectRoot)
   assert.equal(g.scenes["design-review"], "- 项目审查标准：核对兼容依据。")
   assert.ok(g.scenes.design, "未覆盖的设计场景保留基线")
-  const inflight = await call(["dispatch-plan", "--task", "review-t"])
+  const inflight = await call(["dispatch-plan", "--task", "review-t", "--json"])
   assert.match(inflight.inflight[0].prompt, /核对兼容依据/)
   assert.doesNotMatch(inflight.inflight[0].prompt, /不另写一份方案/)
   assertBaseline(inflight.inflight[0].prompt, ["审查示例方案", "只核验约定依据", "不重写示例方案"])
+  assert.equal(inflight.inflight[0].requiredGuidance, r.waves[0].requiredGuidance, "项目场景覆盖不替换 clarity 根包源")
 })
 
 test("loadGuidance：项目无自定义目录时使用包内基线（角色+场景两级）", async () => {

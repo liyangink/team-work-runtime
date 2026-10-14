@@ -6,6 +6,8 @@ import assert from "assert/strict"
 import { mkdir, mkdtemp, writeFile, readFile, readdir, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { artifactsFingerprint } from "../runtime-v3/gate.mjs"
@@ -210,12 +212,17 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
 
   // 完整呈现纪律 + 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
   assert.match(gate.presentation, /呈现纪律/)
-  assert.match(gate.presentation, /不得原样抛给用户/)
-  assert.match(gate.presentation, /首次.*批准什么/)
-  assert.match(gate.presentation, /后续.*本轮变化.*依据.*原结论.*重新批准/)
-  assert.match(gate.presentation, /缺少.*比较.*明确说明.*不得.*臆造.*已批准/)
-  assert.match(gate.presentation, /进行版本对比时.*缺少.*比较.*明确说明/)
-  assert.match(gate.presentation, /引用既有批准结论时.*缺少.*批准记录.*明确说明/)
+  const required = async (relative) => (await readFile(new URL("../" + relative, import.meta.url), "utf8")).split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
+  const publicRules = await required("skills/clarity-guidance/output-standard.md")
+  const reviewRules = await required("skills/clarity-review/references/review-rules.md")
+  assert.ok(gate.presentation.includes(publicRules), "公共段原文同源，不沿用旧硬编码副本")
+  assert.ok(gate.presentation.includes(reviewRules), "决定点追加专项段原文")
+  assert.match(publicRules, /完整句|自然语言|朴实中文/)
+  assert.match(publicRules, /批准.*范围|批准什么/)
+  assert.match(publicRules, /修订.*改变.*依据.*原结论/)
+  assert.match(publicRules, /比较.*批准.*核对真实来源.*缺失.*说明/)
+  assert.match(reviewRules, /不能跳过.*人工批准.*指纹重批/)
+  for (const header of ["## clarity 公共必读", "## clarity 审阅必读"]) assert.equal(gate.presentation.split(header).length - 1, 1)
   assert.match(gate.progress, /完成八视角审查/)
   assert.match(gate.progress, /REPORT\.md/)
   assert.match(gate.progress, /证据链完整/)
@@ -231,15 +238,77 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   assert.match(plan.card.presentation, /呈现纪律/)
   assert.equal(plan.card.presentation, gate.presentation, "run 与 dispatch 的决定呈现规则一致")
   assert.equal(plan.card.progress, gate.progress)
+  for (const flags of [[], ["--json"]]) {
+    const { stdout } = await promisify(execFile)(process.execPath, [new URL("../bin/tw.mjs", import.meta.url).pathname, "dispatch-plan", "--task", "present-check", "--project-root", projectRoot, ...flags])
+    for (const header of ["## clarity 公共必读", "## clarity 审阅必读"]) assert.equal(stdout.split(header).length - 1, 1, "真实 stdout 每段恰好一次：" + flags.join(" "))
+    const actual = JSON.parse(stdout)
+    if (flags.length) assert.ok(actual.card.presentation.includes(publicRules))
+    else {
+      assert.match(actual.card.presentation, /完整呈现规则见 human\[/)
+      assert.ok(actual.human.some((text) => text.includes(publicRules) && text.includes(reviewRules)))
+    }
+  }
 
   // accept → completed：进展转折卡带轻量提醒（完成由 dispatch 通道落盘）
   await call(["decide", "--task", "present-check", "--choice", "1"])
   const done = await call(["dispatch-plan", "--task", "present-check"])
   assert.equal(done.stop, "completed")
   assert.match(done.card.presentation, /自然语言完整说明/)
+  assert.ok(done.human.some((text) => text.includes(publicRules)))
+  assert.doesNotMatch(done.card.presentation, /## clarity 审阅必读/)
+  const repeated = await call(["run", "--task", "present-check"])
+  assert.ok(repeated.presentation.includes(publicRules), "重复终态查询仍带公共规则")
+  await call(["archive", "--task", "present-check"])
+  const archived = await call(["dispatch-plan", "--task", "present-check"])
+  assert.ok(archived.human.some((text) => text.includes(publicRules)), "归档查询仍带规则")
+  assert.match(archived.card.presentation, /完整呈现规则见 human\[/, "早返回终态定位人读规则")
 })
 
 // ── §7 修订 v2：run 只读矩阵 + dispatch-plan 人读模式 ─────────────────────────
+
+test("run 普通进展：待派发、过门和待收尾均带公共段，整个项目零写入", async () => {
+  const snapshot = async (root) => {
+    const entries = []
+    const visit = async (dir) => {
+      for (const name of (await readdir(dir)).sort()) {
+        const file = path.join(dir, name)
+        const info = await stat(file)
+        entries.push([path.relative(root, file), info.mode, info.mtimeMs, info.isDirectory() ? null : await readFile(file, "base64")])
+        if (info.isDirectory()) await visit(file)
+      }
+    }
+    await visit(root)
+    return entries
+  }
+  for (const mode of ["pending", "advance", "complete"]) {
+    const root = await mkdtemp(path.join(tmpdir(), "tw-run-progress-"))
+    await mkdir(path.join(root, "workflow/definitions"), { recursive: true })
+    await mkdir(path.join(root, "team-work/policies"), { recursive: true })
+    await writeFile(path.join(root, "workflow/definitions/engineering.json"), JSON.stringify({
+      stages: [{ id: "research", label: "调研", outputs: [], teamScene: "research" }, { id: "finish", label: "收尾", outputs: [], teamScene: "finish" }],
+      gates: [], terminalStages: mode === "complete" ? ["research"] : ["finish"],
+      edges: [{ from: "research", to: "finish", outcome: "pass" }],
+    }))
+    await writeFile(path.join(root, "team-work/policies/default.json"), JSON.stringify({ maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { research: {}, finish: {} } }))
+    const call = (argv) => tw(argv, { projectRoot: root })
+    await call(["open", "--name", "progress-check", "--objective", "核验普通进展规则"])
+    if (mode !== "pending") {
+      const wave = (await call(["dispatch-plan", "--task", "progress-check", "--writable", "none", "--json"])).waves[0]
+      assert.equal((await call(["deliver", "--task", "progress-check", "--key", wave.dispatchKey, "--outcome", "delivered", "--summary", "调研完成"])).presentation, undefined)
+      const review = (await call(["dispatch-plan", "--task", "progress-check", "--json"])).waves[0]
+      assert.equal((await call(["review", "--task", "progress-check", "--key", review.dispatchKey, "--recommendation", "accept", "--summary", "核验通过"])).presentation, undefined)
+    }
+    const before = await snapshot(root)
+    const card = await call(["run", "--task", "progress-check"])
+    assert.equal(card.status, "working", mode)
+    assert.equal(card.next, "dispatch", mode)
+    assert.match(card.note, mode === "pending" ? /有待派发波次/ : mode === "advance" ? /门禁已通过/ : /完成条件已满足/)
+    assert.equal(card.presentation.split("## clarity 公共必读").length - 1, 1)
+    assert.doesNotMatch(card.presentation, /## clarity 审阅必读/)
+    assert.deepEqual(await snapshot(root), before, "读取规范和呈现不写任务事实或目录：" + mode)
+    assert.equal((await call(["models"])).presentation, undefined)
+  }
+})
 
 test("run 只读：待派发/在途各态出指引卡且零写入；--writable 被拒绝", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-run-ro-"))

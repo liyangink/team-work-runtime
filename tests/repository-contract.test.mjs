@@ -40,9 +40,41 @@ test("package metadata is intact (install simulation once caught corruption)", a
   assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh-agent"], undefined, "模型注入安装器已下线")
   assert.equal(pkg.dependencies?.["@deepseek-ai/schemastery"], "~3.18.4", "直接使用的 schema 依赖在根制品声明")
   assert.ok(!pkg.files.some((entry) => entry.startsWith("packages/")), "唯一根制品不得收编旧 packages 子包")
-  for (const entry of ["bin/", "cordis.patch.yml", "dsh/", "runtime-v3/", "skills/team-work-v3/", "workflow/definitions/", "team-work/policies/"]) {
+  for (const entry of ["bin/", "cordis.patch.yml", "dsh/", "runtime-v3/", "skills/team-work-v3/", "skills/clarity-writing/", "skills/clarity-review/", "skills/clarity-guidance/", "workflow/definitions/", "team-work/policies/"]) {
     assert.ok(pkg.files.includes(entry), `files 缺 ${entry}`)
   }
+})
+
+test("clarity 技能携带同级公共资源，必读段各只有一个原文来源", async () => {
+  const inventory = JSON.parse(await read("docs/file-inventory.json"))
+  const files = [
+    "skills/clarity-guidance/output-standard.md",
+    "skills/clarity-writing/SKILL.md",
+    "skills/clarity-review/SKILL.md",
+    "skills/clarity-review/references/review-rules.md",
+    "skills/clarity-review/references/standalone-records.md",
+    "skills/clarity-review/references/examples.md",
+  ]
+  for (const file of files) {
+    assert.ok(inventory.newImplementation.includes(file), file)
+    assert.ok(!inventory.planned.includes(file), file)
+  }
+  for (const name of ["clarity-writing", "clarity-review"]) {
+    const skill = await read(`skills/${name}/SKILL.md`)
+    assert.ok(skill.startsWith(`---\nname: ${name}\n`), name)
+    assert.ok(skill.includes("../clarity-guidance/output-standard.md"), "两个入口链接同一公共规范")
+  }
+  for (const file of [files[0], files[3]]) {
+    const content = await read(file)
+    const begin = "<!-- clarity:required:begin -->"
+    const end = "<!-- clarity:required:end -->"
+    assert.equal(content.split(begin).length, 2, `${file} 唯一开始标记`)
+    assert.equal(content.split(end).length, 2, `${file} 唯一结束标记`)
+    assert.ok(content.indexOf(begin) < content.indexOf(end), `${file} 标记顺序`)
+    assert.ok(content.slice(content.indexOf(begin) + begin.length, content.indexOf(end)).trim(), `${file} 必读原文非空`)
+  }
+  await assert.rejects(access(path.join(projectRoot, "skills/clarity-guidance/SKILL.md")), (error) => error.code === "ENOENT", "公共资源不是第三个新技能")
+  await assert.rejects(access(path.join(projectRoot, "skills/clarity-review/references/state-model.md")), (error) => error.code === "ENOENT", "状态模型并入独立记录，无副本")
 })
 
 test("dsh orchestration template stays consistent with skill surface", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import z from "@deepseek-ai/schemastery"
@@ -151,6 +151,7 @@ function ownerWave(overrides = {}) {
     round: 1,
     continuation: false,
     prompt: "派单全文 PROMPT",
+    requiredGuidance: "公共必读规则：结论前置，保留真实风险。",
     deliver: "deliver",
     modelHint: { provider: "p-a", model: "m-j1", source: "global-settings" },
     weight: 1,
@@ -185,7 +186,7 @@ function makeCtx(overrides = {}) {
       type: "agent/inbox/spliced",
       seq: session.events.length + 1,
       time: 0,
-      data: { target: "next-turn", start: 0, inserted: [{ id: "msg-" + (++msgSeq), role: "user", content: [{ type: "text", text }] }] },
+      data: { target: "next-turn", start: 0, inserted: [{ id: "msg-" + (++msgSeq), role: "user", content: Array.isArray(text) ? structuredClone(text) : [{ type: "text", text }] }] },
     })
   }
   const persist = (session) => {
@@ -205,7 +206,7 @@ function makeCtx(overrides = {}) {
         started.push(spec)
         const session = { id: childId, header: headerOf(childId, spec.request.parent.id), events: [{ type: "subagent/descriptor", seq: 1, time: 0, data: { mode: "continuable" } }] }
         live.set(childId, session)
-        splice(session, spec.request.prompt[0]?.text ?? "") // inbox 接受即同步进内存事件流
+        splice(session, spec.request.prompt) // inbox 接受即同步进内存事件流，保留全部块
         persist(session) // 接受即落盘（契约 3）
         return { childId, messageId: "m-" + started.length }
       },
@@ -220,8 +221,8 @@ function makeCtx(overrides = {}) {
         } else if (session.header.parentSession !== parent.id) {
           throw unauthorized()
         }
-        followups.push({ childId, text: content[0]?.text, options })
-        splice(session, content[0]?.text ?? "")
+        followups.push({ childId, text: content[0]?.text, content: structuredClone(content), options })
+        splice(session, content)
         persist(session)
         return "msg-" + (++msgSeq)
       },
@@ -274,6 +275,104 @@ function makeTool(deps = {}, ctxOverrides = {}) {
   const tool = twDispatchDefinition(made.ctx, deps)
   return { tool, ...made }
 }
+
+test("自动短规则实际到达初派/续派/重建/在途冷提醒，Lead 最终 render 只保留自身段", async (t) => {
+  const rules = "公共必读段原文\n专项必读段原文\n资源：包内规范"
+  for (const mode of ["fresh", "incremental", "full", "reminder", "rebuild", "inflight-reminder", "inflight-recreate"]) {
+    const h = makeCtx()
+    // 禁止模型调用技能入口；装配服务仍在，不把移除服务当成验收。
+    h.ctx.skills = { register() { return () => {} }, get() { assert.fail("不应主动调用 skill") } }
+    const continuation = ["incremental", "full", "reminder", "rebuild"].includes(mode)
+    const wave = ownerWave({ continuation, ...(continuation ? { expectedAgentId: "prior-example" } : {}), prompt: "本轮增量正文", promptFull: "本轮完整正文", requiredGuidance: rules })
+    if (["incremental", "full", "reminder", "inflight-reminder"].includes(mode)) h.injectCold("prior-example", { received: mode === "incremental" ? "旧轮正文" : ["reminder", "inflight-reminder"].includes(mode) ? wave.promptFull : null })
+    const lead = { purpose: "进展汇报", requiredGuidance: "Lead 公共必读原文" }
+    const plan = mode.startsWith("inflight")
+      ? { ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [{ ...wave, continuation: true, registered: true, mappedAgentId: "prior-example" }], card: { presentation: lead } }
+      : planCard([wave], { presentation: lead })
+    const { runTw } = makeRunTw(plan)
+    const tool = twDispatchDefinition(h.ctx, { runTw })
+    const result = await tool.execute({ task: "demo-t" }, EXEC)
+    const sent = h.started[0]?.request.prompt ?? h.followups[0]?.content
+    assert.equal(sent.length, 2, mode)
+    assert.equal(sent[1].text, rules, mode)
+    if (mode.includes("reminder")) {
+      assert.match(sent[0].text, /已收到本轮派单正文/)
+      assert.doesNotMatch(sent[0].text, /本轮完整正文|本轮增量正文/)
+    } else assert.equal(sent[0].text, mode === "incremental" ? wave.prompt : continuation || mode.startsWith("inflight") ? wave.promptFull : wave.prompt)
+    assert.equal(h.started.length + h.followups.length, 1, mode)
+    assert.deepEqual(result.presentation, lead)
+    const rendered = tool.output.render({}, result)[0].text
+    assert.equal(JSON.parse(rendered).presentation.requiredGuidance, lead.requiredGuidance)
+    assert.doesNotMatch(rendered, /公共必读段原文|本轮完整正文|本轮增量正文/)
+    t.diagnostic(mode + "：规则 2 段/" + rules.length + " 字符，实际投递 1 条消息；非 token 统计")
+  }
+})
+
+test("规则变化后的冷对账仍提醒，live 与 awaiting-user 不投递也不调用技能", async () => {
+  const h = makeCtx()
+  const wave = ownerWave({ requiredGuidance: "第一版规则" })
+  const { runTw } = makeRunTw(planCard([wave], { presentation: { requiredGuidance: "Lead 规则" } }))
+  const tool = twDispatchDefinition(h.ctx, { runTw })
+  await tool.execute({ task: "demo-t" }, EXEC)
+  // 已持久化全部块，模拟仅活会话离开；业务文本没有变化。
+  h.ctx.sessions.get = () => undefined
+  wave.requiredGuidance = "第二版规则"
+  const retry = await tool.execute({ task: "demo-t" }, EXEC)
+  assert.equal(retry.dispatched[0].resume, "reminder")
+  assert.equal(h.followups[0].content[1].text, "第二版规则")
+  h.ctx.sessions.get = () => ({ header: { parentSession: EXEC.agent.id } })
+  await tool.execute({ task: "demo-t" }, EXEC)
+  assert.equal(h.started.length, 1)
+  assert.equal(h.followups.length, 1)
+  const stop = { ok: true, stop: "awaiting-user", card: { status: "awaiting-user", presentation: { requiredGuidance: "公共与专项" } } }
+  const waiting = twDispatchDefinition(h.ctx, { runTw: async () => stop })
+  assert.equal(await waiting.execute({ task: "demo-t" }, EXEC), stop)
+  assert.equal(JSON.parse(waiting.output.render({}, stop)[0].text).card.presentation.requiredGuidance, "公共与专项")
+  assert.equal(h.started.length, 1)
+  assert.equal(h.followups.length, 1)
+})
+
+test("真实 CLI 接缝：默认子进程派单经创建核心送达同源两段，最终 render 不泄漏成员正文", async (t) => {
+  const project = await mkdtemp(path.join(os.tmpdir(), "twr-clarity-dispatch-"))
+  t.after(() => rm(project, { recursive: true, force: true }))
+  const snapshot = { entryId: "team-work-dsh", profile: "profile-example", tiers: {
+    junior: { provider: "provider-example", model: "model-basic" },
+    senior: { provider: "provider-example", model: "model-standard" },
+    expert: { provider: "provider-example", model: "model-advanced" },
+  } }
+  const exec = { agent: { id: EXEC.agent.id, session: { header: { cwd: project } } } }
+  const configSnapshot = () => snapshot
+  const opened = await twToolDefinition({ configSnapshot }).execute({ args: ["open", "--name", "clarity-seam", "--objective", "审查虚构模块的接口边界", "--entry", "code-review"] }, exec)
+  assert.equal(opened.ok, true, JSON.stringify(opened))
+  const h = makeCtx()
+  h.ctx.skills = { register() { return () => {} }, get() { assert.fail("禁止主动调用技能") } }
+  // 不替换 runTw/createDirectedSubagent；只替代不会访问真实模型的宿主服务。
+  const tool = twDispatchDefinition(h.ctx, { configSnapshot })
+  const result = await tool.execute({ task: "clarity-seam", writables: [{ path: "AUDIT.md", kind: "code-review" }] }, exec)
+  assert.equal(result.dispatched[0].ok, true, JSON.stringify(result))
+  const required = async (resource) => {
+    const text = await readFile(new URL(resource, import.meta.url), "utf8")
+    return text.split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
+  }
+  const publicRules = await required("../skills/clarity-guidance/output-standard.md")
+  const reviewRules = await required("../skills/clarity-review/references/review-rules.md")
+  const message = h.started[0].request.prompt
+  assert.equal(message.length, 2)
+  assert.equal(message[1].text.split(publicRules).length - 1, 1)
+  assert.equal(message[1].text.split(reviewRules).length - 1, 1)
+  assert.equal(message[0].text.includes(publicRules), false)
+  assert.equal(message[0].text.includes(reviewRules), false)
+  assert.match(message[1].text, /skills\/clarity-guidance\/output-standard\.md/)
+  assert.match(message[1].text, /skills\/clarity-review\/references\/review-rules\.md/)
+  const rendered = tool.output.render({}, result)[0].text
+  const leadText = JSON.parse(rendered).presentation
+  assert.equal(typeof leadText, "string")
+  assert.equal(leadText.split(publicRules).length - 1, 1)
+  assert.equal(leadText.includes(reviewRules), false)
+  assert.equal("waves" in JSON.parse(rendered), false)
+  assert.equal(rendered.includes(JSON.stringify(message[0].text)), false)
+  t.diagnostic("真实子进程 → 插件核心 → start 参数：公共＋专项 2 段，" + message[1].text.length + " 字符；Lead 仅公共段，无主动 skill 调用或真实 LLM。")
+})
 
 test("buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表", () => {
   assert.equal(

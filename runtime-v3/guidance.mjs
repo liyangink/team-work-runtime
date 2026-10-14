@@ -61,3 +61,45 @@ export async function loadGuidance(projectRoot = null) {
   }
   return { roles, scenes }
 }
+
+const REQUIRED_BEGIN = "<!-- clarity:required:begin -->"
+const REQUIRED_END = "<!-- clarity:required:end -->"
+const CLARITY_RESOURCES = {
+  public: "skills/clarity-guidance/output-standard.md",
+  review: "skills/clarity-review/references/review-rules.md",
+}
+
+export function requiredClarityText(text) {
+  const starts = text.split(REQUIRED_BEGIN).length - 1
+  const ends = text.split(REQUIRED_END).length - 1
+  const begin = text.indexOf(REQUIRED_BEGIN) + REQUIRED_BEGIN.length
+  const end = text.indexOf(REQUIRED_END)
+  if (starts !== 1 || ends !== 1 || end < begin || !text.slice(begin, end).trim()) {
+    throw new Error("必读标记须唯一配对、顺序正确且正文非空")
+  }
+  return text.slice(begin, end)
+}
+
+// 每次工具操作新建读取器：同一操作共享读取结果，下一操作重新读取。
+// 参数仅用于隔离文件系统测试，不是项目配置或宿主技能选源接口。
+export function createClarityGuidanceReader({ packageRoot = PACKAGE_ROOT, read = readFile } = {}) {
+  const loaded = new Map()
+  const section = (kind) => {
+    if (!loaded.has(kind)) loaded.set(kind, (async () => {
+      const source = path.join(packageRoot, CLARITY_RESOURCES[kind])
+      try {
+        const text = await read(source, "utf8")
+        return "## clarity " + (kind === "public" ? "公共必读" : "审阅必读") + "\n" + requiredClarityText(text) + "\n详细规范（仅限读取此文件，不扩展扫描权限）：" + source
+      } catch (error) {
+        return "clarity 规则未带入：" + source + "（" + (error?.code ?? error?.message) + "）。恢复：核对当前根包资源及唯一必读标记，修复或重新安装完整根包后重试；本次原流程保持，不将诊断视为批准。"
+      }
+    })())
+    return loaded.get(kind)
+  }
+  return async ({ review = false } = {}) => (await Promise.all([section("public"), ...(review ? [section("review")] : [])])).join("\n\n")
+}
+
+export function memberNeedsClarityReview(member, teamScene) {
+  return member.kind === "review" || member.kind === "verdict" ||
+    (member.role === "owner" && ["design", "design-review", "spec-review", "code-review"].includes(teamScene))
+}

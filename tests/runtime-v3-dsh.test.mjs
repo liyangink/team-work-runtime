@@ -1,9 +1,11 @@
 // DSH 绑定：调用配置快照解析、dispatch-plan、models、init 与模型快照。
 import assert from "node:assert/strict"
-import { writeFile, readFile, access, mkdir } from "node:fs/promises"
+import { writeFile, readFile, access, mkdir, cp, mkdtemp, symlink, chmod, readdir, realpath, rm } from "node:fs/promises"
+import { pathToFileURL } from "node:url"
+import fsPromises from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import test from "node:test"
+import test, { mock } from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
@@ -357,6 +359,169 @@ test("models 只读调用快照来源；init 只安装 skill，不创建项目 d
   assert.match(skill, /team-work（v3）/)
   const second = await tw(["init"], { projectRoot: root })
   assert.equal(second.skill.action, "skipped")
+  for (const key of ["writingSkill", "reviewSkill", "outputStandard"]) {
+    assert.equal(first[key].action, "installed")
+    assert.equal(second[key].action, "skipped")
+  }
+  assert.match(second.note, /版本混用待核/)
+})
+
+test("init 四目标：混合副本逐项保留，force 不触碰公共目录其他文件", async () => {
+  const root = await makeProject()
+  const base = path.join(root, ".dsh/skills")
+  await mkdir(path.join(base, "team-work-v3"), { recursive: true })
+  await writeFile(path.join(base, "team-work-v3/user-note.md"), "无入口也要保留")
+  await mkdir(path.join(base, "clarity-guidance"), { recursive: true })
+  await writeFile(path.join(base, "clarity-guidance/output-standard.md"), "已有自定义正文")
+  await writeFile(path.join(base, "clarity-guidance/other.md"), "无关文件")
+  const mixed = await tw(["init"], { projectRoot: root })
+  assert.equal(mixed.skill.action, "skipped")
+  assert.equal(mixed.outputStandard.action, "skipped")
+  assert.equal(mixed.writingSkill.action, "installed")
+  assert.equal(await readFile(path.join(base, "clarity-guidance/output-standard.md"), "utf8"), "已有自定义正文")
+  const forced = await tw(["init", "--force"], { projectRoot: root })
+  for (const key of ["skill", "writingSkill", "reviewSkill", "outputStandard"]) assert.equal(forced[key].action, "overwritten")
+  assert.match(await readFile(path.join(base, "clarity-guidance/output-standard.md"), "utf8"), /clarity:required:begin/)
+  assert.equal(await readFile(path.join(base, "clarity-guidance/other.md"), "utf8"), "无关文件")
+  assert.equal((await readdir(base)).filter((name) => name.startsWith(".tw-init-")).length, 0)
+})
+
+test("init 符号链接逃逸：父路径和目标都逐项拒绝，外部内容保持", async () => {
+  for (const parent of [true, false]) {
+    const root = await makeProject()
+    const outside = await mkdtemp(path.join(tmpdir(), "tw-init-outside-"))
+    const original = path.join(outside, "SKILL.md")
+    await writeFile(original, "外部原内容")
+    const base = path.join(root, ".dsh/skills")
+    if (parent) {
+      await mkdir(path.join(root, ".dsh"))
+      await symlink(outside, base)
+    } else {
+      await mkdir(base, { recursive: true })
+      await symlink(outside, path.join(base, "team-work-v3"))
+    }
+    const result = await tw(["init", "--force"], { projectRoot: root })
+    assert.equal(result.skill.action, "unavailable")
+    assert.match(result.skill.note, /符号链接越出项目根/)
+    assert.equal(await readFile(original, "utf8"), "外部原内容")
+    if (parent) for (const key of ["writingSkill", "reviewSkill", "outputStandard"]) assert.equal(result[key].action, "unavailable")
+  }
+})
+
+test("init 隔离坏源和暂存失败：不先删除已有目标，其他项独立完成", async () => {
+  const packageRoot = await realpath(await mkdtemp(path.join(tmpdir(), "tw-init-source-")))
+  for (const folder of ["runtime-v3", "policy"]) await cp(new URL("../" + folder, import.meta.url), path.join(packageRoot, folder), { recursive: true })
+  for (const name of ["team-work-v3", "clarity-writing", "clarity-review"]) {
+    await mkdir(path.join(packageRoot, "skills", name), { recursive: true })
+    await writeFile(path.join(packageRoot, "skills", name, "SKILL.md"), "# 隔离技能")
+  }
+  await mkdir(path.join(packageRoot, "skills/clarity-guidance"))
+  await writeFile(path.join(packageRoot, "skills/clarity-guidance/output-standard.md"), "坏标记")
+  const { tw: isolatedTw } = await import(pathToFileURL(path.join(packageRoot, "runtime-v3/cli.mjs")))
+  const root = await realpath(await makeProject())
+  const publicTarget = path.join(root, ".dsh/skills/clarity-guidance/output-standard.md")
+  await mkdir(path.dirname(publicTarget), { recursive: true })
+  await writeFile(publicTarget, "最后有效内容")
+  const result = await isolatedTw(["init", "--force"], { projectRoot: root })
+  assert.equal(result.outputStandard.action, "unavailable")
+  assert.match(result.outputStandard.note, /必读标记/)
+  assert.equal(await readFile(publicTarget, "utf8"), "最后有效内容")
+  assert.equal(result.writingSkill.action, "unavailable", "公共源不可用时先诊断，不安装缺依赖入口")
+  assert.match(result.note, /部分失败/)
+  const skillTarget = path.join(root, ".dsh/skills/team-work-v3")
+  await writeFile(path.join(skillTarget, "SKILL.md"), "先前有效技能")
+  for (const operation of ["cp", "rename"]) {
+    const original = fsPromises[operation]
+    const mocked = mock.method(fsPromises, operation, async (...args) => {
+      const affected = operation === "cp" ? args[0] === path.join(packageRoot, "skills/team-work-v3") : args[1] === skillTarget && path.basename(args[0]) === "content"
+      if (affected) { const error = new Error("隔离故障"); error.code = "EIO"; throw error }
+      return original(...args)
+    })
+    try {
+      const failed = await isolatedTw(["init", "--force"], { projectRoot: root })
+      assert.equal(failed.skill.action, "unavailable", operation + " 失败应可见")
+      assert.match(failed.skill.note, /EIO/)
+      assert.equal(await readFile(path.join(skillTarget, "SKILL.md"), "utf8"), "先前有效技能", operation + " 失败保留最后有效内容")
+    } finally { mocked.mock.restore() }
+  }
+  if (process.getuid?.() !== 0) {
+    // 暂存目录创建被系统拒绝时，旧目录仍在原位置。
+    const base = path.join(root, ".dsh/skills")
+    await chmod(base, 0o555)
+    try {
+      const failed = await isolatedTw(["init", "--force"], { projectRoot: root })
+      assert.equal(failed.skill.action, "unavailable")
+      assert.match(await readFile(path.join(base, "team-work-v3/SKILL.md"), "utf8"), /先前有效技能/)
+    } finally { await chmod(base, 0o755) }
+  }
+  // 发布与回滚都失败，即使目标被占位也不得把备份当垃圾删除。
+  const rename = fsPromises.rename
+  const fault = mock.method(fsPromises, "rename", async (from, to) => {
+    if (to === skillTarget && path.basename(from) === "content") {
+      await mkdir(to)
+      await writeFile(path.join(to, "SKILL.md"), "故障占位，不是恢复的旧内容")
+      const error = new Error("发布失败"); error.code = "EIO"; throw error
+    }
+    if (to === skillTarget && path.basename(from) === "previous") {
+      const error = new Error("回滚失败"); error.code = "EIO"; throw error
+    }
+    return rename(from, to)
+  })
+  try {
+    const failed = await isolatedTw(["init", "--force"], { projectRoot: root })
+    assert.equal(failed.skill.action, "unavailable")
+    const backup = failed.skill.note.match(/原内容备份保留在 (.+)$/)?.[1]
+    assert.ok(backup, "回滚失败须给可恢复备份位置")
+    assert.equal(await readFile(path.join(backup, "SKILL.md"), "utf8"), "先前有效技能")
+    assert.match(await readFile(path.join(skillTarget, "SKILL.md"), "utf8"), /故障占位/)
+  } finally { fault.mock.restore() }
+})
+
+test("init 新技能已知依赖：缺件、目录假冒与暂存丢失均保留旧有效入口", async () => {
+  const packageRoot = await realpath(await mkdtemp(path.join(tmpdir(), "tw-init-dependencies-")))
+  for (const folder of ["runtime-v3", "policy", "skills"]) await cp(new URL("../" + folder, import.meta.url), path.join(packageRoot, folder), { recursive: true })
+  const { tw: isolatedTw } = await import(pathToFileURL(path.join(packageRoot, "runtime-v3/cli.mjs")))
+  const root = await realpath(await makeProject())
+  await isolatedTw(["init"], { projectRoot: root })
+  const reviewTarget = path.join(root, ".dsh/skills/clarity-review")
+  await writeFile(path.join(reviewTarget, "SKILL.md"), "旧有效审阅入口")
+  for (const reference of ["review-rules", "standalone-records", "examples"]) {
+    const source = path.join(packageRoot, "skills/clarity-review/references", reference + ".md")
+    const body = await readFile(source, "utf8")
+    await rm(source)
+    const missing = await isolatedTw(["init", "--force"], { projectRoot: root })
+    assert.equal(missing.reviewSkill.action, "unavailable")
+    assert.ok(missing.reviewSkill.note.includes(source), "指出实际缺件")
+    assert.equal(await readFile(path.join(reviewTarget, "SKILL.md"), "utf8"), "旧有效审阅入口")
+    await mkdir(source)
+    const directory = await isolatedTw(["init", "--force"], { projectRoot: root })
+    assert.equal(directory.reviewSkill.action, "unavailable")
+    assert.match(directory.reviewSkill.note, /普通文件/)
+    await rm(source, { recursive: true })
+    await writeFile(source, body)
+  }
+  const originalCopy = fsPromises.cp
+  const fault = mock.method(fsPromises, "cp", async (from, to, options) => {
+    await originalCopy(from, to, options)
+    if (from === path.join(packageRoot, "skills/clarity-review")) await rm(path.join(to, "references/examples.md"))
+  })
+  try {
+    const lost = await isolatedTw(["init", "--force"], { projectRoot: root })
+    assert.equal(lost.reviewSkill.action, "unavailable")
+    assert.match(lost.reviewSkill.note, /暂存资源.*examples\.md/)
+    assert.equal(await readFile(path.join(reviewTarget, "SKILL.md"), "utf8"), "旧有效审阅入口")
+  } finally { fault.mock.restore() }
+  const writingTarget = path.join(root, ".dsh/skills/clarity-writing/SKILL.md")
+  await writeFile(writingTarget, "旧有效写作入口")
+  const publicSource = path.join(packageRoot, "skills/clarity-guidance/output-standard.md")
+  await rm(publicSource)
+  const noPublic = await isolatedTw(["init", "--force"], { projectRoot: root })
+  assert.equal(noPublic.writingSkill.action, "unavailable")
+  assert.equal(noPublic.reviewSkill.action, "unavailable")
+  assert.ok(noPublic.writingSkill.note.includes(publicSource))
+  assert.equal(await readFile(writingTarget, "utf8"), "旧有效写作入口")
+  assert.equal(await readFile(path.join(reviewTarget, "SKILL.md"), "utf8"), "旧有效审阅入口")
+  assert.match(noPublic.note, /部分失败/)
 })
 
 test("可选 effort：调用快照候选条目透传", async () => {

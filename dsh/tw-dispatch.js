@@ -166,7 +166,10 @@ export function twDispatchDefinition(ctx, deps = {}) {
       const reconcileSession = async (id) => {
         return inspectSession({ sessions: sessionsSvc, persistence: persistenceSvc, parentSessionId: exec?.agent?.id, signal: exec?.signal }, id)
       }
-      const handleContinuation = async ({ key, label, waveFields, expectedAgentId, hint, prompt, promptFull, retireText }) => {
+      // 只透传 Lead 自身呈现，成员规则不在工具结果重复展开。
+      const leadPresentation = plan?.presentation ?? plan?.card?.presentation
+      const presentation = leadPresentation === undefined ? {} : { presentation: leadPresentation }
+      const handleContinuation = async ({ key, label, waveFields, expectedAgentId, hint, prompt, promptFull, requiredGuidance, retireText }) => {
         if (typeof prompt !== "string" || !prompt.trim()) {
           return { ok: false, key, label, continuation: true, expectedAgentId, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "续派派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未投递未创建。若为误报请修复任务目录后重新 tw-dispatch；" + retireText }
         }
@@ -190,7 +193,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
           try { read = await coldSessionReceived(persistenceSvc, prior, exec?.signal, [prompt, full]) } catch (error) { return { ok: false, key, label, sessionId: prior, code: "TW_SUB_SESSION_UNKNOWN", message: String(error?.message ?? error) + "；保留映射，请检查同 ID 会话后重试，未补投正文" } }
           if (!read.ok) return { ...read, key, label, continuation: true, expectedAgentId: prior, ...waveFields }
           const followup = coldResumePrompt(read, prompt, full)
-          const sent = await followupChild({ subagents: subagentsSvc, parent: exec?.agent, signal: exec?.signal }, prior, followup.text)
+          const sent = await followupChild({ subagents: subagentsSvc, parent: exec?.agent, signal: exec?.signal }, prior, followup.text, requiredGuidance)
           if (!sent.ok) return { ...sent, key, label, continuation: true, expectedAgentId: prior, ...waveFields }
           return {
             ok: true, key, label, continuation: true, expectedAgentId: prior, sessionId: prior, messageId: sent.messageId, action: "followup",
@@ -204,7 +207,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             message: "续派原会话（" + prior + "）是冷持久会话且归属其他父会话（接管冲突）：本工具不做接管（冷唤醒鉴权与同 ID 重建判重两路必被宿主拒绝）。处置：由原 Lead 会话继续，或 " + retireText,
           }
         }
-        const done = await registerThenCreate({ key, label, waveFields, hint, prompt: full, retireText })
+        const done = await registerThenCreate({ key, label, waveFields, hint, prompt: full, requiredGuidance, retireText })
         if (!done.ok) return { ...done, continuation: true, expectedAgentId: prior }
         return {
           ...done, recovered: true, freshRebuilt: true, action: "fresh_rebuilt", continuation: true, priorAgentId: prior,
@@ -213,7 +216,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
       }
       const retireHint = (item) => "若本波不应执行，立即 tw retire --task " + (plan.task ?? task) + " --wave " + (item?.waveId ?? "<waveId 见本卡>") + " 回收"
       const hintValid = (hint) => Boolean(hint && typeof hint.provider === "string" && hint.provider && typeof hint.model === "string" && hint.model)
-      const registerThenCreate = async ({ key, label, waveFields, hint, prompt, retireText }) => {
+      const registerThenCreate = async ({ key, label, waveFields, hint, prompt, requiredGuidance, retireText }) => {
         if (typeof prompt !== "string" || !prompt.trim()) {
           return { ok: false, key, label, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未登记未创建。" + retireText + "；若为误报请修复任务目录后重新 tw-dispatch" }
         }
@@ -228,6 +231,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
         const created = await createSubagent(ctx, coreDeps, {
           description: label,
           prompt,
+          requiredGuidance,
           ...(hintValid(hint) ? { target: { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) } } : {}),
           sessionId,
           dispatchKey: key,
@@ -291,6 +295,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             const created = await createSubagent(ctx, coreDeps, {
               description: label,
               prompt: item.prompt,
+              requiredGuidance: item.requiredGuidance,
               ...(item.continuation && typeof item.promptFull === "string" && item.promptFull.trim() ? { promptFull: item.promptFull } : {}),
               ...(hintValid(hint) ? { target: { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) } } : {}),
               sessionId: targetId,
@@ -325,10 +330,10 @@ export function twDispatchDefinition(ctx, deps = {}) {
           if (item.continuation && item.expectedAgentId) {
             return handleContinuation({
               key, label, waveFields, expectedAgentId: item.expectedAgentId, hint: item?.modelHint,
-              prompt: item.prompt, promptFull: item.promptFull, retireText: retireHint(item),
+              prompt: item.prompt, promptFull: item.promptFull, requiredGuidance: item.requiredGuidance, retireText: retireHint(item),
             })
           }
-          const done = await registerThenCreate({ key, label, waveFields, hint: hintValid(item?.modelHint) ? item.modelHint : null, prompt: item.prompt, retireText: retireHint(item) })
+          const done = await registerThenCreate({ key, label, waveFields, hint: hintValid(item?.modelHint) ? item.modelHint : null, prompt: item.prompt, requiredGuidance: item.requiredGuidance, retireText: retireHint(item) })
           if (!done.ok) return done
           return {
             ...done, recovered: true,
@@ -350,6 +355,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
           stage: plan.stage,
           stop: "wait-inflight",
           inflight,
+          ...presentation,
           ...(failures > 0 ? { failures, note: "部分在途条目处置失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : { note: "在途条目已逐条处置（等待/补发/冷唤醒/续派 followup/重建）" }),
         }
       }
@@ -367,11 +373,11 @@ export function twDispatchDefinition(ctx, deps = {}) {
         if (wave.continuation && wave.expectedAgentId) {
           dispatched.push(await handleContinuation({
             key, label, waveFields, expectedAgentId: wave.expectedAgentId, hint: wave?.modelHint,
-            prompt: wave.prompt, promptFull: wave.promptFull, retireText: retireHint(wave),
+            prompt: wave.prompt, promptFull: wave.promptFull, requiredGuidance: wave.requiredGuidance, retireText: retireHint(wave),
           }))
           continue
         }
-        const card = await registerThenCreate({ key, label, waveFields, hint: hintValid(wave?.modelHint) ? wave.modelHint : null, prompt: wave.prompt, retireText: retireHint(wave) })
+        const card = await registerThenCreate({ key, label, waveFields, hint: hintValid(wave?.modelHint) ? wave.modelHint : null, prompt: wave.prompt, requiredGuidance: wave.requiredGuidance, retireText: retireHint(wave) })
         dispatched.push(card)
       }
       const failures = dispatched.filter((d) => !d.ok).length
@@ -380,6 +386,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
         task: plan.task ?? task,
         stage: plan.stage,
         dispatched,
+        ...presentation,
         ...(failures > 0 ? { failures, note: "部分派单项失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : {}),
       }
     },

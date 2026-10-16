@@ -37,19 +37,19 @@ tw intent --task <名字> [--objective ...] [--add-constraint ...]     # 随时�
 tw archive --task <名字>                                              # 用户明确要求归档时
 ```
 
-- 推进是 dispatch 侧的单一写者：每次 `dispatch-plan` 推进一步并返回一张卡片（waves 派单数组或 stop 卡）——按它行动，不要预判步骤。DSH 内**一律先调 `tw-dispatch`**（单次调用完成开单+创建+登记）；waves 给你派单全文和 key——**原样**转发给成员，不要改写边界。无 DSH 插件的终端：`dispatch-plan` 即推进者，按其 human/waves 输出手工派发并 `tw agent-map` 登记。
+- 推进是 dispatch 侧的单一写者。**推进前先核授权争议**：收到未决范围/必要性/修法报告或看到未批准新增方向，停依赖续派，以普通最终消息请用户确认，不为了取卡调 dispatch。没有该争议时，DSH 用 `tw-dispatch` 开单/创建/登记，终端用 `dispatch-plan`；按返回卡行动，业务派单原样投递，不改边界。恢复与原卡限制见[范围争议暂停](references/scenarios.md#范围争议暂停)。
 - **工具分工**：Lead 用 `tw-dispatch` 派发正式波次成员；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。成员辅助须遵守上文成员入口的限定范围与禁止继续委托要求。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
 - **配置来源**：当前 profile 的插件 Config 提供 tiers，同一 profile 跨项目共享且无项目覆盖。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 精确模型快照；`tw models` 查看当前 entry/profile 来源。
 - **续聊与深度**：原生后台 `continuable` 的 `subagentId` 才是可供 `send_message` 使用的会话 ID，`jobId/runId` 不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
-- 成员完成的通知到达后再 `dispatch-plan`（DSH 内 `tw-dispatch`），消费报告并推进。
+- 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/升档/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。
 - **自动表达规则**：成员的 `requiredGuidance` 与 Lead 卡片的 `presentation` 自动带入根包同源必读段，以现有 `progress` 为素材，不要求主动调用 clarity 技能。公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)；深看按工具给出的准确路径，不读取独立账本。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
 - 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。可写条目写目录（尾斜杠）即授权其下全部路径——派单前预估产出文件位置，目录授权比逐文件列举更稳。
-- **派单范围不够**（任务确需修改范围外文件才能完成）：成员以 `--outcome blocked` 交付（paths 留空），在 summary 写明需要扩权的路径与理由。你会收到 `next: re-scope` 静止卡——单 owner 用新的可写范围推进（`tw-dispatch` 的 writables / `tw dispatch-plan --writable`），多包先 `tw plan` 重拆（该卡不阻塞重拆）再推进；重派派单会自动内嵌上一轮 blocked 原因，成员不需要重述背景。
+- **范围或授权未决**：Owner deliver blocked（paths 留空），报告基线、证据和待确认方向，保留有效制品；Challenger/Expert 按场景详则走评审升级。无其他可派波时才有 re-scope（非 decision），多包不保证立即全任务暂停；Lead 收到争议先停推进。用户明确必要性/授权后按单包 writable 或多包 plan 原通道恢复，非空路径不证明授权，不能自行扩权；重派保留原 blocked 原因，细则见场景指导。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 评价这版交付：实施交付违反需求可以返工；审查制品发现产品缺陷应报告，不因此要求审查 Owner 修产品，报告质量缺陷仍可返工。rework 的 findings 只放本轮关闭依据，其他发现放 summary 或已有交付物；详细规则见场景指导。

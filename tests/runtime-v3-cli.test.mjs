@@ -12,6 +12,24 @@ import { promisify } from "node:util"
 import { tw } from "../runtime-v3/cli.mjs"
 import { artifactsFingerprint } from "../runtime-v3/gate.mjs"
 
+test("范围争议 blocked：恢复提示先确认授权，保留原 re-scope 非决定接口", async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-scope-pause-"))
+  const call = (argv) => tw(argv, { projectRoot })
+  await call(["open", "--name", "pause-check", "--objective", "按已确认范围审阅示例方案", "--entry", "code-review"])
+  const owner = (await call(["dispatch-plan", "--task", "pause-check", "--writable", "R.md:code-review"])).waves[0]
+  const receipt = await call(["deliver", "--task", "pause-check", "--key", owner.dispatchKey, "--outcome", "blocked", "--summary", "新增设施是否为本轮必需及是否获授权仍有争议"])
+  assert.equal(receipt.accepted, true)
+  const state = await call(["run", "--task", "pause-check"])
+  assert.equal(state.status, "awaiting-user")
+  assert.equal(state.next, "re-scope")
+  assert.equal(state.decisionId, undefined)
+  assert.equal(state.choices, undefined)
+  assert.match(state.note, /用户明确.*授权/)
+  assert.doesNotMatch(state.note, /扩大可写范围后重派/)
+  assert.match(state.question, /用户明确.*授权/)
+  assert.deepEqual(await call(["run", "--task", "pause-check"]), state)
+})
+
 // dispatch-plan 在派发点校验调用快照；本文件自带完整三档。
 process.env.TW_DSH_CONFIG = JSON.stringify({
   "entryId": "team-work-dsh",
@@ -29,6 +47,67 @@ process.env.TW_DSH_CONFIG = JSON.stringify({
       "provider": "cli-expert",
       "model": "cli-expert"
     }
+  }
+})
+
+test("返工派单保留原回应轮，提醒授权争议在修补前暂停而非自动扩建", async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-rework-scope-"))
+  const call = (argv) => tw(argv, { projectRoot })
+  await call(["open", "--name", "rework-scope", "--objective", "按原方案审阅重访策略", "--entry", "code-review"])
+  const owner = (await call(["dispatch-plan", "--task", "rework-scope", "--writable", "R.md:code-review"])).waves[0]
+  await writeFile(path.join(projectRoot, "R.md"), "# 原方案\n保留既有扫描机制")
+  await call(["deliver", "--task", "rework-scope", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "完成原范围方案", "--paths", "R.md"])
+  const reviewer = (await call(["dispatch-plan", "--task", "rework-scope"])).waves[0]
+  await call(["review", "--task", "rework-scope", "--key", reviewer.dispatchKey, "--recommendation", "rework", "--summary", "需核对容量恢复与公平再访的证据"])
+  const response = (await call(["dispatch-plan", "--task", "rework-scope", "--writable", "R.md:code-review"])).waves[0]
+  assert.equal(response.kind, "respond")
+  assert.equal(response.round, 2)
+  assert.match(response.prompt, /实质争议.*暂停依赖.*Lead/s)
+  assert.match(response.prompt, /返工.*不.*授权/)
+  assert.match(response.prompt, /普通最终消息/)
+})
+
+test("首轮评审升级保持同 key 修订和原卡语义，方向文本不消耗追加轮数卡", async () => {
+  for (const role of ["challenger", "expert"]) {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-review-direction-"))
+    const call = (argv) => tw(argv, { projectRoot })
+    await call(["open", "--name", "direction-check", "--objective", "在现有机制内审阅虚构方案", "--entry", "code-review"])
+    const owner = (await call(["dispatch-plan", "--task", "direction-check", "--writable", "R.md:code-review"])).waves[0]
+    await writeFile(path.join(projectRoot, "R.md"), "# 虚构方案\n保留既有机制")
+    await call(["deliver", "--task", "direction-check", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "原范围制品", "--paths", "R.md"])
+    let reviewer = (await call(["dispatch-plan", "--task", "direction-check"])).waves[0]
+    if (role === "expert") {
+      await call(["review", "--task", "direction-check", "--key", reviewer.dispatchKey, "--recommendation", "accept", "--summary", "原范围交付合格"])
+      reviewer = (await call(["dispatch-plan", "--task", "direction-check"])).waves[0]
+    }
+    const report = async (escalate) => call([
+      "review", "--task", "direction-check", "--key", reviewer.dispatchKey,
+      "--recommendation", escalate ? "escalate" : "accept", "--summary", escalate ? "必要保证与修法授权待用户确认" : "依据虚构用户方向重核，未变交付符合原范围",
+      ...(role === "expert" ? ["--verdict", JSON.stringify({ outcome: escalate ? "escalate-to-user" : "accept", rationale: "核对现有方案与原目标", confidence: "high", recommendedAction: escalate ? "请用户确认方向" : "按原合同复核" })] : []),
+    ])
+    const first = await report(true)
+    assert.equal(first.accepted, true)
+    assert.equal(first.ver, 1)
+    const pending = await call(["run", "--task", "direction-check"])
+    assert.equal(pending.status, "working", "只读 run 未签卡，普通等待不伪装 Runtime 已落卡")
+    assert.match(pending.question, /升级用户裁决|需要用户/)
+    assert.equal(pending.decisionId, undefined, "Lead 可在签卡之前普通消息等待")
+    await call(["intent", "--task", "direction-check", "--add-constraint", "虚构方向：保留现有机制"])
+    assert.match((await call(["run", "--task", "direction-check"])).question, /升级用户裁决|需要用户/, "改意图不解除原升级报告")
+    const corrected = await report(false)
+    assert.equal(corrected.reportId, first.reportId)
+    assert.equal(corrected.ver, 2)
+    assert.equal(corrected.reviewedDigest, first.reviewedDigest, "未变交付仍绑定同一内容")
+    assert.notEqual((await call(["run", "--task", "direction-check"])).next, "decide")
+    await report(true)
+    const signed = (await call(["dispatch-plan", "--task", "direction-check"])).card
+    assert.deepEqual(signed.choices.map((c) => c.label), ["追加一轮", "结束任务"])
+    assert.equal(signed.choices[0].grant, "extra-round")
+    await call(["intent", "--task", "direction-check", "--add-constraint", "虚构方向确认不授权追加轮数"])
+    await report(false)
+    const stillPending = await call(["run", "--task", "direction-check"])
+    assert.equal(stillPending.decisionId, signed.decisionId)
+    assert.deepEqual(stillPending.choices, signed.choices, "报告修订和方向文本不消费原待决卡")
   }
 })
 

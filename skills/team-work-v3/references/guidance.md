@@ -16,6 +16,8 @@ Runtime 生成派单时按「角色 + 场景」自动注入公共引导，让成
 
 同名文件整体覆盖，升级不会静默替换项目自定义文件；使用自定义引导的项目需核对并合并新增规则。自定义覆盖可能省去角色细则，但统一派单验收基线仍由 Runtime 生成。
 
+跨角色的实质争议暂停提醒由根包公共必读段自动送达，项目角色/场景覆写不擦掉它，不强改用户自定义文件。具体报告、普通等待与原卡恢复只在[场景详则](scenarios.md#范围争议暂停)维护；规则送达不证明模型自动识别，仍由成员和 Lead 在下一次推进前判断。
+
 ## 明晰规则自动带入
 
 专业引导之外，Runtime 从根包[公共规范](../../clarity-guidance/output-standard.md)和[专项审阅规则](../../clarity-review/references/review-rules.md)的唯一必读段提取原文，以 requiredGuidance 只读输出送达，不依赖主动 skill 调用、宿主同名来源或项目覆盖。所有成员公共；review/verdict 或 design/design-review/spec-review/code-review Owner 加专项，自定义无这些事实仅公共。Lead 普通汇报公共，awaiting-user/blocked 加专项，重复终态查询也在场；机械回执不重复附段。

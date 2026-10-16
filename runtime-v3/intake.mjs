@@ -128,7 +128,7 @@ async function deliverLocked({ projectRoot, task, dispatchKey, payload }) {
     if (rel === null) { reasons.push(`路径不合法：${JSON.stringify(p)}（必须是项目内相对路径）`); continue }
     if (!writableMatch(writable, rel)) {
       // 恢复边双层（无死门）：目录条目语义提示（写法纠正）+ blocked 升级通道（任务确需范围外路径时）
-      reasons.push(`路径 ${rel} 不在本派单可写范围（${writable.map((w) => w?.path ?? String(w)).join("、") || "无"}；目录条目以 / 结尾才授权其下路径，如 docs/。本派单：${dispatch.detail.role} 轮次 ${dispatch.detail.round}${dispatch.detail.package ? " 包 " + dispatch.detail.package : ""}）。若任务确实必须修改范围外路径才能完成：不要改派单外文件——以 --outcome blocked 交付（paths 留空），在 summary/unresolved 写明需要扩权的路径与理由，Lead 将扩大可写范围后重派。其余发现的问题请写进交付物或 unresolved。`)
+      reasons.push(`路径 ${rel} 不在本派单可写范围（${writable.map((w) => w?.path ?? String(w)).join("、") || "无"}；目录条目以 / 结尾才授权其下路径，如 docs/。本派单：${dispatch.detail.role} 轮次 ${dispatch.detail.round}${dispatch.detail.package ? " 包 " + dispatch.detail.package : ""}）。若完成目标确需范围外修改，或必要性/修法授权仍有实质争议：不要改派单外文件或先造新方案——以 --outcome blocked 交付（paths 留空），在 summary/unresolved 写明基线、证据和待确认方向，保留原有效制品。Lead 先请用户明确方向与授权，再按原恢复通道处理，不自行扩权。其余发现写进已有交付物或 unresolved。`)
     }
     if (!normalized.includes(rel)) normalized.push(rel)
   }

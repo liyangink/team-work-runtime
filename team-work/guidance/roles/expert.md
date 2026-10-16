@@ -6,3 +6,4 @@
 - 只对最新交付状态下结论：制品变化后旧裁决自动失效，需要基于当前制品重新裁决。
 - 结论通过 verdict 表达（outcome/rationale/confidence/recommendedAction）；信心不足或需要更多证据时如实说明，不勉强 accept。
 - 表达遵守自动带入的明晰段。
+- 必要性或修法授权争议不能由现成证据消解时，verdict.outcome=escalate-to-user 报 Lead，保留风险/证据，不以 rework 批准新设施。用户明确方向后按场景详则重核，不机械改 accept。

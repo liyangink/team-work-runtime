@@ -358,7 +358,7 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
       const brief = summary.slice(0, 160) + (summary.length > 160 ? "…" : "")
       return `${id == null ? "（单 owner）" : `包 ${id}`}：${brief || "（无说明）"}`
     })
-    const reason = `Owner 交付 blocked（无法在可写范围内完成）——${parts.join("；")}。恢复：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或由用户决定结束`
+    const reason = `Owner 交付 blocked（当前条件下无法完成）——${parts.join("；")}。先核必要性和授权，用户明确方向与授权后按原通道恢复（单 owner 用已获授权范围调 tw-dispatch 的 writables / tw dispatch-plan --writable；多包先 tw plan 重拆再推进），或决定结束；路径参数不代表产品授权`
     return { kind: "converge-user", reason, produceBlocked: blockedActive }
   }
   // 6) 活跃集空 → 门

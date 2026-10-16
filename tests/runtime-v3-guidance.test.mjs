@@ -32,6 +32,40 @@ function assertBaseline(prompt, facts) {
   for (const fact of facts) assert.equal(prompt.split(fact).length - 1, 1, "验收事实恰好出现一次：" + fact)
 }
 
+test("范围争议提醒自动送达各角色，项目专业覆写不擦掉公共暂停段", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  for (const role of ["owner", "challenger", "expert"]) {
+    const file = path.join(root, "team-work/guidance/roles", role + ".md")
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, role + " 的自定义专业要求")
+  }
+  await mkdir(path.join(root, "team-work/guidance/scenes"), { recursive: true })
+  await writeFile(path.join(root, "team-work/guidance/scenes/code-review.md"), "自定义场景要求")
+  await openTask(root, "pause-guidance", { objective: "按现有范围审阅虚构方案" })
+  const assertPause = (wave) => {
+    assert.match(wave.requiredGuidance, /实质争议.*暂停依赖/)
+    assert.match(wave.prompt, /自定义专业要求/)
+    assert.doesNotMatch(wave.prompt, /实质争议.*暂停依赖/, "公共段保持独立，不写进业务块")
+  }
+  const owner = (await call(["dispatch-plan", "--task", "pause-guidance", "--writable", "R.md:code-review", "--json"])).waves[0]
+  assertPause(owner)
+  await writeFile(path.join(root, "R.md"), "# 虚构审查\n仅现有目标")
+  await call(["deliver", "--task", "pause-guidance", "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "审阅完成", "--paths", "R.md"])
+  const challenger = (await call(["dispatch-plan", "--task", "pause-guidance", "--json"])).waves[0]
+  assertPause(challenger)
+  await call(["review", "--task", "pause-guidance", "--key", challenger.dispatchKey, "--recommendation", "accept", "--summary", "满足原约定"])
+  const expert = (await call(["dispatch-plan", "--task", "pause-guidance", "--json"])).waves[0]
+  assertPause(expert)
+  await call(["review", "--task", "pause-guidance", "--key", expert.dispatchKey, "--recommendation", "rework", "--summary", "核对原范围必要证据", "--verdict", JSON.stringify({ outcome: "rework", rationale: "本版证据不足", confidence: "high", recommendedAction: "按原目标补证据" })])
+  const continuing = (await call(["dispatch-plan", "--task", "pause-guidance", "--writable", "R.md:code-review", "--json"])).waves[0]
+  assert.equal(continuing.kind, "respond")
+  assert.match(continuing.requiredGuidance, /实质争议.*暂停依赖/)
+  const inflight = await call(["dispatch-plan", "--task", "pause-guidance", "--json"])
+  assert.equal(inflight.inflight[0].requiredGuidance, continuing.requiredGuidance)
+  assert.match(inflight.card.presentation, /实质争议.*暂停依赖/)
+})
+
 test("clarity 同源短段：按需读取、操作内共享，下一操作更新且不加载详细正文", async () => {
   const root = await makeProject()
   const publicFile = path.join(root, "skills/clarity-guidance/output-standard.md")
@@ -264,6 +298,7 @@ test("成员装载 skill：先遵守已分配职责，Lead 指引按问题选择
   const entry = skill.slice(0, skill.indexOf("## 判断指引"))
   assert.match(entry, /成员入口/, "先识别派单成员身份再进入 Lead 指引")
   assert.match(entry, /不执行 Lead.*开任务.*拆包.*正式波次/, "成员不得递归执行组团规程")
+  assert.match(skill, /范围或授权未决[^\n]*Owner deliver blocked[^\n]*Challenger\/Expert[^\n]*评审升级/, "blocked 交付限定 Owner，其他角色沿评审通道")
   const scenarios = await readFile(new URL("../skills/team-work-v3/references/scenarios.md", import.meta.url), "utf8")
   assert.match(scenarios, /默认.*正式轻量交叉审查/)
   assert.match(scenarios, /一个 Owner.*Challenger/)

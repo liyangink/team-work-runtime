@@ -166,7 +166,7 @@ function reworkContext(task, stageId, pkg = null) {
     sections.push('### Expert 裁决（' + v.outcome + '）\n' + v.rationale + '\n建议：' + v.recommendedAction)
   }
   if (humanRework) sections.push('### 用户决定：返工\n' + (humanRework.note ?? '用户在人工门要求返工；结合上述意见修订交付。'))
-  return sections.length ? '## 本轮返工/回应原因\n\n以下是意见和裁决上下文，不是全部必须修复的清单。Owner 独立核验本轮阻塞，以证据修正或反驳；非阻塞建议与范围外发现按分流规则处置，扩大需求须先获用户明确批准。\n\n' + sections.join('\n\n') : ''
+  return sections.length ? '## 本轮返工/回应原因\n\n以下是意见和裁决上下文，不是全部必须修复的清单，返工不代表修法已获授权。分别核对缺陷是否真实、是否妨碍原目标、是否本轮必修、修法是否授权；以现成证据修正或反驳，非阻塞建议与范围外发现沿原分流。范围、必要性或修法授权有实质争议时，先暂停依赖修改，以 blocked 报告 Lead 并保留原有效制品，不先造新设施或耗一轮证明必须扩范围。Lead 应在下一次推进前用普通最终消息请用户确认方向，不为取卡继续派修补波；新增设施或机制替换须用户明确授权。\n\n' + sections.join('\n\n') : ''
 }
 
 // 派单 PATH 注入（Phase 1 过渡）：成员环境未必有 tw 于 PATH——解析本包 bin 绝对路径写入交付指令；
@@ -385,7 +385,7 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',
     wave.kind === 'respond' ? reworkContext(task, stageDef.id, pkg) : '',
-    lastBlocked ? '## 上一轮 blocked 原因\n' + lastBlocked + '\n本轮可写范围已由 Lead 重新声明；若仍无法完成，请再次以 --outcome blocked 交付并在 summary 写明还缺什么。' : '',
+    lastBlocked ? '## 上一轮 blocked 原因\n' + lastBlocked + '\n本轮路径仅是可写边界，不代表争议已获用户批准；先核明确方向与授权，再按原合同工作。若仍不能完成，以 --outcome blocked 报告并保留原有效制品，不自行扩权。' : '',
     '上下文与派单已内嵌；不要读取 .team-work 内部状态，不要扫描项目外路径。',
   ]
   // 保留全量变体与恢复选择；续派也带当前基线，不依赖成员记忆旧条件。
@@ -525,7 +525,7 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
         ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-scope", transition: "await-decision",
         blocked: state.next.produceBlocked, question: state.next.reason,
         ...(progressText ? { progress: progressText } : {}),
-        note: "任务静止等待用户：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或决定结束",
+        note: "任务静止等待用户：先核必要性和授权，用户明确方向与授权后按原通道恢复（单 owner 用已获授权范围调 tw-dispatch 的 writables / tw dispatch-plan --writable；多包先 tw plan 重拆再推进），或决定结束。路径参数不代表产品授权",
       }
     }
     // B（返工终版 §二·B）：渲染一律同钉账本原卡（derive 静止化带出的 state.next.pending）——
@@ -715,7 +715,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const guidance = await loadGuidance(projectRoot)
     const dispatch = withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, decl) }])
-    return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch, dispatches: [dispatch], wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '已按新可写范围重派 produce（上一轮 blocked 解除）；派单卡内嵌上一轮 blocked 原因' }
+    return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch, dispatches: [dispatch], wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '已按传入可写范围重派 produce（机械恢复不代表产品授权）；派单卡保留上一轮 blocked 原因' }
   }
 
   if (state.next.kind === 'dispatch') {
@@ -857,7 +857,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-scope", transition: "await-decision",
         blocked: state.next.produceBlocked, question: state.next.reason,
         ...(progressText ? { progress: progressText } : {}),
-        note: "任务静止等待用户：扩大可写范围后重派（单 owner 用新范围调 tw-dispatch 的 writables / tw dispatch-plan --writable <新范围>；多包先 tw plan 重拆再推进），或决定结束",
+        note: "任务静止等待用户：先核必要性和授权，用户明确方向与授权后按原通道恢复（单 owner 用已获授权范围调 tw-dispatch 的 writables / tw dispatch-plan --writable；多包先 tw plan 重拆再推进），或决定结束。路径参数不代表产品授权",
       }
     }
     // 路由类 blocker 优先（E2E 实测缺陷修复）：gate 同时有路由未判定与人工门时，

@@ -355,6 +355,7 @@ test("真实 CLI 接缝：默认子进程派单经创建核心送达同源两段
     return text.split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
   }
   const publicRules = await required("../skills/clarity-guidance/output-standard.md")
+  assert.match(publicRules, /实质争议.*暂停依赖/, "真实 CLI 派单到创建消息的通用暂停提醒，仅证明送达")
   const reviewRules = await required("../skills/clarity-review/references/review-rules.md")
   const message = h.started[0].request.prompt
   assert.equal(message.length, 2)

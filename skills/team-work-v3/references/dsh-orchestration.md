@@ -8,7 +8,7 @@
 
 ## 波次推进：一律 tw-dispatch
 
-**波次推进一律先调 `tw-dispatch`（{ task, note?, writables? }）**——单次调用完成一个波次的完整派发：
+**无未决范围/必要性/修法授权争议时，用 `tw-dispatch`（{ task, note?, writables? }）推进**；收到争议先按[场景详则](scenarios.md#范围争议暂停)普通最终消息请用户方向，不为取卡继续派发。单次正常调用完成一个波次：
 
 1. 内部子进程调 `tw dispatch-plan --task <名> --json`（writables 透传）推进到派发点或 stop；
 2. 波次机不在派发点时（awaiting-user / completed / blocked / archived 卡，含拒绝卡）**原样透传卡片**，不创建任何子代理——Lead 按卡片行动；wait-inflight 卡是唯一例外：按条目自动兜底处置（见 stop 处理节）；
@@ -18,7 +18,7 @@
 
 创建后的持久化确认失败不等于未创建：保留 sessionId 与映射，先核对同 ID 现状。防重复创建不承诺正文跨中断恰好投递一次；回执丢失或读取不确定时不要另建成员或自动重复投正文。
 
-**Lead 推进循环 = 反复调 tw-dispatch 直到终态卡片**，不再需要「先看卡、再决定怎么派」的双工具交替。`tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；无 DSH 插件的终端直接用 `tw dispatch-plan`（人读输出）作为推进通道。
+Lead 在报告到达后先核未决授权争议，无争议才继续 tw-dispatch；不能以循环推进代替及时请用户方向。tw run 只读查状态，不签卡；普通等待不等于 Runtime 已落卡，已签卡仍需原卡语义处理。用户范围确认不等于 extra-round，不自行加轮或改 choices/grant；无 DSH 插件时按相同纪律使用 dispatch-plan。
 
 工具分工以工作用途区分；任务期间开的助手仍属于普通委派：
 
@@ -45,7 +45,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 - stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
 - stop: wait-inflight：tw-dispatch 逐条核对已登记或可续会话，按上述活/冷/异主/不存在四种现状恢复。未登记的派单先登记确定性 ID 再补派；缺 registered 判定字段或读取不确定时不自动补派，按卡片指引修复。agents.json 损坏时可通过 tw agent-map 重建登记；modelHint 不可解析且该波不应执行时用 tw retire 作废；
 - stop: completed：问用户是否 tw archive；
-- stop: blocked：读 card.blockers（对象数组，每条带 recovery）修复后重新 tw-dispatch。
+- stop: blocked：核 card.blockers 与 recovery；涉及必要性/授权争议先请用户确认，不能将恢复提示当自行修复/扩权许可。明确授权后按原通道恢复。
 
 ## 作废未结波（tw retire）
 

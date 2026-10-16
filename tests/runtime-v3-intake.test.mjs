@@ -64,7 +64,7 @@ test("deliver 目录授权边界：前缀不误匹配（review/ 不覆盖 review
     registerDelivery({ projectRoot, task, dispatchKey: "w1-dir002", payload: { outcome: "delivered", summary: "越界", paths: ["review-x/a.md"], checks: [], unresolved: [] } }),
     (error) => error.code === "INTAKE_REJECTED"
       && error.reasons.some((r) => r.includes("review-x/a.md") && r.includes("不在本派单可写范围") && r.includes("目录条目以 / 结尾"))
-      && error.reasons.some((r) => r.includes("--outcome blocked") && r.includes("扩大可写范围")),
+      && error.reasons.some((r) => r.includes("--outcome blocked") && /用户明确.*授权/.test(r) && !r.includes("Lead 将扩大可写范围")),
   )
 })
 

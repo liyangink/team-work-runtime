@@ -20,6 +20,26 @@ const policy = JSON.parse(await readFile(path.join(here, "../team-work/policies/
 const codeReviewScene = scenePolicy(policy, "code-review")
 const implScene = scenePolicy(policy, "implementation")
 
+test("首轮争议沿原升级出口，单包 blocked 静止但不机械冻结其他可派包", () => {
+  for (const reports of [
+    [ownerDeliver(1), challengerReview(1, "escalate")],
+    [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("escalate-to-user")],
+  ]) assert.equal(nextWave({ scenePolicy: codeReviewScene, reports }).kind, "converge-user")
+  const blocked = { ...ownerDeliver(1, { outcome: "blocked", summary: "新增设施授权未确定", paths: [] }), dispatchKey: "blocked-example" }
+  const journal = [{ seq: 1, type: "dispatched", detail: { key: blocked.dispatchKey, role: "owner", round: 1 } }]
+  const single = nextWave({ scenePolicy: codeReviewScene, reports: [blocked], journal })
+  assert.equal(single.kind, "converge-user")
+  assert.deepEqual(single.produceBlocked, [null])
+  const parallel = nextWave({
+    scenePolicy: codeReviewScene,
+    packages: [{ id: "held", dependsOn: [] }, { id: "ready", dependsOn: [] }],
+    reports: [{ ...blocked, package: "held" }],
+    journal: [{ ...journal[0], detail: { ...journal[0].detail, package: "held" } }],
+  })
+  assert.equal(parallel.kind, "produce")
+  assert.deepEqual(parallel.owners, [{ package: "ready", round: 1, continuation: false }])
+})
+
 test("波次推进：produce → review → verdict（核心场景）→ gate（单 owner 兼容：匿名包 [null]）", () => {
   assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: [] }), { kind: "produce", role: "owner", round: 1, owners: [{ package: null, round: 1, continuation: false }] })
   assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: [ownerDeliver(1)] }), { kind: "review", role: "challenger", round: 1, continuation: false })

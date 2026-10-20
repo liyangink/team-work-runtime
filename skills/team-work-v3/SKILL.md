@@ -40,7 +40,7 @@ tw archive --task <名字>                                              # 用户
 - 推进是 dispatch 侧的单一写者。**推进前先核授权争议**：收到未决范围/必要性/修法报告或看到未批准新增方向，停依赖续派，以普通最终消息请用户确认，不为了取卡调 dispatch。没有该争议时，DSH 用 `tw-dispatch` 开单/创建/登记，终端用 `dispatch-plan`；按返回卡行动，业务派单原样投递，不改边界。恢复与原卡限制见[范围争议暂停](references/scenarios.md#范围争议暂停)。
 - **工具分工**：Lead 用 `tw-dispatch` 派发正式波次成员；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。成员辅助须遵守上文成员入口的限定范围与禁止继续委托要求。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
 - **配置来源**：当前 profile 的插件 Config 提供 tiers，同一 profile 跨项目共享且无项目覆盖。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 精确模型快照；`tw models` 查看当前 entry/profile 来源。
-- **续聊与深度**：原生后台 `continuable` 的 `subagentId` 才是可供 `send_message` 使用的会话 ID，`jobId/runId` 不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
+- **续聊与深度**：使用支持续聊的原生后端，返回的 `subagentId` 可用于 `send_message`；参数以当前工具 schema 为准，不补造模式字段，旧版非会话回执不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
 - 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/升档/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。

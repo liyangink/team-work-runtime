@@ -1,8 +1,8 @@
-# DSH 编排：Lead 派发操作规程（DSH 0.2.0-rc.2）
+# DSH 编排：Lead 派发操作规程（DSH 0.2.0-rc.2 / 0.2.1-rc.2）
 
 本篇的开任务、拆包与正式波次派发操作仅供 Lead。已收到角色、边界与 deliver/review 指令的成员按本派单执行，不重建审查团队。成员可用原生工具就本职责内的限定小问题开 junior 只读助手，消息带完整范围、可写为空与禁止继续委托的要求；不复制总目标，不派完整审查团队，由发起者核验整合结果。
 
-正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`；原生后台 `continuable` 返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。一次性后台 `jobId` 与前台 `runId` 不作续聊身份。
+正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`。需要续聊时使用支持续聊的原生后端；返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。参数以当前工具 schema 为准，不补造模式字段；旧版非会话回执不作续聊身份。
 
 原样投递 Runtime 业务派单，两种正文都已带当前验收基线；绑定层只选变体，不改业务条件。requiredGuidance 是根包规范的只读投影，DSH 同条消息追加规则 text 块，Lead 最终结果保留自身 presentation；无需主动调 skill。独立入口可依宿主选源，TWR 自动规则固定来自根包，见[派单引导库](guidance.md)。intent/done/可写目录不授权扩需求，变更仍经用户明确批准及原人工门/SPEC；分流见[场景指导](scenarios.md#验收基线与意见分流)。
 

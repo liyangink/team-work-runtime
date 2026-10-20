@@ -7,18 +7,83 @@ import path from "node:path"
 import test from "node:test"
 import { pathToFileURL } from "node:url"
 import vm from "node:vm"
-import { coldSessionReceived } from "../dsh/subagent-session.js"
+import { coldSessionReceived, createDirectedSubagent } from "../dsh/subagent-session.js"
+
+const verifiedHostVersions = ["0.2.0-rc.2", "0.2.1-rc.2"]
 
 async function hostContext(t) {
   const host = process.env.DSH_TEST_HOST
   if (!host) { t.skip("未指定 DSH_TEST_HOST；新版隔离宿主验证未执行"); return null }
   const metadata = JSON.parse(await readFile(path.join(host, "package.json"), "utf8"))
   assert.equal(metadata.name, "@deepseek-ai/dsh")
-  assert.equal(metadata.version, "0.2.0-rc.2", "只使用本次已核验的宿主版本")
   const require = createRequire(path.join(host, "package.json"))
+  const { evaluatePluginCompatibility } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")).href)
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"))
+  assert.equal(evaluatePluginCompatibility(manifest, {}, metadata.version), undefined, "实际宿主须通过当前根包的官方兼容检查")
   const { Context } = await import(pathToFileURL(require.resolve("@deepseek-ai/cordis")).href)
   return new Context({ _isRoot: true })
 }
+
+test("真实宿主兼容检查：已测两版通过，加载范围边界遵循声明", async (t) => {
+  const ctx = await hostContext(t)
+  if (!ctx) return
+  const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
+  const { evaluatePluginCompatibility } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")).href)
+  const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"))
+  for (const version of verifiedHostVersions) assert.equal(evaluatePluginCompatibility(manifest, {}, version), undefined)
+  const oldManifest = { ...manifest, peerDependencies: { "@deepseek-ai/dsh": "0.2.0-rc.2" } }
+  assert.equal(evaluatePluginCompatibility(oldManifest, {}, "0.2.1-rc.2").exempted, false)
+  // 以下版本仅作范围规则输入，不代表它们已发布或已完成运行验证。
+  for (const version of ["0.2.0-rc.3", "0.2.0", "0.2.1-rc.1", "0.2.1", "0.2.2-rc.1", "0.2.99"]) {
+    assert.equal(evaluatePluginCompatibility(manifest, {}, version), undefined, version)
+  }
+  for (const version of ["0.1.7-rc.2", "0.2.0-rc.1", "0.3.0-0", "0.3.0-alpha.1", "0.3.0-rc.1", "0.3.0", "1.0.0"]) {
+    assert.equal(evaluatePluginCompatibility(manifest, {}, version).exempted, false, version)
+  }
+})
+
+test("真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及父级结果投递", async (t) => {
+  const ctx = await hostContext(t)
+  if (!ctx) return
+  const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
+  const { SubagentRuntime } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-subagent")).href)
+  const parent = { id: "parent-example", session: { header: { id: "parent-example", delegationDepth: 0 } } }
+  const live = new Map(), starts = []
+  ctx.provide("workingDirectory", { ensure: async () => "/example" })
+  const fiber = ctx.plugin(SubagentRuntime, {})
+  await fiber
+  const subagents = ctx.get("subagents")
+  const providerOff = subagents.registerProvider({ name: "spawn", capabilities: { agentOptions: true, depthLimit: true }, prepareContinuable() {} })
+  // 真实公共入口负责鉴权/能力校验；这里只隔离调度后端，不执行真实模型。
+  ctx.provide("agents", { get: (id) => id === parent.id ? parent : undefined })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const activation = typeof subagents.startActivation === "function"
+  const managerSlot = activation ? "manager" : "continuations"
+  subagents[managerSlot] = {
+    [activation ? "startLocal" : "startContinuable"]: async (spec) => { starts.push(spec); live.set(spec.childId, { header: { id: spec.childId, parentSession: parent.id } }); return { childId: spec.childId, messageId: "message-example" } },
+  }
+  t.after(async () => { subagents[managerSlot] = undefined; providerOff(); await fiber.dispose() })
+  const services = {
+    subagents,
+    sessions: { get: (id) => live.get(id), flush: async () => true },
+    sessionPersistence: { stat: async () => undefined },
+    llm: { resolveCallConfig: async (config) => config },
+  }
+  const result = await createDirectedSubagent({}, { getService: (name) => services[name] }, {
+    sessionId: "child-example", description: "成员", prompt: "业务派单", requiredGuidance: "公共规则",
+    target: { provider: "provider-example", model: "model-example", effort: "high" }, exec: { agent: parent },
+  })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.sessionId, "child-example")
+  assert.equal(result.messageId, "message-example")
+  assert.equal(starts[0].childId, "child-example")
+  if (activation) assert.equal(starts[0].delivery, "parent")
+  else assert.equal(starts[0].delivery, undefined)
+  assert.deepEqual(starts[0].request.agentOptions, { provider: "provider-example", model: "model-example", reasoningEffort: "high" })
+  assert.equal(starts[0].request.maxDepth, 1)
+  assert.deepEqual(starts[0].request.prompt.map(({ text }) => text), ["业务派单", "公共规则"])
+  t.diagnostic("真实公共创建入口通过；调度后端隔离，未调用真实 LLM。")
+})
 test("新版真实 Cordis：空 tiers 可启动，只注册 tw/tw-dispatch 和内嵌 skill", async (t) => {
   const ctx = await hostContext(t)
   if (!ctx) return
@@ -48,6 +113,8 @@ test("新版真实 skill 工具：随包正文/相邻资源/来源优先级及�
   const tools = new Map()
   ctx.provide("tools", { register(def) { tools.set(def.name, def); return () => tools.delete(def.name) }, get(name) { return tools.get(name) } })
   ctx.provide("agents", {})
+  ctx.provide("systemPrompt", { section() { return () => {} } })
+  ctx.provide("workingDirectory", { ensure: async (agent) => agent.session.header.cwd })
   ctx.provide("subagents", {})
   ctx.provide("sandboxPolicy", { defaultMode: "read-only", resolve: () => ({ mode: "read-only" }) })
   const filesystemBackend = ctx.plugin(SandboxedFileSystem, {})
@@ -112,7 +179,8 @@ test("新版真实 JSONL 后端：两文本块冷持久读取保留，更新规�
   const ctx = await hostContext(t)
   if (!ctx) return
   const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
-  const { default: JsonlPersistence } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-session-persistence-jsonl")).href)
+  const persistencePlugin = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-session-persistence-jsonl")).href)
+  const JsonlPersistence = persistencePlugin.default ?? persistencePlugin
   const { createUserMessage } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-llm")).href)
   const root = await mkdtemp(path.join(os.tmpdir(), "twr-message-blocks-"))
   t.after(() => rm(root, { recursive: true, force: true }))

@@ -42,6 +42,31 @@ test("新成员采用精确模型与宿主深度，允许宿主填充未指定 e
   assert.deepEqual(h.starts[0].request.prompt, [{ type: "text", text: input.prompt }, { type: "text", text: input.requiredGuidance }])
 })
 
+test("新版创建优先 startActivation 并指定父级投递，保留会话与消息回执", async () => {
+  const h = host()
+  h.ctx.subagents.startActivation = async (spec) => {
+    assert.equal(spec.delivery, "parent")
+    h.starts.push(spec)
+    h.live.set(spec.childId, { header: { parentSession: parent.id } })
+    return { childId: spec.childId, messageId: "activation-message", result: Promise.resolve({}), dispose() { assert.fail("插件不接管生命周期") } }
+  }
+  h.ctx.subagents.startContinuable = async () => assert.fail("新版不得走旧入口")
+  const result = await createDirectedSubagent(h.ctx, {}, input)
+  assert.equal(result.ok, true)
+  assert.equal(result.messageId, "activation-message")
+  assert.equal(h.starts[0].childId, input.sessionId)
+  assert.deepEqual(h.starts[0].request.prompt.map(({ text }) => text), [input.prompt, input.requiredGuidance])
+})
+
+test("新版创建拒绝不降级重试旧入口，避免重复创建", async () => {
+  const h = host()
+  h.ctx.subagents.startActivation = async () => { throw new Error("新版拒绝") }
+  h.ctx.subagents.startContinuable = async () => assert.fail("拒绝后不得降级重试")
+  const result = await createDirectedSubagent(h.ctx, {}, input)
+  assert.equal(result.code, "TW_SUB_START_FAILED")
+  assert.equal(result.sessionId, input.sessionId)
+})
+
 test("已接收但 flush=false 保留会话 ID，绝不回收已运行成员", async () => {
   const h = host()
   h.ctx.sessions.flush = async () => false

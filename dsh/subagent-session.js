@@ -118,7 +118,7 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     if (!resolved || resolved.provider !== target.provider || resolved.model !== target.model || (target.effort !== undefined && resolved.reasoningEffort !== target.effort)) {
       return failure("TW_SUB_EXPLICIT_SELECTION_MISMATCH", "宿主未确认精确模型或显式 effort；未创建成员，请核对 tiers", id)
     }
-    if (typeof subagents?.startContinuable !== "function" || typeof subagents?.resolveMaxDepth !== "function") return failure("TW_SUB_SUBAGENTS_UNAVAILABLE", "subagents.startContinuable/resolveMaxDepth 不可用", id)
+    if ((typeof subagents?.startActivation !== "function" && typeof subagents?.startContinuable !== "function") || typeof subagents?.resolveMaxDepth !== "function") return failure("TW_SUB_SUBAGENTS_UNAVAILABLE", "subagents.startActivation（旧版 startContinuable）/resolveMaxDepth 不可用", id)
     const provider = subagents.getProvider?.(deps.subagentProviderName ?? SUBAGENT_PROVIDER)
     if (!provider) return failure("TW_SUB_PROVIDER_MISSING", "spawn 子代理 provider 未注册", id)
     if (typeof provider.prepareContinuable !== "function") return failure("TW_SUB_PROVIDER_NOT_CONTINUABLE", "spawn provider 不支持可续聊成员", id)
@@ -127,8 +127,12 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
   const agentOptions = { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}) }
   let start
   try {
-    start = await subagents.startContinuable({ provider: deps.subagentProviderName ?? SUBAGENT_PROVIDER, label: input.description, childId: id,
+    // 新版显式交给父级接收结果，旧版保留原 continuable 入口；不自行接管生命周期。
+    const activation = typeof subagents.startActivation === "function"
+    const create = activation ? subagents.startActivation : subagents.startContinuable
+    start = await create.call(subagents, { provider: deps.subagentProviderName ?? SUBAGENT_PROVIDER, label: input.description, childId: id,
       request: { parent: input.exec.agent, prompt: memberMessage(input.promptFull?.trim() ? input.promptFull : input.prompt, input.requiredGuidance), agentOptions, maxDepth },
+      ...(activation ? { delivery: "parent" } : {}),
       signal: input.exec.signal ?? new AbortController().signal })
   } catch (error) { return failure("TW_SUB_START_FAILED", "成员创建失败：" + describe(error) + "；保留映射，先核对同 ID 会话后重试", id) }
   const childId = start?.childId ?? id

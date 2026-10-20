@@ -36,7 +36,7 @@ test("package metadata is intact (install simulation once caught corruption)", a
   assert.equal(pkg.main, "./dsh/index.js", "唯一根制品直接提供 DSH host 入口")
   assert.equal(pkg.exports?.["./client"], "./dsh/client/badge.js", "唯一根制品直接提供 Web client")
   assert.equal(pkg.dsh?.bundle?.patch, "./cordis.patch.yml", "唯一根制品声明 DSH bundle patch")
-  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh"], "0.2.0-rc.2", "只声明已核验的新版宿主")
+  assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh"], ">=0.2.0-rc.2 <0.3.0-0", "允许 0.2 系列加载，但不纳入 0.3 预发布版")
   assert.equal(pkg.peerDependencies?.["@deepseek-ai/dsh-agent"], undefined, "模型注入安装器已下线")
   assert.equal(pkg.dependencies?.["@deepseek-ai/schemastery"], "~3.18.4", "直接使用的 schema 依赖在根制品声明")
   assert.ok(!pkg.files.some((entry) => entry.startsWith("packages/")), "唯一根制品不得收编旧 packages 子包")

@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process"
 import { readFile, mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises"
 import { promisify } from "node:util"
+import { createRequire } from "node:module"
 import { pathToFileURL, fileURLToPath } from "node:url"
 import os from "node:os"
 import path from "node:path"
@@ -16,7 +17,10 @@ test("唯一根制品：新版隔离 profile 的 bundle 与 Config schema 可装
   if (!host) { t.skip("未指定 DSH_TEST_HOST；新版隔离装配验证未执行"); return }
   const hostPackage = JSON.parse(await readFile(path.join(host, "package.json"), "utf8"))
   assert.equal(hostPackage.name, "@deepseek-ai/dsh")
-  assert.equal(hostPackage.version, "0.2.0-rc.2")
+  const require = createRequire(path.join(host, "package.json"))
+  const { evaluatePluginCompatibility } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-app-boot")).href)
+  const pluginPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8"))
+  assert.equal(evaluatePluginCompatibility(pluginPackage, {}, hostPackage.version), undefined, "实际宿主须通过当前根包的官方兼容检查")
   const home = await mkdtemp(path.join(os.tmpdir(), "twr-dsh-profile-"))
   const profileName = "profile-demo"
   const profileDir = path.join(home, "profiles", profileName)

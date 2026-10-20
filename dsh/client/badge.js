@@ -131,7 +131,7 @@ var factory = function (require) {
             }
             var params = { provider: candidate.provider, model: candidate.model }
             if (candidate.effort) params.reasoning_effort = candidate.effort
-            return Promise.resolve("[委派 " + ref + "] 请使用原生 subagent（继承历史时 subagent_fork），精确参数 " + JSON.stringify(params) + "。先通过 list_subagent_models 确认路由；目录未列出时按 provider+model 精确查询，区分权限拒绝与解析失败，禁止改用默认模型。需要续聊时后台模式必须为 continuable，仅 subagentId 可用于 send_message；不要把 jobId/runId 当作会话 ID，不自动修改宿主开关或允许列表。")
+            return Promise.resolve("[委派 " + ref + "] 请使用原生 subagent（继承历史时 subagent_fork），精确参数 " + JSON.stringify(params) + "。先通过 list_subagent_models 确认路由；目录未列出时按 provider+model 精确查询，区分权限拒绝与解析失败，禁止改用默认模型。需要续聊时使用支持续聊的原生后端，将返回的 subagentId 用于 send_message；模式参数以当前工具 schema 为准，不补造参数，不自动修改宿主开关或允许列表。")
           },
         },
         lexicon: function () { return TIER_ORDER.slice() },

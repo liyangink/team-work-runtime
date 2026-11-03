@@ -1,0 +1,34 @@
+{
+  "id": "anuraghazra__github-readme-stats-58",
+  "benchmark": "Multi-SWE-bench",
+  "repo": "anuraghazra/github-readme-stats",
+  "baseCommit": "2efb399f33d8f3dca7eb156404598384f419cb8b",
+  "entryStage": "implementation",
+  "writable": [
+    {
+      "path": "api/index.js",
+      "kind": "source"
+    },
+    {
+      "path": "api/pin.js",
+      "kind": "source"
+    },
+    {
+      "path": "src/fetchRepo.js",
+      "kind": "source"
+    },
+    {
+      "path": "src/fetchStats.js",
+      "kind": "source"
+    },
+    {
+      "path": "src/retryer.js",
+      "kind": "source"
+    },
+    {
+      "path": "src/utils.js",
+      "kind": "source"
+    }
+  ],
+  "prompt": "请修复当前仓库中的以下缺陷（Repository: anuraghazra/github-readme-stats）：\n\n## fix: increase github rate limit with multiple PATs\n\n### Issue #51: All stats card and repo features are down. Error cannot fetch user is shown on all cards including your readme #bug\n\n\n\n\n### Context\nWork in Progress, special thanks to @filiptronicek @ApurvShah007 @garvit-joshi\r\n\r\nfixes #51 \r\n\r\nTODO:\r\n- write tests\r\n- refactor code\r\n- add retry logic in pin.js\n\n请直接在当前工作区对应源码文件（api/index.js, api/pin.js, src/fetchRepo.js, src/fetchStats.js, src/retryer.js, src/utils.js）中完成修复（保持与现有模块导入和导出接口完全兼容）。"
+}

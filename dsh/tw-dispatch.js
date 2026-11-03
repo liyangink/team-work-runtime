@@ -9,6 +9,7 @@ import {
   SUBAGENT_PROVIDER,
 } from "./subagent-session.js"
 import { decisionTableText } from "./settings.js"
+import { createSleepConfirmGuard } from "./sleep-confirm.js"
 import { resolveChildCwd, resolveTwExecutable } from "./tw-tool.js"
 
 export const TOOL_NAME = "tw-dispatch"
@@ -50,9 +51,54 @@ export function deterministicSessionId(task, key) {
 export function twDispatchToolDescription() {
   return [
     "team-work 正式成员派发：推进到当前波次、先登记确定性会话 ID、按派单 modelHint 创建成员并拼接展示标签。同 key 重试先检查同 ID：同父活会话等待；同父冷会话用 sendMessage 续投；异主拒绝接管；确认不存在才重建。读取不确定时返回恢复错误，保留映射；初始消息已接收但持久化未确认时保留 sessionId，不回收或另建成员。",
-    "续派先登记本轮 key 到原成员会话，再等待或冷唤醒：日志已含本轮完整正文则发送轻量续行提醒，仅有旧轮上下文则发送本轮增量，尚无上下文则发送全量；断链重建发送全量上下文。awaiting-user/completed/blocked/archived 卡停止派发，wait-inflight 逐项恢复。人工等待时只能等新用户输入，不轮询。主动催单和续聊用原生 send_message。防重复创建不承诺消息恰好投递一次；回执丢失后先核对已有会话 ID。",
+    '续派先登记本轮 key 到原成员会话，再等待或冷唤醒：日志已含本轮完整正文则发送轻量续行提醒，仅有旧轮上下文则发送本轮增量，尚无上下文则发送全量；断链重建发送全量上下文。正常波次全部在途（nextAction="wait-children"）时输出派发简报后自然结束回合即可，宿主会在成员完成时自动唤醒本会话；确需同步等待时，sleep 类命令首次会被确认引导，在你看到引导后的后续 Step 再次执行即确认放行（更推荐 bash run_in_background + job_output 等原生等待通道）；awaiting-user/completed/blocked/archived 卡停止派发并由 Lead 向用户汇报，wait-inflight 逐项恢复。人工等待时只能等新用户输入，不轮询。主动催单和续聊用原生 send_message。防重复创建不承诺消息恰好投递一次；回执丢失后先核对已有会话 ID。',
     decisionTableText(),
   ].join("\n")
+}
+
+export const TW_DISPATCH_OUTPUT_SCHEMA = Object.freeze({
+  type: "object",
+  properties: {
+    ok: { type: "boolean", description: "调用是否成功" },
+    task: { type: "string", description: "任务名" },
+    stage: { oneOf: [{ type: "string" }, { type: "null" }], description: "当前阶段 ID" },
+    stop: {
+      oneOf: [
+        { type: "string", enum: ["awaiting-user", "wait-inflight", "completed", "blocked", "archived"] },
+        { type: "null" },
+      ],
+      description: "停止原因；派发点为 null",
+    },
+    nextAction: {
+      type: "string",
+      enum: ["wait-children", "needs-user-report", "recover", "complete"],
+      description: "机器可读后续动作：wait-children=成员已在途，可输出简报后结束回合等待通知；recover=存在需修复或核对的异常项",
+    },
+    dispatched: { type: "array", items: { type: "object" }, description: "本波已派发或续派的成员回执列表" },
+    inflight: { type: "array", items: { type: "object" }, description: "wait-inflight 在途核对与恢复结果列表" },
+    failures: { type: "integer", description: "失败条目数" },
+    code: { type: "string", description: "错误码" },
+    message: { type: "string", description: "说明或错误恢复指引" },
+  },
+})
+
+export function isHealthyInflightItem(item) {
+  return Boolean(
+    item &&
+      typeof item === "object" &&
+      item.ok === true &&
+      item.passthrough !== true &&
+      item.accepted !== true &&
+      item.persistenceConfirmed !== false &&
+      typeof item.sessionId === "string" &&
+      item.sessionId.trim().length > 0 &&
+      (item.registered === true || item.continuation === true) &&
+      (item.action === "wait" || item.action === "followup" || item.action === "recreated" || item.action === "fresh_rebuilt")
+  )
+}
+
+export function isHealthyInflightBatch(items, failures = 0) {
+  return Array.isArray(items) && items.length > 0 && failures === 0 && items.every(isHealthyInflightItem)
 }
 
 const TW_TIMEOUT_MS = 120000
@@ -96,6 +142,7 @@ function runTwChild(executable, args, cwd, snapshot, timeoutMs = TW_TIMEOUT_MS) 
 export function twDispatchDefinition(ctx, deps = {}) {
   const cli = deps.runTw ?? ((args, cwd, snapshot) => runTwChild(resolveTwExecutable(), args, cwd, snapshot))
   const createSubagent = deps.createDirectedSubagent ?? createDirectedSubagent
+  const sleepConfirm = deps.sleepConfirm ?? createSleepConfirmGuard()
   const coreDeps = {
     subagentProviderName: deps.subagentProviderName ?? SUBAGENT_PROVIDER,
     ...(deps.getService ? { getService: deps.getService } : {}),
@@ -183,8 +230,9 @@ export function twDispatchDefinition(ctx, deps = {}) {
           if (mapped?.ok !== true) return { ok: false, key, label, sessionId: prior, ...waveFields, code: "TW_DISPATCH_REGISTER_FAILED", message: "续派登记失败，未发送本轮正文；保留原成员会话，请修复登记后重试：" + String(mapped?.message ?? mapped) }
         }
         if (state === "live") {
+          // reused：活会话在场是纯重入等待，没有新投递——sleep 引导的派发世代不得因此递增。
           return {
-            ok: true, key, label, continuation: true, expectedAgentId: prior, sessionId: prior, action: "wait", ...waveFields,
+            ok: true, key, label, continuation: true, expectedAgentId: prior, sessionId: prior, reused: true, action: "wait", ...waveFields,
             message: "续派原会话（" + prior + "）在场：任务进行中（正在处理本轮，或等子代——子代停止时宿主注入父级通知逐级传导），等待成员完成通知；重入恒等待不重投，催单用 send_message",
           }
         }
@@ -263,7 +311,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             ? { action: "wait", message: "判定链命中：会话（" + created.sessionId + "）在场——任务进行中，等待成员完成通知；重入恒等待不重投" }
             : created.refollowed
               ? { action: "followup", message: "同父冷会话（" + created.sessionId + "）已冷唤醒并发送" + (created.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : created.resume === "incremental" ? "本轮增量派单" : "全量派单") }
-              : {}),
+              : { action: "wait", message: "已创建成员会话（" + created.sessionId + "）并投递派单；输出派发简报后自然结束回合即可，等待成员完成通知（宿主会自动唤醒本会话）；请勿轮询或调用 sleep，确需同步等待时 sleep 类命令首次会被确认引导" }),
         }
       }
 
@@ -321,7 +369,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
               ...(created.effort ? { effort: created.effort } : {}),
               ...waveFields, registered: true,
               ...(created.reused
-                ? { action: "wait", message: "已登记在途且会话在场（" + created.sessionId + "）：任务进行中，等待成员完成通知；重入恒等待不重投，催单用 send_message" }
+                ? { reused: true, action: "wait", message: "已登记在途且会话在场（" + created.sessionId + "）：任务进行中，等待成员完成通知；重入恒等待不重投，催单用 send_message" }
                 : created.refollowed
                   ? { recovered: true, action: "followup", ...(created.resume ? { resume: created.resume } : {}), message: "已登记在途，同父冷会话（" + created.sessionId + "）已唤醒并发送" + (created.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : created.resume === "incremental" ? "本轮增量派单" : "全量派单") + "。" + retireHint(item) }
                   : { recovered: true, action: "recreated", message: "已登记在途但会话无记录（崩溃窗口或会话被清），已同 id 重建（投全量变体）：" + created.sessionId + "。" + retireHint(item) }),
@@ -349,15 +397,19 @@ export function twDispatchDefinition(ctx, deps = {}) {
         const inflight = []
         for (const item of plan.inflight) inflight.push(await handleInflightItem(item))
         const failures = inflight.filter((d) => !d.ok).length
-        return {
+        const healthyInflight = isHealthyInflightBatch(inflight, failures)
+        const inflightResult = {
           ok: true,
           task: plan.task ?? task,
           stage: plan.stage,
           stop: "wait-inflight",
+          nextAction: healthyInflight ? "wait-children" : "recover",
           inflight,
           ...presentation,
           ...(failures > 0 ? { failures, note: "部分在途条目处置失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : { note: "在途条目已逐条处置（等待/补发/冷唤醒/续派 followup/重建）" }),
         }
+        if (healthyInflight) sleepConfirm.noteDispatch(exec, inflightResult)
+        return inflightResult
       }
       if (!isDispatchPlan) return plan
 
@@ -381,17 +433,21 @@ export function twDispatchDefinition(ctx, deps = {}) {
         dispatched.push(card)
       }
       const failures = dispatched.filter((d) => !d.ok).length
-      return {
+      const healthyDispatched = isHealthyInflightBatch(dispatched, failures)
+      const dispatchedResult = {
         ok: true,
         task: plan.task ?? task,
         stage: plan.stage,
+        nextAction: healthyDispatched ? "wait-children" : "recover",
         dispatched,
         ...presentation,
         ...(failures > 0 ? { failures, note: "部分派单项失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : {}),
       }
+      if (healthyDispatched) sleepConfirm.noteDispatch(exec, dispatchedResult)
+      return dispatchedResult
     },
     output: {
-      schema: { type: "object" },
+      schema: TW_DISPATCH_OUTPUT_SCHEMA,
       render: (_params, card) => [{ type: "text", text: JSON.stringify(card, null, 2) }],
     },
   }

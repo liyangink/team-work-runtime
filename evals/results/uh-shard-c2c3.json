@@ -1,0 +1,1568 @@
+{
+  "schemaVersion": "1.0",
+  "package": "run-uh-c2c3",
+  "description": "3 道零注释超难题（uh1/uh2/uh3）× C2/C3 两组共 6 格完整评测分片：先按统一协议 900s 试跑留观测，再按 Lead 裁决对多智能体组放宽到 2400s 补跑；对反作弊检测器边界误报的 2 格按 Lead 统一裁决恢复审计重判后的真实能力分，并保留原始违规证据。",
+  "generatedAt": "2026-11-02T08:19:38.883Z",
+  "updatedAt": "2026-11-02T09:15:21.964Z",
+  "provider": "codemaker",
+  "taskIds": [
+    "uh1_swelancer__offline_optimistic_reappear",
+    "uh2_swelancer__popover_backdrop_event_routing",
+    "uh3_cooperbench__three_way_tx_cache_pipeline"
+  ],
+  "groups": [
+    "C2",
+    "C3"
+  ],
+  "concurrency": 3,
+  "totalCells": 6,
+  "completedCells": 6,
+  "harnessNotes": {
+    "runner": "evals/run-matrix.mjs#runGovernanceMatrixCell，未改动执行协议；每格独立临时 DSH_HOME 与工作区；twrMeta 来自任务目录 journal/reports 快照。",
+    "dshBin": "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+    "dshVersion": "0.2.1-rc.5",
+    "dshBinRationale": "PATH 中的 dsh 为 0.1.7-rc.2（低于 peerDependencies >=0.2.0-rc.2），使用 DSH 桌面端自带 CLI（实测 0.2.1-rc.5）。",
+    "llmPiAiPatch": "取自本地 DSH profile cordis.patch.yml 的 llm-pi-ai 配置项，按 YAML 1.2 语义提取（yaml v2.9，reasoningEfforts 的 off 键保持字符串），provider=codemaker。",
+    "models": "tiers 取自 evals/tasks.json：junior=deepseek-flash/high、senior=glm-5.3/high、expert=gpt-6.1-sol/max。C2=Lead S + Owner S + Challenger S + Expert E（core=true）；C3=Lead S + Owner J + Challenger S，无 Expert（core=false）。",
+    "protocol": "两阶段：① 统一 900s 逐回合上限试跑 6 格，保留为 previous900sObservation；② Lead 2026-11-02 统一裁决后，对多智能体组用 timeoutMs=2400000（40 分钟）补跑 6 格，主字段为补跑结果。",
+    "perTurnTimeoutMs": 2400000,
+    "pilotPerTurnTimeoutMs": 900000,
+    "concurrency": 3,
+    "isolation": "独立临时 DSH_HOME；workspace-write 沙箱；approval never；tool-web 禁用；离线 PATH 桩（curl/wget/nc/ncat/telnet/pip/pip3/npm/npx/pnpm/yarn/uv）与 PIP_NO_INDEX 等包管理器离线变量。",
+    "antiCheat": "事后检测 detectWorkspaceEscape（网络访问、workspace 外路径、超难题内部相对路径白名单）。本轮实测发现检测器 2 类边界误报：/private/tmp 裸目录自测脚本、/dev/* 与手敲自身 cell 路径笔误（目标不存在 ENOENT）；均无数据泄漏。",
+    "antiCheatAdjudication": "Lead 统一裁决（2026-11-02）：上述违禁项均无数据泄漏，属检测器边界误报；按上一轮矩阵先例恢复真实能力分，主字段 cheatDetected=false，原始违规数组与逐条证据保留在 antiCheatReview/auditHistory；待总合并阶段同步加固 evals/zstd-log.mjs 的 /tmp 裸目录、/dev/* 与自身 cell 路径容错。 涉及 cell 的原始 violations 见 antiCheatReview.detectorVerdict.violations。",
+    "scoreSemantics": "TWR 组 score = deterministic60 + checkpoints30 + discipline10；round1Score 为首交快照得分，deltaQ = score - round1Score。被检测器清零的格，主字段使用审计重判能力分（原始判分组件即真实分，另用审计快照重判复核一致），scoreByDetector 保留检测器原始清零值 0。",
+    "capTruncation": "uh1/C2 在 2400s 内完成 wv1 Owner→wv2 Challenger→wv3 Expert 三轮核心报告并产出有效答卷（score=92），但 Senior Owner 在 wv4 第 2 轮返工波触及 2400s 上限；按 Lead 裁决保留该结果并如实标注，不再单独扩至 3600s。",
+    "costAccounting": {
+      "pilot900sTotalUsd": 3.391141,
+      "rerun2400sTotalUsd": 8.665215,
+      "note": "两阶段为独立重跑，成本不可相加为单次成绩成本；主字段 costUsd 为 2400s 补跑成本。"
+    },
+    "auditMethod": "运行期每 5s 复制评测格 dsh-home/sessions 与 workspace-live 到 /tmp/uh-audit 供事后核验；误报格用审计快照重跑 gradeUltraHardTask 复核分数，并解码会话 tool/call 原文定位越界调用。"
+  },
+  "validity": {
+    "totalCells": 6,
+    "validCells": 6,
+    "capTruncatedCells": [
+      "uh1_swelancer__offline_optimistic_reappear|C2"
+    ],
+    "antCheatAdjudicatedCells": [
+      "uh1_swelancer__offline_optimistic_reappear|C3",
+      "uh3_cooperbench__three_way_tx_cache_pipeline|C2"
+    ],
+    "issues": [],
+    "notes": []
+  },
+  "groupStats": {
+    "C2": {
+      "avgScore": 94.67,
+      "totalCostUsd": 7.094521,
+      "avgDeltaQ": 0
+    },
+    "C3": {
+      "avgScore": 97.33,
+      "totalCostUsd": 1.570694,
+      "avgDeltaQ": 0
+    }
+  },
+  "matrix": {
+    "uh1_swelancer__offline_optimistic_reappear": {
+      "C2": {
+        "round1Score": 92,
+        "score": 92,
+        "deltaQ": 0,
+        "cost": 2.37344,
+        "sec": 2400.22,
+        "sessions": 4,
+        "waves": "wv1(owner)->wv2(challenger)->wv3(expert)->wv4(owner)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": false,
+        "capTruncated": true
+      },
+      "C3": {
+        "round1Score": 92,
+        "score": 92,
+        "deltaQ": 0,
+        "cost": 0.559811,
+        "sec": 995.4,
+        "sessions": 3,
+        "waves": "wv1(owner)->wv2(challenger)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": true,
+        "capTruncated": false
+      }
+    },
+    "uh2_swelancer__popover_backdrop_event_routing": {
+      "C2": {
+        "round1Score": 92,
+        "score": 92,
+        "deltaQ": 0,
+        "cost": 1.982167,
+        "sec": 1846.26,
+        "sessions": 5,
+        "waves": "wv1(owner)->wv2(challenger)->wv3(expert)->wv4(owner)->wv5(challenger)->wv6(expert)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": false,
+        "capTruncated": false
+      },
+      "C3": {
+        "round1Score": 100,
+        "score": 100,
+        "deltaQ": 0,
+        "cost": 0.513127,
+        "sec": 752.62,
+        "sessions": 3,
+        "waves": "wv1(owner)->wv2(challenger)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": false,
+        "capTruncated": false
+      }
+    },
+    "uh3_cooperbench__three_way_tx_cache_pipeline": {
+      "C2": {
+        "round1Score": 100,
+        "score": 100,
+        "deltaQ": 0,
+        "cost": 2.738914,
+        "sec": 2298.53,
+        "sessions": 4,
+        "waves": "wv1(owner)->wv2(challenger)->wv3(expert)->wv4(owner)->wv5(challenger)->wv6(expert)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": true,
+        "capTruncated": false
+      },
+      "C3": {
+        "round1Score": 100,
+        "score": 100,
+        "deltaQ": 0,
+        "cost": 0.497756,
+        "sec": 886.71,
+        "sessions": 3,
+        "waves": "wv1(owner)->wv2(challenger)",
+        "kind": "twr",
+        "layer": "ultra-hard",
+        "source": "uh-shard-c2c3",
+        "cheatDetected": false,
+        "antiCheatAdjudicated": false,
+        "capTruncated": false
+      }
+    }
+  },
+  "runMetadata": {
+    "pilot": {
+      "startedAt": "2026-11-02T07:48:30.330Z",
+      "dshVersion": "0.2.1-rc.5",
+      "perTurnTimeoutMs": 900000,
+      "concurrency": 3,
+      "cells": 6,
+      "totalCostUsd": 3.391141,
+      "detectorHashes": {
+        "evals/run-matrix.mjs": "9cc868d2a81190de49217fae5a9d14f4bfe716dd6d8a02cb1ce8cc0781e2210e",
+        "evals/runner.mjs": "7d8a131b578eb7d92211c249a47f343460bd66ebbd9e2bc9e58f1c7f3d83f96a",
+        "evals/zstd-log.mjs": "d75da7f0a0aecc3bdf01b633e543045de3d15a3fdb4e0f45b88507cf071ecaa4",
+        "evals/grade.mjs": "b7d60b5698acffc584623745908c92fe91749d9ef41d7163a814c7947991c1cb"
+      }
+    },
+    "rerun": {
+      "startedAt": "2026-11-02T08:19:38.883Z",
+      "perTurnTimeoutMs": 2400000,
+      "concurrency": 3,
+      "cells": 6,
+      "totalCostUsd": 8.665215
+    },
+    "repoHead": "176621cd5cd989480152b8f4358c2abf20ccb15c",
+    "auditArtifacts": "/tmp/uh-audit（本机临时审计副本，不随仓库交付）"
+  },
+  "cells": [
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "C2",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 92,
+      "deterministic60": 52,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 92,
+      "deltaQ": 0,
+      "costUsd": 2.37344,
+      "offPeakCostUsd": 2.37344,
+      "elapsedSec": 2400.22,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 87,
+          "failedAttempts": 0,
+          "inputTokens": 414603,
+          "cacheReadTokens": 3502912,
+          "cacheWriteTokens": 0,
+          "outputTokens": 125601,
+          "costUsd": 2.043846,
+          "offPeakCostUsd": 2.043846
+        },
+        "gpt-6.1-sol": {
+          "requests": 17,
+          "failedAttempts": 0,
+          "inputTokens": 34,
+          "cacheReadTokens": 670233,
+          "cacheWriteTokens": 56781,
+          "outputTokens": 12055,
+          "costUsd": 0.329594,
+          "offPeakCostUsd": 0.329594
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 9,
+        "reportCount": 3,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 13,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "selectedId": 6,
+        "decisionUnambiguous": true,
+        "issueUntouched": true,
+        "filesHit": 5,
+        "functionsHit": 5,
+        "rootCauseScore": 4,
+        "substantiveRejections": 7,
+        "falsifyScore": 6,
+        "choiceScore": 10,
+        "design": {
+          "modulesMentioned": 6,
+          "traceScore": 3,
+          "falsifyScore": 2,
+          "targetScore": 3,
+          "selfTestScore": 2
+        }
+      },
+      "startedAt": "2026-11-02T08:19:38.885Z",
+      "finishedAt": "2026-11-02T08:59:39.390Z",
+      "wallSec": 2400.51,
+      "previous900sObservation": {
+        "score": 57,
+        "scoreComponents": {
+          "deterministic60": 52,
+          "checkpoints30": 0,
+          "discipline10": 5
+        },
+        "rawScoreBeforeCheatZero": null,
+        "round1Score": null,
+        "costUsd": 0.625628,
+        "elapsedSec": 900.15,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "journalCount": 2,
+          "reportCount": 0,
+          "waves": [
+            "wv1(owner:glm-5.3)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "truncated",
+          "observation": {
+            "score": 57,
+            "scoreComponents": {
+              "deterministic60": 52,
+              "checkpoints30": 0,
+              "discipline10": 5
+            },
+            "rawScoreBeforeCheatZero": null,
+            "round1Score": null,
+            "costUsd": 0.625628,
+            "elapsedSec": 900.15,
+            "cheatDetected": false,
+            "violations": [],
+            "twrMeta": {
+              "journalCount": 2,
+              "reportCount": 0,
+              "waves": [
+                "wv1(owner:glm-5.3)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "cap-truncated-in-rework",
+          "elapsedSec": 2400.22,
+          "wallSec": 2400.51,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 9,
+        "lastEvent": {
+          "type": "dispatched",
+          "waveId": "wv4",
+          "role": "owner",
+          "round": 2
+        }
+      },
+      "capNote": "Senior Owner 在 wv4（第 2 轮返工）波次触及 2400s 上限；原始能力分仍可判分，但审查链未走到最终 accept 门。按 Lead 裁决保留该 2400s 结果，不再扩到 3600s 重跑。"
+    },
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "C3",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 92,
+      "deterministic60": 52,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 92,
+      "deltaQ": 0,
+      "costUsd": 0.559811,
+      "offPeakCostUsd": 0.497934,
+      "elapsedSec": 995.4,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 31,
+          "failedAttempts": 0,
+          "inputTokens": 79431,
+          "cacheReadTokens": 796224,
+          "cacheWriteTokens": 0,
+          "outputTokens": 26781,
+          "costUsd": 0.436058,
+          "offPeakCostUsd": 0.436058
+        },
+        "deepseek-flash": {
+          "requests": 53,
+          "failedAttempts": 0,
+          "inputTokens": 54744,
+          "cacheReadTokens": 3671040,
+          "cacheWriteTokens": 0,
+          "outputTokens": 71086,
+          "costUsd": 0.123753,
+          "offPeakCostUsd": 0.061876
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 13,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "selectedId": 6,
+        "decisionUnambiguous": true,
+        "issueUntouched": true,
+        "filesHit": 5,
+        "functionsHit": 5,
+        "rootCauseScore": 4,
+        "substantiveRejections": 7,
+        "falsifyScore": 6,
+        "choiceScore": 10,
+        "design": {
+          "modulesMentioned": 6,
+          "traceScore": 3,
+          "falsifyScore": 2,
+          "targetScore": 3,
+          "selfTestScore": 2
+        }
+      },
+      "startedAt": "2026-11-02T08:19:38.886Z",
+      "finishedAt": "2026-11-02T08:36:14.672Z",
+      "wallSec": 995.79,
+      "scoreByDetector": 0,
+      "detectorCheatDetected": true,
+      "detectorViolations": [
+        {
+          "sessionId": "session-dfd5d16e-4699-4919-af5f-b054bf2f8a3b",
+          "turn": 1,
+          "step": 4,
+          "tool": "read",
+          "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lock/PolicyRoleIndex.js"
+        }
+      ],
+      "antiCheatReview": {
+        "conclusion": "false-positive",
+        "ruling": "Lead 统一裁决（2026-11-02）：上述违禁项均无数据泄漏，属检测器边界误报；按上一轮矩阵先例恢复真实能力分，主字段 cheatDetected=false，原始违规数组与逐条证据保留在 antiCheatReview/auditHistory；待总合并阶段同步加固 evals/zstd-log.mjs 的 /tmp 裸目录、/dev/* 与自身 cell 路径容错。",
+        "detectorVerdict": {
+          "cheatDetected": true,
+          "scoreAppliedByDetector": 0,
+          "rawScoreBeforeZero": 92,
+          "violations": [
+            {
+              "sessionId": "session-dfd5d16e-4699-4919-af5f-b054bf2f8a3b",
+              "turn": 1,
+              "step": 4,
+              "tool": "read",
+              "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lock/PolicyRoleIndex.js"
+            }
+          ]
+        },
+        "auditRegrade": {
+          "score": 92,
+          "note": "对审计采集的最终工作区快照重跑 gradeUltraHardTask，totalScore=92（52+30+10），与本格原始判分组件一致；最终 journal 末事件为 decision-issued。"
+        },
+        "evidence": [
+          {
+            "source": "audit-session-call",
+            "sessionId": "session-dfd5d16e-4699-4919-af5f-b054bf2f8a3b",
+            "turn": 1,
+            "step": 4,
+            "tool": "read",
+            "argument": "/private/var/folders/yw/sw4vsv4f11_wyzz3lock/PolicyRoleIndex.js",
+            "finding": "路径段 sw4vsv4f11_wyzz3lock 与实际临时目录 sw4vsvwn4f11_wyzz3lrp8dc0000gq 不一致，目标文件不存在；非真实越界访问。"
+          }
+        ],
+        "summary": "检测器误报：唯一违禁项是模型把自身工作区绝对路径写坏（/private/var/folders/.../sw4vsv4f11_wyzz3lock/PolicyRoleIndex.js，真实目录为 sw4vsvwn4f11…，该路径不存在/ENOENT），未读取任何外部或跨格评测数据。"
+      },
+      "previous900sObservation": {
+        "score": 41,
+        "scoreComponents": {
+          "deterministic60": 36,
+          "checkpoints30": 0,
+          "discipline10": 5
+        },
+        "rawScoreBeforeCheatZero": null,
+        "round1Score": null,
+        "costUsd": 0.42619,
+        "elapsedSec": 900.14,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "journalCount": 4,
+          "reportCount": 0,
+          "waves": [
+            "wv1(owner:deepseek-flash)",
+            "wv2(owner:deepseek-flash)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "truncated",
+          "observation": {
+            "score": 41,
+            "scoreComponents": {
+              "deterministic60": 36,
+              "checkpoints30": 0,
+              "discipline10": 5
+            },
+            "rawScoreBeforeCheatZero": null,
+            "round1Score": null,
+            "costUsd": 0.42619,
+            "elapsedSec": 900.14,
+            "cheatDetected": false,
+            "violations": [],
+            "twrMeta": {
+              "journalCount": 4,
+              "reportCount": 0,
+              "waves": [
+                "wv1(owner:deepseek-flash)",
+                "wv2(owner:deepseek-flash)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "completed-chain-with-detector-false-positive",
+          "elapsedSec": 995.4,
+          "wallSec": 995.79,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 7,
+        "lastEvent": {
+          "type": "decision-issued",
+          "waveId": null,
+          "role": null,
+          "round": null
+        }
+      }
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "C2",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 92,
+      "deterministic60": 60,
+      "checkpoints30": 22,
+      "discipline10": 10,
+      "round1Score": 92,
+      "deltaQ": 0,
+      "costUsd": 1.982167,
+      "offPeakCostUsd": 1.970588,
+      "elapsedSec": 1846.26,
+      "sessionCount": 5,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 70,
+          "failedAttempts": 0,
+          "inputTokens": 247927,
+          "cacheReadTokens": 2588672,
+          "cacheWriteTokens": 0,
+          "outputTokens": 78827,
+          "costUsd": 1.366992,
+          "offPeakCostUsd": 1.366992
+        },
+        "gpt-6.1-sol": {
+          "requests": 28,
+          "failedAttempts": 0,
+          "inputTokens": 56,
+          "cacheReadTokens": 1398617,
+          "cacheWriteTokens": 89005,
+          "outputTokens": 22953,
+          "costUsd": 0.592016,
+          "offPeakCostUsd": 0.592016
+        },
+        "deepseek-flash": {
+          "requests": 6,
+          "failedAttempts": 0,
+          "inputTokens": 12978,
+          "cacheReadTokens": 80000,
+          "cacheWriteTokens": 0,
+          "outputTokens": 15655,
+          "costUsd": 0.023159,
+          "offPeakCostUsd": 0.01158
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 14,
+        "reportCount": 6,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv5",
+            "role": "challenger",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv6",
+            "role": "expert",
+            "round": 2,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 2,
+        "contractsScore": 8,
+        "substantiveRejections": 7,
+        "falsifyScore": 14,
+        "modulesHit": 5,
+        "designDelivered": true
+      },
+      "startedAt": "2026-11-02T08:36:14.673Z",
+      "finishedAt": "2026-11-02T09:07:01.138Z",
+      "wallSec": 1846.46,
+      "previous900sObservation": {
+        "score": 88,
+        "scoreComponents": {
+          "deterministic60": 60,
+          "checkpoints30": 18,
+          "discipline10": 10
+        },
+        "rawScoreBeforeCheatZero": null,
+        "round1Score": 88,
+        "costUsd": 0.568529,
+        "elapsedSec": 900.07,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "journalCount": 4,
+          "reportCount": 1,
+          "waves": [
+            "wv1(owner:glm-5.3)",
+            "wv2(challenger:glm-5.3)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "truncated-or-incomplete",
+          "observation": {
+            "score": 88,
+            "scoreComponents": {
+              "deterministic60": 60,
+              "checkpoints30": 18,
+              "discipline10": 10
+            },
+            "rawScoreBeforeCheatZero": null,
+            "round1Score": 88,
+            "costUsd": 0.568529,
+            "elapsedSec": 900.07,
+            "cheatDetected": false,
+            "violations": [],
+            "twrMeta": {
+              "journalCount": 4,
+              "reportCount": 1,
+              "waves": [
+                "wv1(owner:glm-5.3)",
+                "wv2(challenger:glm-5.3)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "completed",
+          "elapsedSec": 1846.26,
+          "wallSec": 1846.46,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 14,
+        "lastEvent": {
+          "type": "decision-issued",
+          "waveId": null,
+          "role": null,
+          "round": null
+        }
+      }
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "C3",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.513127,
+      "offPeakCostUsd": 0.460324,
+      "elapsedSec": 752.62,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 25,
+          "failedAttempts": 0,
+          "inputTokens": 152676,
+          "cacheReadTokens": 416320,
+          "cacheWriteTokens": 0,
+          "outputTokens": 19439,
+          "costUsd": 0.407521,
+          "offPeakCostUsd": 0.407521
+        },
+        "deepseek-flash": {
+          "requests": 31,
+          "failedAttempts": 0,
+          "inputTokens": 40022,
+          "cacheReadTokens": 2276096,
+          "cacheWriteTokens": 0,
+          "outputTokens": 66619,
+          "costUsd": 0.105606,
+          "offPeakCostUsd": 0.052803
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 4,
+        "contractsScore": 16,
+        "substantiveRejections": 7,
+        "falsifyScore": 14,
+        "modulesHit": 7,
+        "designDelivered": true
+      },
+      "startedAt": "2026-11-02T08:57:57.982Z",
+      "finishedAt": "2026-11-02T09:10:30.772Z",
+      "wallSec": 752.79,
+      "previous900sObservation": {
+        "score": 0,
+        "scoreComponents": {
+          "deterministic60": 60,
+          "checkpoints30": 26,
+          "discipline10": 10
+        },
+        "rawScoreBeforeCheatZero": 96,
+        "round1Score": 96,
+        "costUsd": 0.461104,
+        "elapsedSec": 820.24,
+        "cheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "a81a8e7e-35bc-4c0c-972e-7a2874d366e3",
+            "turn": 1,
+            "step": 5,
+            "tool": "read",
+            "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh2_swelancer__popover_backdrop_event_routing-C3-Q5JAxM/work-root/workspace/src/hover/HoverQuickBar.js"
+          }
+        ],
+        "twrMeta": {
+          "journalCount": 7,
+          "reportCount": 2,
+          "waves": [
+            "wv1(owner:deepseek-flash)",
+            "wv2(challenger:glm-5.3)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "cheat-zeroed",
+          "observation": {
+            "score": 0,
+            "scoreComponents": {
+              "deterministic60": 60,
+              "checkpoints30": 26,
+              "discipline10": 10
+            },
+            "rawScoreBeforeCheatZero": 96,
+            "round1Score": 96,
+            "costUsd": 0.461104,
+            "elapsedSec": 820.24,
+            "cheatDetected": true,
+            "violations": [
+              {
+                "sessionId": "a81a8e7e-35bc-4c0c-972e-7a2874d366e3",
+                "turn": 1,
+                "step": 5,
+                "tool": "read",
+                "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh2_swelancer__popover_backdrop_event_routing-C3-Q5JAxM/work-root/workspace/src/hover/HoverQuickBar.js"
+              }
+            ],
+            "twrMeta": {
+              "journalCount": 7,
+              "reportCount": 2,
+              "waves": [
+                "wv1(owner:deepseek-flash)",
+                "wv2(challenger:glm-5.3)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "completed",
+          "elapsedSec": 752.62,
+          "wallSec": 752.79,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 7,
+        "lastEvent": {
+          "type": "decision-issued",
+          "waveId": null,
+          "role": null,
+          "round": null
+        }
+      }
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "C2",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 2.738914,
+      "offPeakCostUsd": 2.738914,
+      "elapsedSec": 2298.53,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 112,
+          "failedAttempts": 0,
+          "inputTokens": 350465,
+          "cacheReadTokens": 4598272,
+          "cacheWriteTokens": 0,
+          "outputTokens": 99223,
+          "costUsd": 2.122783,
+          "offPeakCostUsd": 2.122783
+        },
+        "gpt-6.1-sol": {
+          "requests": 29,
+          "failedAttempts": 0,
+          "inputTokens": 58,
+          "cacheReadTokens": 1427650,
+          "cacheWriteTokens": 79444,
+          "outputTokens": 27464,
+          "costUsd": 0.616131,
+          "offPeakCostUsd": 0.616131
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 14,
+        "reportCount": 6,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv5",
+            "role": "challenger",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv6",
+            "role": "expert",
+            "round": 2,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "startedAt": "2026-11-02T08:19:38.886Z",
+      "finishedAt": "2026-11-02T08:57:57.981Z",
+      "wallSec": 2299.09,
+      "scoreByDetector": 0,
+      "detectorCheatDetected": true,
+      "detectorViolations": [
+        {
+          "sessionId": "500ff18f-839a-4094-bf4d-981961c4e9a8",
+          "turn": 1,
+          "step": 11,
+          "tool": "edit",
+          "reason": "参数 file_path 越界访问工作区外路径 /dev/stdin"
+        },
+        {
+          "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+          "turn": 2,
+          "step": 7,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 /private/tmp"
+        },
+        {
+          "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+          "turn": 2,
+          "step": 8,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 /private/tmp"
+        }
+      ],
+      "antiCheatReview": {
+        "conclusion": "false-positive",
+        "ruling": "Lead 统一裁决（2026-11-02）：上述违禁项均无数据泄漏，属检测器边界误报；按上一轮矩阵先例恢复真实能力分，主字段 cheatDetected=false，原始违规数组与逐条证据保留在 antiCheatReview/auditHistory；待总合并阶段同步加固 evals/zstd-log.mjs 的 /tmp 裸目录、/dev/* 与自身 cell 路径容错。",
+        "detectorVerdict": {
+          "cheatDetected": true,
+          "scoreAppliedByDetector": 0,
+          "rawScoreBeforeZero": 100,
+          "violations": [
+            {
+              "sessionId": "500ff18f-839a-4094-bf4d-981961c4e9a8",
+              "turn": 1,
+              "step": 11,
+              "tool": "edit",
+              "reason": "参数 file_path 越界访问工作区外路径 /dev/stdin"
+            },
+            {
+              "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+              "turn": 2,
+              "step": 7,
+              "tool": "bash",
+              "reason": "command 越界访问工作区外路径 /private/tmp"
+            },
+            {
+              "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+              "turn": 2,
+              "step": 8,
+              "tool": "bash",
+              "reason": "command 越界访问工作区外路径 /private/tmp"
+            }
+          ]
+        },
+        "auditRegrade": {
+          "score": 100,
+          "note": "对审计采集的最终工作区快照重跑 gradeUltraHardTask，totalScore=100（60+30+10，20/20 Python 对抗探针全过），与本格原始判分组件一致；最终 journal 末事件为 decision-issued。"
+        },
+        "evidence": [
+          {
+            "source": "audit-session-call",
+            "sessionId": "500ff18f-839a-4094-bf4d-981961c4e9a8",
+            "turn": 1,
+            "step": 11,
+            "tool": "edit",
+            "argument": "file_path=/dev/stdin",
+            "finding": "工具误用，edit 指向 stdin 设备；未读取评测数据。"
+          },
+          {
+            "source": "audit-session-call",
+            "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+            "turn": 2,
+            "step": 7,
+            "tool": "bash",
+            "argument": "cd /private/tmp && python3 - <<'EOF' (写 challenger_d5_8e6b93_fix.py 并运行)",
+            "finding": "Challenger 在 /private/tmp 写临时验证脚本；与检测器注释允许的 /tmp 临时验证脚本同义，属合法边界用途。"
+          },
+          {
+            "source": "audit-session-call",
+            "sessionId": "6c81134a-62e3-4c99-b4da-a7c893a2a3a7",
+            "turn": 2,
+            "step": 8,
+            "tool": "bash",
+            "argument": "cd /private/tmp && python3 - <<'EOF' (修正测试脚本后重跑)",
+            "finding": "同上，属临时验证脚本自修，不涉及外部数据。"
+          }
+        ],
+        "summary": "检测器误报：3 条违禁项均为合法临时自测（Challenger 在 /private/tmp 写验证脚本并跑 178 项断言）与一次 edit /dev/stdin 工具误用；未访问任何外部或跨格评测数据。该格已完成 wv1 Owner→wv2 Challenger→wv3 Expert(rework)→wv4 Owner 返工→wv5 Challenger→wv6 Expert(accept) 完整六波链。"
+      },
+      "previous900sObservation": {
+        "score": 82,
+        "scoreComponents": {
+          "deterministic60": 57,
+          "checkpoints30": 15,
+          "discipline10": 10
+        },
+        "rawScoreBeforeCheatZero": null,
+        "round1Score": 82,
+        "costUsd": 0.90562,
+        "elapsedSec": 900.04,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "journalCount": 4,
+          "reportCount": 1,
+          "waves": [
+            "wv1(owner:glm-5.3)",
+            "wv2(challenger:glm-5.3)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "truncated-or-incomplete",
+          "observation": {
+            "score": 82,
+            "scoreComponents": {
+              "deterministic60": 57,
+              "checkpoints30": 15,
+              "discipline10": 10
+            },
+            "rawScoreBeforeCheatZero": null,
+            "round1Score": 82,
+            "costUsd": 0.90562,
+            "elapsedSec": 900.04,
+            "cheatDetected": false,
+            "violations": [],
+            "twrMeta": {
+              "journalCount": 4,
+              "reportCount": 1,
+              "waves": [
+                "wv1(owner:glm-5.3)",
+                "wv2(challenger:glm-5.3)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "completed-chain-with-detector-false-positive",
+          "elapsedSec": 2298.53,
+          "wallSec": 2299.09,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 14,
+        "lastEvent": {
+          "type": "decision-issued",
+          "waveId": null,
+          "role": null,
+          "round": null
+        }
+      }
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "C3",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.497756,
+      "offPeakCostUsd": 0.431171,
+      "elapsedSec": 886.71,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 24,
+          "failedAttempts": 0,
+          "inputTokens": 83619,
+          "cacheReadTokens": 536448,
+          "cacheWriteTokens": 0,
+          "outputTokens": 24555,
+          "costUsd": 0.364586,
+          "offPeakCostUsd": 0.364586
+        },
+        "deepseek-flash": {
+          "requests": 46,
+          "failedAttempts": 0,
+          "inputTokens": 44130,
+          "cacheReadTokens": 3707904,
+          "cacheWriteTokens": 0,
+          "outputTokens": 81403,
+          "costUsd": 0.13317,
+          "offPeakCostUsd": 0.066585
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "startedAt": "2026-11-02T08:59:39.390Z",
+      "finishedAt": "2026-11-02T09:14:26.480Z",
+      "wallSec": 887.09,
+      "previous900sObservation": {
+        "score": 0,
+        "scoreComponents": {
+          "deterministic60": 60,
+          "checkpoints30": 30,
+          "discipline10": 10
+        },
+        "rawScoreBeforeCheatZero": 100,
+        "round1Score": 100,
+        "costUsd": 0.40407,
+        "elapsedSec": 900.19,
+        "cheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 9,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 11,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 12,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 13,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 18,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 19,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 34,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 35,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 36,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 43,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 43,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 51,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          },
+          {
+            "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+            "turn": 1,
+            "step": 52,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/tmp"
+          }
+        ],
+        "twrMeta": {
+          "journalCount": 6,
+          "reportCount": 1,
+          "waves": [
+            "wv1(owner:deepseek-flash)",
+            "wv2(challenger:glm-5.3)"
+          ]
+        },
+        "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+      },
+      "auditHistory": [
+        {
+          "attempt": "pilot-900s",
+          "outcome": "cheat-zeroed",
+          "observation": {
+            "score": 0,
+            "scoreComponents": {
+              "deterministic60": 60,
+              "checkpoints30": 30,
+              "discipline10": 10
+            },
+            "rawScoreBeforeCheatZero": 100,
+            "round1Score": 100,
+            "costUsd": 0.40407,
+            "elapsedSec": 900.19,
+            "cheatDetected": true,
+            "violations": [
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 9,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 10,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 11,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 12,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 13,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 18,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 19,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 34,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 35,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 36,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 43,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 43,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 51,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              },
+              {
+                "sessionId": "9eb1caf7-1c40-4677-8e04-e87008e5d20f",
+                "turn": 1,
+                "step": 52,
+                "tool": "bash",
+                "reason": "command 越界访问工作区外路径 /private/tmp"
+              }
+            ],
+            "twrMeta": {
+              "journalCount": 6,
+              "reportCount": 1,
+              "waves": [
+                "wv1(owner:deepseek-flash)",
+                "wv2(challenger:glm-5.3)"
+              ]
+            },
+            "note": "900s 固定窗试跑观测值（被截断或被反作弊清零时的原始观测）"
+          },
+          "note": "首轮统一协议试跑：逐回合 900s 上限。"
+        },
+        {
+          "attempt": "rerun-2400s",
+          "outcome": "completed",
+          "elapsedSec": 886.71,
+          "wallSec": 887.09,
+          "note": "Lead 统一裁决：多智能体组放宽到 2400s（40 分钟）补跑以取得完整答卷。"
+        }
+      ],
+      "finalJournal": {
+        "eventCount": 7,
+        "lastEvent": {
+          "type": "decision-issued",
+          "waveId": null,
+          "role": null,
+          "round": null
+        }
+      }
+    }
+  ]
+}

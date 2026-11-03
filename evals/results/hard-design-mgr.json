@@ -1,0 +1,1802 @@
+{
+  "schemaVersion": "1.0",
+  "package": "eval-design",
+  "description": "SWE-Lancer-Diamond 两道高难题（modal_nav_race / draft_state_commit）在 A1-A4、B1、C1-C3 八个实验组的 16 条评测结果。单代理组顶层 score 等字段取 pass3 终版，pass1/pass3 明细与作弊清零前原始分均保留。",
+  "provider": "codemaker",
+  "taskIds": [
+    "swelancer_mgr__modal_nav_race",
+    "swelancer_mgr__draft_state_commit"
+  ],
+  "groups": [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "B1",
+    "C1",
+    "C2",
+    "C3"
+  ],
+  "concurrency": 3,
+  "totalCells": 16,
+  "completedCells": 16,
+  "generatedAt": "2026-10-30T08:20:18.107Z",
+  "updatedAt": "2026-10-30T11:08:07.803Z",
+  "harnessNotes": {
+    "runner": "evals/run-matrix.mjs 的 runGovernanceMatrixCell，未改动执行协议；并发度 3；每格独立临时 DSH_HOME 与工作区",
+    "llmPiAiPatch": "取自本地 DSH profile 的 cordis.patch.yml 中 llm-pi-ai 配置项，按 YAML 1.2 语义提取（reasoningEfforts 的 off 键保持字符串），provider=codemaker",
+    "perTurnTimeoutMs": 900000,
+    "incrementalPersist": "每完成一格先写临时文件再原子 rename 覆盖本文件，防止中途丢失",
+    "scoreSemantics": "单代理组顶层 score/deterministic60/checkpoints30/discipline10/costUsd/elapsedSec/details 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分；B/C 组 elapsedSec 为无头会话耗时（runner 语义），wallSec 为整格墙钟耗时",
+    "runWindow": {
+      "startedAt": "2026-10-30T08:20:18.111Z",
+      "finishedAt": "2026-10-30T09:52:25.098Z"
+    },
+    "antiCheatDetectorChangedMidRun": "运行期间 evals/zstd-log.mjs 被并行改动（文件修改时间 17:34:10，本机时区），驱动进程 16:20 启动时已加载该模块，16 条结果因此由同一份旧版检测器判定，运行内协议一致，但与当前工作区版本不一致",
+    "currentDetectorBehavior": "harness-fix 后的当前 evals/zstd-log.mjs（sha256 见 rerunARemediation）：../ 相对路径片段在 src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/ 前缀下放行；/var/folders/<xx>/<yyy>/T 系统临时目录放行（排除 twr-eval*、twr-cell-*、hidden*）。原记录中 ../src/libs/*、../store/*、../navigation/*、../validation/* 与 /var/folders/.../T/* 片段均不再判越界。",
+    "cheatFlaggedCells": [
+      {
+        "cell": "swelancer_mgr__modal_nav_race/A4",
+        "rawScores": {
+          "pass1": 94,
+          "pass3": 94
+        },
+        "violationCount": 21,
+        "violationKinds": {
+          "command 越界访问工作区外路径": 21
+        }
+      },
+      {
+        "cell": "swelancer_mgr__draft_state_commit/A4",
+        "rawScores": {
+          "pass1": 100,
+          "pass3": 100
+        },
+        "violationCount": 3,
+        "violationKinds": {
+          "command 越界访问工作区外路径": 3
+        }
+      },
+      {
+        "cell": "swelancer_mgr__draft_state_commit/B1",
+        "rawScores": {
+          "round1": null,
+          "components": {
+            "deterministic60": 60,
+            "checkpoints30": 30,
+            "discipline10": 10
+          }
+        },
+        "violationCount": 2,
+        "violationKinds": {
+          "command 越界访问工作区外路径": 2
+        }
+      },
+      {
+        "cell": "swelancer_mgr__draft_state_commit/C1",
+        "rawScores": {
+          "round1": 100,
+          "components": {
+            "deterministic60": 60,
+            "checkpoints30": 30,
+            "discipline10": 10
+          }
+        },
+        "violationCount": 3,
+        "violationKinds": {
+          "command 越界访问工作区外路径": 3
+        }
+      },
+      {
+        "cell": "swelancer_mgr__draft_state_commit/C2",
+        "rawScores": {
+          "round1": 100,
+          "components": {
+            "deterministic60": 60,
+            "checkpoints30": 30,
+            "discipline10": 10
+          }
+        },
+        "violationCount": 4,
+        "violationKinds": {
+          "command 越界访问工作区外路径": 4
+        }
+      }
+    ],
+    "perTurnTimeoutTruncatedCells": [
+      "swelancer_mgr__modal_nav_race/A3",
+      "swelancer_mgr__modal_nav_race/B1",
+      "swelancer_mgr__modal_nav_race/C1",
+      "swelancer_mgr__modal_nav_race/C2",
+      "swelancer_mgr__draft_state_commit/C1",
+      "swelancer_mgr__draft_state_commit/C2"
+    ],
+    "verification": "全部 16 条为真实无头执行；顶层字段完整性由独立脚本校验通过；反作弊判定片段用当前检测器做了合成会话复算",
+    "timeoutSemantics": "单代理组 pass1.elapsedSec≈900 表示首轮被 900s 上限终止且无 sessionId，第 2/3 轮自审因此未执行（本批仅 modal_nav_race/A3 属于该情形）；B/C 组 elapsedSec≈900 表示整格唯一无头会话被上限终止后按已落盘工作区判分",
+    "openQuestion": "已由 Lead 决策：rerun-a 包按 harness-fix 后的当前检测器对受影响格复算并清除误报清零（见 rerunARemediation），保留原判定于各格 cheatReconciliation；受旧版检测器影响的格子不再重跑。",
+    "rerunARemediation": {
+      "appliedAt": "2026-10-30T11:08:07.803Z",
+      "package": "rerun-a",
+      "task": "hard-eval-remediation",
+      "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+      "ruleFixes": [
+        "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+        "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+      ],
+      "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+      "reconciledCells": [
+        {
+          "cell": "design swelancer_mgr__modal_nav_race/A4",
+          "recovered": {
+            "pass1": 94,
+            "pass3": 94,
+            "deltaQ": 0
+          },
+          "originalViolationCount": 21
+        },
+        {
+          "cell": "design swelancer_mgr__draft_state_commit/A4",
+          "recovered": {
+            "pass1": 100,
+            "pass3": 100,
+            "deltaQ": 0
+          },
+          "originalViolationCount": 3
+        },
+        {
+          "cell": "design swelancer_mgr__draft_state_commit/B1",
+          "recovered": {
+            "score": 100,
+            "deltaQ": null
+          },
+          "originalViolationCount": 2
+        },
+        {
+          "cell": "design swelancer_mgr__draft_state_commit/C1",
+          "recovered": {
+            "score": 100,
+            "deltaQ": 0
+          },
+          "originalViolationCount": 3
+        },
+        {
+          "cell": "design swelancer_mgr__draft_state_commit/C2",
+          "recovered": {
+            "score": 100,
+            "deltaQ": 0
+          },
+          "originalViolationCount": 4
+        }
+      ],
+      "note": "被清零的原始分已按 rawPass1Score/rawPass3Score（单代理组）或确定性分量之和（B/C 组）恢复；原始 violations 完整保留在各格 cheatReconciliation.originalViolations 中。"
+    }
+  },
+  "cells": [
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "A1",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 94,
+      "rawPass3Score": 94,
+      "pass1": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "costUsd": 0.070726,
+        "offPeakCostUsd": 0.035363,
+        "elapsedSec": 728.88,
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 0.202887,
+        "offPeakCostUsd": 0.101443,
+        "elapsedSec": 1119.74,
+        "byModel": {
+          "deepseek-flash": {
+            "requests": 93,
+            "failedAttempts": 0,
+            "inputTokens": 55285,
+            "cacheReadTokens": 9238784,
+            "cacheWriteTokens": 0,
+            "outputTokens": 109057,
+            "costUsd": 0.202887,
+            "offPeakCostUsd": 0.101443
+          }
+        },
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "costUsd": 0.202887,
+      "offPeakCostUsd": 0.101443,
+      "elapsedSec": 1119.74,
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T08:20:18.111Z",
+      "finishedAt": "2026-10-30T08:38:58.155Z",
+      "wallSec": 1120.04
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "A2",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 94,
+      "rawPass3Score": 94,
+      "pass1": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "costUsd": 0.143304,
+        "offPeakCostUsd": 0.143304,
+        "elapsedSec": 332.43,
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 0.608575,
+        "offPeakCostUsd": 0.608575,
+        "elapsedSec": 869.78,
+        "byModel": {
+          "glm-5.3": {
+            "requests": 23,
+            "failedAttempts": 0,
+            "inputTokens": 80118,
+            "cacheReadTokens": 1012480,
+            "cacheWriteTokens": 0,
+            "outputTokens": 52992,
+            "costUsd": 0.608575,
+            "offPeakCostUsd": 0.608575
+          }
+        },
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "costUsd": 0.608575,
+      "offPeakCostUsd": 0.608575,
+      "elapsedSec": 869.78,
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T08:20:18.112Z",
+      "finishedAt": "2026-10-30T08:34:48.185Z",
+      "wallSec": 870.07
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "A3",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 62,
+      "rawPass3Score": 62,
+      "pass1": {
+        "score": 62,
+        "deterministic60": 40,
+        "checkpoints30": 12,
+        "discipline10": 10,
+        "costUsd": 0.280122,
+        "offPeakCostUsd": 0.280122,
+        "elapsedSec": 900,
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": false,
+          "invariantTx": false,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": false,
+          "falsifyProposal5": false,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 62,
+        "deterministic60": 40,
+        "checkpoints30": 12,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 0.280122,
+        "offPeakCostUsd": 0.280122,
+        "elapsedSec": 900.04,
+        "byModel": {
+          "gpt-6.1-sol": {
+            "requests": 11,
+            "failedAttempts": 0,
+            "inputTokens": 33,
+            "cacheReadTokens": 106638,
+            "cacheWriteTokens": 26485,
+            "outputTokens": 20318,
+            "costUsd": 0.280122,
+            "offPeakCostUsd": 0.280122
+          }
+        },
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": false,
+          "invariantTx": false,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": false,
+          "falsifyProposal5": false,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 62,
+      "deterministic60": 40,
+      "checkpoints30": 12,
+      "discipline10": 10,
+      "costUsd": 0.280122,
+      "offPeakCostUsd": 0.280122,
+      "elapsedSec": 900.04,
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": false,
+        "invariantTx": false,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": false,
+        "falsifyProposal5": false,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T08:20:18.112Z",
+      "finishedAt": "2026-10-30T08:35:18.438Z",
+      "wallSec": 900.33
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "A4",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 94,
+      "rawPass3Score": 94,
+      "pass1": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "costUsd": 2.504783,
+        "offPeakCostUsd": 2.504783,
+        "elapsedSec": 821.15,
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 94,
+        "deterministic60": 60,
+        "checkpoints30": 24,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 8.09709,
+        "offPeakCostUsd": 8.09709,
+        "elapsedSec": 2014.08,
+        "byModel": {
+          "claude-opus-5-5": {
+            "requests": 48,
+            "failedAttempts": 0,
+            "inputTokens": 102,
+            "cacheReadTokens": 1578037,
+            "cacheWriteTokens": 1084119,
+            "outputTokens": 118024,
+            "costUsd": 8.09709,
+            "offPeakCostUsd": 8.09709
+          }
+        },
+        "details": {
+          "selectedId": 7,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantToast": true,
+          "invariantTx": true,
+          "falsifyProposal1": false,
+          "falsifyProposal2": true,
+          "falsifyProposal4": true,
+          "falsifyProposal5": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "costUsd": 8.09709,
+      "offPeakCostUsd": 8.09709,
+      "elapsedSec": 2014.08,
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T08:34:48.186Z",
+      "finishedAt": "2026-10-30T09:08:22.402Z",
+      "wallSec": 2014.22,
+      "cheatReconciliation": {
+        "reconciledAt": "2026-10-30T11:08:07.803Z",
+        "package": "rerun-a",
+        "detector": "evals/zstd-log.mjs",
+        "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+        "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+        "ruleFixes": [
+          "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+          "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+        ],
+        "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+        "recomputedTokens": [
+          "../src/libs/ModalStack.js",
+          "../src/libs/Navigation.js",
+          "../src/components/AttachmentPreviewModal.js",
+          "../src/components/BaseModal.js",
+          "../src/libs/OverlayBus.js"
+        ],
+        "remainingViolations": 0,
+        "originalViolationCount": 21,
+        "originalViolations": [
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/Navigation.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/AttachmentPreviewModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/Navigation.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/AttachmentPreviewModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/BaseModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/Navigation.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/BaseModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/Navigation.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/BaseModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/Navigation.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/AttachmentPreviewModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/BaseModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/OverlayBus.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 11,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/libs/ModalStack.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 11,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/BaseModal.js"
+          },
+          {
+            "sessionId": "session-480f8786-91e5-4796-88d7-f13a2f5cee81",
+            "turn": 1,
+            "step": 11,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../src/components/AttachmentPreviewModal.js"
+          }
+        ]
+      }
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "B1",
+      "kind": "free-team",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "round1Score": null,
+      "deltaQ": null,
+      "costUsd": 0.803761,
+      "offPeakCostUsd": 0.803761,
+      "elapsedSec": 900.01,
+      "sessionCount": 3,
+      "byModel": {
+        "gpt-6.1-sol": {
+          "requests": 11,
+          "failedAttempts": 0,
+          "inputTokens": 22,
+          "cacheReadTokens": 211377,
+          "cacheWriteTokens": 56747,
+          "outputTokens": 30867,
+          "costUsd": 0.471719,
+          "offPeakCostUsd": 0.471719
+        },
+        "glm-5.3": {
+          "requests": 25,
+          "failedAttempts": 0,
+          "inputTokens": 64178,
+          "cacheReadTokens": 425152,
+          "cacheWriteTokens": 0,
+          "outputTokens": 29921,
+          "costUsd": 0.332042,
+          "offPeakCostUsd": 0.332042
+        }
+      },
+      "twrMeta": null,
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T08:35:18.439Z",
+      "finishedAt": "2026-10-30T08:50:18.573Z",
+      "wallSec": 900.13
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "C1",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.440169,
+      "offPeakCostUsd": 0.392912,
+      "elapsedSec": 900.01,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 21,
+          "failedAttempts": 0,
+          "inputTokens": 76266,
+          "cacheReadTokens": 433152,
+          "cacheWriteTokens": 0,
+          "outputTokens": 28696,
+          "costUsd": 0.345654,
+          "offPeakCostUsd": 0.345654
+        },
+        "deepseek-flash": {
+          "requests": 31,
+          "failedAttempts": 0,
+          "inputTokens": 28710,
+          "cacheReadTokens": 1801472,
+          "cacheWriteTokens": 0,
+          "outputTokens": 62578,
+          "costUsd": 0.094515,
+          "offPeakCostUsd": 0.047258
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 6,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T08:38:58.155Z",
+      "finishedAt": "2026-10-30T08:53:58.343Z",
+      "wallSec": 900.19
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "C2",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "round1Score": 94,
+      "deltaQ": 0,
+      "costUsd": 0.762117,
+      "offPeakCostUsd": 0.762117,
+      "elapsedSec": 900.01,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 45,
+          "failedAttempts": 0,
+          "inputTokens": 210645,
+          "cacheReadTokens": 945984,
+          "cacheWriteTokens": 0,
+          "outputTokens": 50286,
+          "costUsd": 0.762117,
+          "offPeakCostUsd": 0.762117
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 6,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "owner",
+            "round": 2,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T08:50:18.573Z",
+      "finishedAt": "2026-10-30T09:05:18.726Z",
+      "wallSec": 900.15
+    },
+    {
+      "taskId": "swelancer_mgr__modal_nav_race",
+      "groupId": "C3",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 94,
+      "deterministic60": 60,
+      "checkpoints30": 24,
+      "discipline10": 10,
+      "round1Score": 94,
+      "deltaQ": 0,
+      "costUsd": 0.559289,
+      "offPeakCostUsd": 0.503869,
+      "elapsedSec": 855.82,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 26,
+          "failedAttempts": 0,
+          "inputTokens": 165350,
+          "cacheReadTokens": 464064,
+          "cacheWriteTokens": 0,
+          "outputTokens": 21887,
+          "costUsd": 0.448449,
+          "offPeakCostUsd": 0.448449
+        },
+        "deepseek-flash": {
+          "requests": 28,
+          "failedAttempts": 0,
+          "inputTokens": 41463,
+          "cacheReadTokens": 1968640,
+          "cacheWriteTokens": 0,
+          "outputTokens": 72158,
+          "costUsd": 0.11084,
+          "offPeakCostUsd": 0.05542
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 7,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantToast": true,
+        "invariantTx": true,
+        "falsifyProposal1": false,
+        "falsifyProposal2": true,
+        "falsifyProposal4": true,
+        "falsifyProposal5": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T08:53:58.343Z",
+      "finishedAt": "2026-10-30T09:08:14.323Z",
+      "wallSec": 855.98
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "A1",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 0.084114,
+        "offPeakCostUsd": 0.042057,
+        "elapsedSec": 325.93,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 0.148772,
+        "offPeakCostUsd": 0.074386,
+        "elapsedSec": 530.57,
+        "byModel": {
+          "deepseek-flash": {
+            "requests": 61,
+            "failedAttempts": 0,
+            "inputTokens": 40121,
+            "cacheReadTokens": 4772608,
+            "cacheWriteTokens": 0,
+            "outputTokens": 90083,
+            "costUsd": 0.148772,
+            "offPeakCostUsd": 0.074386
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.148772,
+      "offPeakCostUsd": 0.074386,
+      "elapsedSec": 530.57,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T09:05:18.727Z",
+      "finishedAt": "2026-10-30T09:14:09.431Z",
+      "wallSec": 530.7
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "A2",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 0.159083,
+        "offPeakCostUsd": 0.159083,
+        "elapsedSec": 338.3,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 0.556681,
+        "offPeakCostUsd": 0.556681,
+        "elapsedSec": 670.2,
+        "byModel": {
+          "glm-5.3": {
+            "requests": 29,
+            "failedAttempts": 0,
+            "inputTokens": 131032,
+            "cacheReadTokens": 772800,
+            "cacheWriteTokens": 0,
+            "outputTokens": 39161,
+            "costUsd": 0.556681,
+            "offPeakCostUsd": 0.556681
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.556681,
+      "offPeakCostUsd": 0.556681,
+      "elapsedSec": 670.2,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T09:08:14.324Z",
+      "finishedAt": "2026-10-30T09:19:24.650Z",
+      "wallSec": 670.33
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "A3",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 0.436506,
+        "offPeakCostUsd": 0.436506,
+        "elapsedSec": 567.81,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 1.671101,
+        "offPeakCostUsd": 1.671101,
+        "elapsedSec": 2367.84,
+        "byModel": {
+          "gpt-6.1-sol": {
+            "requests": 54,
+            "failedAttempts": 0,
+            "inputTokens": 108,
+            "cacheReadTokens": 3892497,
+            "cacheWriteTokens": 147930,
+            "outputTokens": 91181,
+            "costUsd": 1.671101,
+            "offPeakCostUsd": 1.671101
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 1.671101,
+      "offPeakCostUsd": 1.671101,
+      "elapsedSec": 2367.84,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T09:08:22.402Z",
+      "finishedAt": "2026-10-30T09:47:50.397Z",
+      "wallSec": 2367.99
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "A4",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 0.915291,
+        "offPeakCostUsd": 0.915291,
+        "elapsedSec": 297.03,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 4.420326,
+        "offPeakCostUsd": 4.420326,
+        "elapsedSec": 943.72,
+        "byModel": {
+          "claude-opus-5-5": {
+            "requests": 24,
+            "failedAttempts": 0,
+            "inputTokens": 54,
+            "cacheReadTokens": 311600,
+            "cacheWriteTokens": 655338,
+            "outputTokens": 54055,
+            "costUsd": 4.420326,
+            "offPeakCostUsd": 4.420326
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "decisionUnambiguous": true,
+          "rootCauseHit": true,
+          "invariantVault": true,
+          "falsifyProposal1": true,
+          "falsifyProposal2": true,
+          "falsifyProposal3": true,
+          "falsifyProposal4": true,
+          "falsifyProposal6": true
+        }
+      },
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 4.420326,
+      "offPeakCostUsd": 4.420326,
+      "elapsedSec": 943.72,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "scoreSemantics": "single 组 score 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊检测前原始分",
+      "startedAt": "2026-10-30T09:14:09.432Z",
+      "finishedAt": "2026-10-30T09:29:53.280Z",
+      "wallSec": 943.85,
+      "cheatReconciliation": {
+        "reconciledAt": "2026-10-30T11:08:07.803Z",
+        "package": "rerun-a",
+        "detector": "evals/zstd-log.mjs",
+        "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+        "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+        "ruleFixes": [
+          "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+          "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+        ],
+        "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+        "recomputedTokens": [
+          "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/tmp.XlzmavGBwD",
+          "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/"
+        ],
+        "remainingViolations": 0,
+        "originalViolationCount": 3,
+        "originalViolations": [
+          {
+            "sessionId": "session-714270c1-1c2b-4a8d-9938-3e7e19b81f4f",
+            "turn": 1,
+            "step": 5,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/tmp.XlzmavGBwD"
+          },
+          {
+            "sessionId": "session-714270c1-1c2b-4a8d-9938-3e7e19b81f4f",
+            "turn": 1,
+            "step": 8,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/tmp.XlzmavGBwD"
+          },
+          {
+            "sessionId": "session-714270c1-1c2b-4a8d-9938-3e7e19b81f4f",
+            "turn": 2,
+            "step": 8,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/"
+          }
+        ]
+      }
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "B1",
+      "kind": "free-team",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": null,
+      "deltaQ": null,
+      "costUsd": 0.397475,
+      "offPeakCostUsd": 0.397475,
+      "elapsedSec": 542.54,
+      "sessionCount": 2,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 19,
+          "failedAttempts": 0,
+          "inputTokens": 129404,
+          "cacheReadTokens": 237504,
+          "cacheWriteTokens": 0,
+          "outputTokens": 35127,
+          "costUsd": 0.397475,
+          "offPeakCostUsd": 0.397475
+        }
+      },
+      "twrMeta": null,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T09:19:24.651Z",
+      "finishedAt": "2026-10-30T09:28:27.323Z",
+      "wallSec": 542.67,
+      "cheatReconciliation": {
+        "reconciledAt": "2026-10-30T11:08:07.803Z",
+        "package": "rerun-a",
+        "detector": "evals/zstd-log.mjs",
+        "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+        "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+        "ruleFixes": [
+          "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+          "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+        ],
+        "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+        "recomputedTokens": [
+          "../store/StateVault.js",
+          "../navigation/RouteSerializer.js"
+        ],
+        "remainingViolations": 0,
+        "originalViolationCount": 2,
+        "originalViolations": [
+          {
+            "sessionId": "41f1620f-d0e5-49d4-90a9-369ae3b7c9e0",
+            "turn": 1,
+            "step": 2,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "41f1620f-d0e5-49d4-90a9-369ae3b7c9e0",
+            "turn": 1,
+            "step": 2,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../navigation/RouteSerializer.js"
+          }
+        ]
+      }
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "C1",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.789554,
+      "offPeakCostUsd": 0.741939,
+      "elapsedSec": 900,
+      "sessionCount": 4,
+      "byModel": {
+        "gpt-6.1-sol": {
+          "requests": 12,
+          "failedAttempts": 0,
+          "inputTokens": 24,
+          "cacheReadTokens": 309116,
+          "cacheWriteTokens": 39819,
+          "outputTokens": 12043,
+          "costUsd": 0.250937,
+          "offPeakCostUsd": 0.250937
+        },
+        "glm-5.3": {
+          "requests": 30,
+          "failedAttempts": 0,
+          "inputTokens": 173145,
+          "cacheReadTokens": 537344,
+          "cacheWriteTokens": 0,
+          "outputTokens": 13926,
+          "costUsd": 0.443387,
+          "offPeakCostUsd": 0.443387
+        },
+        "deepseek-flash": {
+          "requests": 37,
+          "failedAttempts": 0,
+          "inputTokens": 34351,
+          "cacheReadTokens": 2253696,
+          "cacheWriteTokens": 0,
+          "outputTokens": 59502,
+          "costUsd": 0.09523,
+          "offPeakCostUsd": 0.047615
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 13,
+        "reportCount": 5,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv5",
+            "role": "challenger",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv6",
+            "role": "expert",
+            "round": 2,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T09:28:27.323Z",
+      "finishedAt": "2026-10-30T09:43:27.518Z",
+      "wallSec": 900.2,
+      "cheatReconciliation": {
+        "reconciledAt": "2026-10-30T11:08:07.803Z",
+        "package": "rerun-a",
+        "detector": "evals/zstd-log.mjs",
+        "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+        "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+        "ruleFixes": [
+          "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+          "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+        ],
+        "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+        "recomputedTokens": [
+          "../store/StateVault.js",
+          "../navigation/RouteSerializer.js"
+        ],
+        "remainingViolations": 0,
+        "originalViolationCount": 3,
+        "originalViolations": [
+          {
+            "sessionId": "06791853-bdf2-4aa6-87d0-810f2d3e3f1d",
+            "turn": 1,
+            "step": 5,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "06791853-bdf2-4aa6-87d0-810f2d3e3f1d",
+            "turn": 1,
+            "step": 5,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "06791853-bdf2-4aa6-87d0-810f2d3e3f1d",
+            "turn": 1,
+            "step": 5,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../navigation/RouteSerializer.js"
+          }
+        ]
+      }
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "C2",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.725145,
+      "offPeakCostUsd": 0.725145,
+      "elapsedSec": 900.01,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 39,
+          "failedAttempts": 0,
+          "inputTokens": 131770,
+          "cacheReadTokens": 752768,
+          "cacheWriteTokens": 0,
+          "outputTokens": 35785,
+          "costUsd": 0.537651,
+          "offPeakCostUsd": 0.537651
+        },
+        "gpt-6.1-sol": {
+          "requests": 10,
+          "failedAttempts": 0,
+          "inputTokens": 30,
+          "cacheReadTokens": 183736,
+          "cacheWriteTokens": 32792,
+          "outputTokens": 8708,
+          "costUsd": 0.187494,
+          "offPeakCostUsd": 0.187494
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T09:29:53.281Z",
+      "finishedAt": "2026-10-30T09:44:53.445Z",
+      "wallSec": 900.16,
+      "cheatReconciliation": {
+        "reconciledAt": "2026-10-30T11:08:07.803Z",
+        "package": "rerun-a",
+        "detector": "evals/zstd-log.mjs",
+        "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+        "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+        "ruleFixes": [
+          "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+          "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+        ],
+        "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+        "recomputedTokens": [
+          "../store/StateVault.js",
+          "../navigation/RouteSerializer.js"
+        ],
+        "remainingViolations": 0,
+        "originalViolationCount": 4,
+        "originalViolations": [
+          {
+            "sessionId": "deec3929-a36a-464c-afb2-7b52ea14e6f4",
+            "turn": 1,
+            "step": 5,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "deec3929-a36a-464c-afb2-7b52ea14e6f4",
+            "turn": 1,
+            "step": 6,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "deec3929-a36a-464c-afb2-7b52ea14e6f4",
+            "turn": 1,
+            "step": 6,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../store/StateVault.js"
+          },
+          {
+            "sessionId": "deec3929-a36a-464c-afb2-7b52ea14e6f4",
+            "turn": 1,
+            "step": 6,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../navigation/RouteSerializer.js"
+          }
+        ]
+      }
+    },
+    {
+      "taskId": "swelancer_mgr__draft_state_commit",
+      "groupId": "C3",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.385664,
+      "offPeakCostUsd": 0.358151,
+      "elapsedSec": 537.41,
+      "sessionCount": 3,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 24,
+          "failedAttempts": 0,
+          "inputTokens": 100412,
+          "cacheReadTokens": 433600,
+          "cacheWriteTokens": 0,
+          "outputTokens": 17574,
+          "costUsd": 0.330638,
+          "offPeakCostUsd": 0.330638
+        },
+        "deepseek-flash": {
+          "requests": 23,
+          "failedAttempts": 0,
+          "inputTokens": 21685,
+          "cacheReadTokens": 763904,
+          "cacheWriteTokens": 0,
+          "outputTokens": 36614,
+          "costUsd": 0.055026,
+          "offPeakCostUsd": 0.027513
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 7,
+        "reportCount": 2,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantVault": true,
+        "falsifyProposal1": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal6": true
+      },
+      "startedAt": "2026-10-30T09:43:27.519Z",
+      "finishedAt": "2026-10-30T09:52:25.098Z",
+      "wallSec": 537.58
+    }
+  ]
+}

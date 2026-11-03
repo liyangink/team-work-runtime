@@ -1,0 +1,702 @@
+[
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "A1",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.11041,
+      "offPeakCostUsd": 0.055205,
+      "elapsedSec": 489.88,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 0.164132,
+      "offPeakCostUsd": 0.082066,
+      "elapsedSec": 729.44,
+      "byModel": {
+        "deepseek-flash": {
+          "requests": 50,
+          "failedAttempts": 0,
+          "inputTokens": 35365,
+          "cacheReadTokens": 3499648,
+          "cacheWriteTokens": 0,
+          "outputTokens": 110437,
+          "costUsd": 0.164132,
+          "offPeakCostUsd": 0.082066
+        }
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "A3",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.747962,
+      "offPeakCostUsd": 0.747962,
+      "elapsedSec": 1027.95,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 2.858968,
+      "offPeakCostUsd": 2.858968,
+      "elapsedSec": 4076.43,
+      "byModel": {
+        "gpt-6.1-sol": {
+          "requests": 71,
+          "failedAttempts": 0,
+          "inputTokens": 142,
+          "cacheReadTokens": 7366020,
+          "cacheWriteTokens": 243909,
+          "outputTokens": 151231,
+          "costUsd": 2.858968,
+          "offPeakCostUsd": 2.858968
+        }
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "rerun": {
+      "rerunAt": "2026-10-30T12:15:42.745Z",
+      "task": "hard-eval-remediation",
+      "package": "rerun-a",
+      "wave": "wv3",
+      "reason": "首轮 900s 上限终止未写完 DECISION.json（同时含旧版检测器 ../validation 误报清零），按 harness-fix 后的 runGovernanceMatrixCell 重跑",
+      "provider": "codemaker",
+      "providerConfigSource": "当前 DSH profile 的 llm-pi-ai 配置（YAML 1.2 解析）",
+      "dshVersion": "0.2.1-rc.3",
+      "perTurnTimeoutMs": 1800000,
+      "runStartedAt": "2026-10-30T11:07:35.485Z",
+      "runFinishedAt": "2026-10-30T12:15:32.077Z",
+      "previousCell": {
+        "taskId": "swelancer_mgr__email_validator_unification",
+        "groupId": "A3",
+        "kind": "single",
+        "cheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "session-450f778a-2785-4b40-a202-d1899f852846",
+            "turn": 1,
+            "step": 7,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../validation/AddressValidator.js"
+          }
+        ],
+        "rawPass1Score": 5,
+        "rawPass3Score": 5,
+        "pass1": {
+          "score": 0,
+          "deterministic60": 0,
+          "checkpoints30": 0,
+          "discipline10": 5,
+          "costUsd": 0.365398,
+          "offPeakCostUsd": 0.365398,
+          "elapsedSec": 900.01,
+          "details": {
+            "srcUntouched": true,
+            "decisionUnambiguous": false,
+            "rootCauseHit": false,
+            "invariantPolicy": false,
+            "falsifyProposal1And6": false,
+            "falsifyProposal2": false,
+            "falsifyProposal3": false,
+            "falsifyProposal4": false,
+            "falsifyProposal7AndDesign": false
+          }
+        },
+        "pass3": {
+          "score": 0,
+          "deterministic60": 0,
+          "checkpoints30": 0,
+          "discipline10": 5,
+          "deltaQ": 0,
+          "costUsd": 0.365398,
+          "offPeakCostUsd": 0.365398,
+          "elapsedSec": 900.03,
+          "byModel": {
+            "gpt-6.1-sol": {
+              "requests": 11,
+              "failedAttempts": 0,
+              "inputTokens": 33,
+              "cacheReadTokens": 121594,
+              "cacheWriteTokens": 34045,
+              "outputTokens": 26806,
+              "costUsd": 0.365398,
+              "offPeakCostUsd": 0.365398
+            }
+          },
+          "details": {
+            "srcUntouched": true,
+            "decisionUnambiguous": false,
+            "rootCauseHit": false,
+            "invariantPolicy": false,
+            "falsifyProposal1And6": false,
+            "falsifyProposal2": false,
+            "falsifyProposal3": false,
+            "falsifyProposal4": false,
+            "falsifyProposal7AndDesign": false
+          }
+        }
+      }
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "A2",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.176334,
+      "offPeakCostUsd": 0.176334,
+      "elapsedSec": 441.46,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 0.759555,
+      "offPeakCostUsd": 0.759555,
+      "elapsedSec": 1026.54,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 36,
+          "failedAttempts": 0,
+          "inputTokens": 77424,
+          "cacheReadTokens": 1521152,
+          "cacheWriteTokens": 0,
+          "outputTokens": 58105,
+          "costUsd": 0.759555,
+          "offPeakCostUsd": 0.759555
+        }
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "B1",
+    "kind": "free-team",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": null,
+    "deltaQ": null,
+    "costUsd": 0.578668,
+    "offPeakCostUsd": 0.578668,
+    "elapsedSec": 758.07,
+    "sessionCount": 2,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 11,
+        "failedAttempts": 0,
+        "inputTokens": 27700,
+        "cacheReadTokens": 158464,
+        "cacheWriteTokens": 0,
+        "outputTokens": 10666,
+        "costUsd": 0.126911,
+        "offPeakCostUsd": 0.126911
+      },
+      "gpt-6.1-sol": {
+        "requests": 16,
+        "failedAttempts": 0,
+        "inputTokens": 32,
+        "cacheReadTokens": 447901,
+        "cacheWriteTokens": 51113,
+        "outputTokens": 27912,
+        "costUsd": 0.451757,
+        "offPeakCostUsd": 0.451757
+      }
+    },
+    "twrMeta": null,
+    "details": {
+      "selectedId": 5,
+      "srcUntouched": true,
+      "decisionUnambiguous": true,
+      "rootCauseHit": true,
+      "invariantPolicy": true,
+      "falsifyProposal1And6": true,
+      "falsifyProposal2": true,
+      "falsifyProposal3": true,
+      "falsifyProposal4": true,
+      "falsifyProposal7AndDesign": true
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "C1",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.512216,
+    "offPeakCostUsd": 0.454611,
+    "elapsedSec": 900.01,
+    "sessionCount": 4,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 23,
+        "failedAttempts": 0,
+        "inputTokens": 84996,
+        "cacheReadTokens": 408896,
+        "cacheWriteTokens": 0,
+        "outputTokens": 12649,
+        "costUsd": 0.280963,
+        "offPeakCostUsd": 0.280963
+      },
+      "deepseek-flash": {
+        "requests": 46,
+        "failedAttempts": 0,
+        "inputTokens": 33341,
+        "cacheReadTokens": 3044096,
+        "cacheWriteTokens": 0,
+        "outputTokens": 72453,
+        "costUsd": 0.11521,
+        "offPeakCostUsd": 0.057605
+      },
+      "gpt-6.1-sol": {
+        "requests": 5,
+        "failedAttempts": 0,
+        "inputTokens": 10,
+        "cacheReadTokens": 53603,
+        "cacheWriteTokens": 33625,
+        "outputTokens": 2660,
+        "costUsd": 0.116043,
+        "offPeakCostUsd": 0.116043
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 7,
+      "reportCount": 2,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "deepseek-flash"
+        },
+        {
+          "waveId": "wv2",
+          "role": "challenger",
+          "round": 1,
+          "model": "glm-5.3"
+        },
+        {
+          "waveId": "wv3",
+          "role": "expert",
+          "round": 1,
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "selectedId": 5,
+      "srcUntouched": true,
+      "decisionUnambiguous": true,
+      "rootCauseHit": true,
+      "invariantPolicy": true,
+      "falsifyProposal1And6": true,
+      "falsifyProposal2": true,
+      "falsifyProposal3": true,
+      "falsifyProposal4": true,
+      "falsifyProposal7AndDesign": true
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "C2",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.736451,
+    "offPeakCostUsd": 0.736451,
+    "elapsedSec": 900.01,
+    "sessionCount": 4,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 42,
+        "failedAttempts": 0,
+        "inputTokens": 111801,
+        "cacheReadTokens": 920832,
+        "cacheWriteTokens": 0,
+        "outputTokens": 40830,
+        "costUsd": 0.57559,
+        "offPeakCostUsd": 0.57559
+      },
+      "gpt-6.1-sol": {
+        "requests": 7,
+        "failedAttempts": 0,
+        "inputTokens": 14,
+        "cacheReadTokens": 110408,
+        "cacheWriteTokens": 34941,
+        "outputTokens": 6244,
+        "costUsd": 0.160861,
+        "offPeakCostUsd": 0.160861
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 7,
+      "reportCount": 2,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "glm-5.3"
+        },
+        {
+          "waveId": "wv2",
+          "role": "challenger",
+          "round": 1,
+          "model": "glm-5.3"
+        },
+        {
+          "waveId": "wv3",
+          "role": "expert",
+          "round": 1,
+          "model": "gpt-6.1-sol"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "selectedId": 5,
+      "srcUntouched": true,
+      "decisionUnambiguous": true,
+      "rootCauseHit": true,
+      "invariantPolicy": true,
+      "falsifyProposal1And6": true,
+      "falsifyProposal2": true,
+      "falsifyProposal3": true,
+      "falsifyProposal4": true,
+      "falsifyProposal7AndDesign": true
+    },
+    "cheatReconciliation": {
+      "reconciledAt": "2026-10-30T11:08:07.803Z",
+      "package": "rerun-a",
+      "detector": "evals/zstd-log.mjs",
+      "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+      "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+      "ruleFixes": [
+        "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+        "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+      ],
+      "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+      "recomputedTokens": [
+        "../validation/AddressValidator.js"
+      ],
+      "remainingViolations": 0,
+      "originalViolationCount": 2,
+      "originalViolations": [
+        {
+          "sessionId": "ffd0b622-663b-4750-a6e6-5883e278fdc7",
+          "turn": 1,
+          "step": 6,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 ../validation/AddressValidator.js"
+        },
+        {
+          "sessionId": "ffd0b622-663b-4750-a6e6-5883e278fdc7",
+          "turn": 1,
+          "step": 6,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 ../validation/AddressValidator.js"
+        }
+      ]
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "C3",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.431641,
+    "offPeakCostUsd": 0.3684,
+    "elapsedSec": 900.01,
+    "sessionCount": 3,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 16,
+        "failedAttempts": 0,
+        "inputTokens": 111610,
+        "cacheReadTokens": 209536,
+        "cacheWriteTokens": 0,
+        "outputTokens": 21460,
+        "costUsd": 0.305158,
+        "offPeakCostUsd": 0.305158
+      },
+      "deepseek-flash": {
+        "requests": 42,
+        "failedAttempts": 0,
+        "inputTokens": 49680,
+        "cacheReadTokens": 2890752,
+        "cacheWriteTokens": 0,
+        "outputTokens": 78529,
+        "costUsd": 0.126483,
+        "offPeakCostUsd": 0.063242
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 6,
+      "reportCount": 1,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "deepseek-flash"
+        },
+        {
+          "waveId": "wv2",
+          "role": "challenger",
+          "round": 1,
+          "model": "glm-5.3"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "selectedId": 5,
+      "srcUntouched": true,
+      "decisionUnambiguous": true,
+      "rootCauseHit": true,
+      "invariantPolicy": true,
+      "falsifyProposal1And6": true,
+      "falsifyProposal2": true,
+      "falsifyProposal3": true,
+      "falsifyProposal4": true,
+      "falsifyProposal7AndDesign": true
+    }
+  },
+  {
+    "taskId": "swelancer_mgr__email_validator_unification",
+    "groupId": "A4",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 2.246098,
+      "offPeakCostUsd": 2.246098,
+      "elapsedSec": 885.27,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 10.283757,
+      "offPeakCostUsd": 10.283757,
+      "elapsedSec": 2622.2,
+      "byModel": {
+        "claude-opus-5-5": {
+          "requests": 38,
+          "failedAttempts": 0,
+          "inputTokens": 82,
+          "cacheReadTokens": 901768,
+          "cacheWriteTokens": 1263487,
+          "outputTokens": 189282,
+          "costUsd": 10.283757,
+          "offPeakCostUsd": 10.283757
+        }
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "decisionUnambiguous": true,
+        "rootCauseHit": true,
+        "invariantPolicy": true,
+        "falsifyProposal1And6": true,
+        "falsifyProposal2": true,
+        "falsifyProposal3": true,
+        "falsifyProposal4": true,
+        "falsifyProposal7AndDesign": true
+      }
+    },
+    "cheatReconciliation": {
+      "reconciledAt": "2026-10-30T11:08:07.803Z",
+      "package": "rerun-a",
+      "detector": "evals/zstd-log.mjs",
+      "detectorSha256": "d3be57bc53f9101e347015018184168afc6fdd73034b6583ecc1b5b54fccbb38",
+      "reason": "旧版反作弊字面量检测把工作区内相对路径与系统临时目录误判为越界，误置 0",
+      "ruleFixes": [
+        "../ 相对路径前缀白名单（src/、validation/、libs/、components/、store/、navigation/、pages/、lexer/、runtime/）",
+        "/var/folders/<xx>/<yyy>/T 系统临时目录白名单（排除 twr-eval*、twr-cell-*、hidden*）"
+      ],
+      "method": "用当前 evals/zstd-log.mjs 的 detectWorkspaceEscape 对每格原违约片段构造合成会话复算：相对路径 ../ 命中新增的 ../ 前缀白名单，/var/folders 系统临时目录命中系统临时目录白名单，剩余命中 0 条；原记录来自旧版检测器，其字面量扫描把工作区内相对路径与系统临时目录误判为越界",
+      "recomputedTokens": [
+        "../src/validation/AddressValidator.js",
+        "../validation/AddressValidator.js"
+      ],
+      "remainingViolations": 0,
+      "originalViolationCount": 3,
+      "originalViolations": [
+        {
+          "sessionId": "session-ff9abf48-488b-4a6d-a8bc-03915b1d06e4",
+          "turn": 1,
+          "step": 7,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 ../src/validation/AddressValidator.js"
+        },
+        {
+          "sessionId": "session-ff9abf48-488b-4a6d-a8bc-03915b1d06e4",
+          "turn": 1,
+          "step": 7,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 ../src/validation/AddressValidator.js"
+        },
+        {
+          "sessionId": "session-ff9abf48-488b-4a6d-a8bc-03915b1d06e4",
+          "turn": 2,
+          "step": 4,
+          "tool": "bash",
+          "reason": "command 越界访问工作区外路径 ../validation/AddressValidator.js"
+        }
+      ]
+    }
+  }
+]

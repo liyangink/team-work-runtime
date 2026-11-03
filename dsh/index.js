@@ -1,6 +1,7 @@
 // 宿主入口只装配正式派发、CLI 与 skill，模型解析和冷恢复由新版宿主原生承载。
 import { twToolDefinition } from "./tw-tool.js"
 import { twDispatchDefinition } from "./tw-dispatch.js"
+import { createSleepConfirmGuard } from "./sleep-confirm.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 import { readDshConfigSnapshot, systemPromptSection } from "./settings.js"
 export { Config } from "./settings.js"
@@ -21,11 +22,26 @@ export async function apply(ctx, config = {}, deps = {}) {
     ctx.logger?.warn?.("team-work-dsh: skill 注册未启用，可用 tw init 文件通道：" + String(error?.message ?? error))
   }
   const configSnapshot = () => readDshConfigSnapshot(ctx, config)
-  for (const definition of [twToolDefinition({ configSnapshot }), twDispatchDefinition(ctx, { configSnapshot })]) {
+  // sleep 引导是防呆增强：guard 自身异常只记日志并放行（fail-open），不阻塞工具执行。
+  const sleepConfirm = deps.sleepConfirm ?? createSleepConfirmGuard({
+    log: (message) => ctx.logger?.warn?.("team-work-dsh: " + message),
+  })
+  for (const definition of [twToolDefinition({ configSnapshot }), twDispatchDefinition(ctx, { configSnapshot, sleepConfirm })]) {
     try { const dispose = ctx.tools.register(definition); if (typeof dispose === "function") disposers.push(dispose) } catch (error) {
       ctx.logger?.warn?.("team-work-dsh: 工具注册失败：" + String(error?.message ?? error))
     }
   }
+  try {
+    if (typeof ctx?.on === "function") {
+      const offExec = ctx.on("tools/execute", (exec, next) => sleepConfirm.aroundExecute(exec, next))
+      if (typeof offExec === "function") disposers.push(offExec)
+      // 只清回合边界：同回合跨 Step 的已确认放行持续有效（连续派发所需），step 边界不清空。
+      const offSessionEvent = ctx.on("session/event", (session, event) => {
+        if (event?.type === "turn/start" || event?.type === "turn/end") sleepConfirm.clearTurn(session?.id)
+      })
+      if (typeof offSessionEvent === "function") disposers.push(offSessionEvent)
+    }
+  } catch (error) { ctx.logger?.warn?.("team-work-dsh: sleep 确认引导钩子未启用：" + String(error?.message ?? error)) }
   try {
     const systemPrompt = optional("systemPrompt")
     if (typeof systemPrompt?.section === "function") disposers.push(systemPrompt.section(systemPromptSection(ctx, config)))

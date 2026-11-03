@@ -1,0 +1,69 @@
+# === Commit 1 ===
+# Message: Fix bug where coord representation gets lost in __getitem__
+astropy/coordinates/baseframe.py
+@@ -1020,7 +1020,9 @@ def __repr__(self):
+ 
+     def __getitem__(self, view):
+         if self.has_data:
+-            return self.realize_frame(self.data[view])
++            out = self.realize_frame(self.data[view])
++            out.representation = self.representation
++            return out
+         else:
+             raise ValueError('Cannot index a frame with no data')
+ 
+astropy/coordinates/sky_coordinate.py
+@@ -198,7 +198,7 @@ def __getitem__(self, item):
+             # First turn `self` into a mockup of the thing we want - we can copy
+             # this to get all the right attributes
+             self._sky_coord_frame = self_frame[item]
+-            return SkyCoord(self)
++            return SkyCoord(self, representation=self.representation)
+         finally:
+             # now put back the right frame in self
+             self._sky_coord_frame = self_frame
+astropy/coordinates/tests/test_frames.py
+@@ -649,3 +649,14 @@ def __repr__(self):
+                 representation=NewSphericalRepresentation)
+ 
+     assert repr(frame) == "<FK5 Coordinate (equinox=J2000.000):  spam spam spam>"
++
++
++def test_getitem_representation():
++    """
++    Make sure current representation survives __getitem__ even if different
++    from data representation.
++    """
++    from ..builtin_frames import ICRS
++    c = ICRS([1, 1] * u.deg, [2, 2] * u.deg)
++    c.representation = 'cartesian'
++    assert c[0].representation is representation.CartesianRepresentation
+astropy/coordinates/tests/test_sky_coord.py
+@@ -1144,3 +1144,13 @@ def test_constellations_with_nameresolve():
+     assert SkyCoord.from_name('Coma Cluster').get_constellation(short_name=True) == 'Com'
+     assert SkyCoord.from_name('UMa II').get_constellation() == 'Ursa Major'
+     assert SkyCoord.from_name('Triangulum Galaxy').get_constellation() == 'Triangulum'
++
++
++def test_getitem_representation():
++    """
++    Make sure current representation survives __getitem__ even if different
++    from data representation.
++    """
++    sc = SkyCoord([1, 1] * u.deg, [2, 2] * u.deg)
++    sc.representation = 'cartesian'
++    assert sc[0].representation is CartesianRepresentation
+
+# === Commit 2 ===
+# Message: Update CHANGES.rst
+CHANGES.rst
+@@ -360,6 +360,9 @@ Bug Fixes
+ 
+ - ``astropy.coordinates``
+ 
++  - Fix bug where coordinate representation setting gets reset to default
++    value when coordinate array is indexed or sliced. [#REDACTED]
++
+ - ``astropy.cosmology``
+ 
+ - ``astropy.io.ascii``

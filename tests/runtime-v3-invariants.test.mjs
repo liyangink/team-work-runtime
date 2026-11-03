@@ -349,3 +349,68 @@ test("E2E-07 v3：respond 派单注入返工原因（意见随派单到达 Owner
   assert.match(d3.waves[0].prompt, /并发场景未分析/)
   assert.match(d3.waves[0].prompt, /Challenger 意见（rework）/)
 })
+
+test("E2E-07b v3：单包 review 与 verdict 派单内嵌被审制品清单、Owner 交付摘要与 Challenger 评审结论", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "verdict-ctx")
+  const d1 = await call(["dispatch-plan", "--task", "verdict-ctx", "--writable", "R.md:code-review"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "verdict-ctx", "--key", d1.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成 calc 审查", "--paths", "R.md"])
+  const d2 = await call(["dispatch-plan", "--task", "verdict-ctx"])
+  assert.equal(d2.waves[0].role, "challenger")
+  assert.match(d2.waves[0].prompt, /被审制品清单：（当前阶段登记产出物：R\.md）/)
+  assert.match(d2.waves[0].prompt, /本阶段交付：完成 calc 审查（产出：R\.md）/)
+  await call(["review", "--task", "verdict-ctx", "--key", d2.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "独立复现通过，无阻塞问题"])
+  const d3 = await call(["dispatch-plan", "--task", "verdict-ctx"])
+  assert.equal(d3.waves[0].role, "expert")
+  assert.equal(d3.waves[0].kind, "verdict")
+  assert.match(d3.waves[0].prompt, /被审制品清单：（当前阶段登记产出物：R\.md）/)
+  assert.match(d3.waves[0].prompt, /本阶段交付：完成 calc 审查（产出：R\.md）/)
+  assert.match(d3.waves[0].prompt, /Challenger 评审结论（accept）/)
+  assert.match(d3.waves[0].prompt, /独立复现通过，无阻塞问题/)
+  assert.match(d3.waves[0].prompt, /无待裁决分歧/)
+})
+
+test("E2E-07c v3：NLART 过滤已 retire 作废波次的产物，且 reviewVerdictContext 非 accept 空 findings 不输出已接受文案", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await openTask(root, "verdict-edge")
+  await call(["plan", "--task", "verdict-edge", "--packages", JSON.stringify([
+    { id: "p1", scope: "包1", writable: ["OLD.md:code-review", "NEW.md:code-review"], done: ["完成审查"] },
+    { id: "p2", scope: "包2", writable: ["P2.md:code-review"], done: ["完成审查"] }
+  ])])
+  const d1 = await call(["dispatch-plan", "--task", "verdict-edge"])
+  const p1Wave = d1.waves.find((w) => w.package === "p1")
+  await writeFile(path.join(root, "OLD.md"), "old", "utf8")
+  await call(["deliver", "--task", "verdict-edge", "--key", p1Wave.dispatchKey, "--outcome", "delivered", "--summary", "旧作废交付", "--paths", "OLD.md"])
+  // p2 尚未交付，此时 wv1 未结波，合法执行 retire 作废 wv1（含 p1 的 OLD.md 交付）
+  const r = await call(["retire", "--task", "verdict-edge", "--wave", p1Wave.waveId, "--reason", "更换产出路径"])
+  assert.equal(r.ok, true)
+
+  const d2 = await call(["dispatch-plan", "--task", "verdict-edge"])
+  await writeFile(path.join(root, "NEW.md"), "new", "utf8")
+  await writeFile(path.join(root, "P2.md"), "p2", "utf8")
+  const p1New = d2.waves.find((w) => w.package === "p1")
+  const p2New = d2.waves.find((w) => w.package === "p2")
+  await call(["deliver", "--task", "verdict-edge", "--key", p1New.dispatchKey, "--outcome", "delivered", "--summary", "新有效交付", "--paths", "NEW.md"])
+  await call(["deliver", "--task", "verdict-edge", "--key", p2New.dispatchKey, "--outcome", "delivered", "--summary", "包2有效交付", "--paths", "P2.md"])
+
+  const d3 = await call(["dispatch-plan", "--task", "verdict-edge"])
+  assert.equal(d3.waves[0].role, "challenger")
+  assert.match(d3.waves[0].prompt, /NEW\.md/)
+  assert.doesNotMatch(d3.waves[0].prompt, /OLD\.md/, "已 retire 波次的产物不得出现在被审制品清单")
+  assert.doesNotMatch(d3.waves[0].prompt, /旧作废交付/)
+
+  // 验证 Challenger 给出 rework（无 findings）后，re-plan 移除 p2 包时，后续评审不再显示已移除包 p2 的旧摘要
+  await call(["review", "--task", "verdict-edge", "--key", d3.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需缩减为单包 p1"])
+  await call(["plan", "--task", "verdict-edge", "--packages", JSON.stringify([
+    { id: "p1", scope: "仅保留包1", writable: ["NEW.md:code-review"], done: ["完成审查"] }
+  ])])
+  const d4 = await call(["dispatch-plan", "--task", "verdict-edge"])
+  await call(["deliver", "--task", "verdict-edge", "--key", d4.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "包1重拆后交付", "--paths", "NEW.md"])
+  const d5 = await call(["dispatch-plan", "--task", "verdict-edge"])
+  assert.equal(d5.waves[0].role, "challenger")
+  assert.match(d5.waves[0].prompt, /包1重拆后交付/)
+  assert.doesNotMatch(d5.waves[0].prompt, /包2有效交付/, "re-plan 已移除的包摘要不得残留在新评审上下文中")
+})

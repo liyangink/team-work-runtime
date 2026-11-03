@@ -1,0 +1,14 @@
+{
+  "id": "matplotlib__matplotlib-4892",
+  "benchmark": "SWR-Bench",
+  "repo": "matplotlib/matplotlib",
+  "entryStage": "code-review",
+  "writable": [
+    {
+      "path": "REVIEW.md",
+      "kind": "code-review"
+    }
+  ],
+  "changeIntroduced": true,
+  "prompt": "注意：当前工作区仅包含 `PR_DESCRIPTION.md` 与 `PR_DIFF.patch` 两个文件（不包含完整仓库其它未修改文件，请勿调用 glob/grep 搜索其它文件）。请直接读取 `PR_DESCRIPTION.md` 与 `PR_DIFF.patch` 进行代码审查（code-review），并将完整审查报告写入 `REVIEW.md`（严禁修改 `PR_DESCRIPTION.md` 与 `PR_DIFF.patch` 原文件）。请在 `REVIEW.md` 中明确给出：\n1. 总体审查结论（若 PR 逻辑正确、无实质缺陷可直接合入，请明确标为 `ACCEPT / APPROVE`；若引入了功能错误、接口误用、资源泄漏、核心遗漏或测试缺失，请明确标为 `REWORK / REQUEST_CHANGES`）；\n2. 发现的每项具体问题（指明文件名、代码位置、触发机理与严重级别：Blocker/Major 功能缺陷 vs Minor 演进建议）及最小修复建议；若确认 PR 干净无缺陷，请说明核验依据，切勿凭空捏造虚假阻塞缺陷。"
+}

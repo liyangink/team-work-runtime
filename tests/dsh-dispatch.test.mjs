@@ -8,12 +8,22 @@ import z from "@deepseek-ai/schemastery"
 import {
   TOOL_NAME,
   STAGE_ABBREV,
+  TW_DISPATCH_OUTPUT_SCHEMA,
   buildDispatchLabel,
   deterministicSessionId,
+  isHealthyInflightBatch,
+  isHealthyInflightItem,
   roleAbbrev,
   twDispatchDefinition,
   twDispatchToolDescription,
 } from "../dsh/tw-dispatch.js"
+import {
+  NATIVE_DELEGATION_TOOLS,
+  SLEEP_CONFIRM_STOP,
+  analyzeSleepCommand,
+  createSleepConfirmGuard,
+  renderSleepConfirmGuide,
+} from "../dsh/sleep-confirm.js"
 import { Config, readDshConfigSnapshot, decisionTableText, systemPromptSection } from "../dsh/settings.js"
 import { twToolDefinition } from "../dsh/tw-tool.js"
 import * as hostPlugin from "../dsh/index.js"
@@ -469,6 +479,7 @@ test("三步集成：真实创建核心 + agent-map 登记；先登记后创建�
     ok: true,
     task: "demo-t",
     stage: "implementation",
+    nextAction: "wait-children",
     dispatched: [{
       ok: true,
       key: "d1-abc123",
@@ -478,6 +489,8 @@ test("三步集成：真实创建核心 + agent-map 登记；先登记后创建�
       model: "m-j1",
       waveId: "wv1",
       registered: true,
+      action: "wait",
+      message: "已创建成员会话（" + fixedId + "）并投递派单；输出派发简报后自然结束回合即可，等待成员完成通知（宿主会自动唤醒本会话）；请勿轮询或调用 sleep，确需同步等待时 sleep 类命令首次会被确认引导",
     }],
   })
 })
@@ -1069,6 +1082,16 @@ test("分工文案同源：普通委派走原生工具，正式成员走 tw-disp
   assert.equal(dispatchDef.description, twDispatchToolDescription())
 })
 
+test("派发文案不再声称回合已收束：工具描述与 nextAction 说明都指向简报、自动唤醒与 sleep 确认引导", () => {
+  const description = twDispatchToolDescription()
+  assert.match(description, /输出派发简报后自然结束回合即可/)
+  assert.match(description, /sleep 类命令首次会被确认引导/)
+  assert.doesNotMatch(description, /自动收束当前回合/)
+  const nextActionText = TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.description
+  assert.match(nextActionText, /可输出简报后结束回合等待通知/)
+  assert.doesNotMatch(nextActionText, /本回合自动收束/)
+})
+
 test("工具定义形态：名称/并发安全/参数面只收语义（key、modelHint、标签均不向模型索要）", () => {
   const def = twDispatchDefinition({}, {})
   assert.equal(def.name, TOOL_NAME)
@@ -1107,4 +1130,486 @@ test("index 装配只注册 tw 和 tw-dispatch，不装配旧注入", async () =
   } finally {
     if (typeof dispose === "function") dispose()
   }
+})
+
+function makeSpySleepConfirm() {
+  const notes = []
+  return {
+    notes,
+    noteDispatch(exec, card) { notes.push({ exec, card }) },
+    aroundExecute: async (_exec, next) => next(),
+    clearTurn() {},
+  }
+}
+
+test("波次派发不再收束回合：健康派发只记录派发世代，静止卡/部分失败/未确认持久化均保留汇报回合", async () => {
+  // 1. 正常初派、同父活会话等待、冷唤醒续投、wait-inflight 健康恢复 → 只 noteDispatch，不再 concludeTurn
+  for (const mode of ["fresh", "reused-live", "cold-followup", "wait-inflight-healthy"]) {
+    const h = makeCtx()
+    const wave = ownerWave({
+      ...(mode === "cold-followup" ? { continuation: true, expectedAgentId: "cold-c1" } : {}),
+    })
+    if (mode === "reused-live") h.injectLive(deterministicSessionId("demo-t", wave.dispatchKey), { received: wave.prompt })
+    if (mode === "cold-followup") h.injectCold("cold-c1", { received: "旧轮正文" })
+    const plan = mode === "wait-inflight-healthy"
+      ? inflightCard([inflightItem({ registered: true, mappedAgentId: "live-inflight-1" })])
+      : planCard([wave])
+    if (mode === "wait-inflight-healthy") h.injectLive("live-inflight-1", { received: "原派单" })
+    const { runTw } = makeRunTw(plan)
+    const sleepConfirm = makeSpySleepConfirm()
+    const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
+    let concluded = 0
+    const out = await tool.execute({ task: "demo-t" }, { ...EXEC, concludeTurn() { concluded++ } })
+    assert.equal(concluded, 0, mode + " 健康派发不得收束回合（模型还要输出派发简报）")
+    assert.equal(out.nextAction, "wait-children", mode + " nextAction 应为 wait-children")
+    assert.equal(sleepConfirm.notes.length, 1, mode + " 健康派发记录一次派发世代")
+    assert.equal(sleepConfirm.notes[0].card, out, mode + " noteDispatch 收到本次卡片")
+    const entry = out.dispatched?.[0] ?? out.inflight?.[0]
+    // 纯重入等待（活会话在场）必须带 reused 标记，否则 guard 会把重入查询误判成新交付而重置确认状态。
+    assert.equal(entry.reused, mode === "reused-live" || mode === "wait-inflight-healthy" ? true : undefined, mode + " reused 标记语义")
+  }
+
+  // 2. awaiting-user / blocked / completed / archived / 拒绝卡 / 空波计划 → 不记录派发世代
+  for (const stopCard of [
+    { ok: true, task: "demo-t", stage: "finish", stop: "awaiting-user", waves: [], card: { status: "awaiting-user" } },
+    { ok: true, task: "demo-t", stage: null, stop: "blocked", waves: [], card: { ok: false } },
+    { ok: true, task: "demo-t", stage: "finish", stop: "completed", waves: [], card: { status: "completed" } },
+    { ok: true, task: "demo-t", stage: null, stop: "archived", waves: [], card: { archived: true } },
+    { ok: false, code: "TASK_NOT_FOUND", message: "任务不存在" },
+    { ok: true, task: "demo-t", stage: "finish", stop: null, waves: [] },
+  ]) {
+    const h = makeCtx()
+    const { runTw } = makeRunTw(stopCard)
+    const sleepConfirm = makeSpySleepConfirm()
+    const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
+    let concluded = 0
+    await tool.execute({ task: "demo-t" }, { ...EXEC, concludeTurn() { concluded++ } })
+    assert.equal(concluded, 0, "非在途卡不得收束回合：" + JSON.stringify(stopCard))
+    assert.equal(sleepConfirm.notes.length, 0, "非在途卡不得记录派发世代：" + JSON.stringify(stopCard))
+  }
+
+  // 3. 部分失败、wait-inflight passthrough（未知登记）、flush 持久化未确认 → 不记录派发世代且 nextAction=recover
+  {
+    const h = makeCtx()
+    h.ctx.sessions.flush = async () => false
+    const { runTw } = makeRunTw(planCard([ownerWave()]))
+    const sleepConfirm = makeSpySleepConfirm()
+    const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
+    let concluded = 0
+    const out = await tool.execute({ task: "demo-t" }, { ...EXEC, concludeTurn() { concluded++ } })
+    assert.equal(concluded, 0, "持久化未确认不得收束回合")
+    assert.equal(sleepConfirm.notes.length, 0, "持久化未确认不得记录派发世代")
+    assert.equal(out.nextAction, "recover")
+  }
+  {
+    const h = makeCtx()
+    const { runTw } = makeRunTw(inflightCard([inflightItem({ registered: undefined, registeredUnresolved: "损坏" })]))
+    const sleepConfirm = makeSpySleepConfirm()
+    const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
+    let concluded = 0
+    const out = await tool.execute({ task: "demo-t" }, { ...EXEC, concludeTurn() { concluded++ } })
+    assert.equal(concluded, 0, "passthrough 未知登记不得收束回合")
+    assert.equal(sleepConfirm.notes.length, 0, "passthrough 未知登记不得记录派发世代")
+    assert.equal(out.nextAction, "recover")
+  }
+})
+
+test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再次执行放行，新回合重新引导，其余工具完全放行", async () => {
+  const registered = new Map()
+  const listeners = new Map()
+  const h = makeCtx()
+  const { runTw, calls } = makeRunTw(planCard([ownerWave()]))
+  const ctx = {
+    ...h.ctx,
+    logger: { warn() {}, info() {} },
+    tools: { register(def) { registered.set(def.name, def); return () => registered.delete(def.name) } },
+    on(event, fn) {
+      listeners.set(event, fn)
+      return () => listeners.delete(event)
+    },
+  }
+  const fixedNow = Date.parse("2026-10-30T10:00:00+08:00")
+  const sleepConfirm = createSleepConfirmGuard({ now: () => fixedNow })
+  const dispose = await hostPlugin.apply(ctx, {}, {
+    registerEmbeddedSkill: async () => {},
+    sleepConfirm,
+  })
+  assert.deepEqual([...listeners.keys()].sort(), ["session/event", "tools/execute"], "只装配工具执行引导与回合边界清理，旧的 pre-step 钩子已下线")
+  // 替换 tw-dispatch 的内部 runTw 以观测调用次数
+  const dispatchTool = twDispatchDefinition(ctx, { runTw, sleepConfirm })
+  registered.set("tw-dispatch", dispatchTool)
+  const invokeViaHook = (exec, body) => listeners.get("tools/execute")(exec, body)
+  const emitSessionEvent = (id, type) => listeners.get("session/event")({ id }, { type })
+  let bashExecCount = 0
+  let runCodeExecCount = 0
+  let seq = 0
+  const runBash = async (agent, command, extra = {}) => {
+    const contexts = []
+    // 顶层 bash 没有 parent；run_code 内嵌（PTC）调用才带 parent token。
+    const exec = {
+      name: "bash",
+      callId: extra.callId ?? "call-" + String(++seq),
+      rootCallId: extra.rootCallId ?? "rc-bash-" + String(seq),
+      ...(extra.parent ? { parent: extra.parent } : {}),
+      agent,
+      arguments: { command, description: "test" },
+      deferContext(context) { contexts.push(context) },
+    }
+    let executed = 0
+    const result = await invokeViaHook(exec, async () => {
+      bashExecCount++
+      executed++
+      return { isError: false, value: { kind: "foreground", exitCode: 0 } }
+    })
+    return { result, contexts, executed }
+  }
+
+  try {
+    const leadAgent = { id: "parent-agent-1", phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: "/proj" } } }
+    const childAgent = { id: "child-agent-1", phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: "/proj" } } }
+    const parentToken = Symbol("ptc-run-1")
+
+    // 1) 首派健康返回：不再 concludeTurn，回合继续，可输出简报
+    let outerConcluded = 0
+    const dispatchExec = { name: "tw-dispatch", callId: "rc-1:ptc:1", rootCallId: "rc-1", parent: parentToken, agent: leadAgent, concludeTurn() { outerConcluded++ } }
+    const dispatchRes = await invokeViaHook(dispatchExec, () => dispatchTool.execute({ task: "demo-t" }, dispatchExec))
+    assert.equal(dispatchRes.nextAction, "wait-children")
+    assert.equal(outerConcluded, 0, "派发后不再收束回合")
+
+    // 2) 同一 run_code 内紧接着 bash sleep：首次引导，命令未执行，引导经 deferContext 递达
+    const first = await runBash(leadAgent, "sleep 30", { callId: "rc-1:ptc:2", rootCallId: "rc-1", parent: parentToken })
+    assert.equal(first.executed, 0, "首次命中的 sleep 不执行")
+    assert.equal(first.result.isError, false)
+    assert.equal(first.result.value.stopped, SLEEP_CONFIRM_STOP)
+    assert.equal(first.result.value.cwd, "/proj")
+    assert.equal(first.contexts.length, 1, "嵌套调用的引导不依赖程序转印：deferContext 独立递达")
+    assert.equal(first.contexts[0].role, "user")
+    assert.equal(first.contexts[0].source.kind, "sleep-confirm")
+    assert.match(first.contexts[0].content[0].text, /TWR_SLEEP_CONFIRM/)
+    assert.match(first.contexts[0].content[0].text, /1 分钟前刚派发了任务 demo-t 的波次/, "首行追加近期派发提示")
+
+    // 3) 同 Step 的后续 sleep（不同根调用）继续拦截，只返回精简提示
+    const second = await runBash(leadAgent, "sleep 30", { callId: "rc-2", rootCallId: "rc-2", parent: Symbol("ptc-run-2") })
+    assert.equal(second.executed, 0)
+    assert.equal(second.result.value.stopped, SLEEP_CONFIRM_STOP)
+    assert.match(second.contexts[0].content[0].text, /本回合已引导过/)
+
+    // 4) 非 sleep 的 bash / run_code / tw-dispatch 完全放行（同回合连续派发回归）
+    const plain = await runBash(leadAgent, "echo hello")
+    assert.equal(plain.executed, 1, "非 sleep 的 bash 正常执行")
+    const runCodeResult = await invokeViaHook({ name: "run_code", callId: "rc-3", rootCallId: "rc-3", agent: leadAgent }, async () => {
+      runCodeExecCount++
+      return { isError: false, value: { logs: [], result: "ok" } }
+    })
+    assert.equal(runCodeExecCount, 1, "run_code 正常执行")
+    assert.equal(runCodeResult.value.result, "ok")
+    const beforeTaskB = calls.length
+    const taskBExec = { name: "tw-dispatch", callId: "rc-3b", rootCallId: "rc-3b", agent: leadAgent }
+    const taskB = await invokeViaHook(taskBExec, () => dispatchTool.execute({ task: "demo-t" }, taskBExec))
+    assert.equal(calls.length, beforeTaskB + 2, "同回合再派发正常走判定链（dispatch-plan + agent-map），无屏障短路")
+    assert.equal(taskB.nextAction, "wait-children")
+    assert.equal(taskB.dispatched[0].reused, true, "同 key 由判定链收敛为纯重入等待（reused），不是屏障短路卡")
+
+    // 4b) 其他工具调用夹在中间不使确认失效（跨多 Step 做别的事）
+    const interleaved = await invokeViaHook({ name: "tw", callId: "rc-3c", rootCallId: "rc-3c", agent: leadAgent }, async () => ({ isError: false, value: { ok: true } }))
+    assert.equal(interleaved.isError, false)
+
+    // 5) 子代理独立状态：同 Step 首次引导，更晚 Step 放行
+    const childFirst = await runBash(childAgent, "sleep 30", { callId: "child-rc-1:ptc:1", rootCallId: "child-rc-1", parent: Symbol("child-ptc") })
+    assert.equal(childFirst.executed, 0, "子代理的 sleep 同样被引导")
+    childAgent.phase = { kind: "running", turn: 1, step: 2 }
+    const childSecond = await runBash(childAgent, "sleep 30", { callId: "child-rc-2:ptc:1", rootCallId: "child-rc-2" })
+    assert.equal(childSecond.executed, 1, "子代理更晚 Step 确认放行")
+
+    // 6) Lead 更晚 Step 再次执行（顶层调用）→ 确认放行；同 Step 改写命令仍放行
+    leadAgent.phase = { kind: "running", turn: 1, step: 2 }
+    const confirmed = await runBash(leadAgent, "sleep 30", { callId: "rc-4", rootCallId: "rc-4" })
+    assert.equal(confirmed.executed, 1, "看到引导后的更晚 Step 再次执行即确认放行")
+    const rewritten = await runBash(leadAgent, "sleep 90", { callId: "rc-5", rootCallId: "rc-5" })
+    assert.equal(rewritten.executed, 1, "确认是回合级一次性，不按命令文本指纹")
+
+    // 7) 回合边界清空（turn/end）：新回合重新引导一次
+    emitSessionEvent("parent-agent-1", "turn/end")
+    leadAgent.phase = { kind: "running", turn: 2, step: 1 }
+    const newTurn = await runBash(leadAgent, "sleep 30", { callId: "rc-6", rootCallId: "rc-6" })
+    assert.equal(newTurn.executed, 0, "新回合重新引导")
+    assert.match(newTurn.contexts[0].content[0].text, /请先自判等待是否必要/)
+    leadAgent.phase = { kind: "running", turn: 2, step: 2 }
+    assert.equal((await runBash(leadAgent, "sleep 30", { callId: "rc-7", rootCallId: "rc-7" })).executed, 1, "新回合的确认放行")
+
+    // 8) turn/start 同样清空 confirmed（guided 与 confirmed 一并清除）
+    emitSessionEvent("parent-agent-1", "turn/start")
+    leadAgent.phase = { kind: "running", turn: 3, step: 1 }
+    assert.equal((await runBash(leadAgent, "sleep 30", { callId: "rc-8", rootCallId: "rc-8" })).executed, 0, "turn/start 后重新引导")
+  } finally {
+    if (typeof dispose === "function") dispose()
+  }
+})
+
+test("sleep 检测规则矩阵：R1/R2/R3 命中，白名单与未覆盖形态放行", () => {
+  const cases = [
+    ["sleep 5", true, "R1"],
+    ["sleep 1", true, "R1"],
+    ["sleep 0.5", false, null],
+    ["sleep 0", false, null],
+    ["watch -n 2 date", true, "R1"],
+    ["tail -f app.log", true, "R1"],
+    ["tail -n 20 -f app.log", true, "R1"],
+    ["tail -n 20 app.log", false, null],
+    ["while true; do sleep 5; done", true, "R2"],
+    ["until test -f out.txt; do sleep 0.2; done", true, "R2"],
+    ["while true; do date; done", false, null],
+    ["for i in 1 2 3; do sleep 1; done", false, null],
+    ["echo start && sleep 5", true, "R3"],
+    ["echo a; sleep 3", true, "R3"],
+    ["echo a\nsleep 3", true, "R3"],
+    ["echo start; sleep 2", false, null],
+    ["sleep 5 && echo done", true, "R1"],
+    ["ps aux | grep node", false, null],
+    ["sleep infinity", true, "R1"],
+  ]
+  for (const [command, expected, rule] of cases) {
+    const hit = analyzeSleepCommand(command)
+    assert.equal(hit.match, expected, command)
+    assert.equal(hit.rule, rule, command)
+  }
+  assert.equal(analyzeSleepCommand("sleep 5", { runInBackground: true }).match, false, "run_in_background 走宿主原生后台机制，不引导")
+  assert.match(renderSleepConfirmGuide(), /TWR_SLEEP_CONFIRM/)
+  assert.doesNotMatch(renderSleepConfirmGuide(), /分钟前刚派发/, "无派发记录时不追加场景提示")
+})
+
+function makeGuardExec(agent, command, extra = {}) {
+  const contexts = []
+  const exec = {
+    name: "bash",
+    callId: extra.callId ?? "call-1",
+    rootCallId: extra.rootCallId ?? "root-1",
+    parent: extra.parent ?? Symbol("ptc"),
+    agent,
+    arguments: { command, description: "test", ...(extra.workdir ? { workdir: extra.workdir } : {}), ...(extra.runInBackground ? { run_in_background: true } : {}) },
+    deferContext(context) { contexts.push(context) },
+  }
+  return { exec, contexts }
+}
+
+function makeGuardAgent(id = "lead-guard") {
+  return { id, phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: "/proj" } } }
+}
+
+function setGuardStep(agent, turn, step) {
+  agent.phase = { kind: "running", turn, step }
+}
+
+test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，更晚 Step 确认放行且失败不回退", async () => {
+  const guard = createSleepConfirmGuard({ now: () => 0 })
+  const agent = makeGuardAgent()
+  const run = async (command, extra = {}) => {
+    const { exec, contexts } = makeGuardExec(agent, command, extra)
+    let executed = 0
+    const result = await guard.aroundExecute(exec, async () => {
+      executed++
+      return { isError: false, value: { kind: "foreground" } }
+    })
+    return { result, contexts, executed }
+  }
+
+  // 1) 首次命中：不执行、返回 bash 前台契约结果、引导经 deferContext 递达
+  const first = await run("sleep 30")
+  assert.equal(first.executed, 0, "首次禁止真实执行")
+  assert.equal(first.result.isError, false)
+  assert.equal(first.result.value.kind, "foreground")
+  assert.equal(first.result.value.stopped, SLEEP_CONFIRM_STOP)
+  assert.equal(first.result.value.cwd, "/proj")
+  assert.equal(first.result.value.exitCode, null)
+  assert.equal(first.result.value.signal, null)
+  assert.equal(first.result.value.timedOut, false)
+  assert.equal(first.result.value.aborted, false)
+  assert.equal(first.result.value.timeoutMs, 0)
+  assert.equal(first.result.value.stdout.truncated, false)
+  assert.equal(first.result.value.stderr.text, "")
+  assert.equal(first.contexts.length, 1, "引导经 deferContext 递达（嵌套调用不依赖程序转印）")
+  assert.equal(typeof first.contexts[0].id, "string")
+  assert.equal(first.contexts[0].role, "user")
+  assert.equal(first.contexts[0].source.form, "notice")
+  assert.match(first.contexts[0].content[0].text, /请先自判等待是否必要/)
+
+  // 2) 同一次 run_code 连续两次 / 同 Step 不同根调用：全部拦截，只首个记 guided
+  const second = await run("sleep 30", { callId: "call-2", rootCallId: "root-2" })
+  assert.equal(second.executed, 0)
+  assert.equal(second.result.value.stopped, SLEEP_CONFIRM_STOP)
+  assert.match(second.contexts[0].content[0].text, /本回合已引导过/)
+  const third = await run("sleep 1", { callId: "call-3", rootCallId: "root-3" })
+  assert.equal(third.executed, 0)
+  assert.match(third.contexts[0].content[0].text, /本回合已引导过/)
+
+  // 3) 更晚 Step（不要求紧邻、可夹其他工具）再次执行：确认放行
+  let otherRan = 0
+  await guard.aroundExecute({ name: "read", agent, arguments: {} }, async () => { otherRan++; return { isError: false } })
+  assert.equal(otherRan, 1, "中间夹其他工具调用完全放行")
+  setGuardStep(agent, 1, 3)
+  const confirmed = await run("sleep 30", { callId: "call-4", rootCallId: "root-4" })
+  assert.equal(confirmed.executed, 1, "更晚 Step 再次执行即确认放行")
+  const rewritten = await run("sleep 60", { callId: "call-5", rootCallId: "root-5" })
+  assert.equal(rewritten.executed, 1, "确认后命令改写仍放行")
+
+  // 4) 确认后命令执行失败与失败重试不回退状态
+  const { exec: failingExec } = makeGuardExec(agent, "sleep 5", { callId: "call-6", rootCallId: "root-6" })
+  let failingRan = 0
+  const failing = await guard.aroundExecute(failingExec, async () => { failingRan++; return { isError: true, error: { message: "boom" } } })
+  assert.equal(failingRan, 1)
+  assert.equal(failing.isError, true)
+  const retried = await run("sleep 5", { callId: "call-7", rootCallId: "root-7" })
+  assert.equal(retried.executed, 1, "失败重试不回退 confirmed")
+
+  // 5) 回合边界清空 guided 与 confirmed；新回合重新引导
+  guard.clearTurn("lead-guard")
+  setGuardStep(agent, 2, 1)
+  const newTurn = await run("sleep 30", { callId: "call-8", rootCallId: "root-8" })
+  assert.equal(newTurn.executed, 0, "新回合重新引导")
+
+  // 6) 派发世代重置：已引导后新交付 → 后面的 sleep 重新首次拦截
+  setGuardStep(agent, 2, 2)
+  guard.noteDispatch({ agent }, { ok: true, task: "task-x", dispatched: [{ ok: true, sessionId: "s-x", action: "wait" }] })
+  const afterDispatch = await run("sleep 30", { callId: "call-9", rootCallId: "root-9" })
+  assert.equal(afterDispatch.executed, 0, "新派发后的 sleep 重新首次拦截")
+  assert.match(afterDispatch.contexts[0].content[0].text, /请先自判等待是否必要/)
+  setGuardStep(agent, 2, 3)
+  const afterDispatchConfirm = await run("sleep 30", { callId: "call-10", rootCallId: "root-10" })
+  assert.equal(afterDispatchConfirm.executed, 1)
+})
+
+test("派发世代：新交付与原生委派成功递增并重新引导，纯重入 reused 与 send_message 不重置", async () => {
+  const guard = createSleepConfirmGuard({ now: () => 0 })
+  const agent = makeGuardAgent("lead-epoch")
+  const run = async (command, extra = {}) => {
+    const { exec, contexts } = makeGuardExec(agent, command, extra)
+    let executed = 0
+    await guard.aroundExecute(exec, async () => {
+      executed++
+      return { isError: false, value: { kind: "foreground" } }
+    })
+    return { contexts, executed }
+  }
+
+  // 1) noteDispatch 新交付：引导文案首行含近期派发提示
+  guard.noteDispatch({ agent }, { ok: true, task: "task-a", dispatched: [{ ok: true, sessionId: "s1", action: "wait" }] })
+  const first = await run("sleep 10")
+  assert.equal(first.executed, 0)
+  assert.match(first.contexts[0].content[0].text, /本会话 1 分钟前刚派发了任务 task-a 的波次/)
+  setGuardStep(agent, 1, 2)
+  assert.equal((await run("sleep 10")).executed, 1, "更晚 Step 确认放行")
+
+  // 2) 纯重入等待（判定链命中 reused、无新投递）不重置：确认状态保持放行
+  const reusedNote = guard.noteDispatch({ agent }, { ok: true, task: "task-a", dispatched: [{ ok: true, sessionId: "s1", reused: true, action: "wait" }] })
+  assert.equal(reusedNote, null, "纯重入 reused 不记录派发世代")
+  setGuardStep(agent, 1, 3)
+  assert.equal((await run("sleep 10")).executed, 1, "reused 重入后已确认状态保持")
+
+  // 3) 原生委派成功（subagent / subagent_fork）：递增世代，后续 sleep 重新引导
+  for (const toolName of NATIVE_DELEGATION_TOOLS) {
+    const delegated = { isError: false, value: { subagentId: "child-" + toolName } }
+    assert.equal(await guard.aroundExecute({ name: toolName, agent }, async () => delegated), delegated, toolName + " 委派结果透传")
+    setGuardStep(agent, 1, agent.phase.step + 1)
+    assert.equal((await run("sleep 10")).executed, 0, toolName + " 成功委派后 sleep 重新引导")
+    setGuardStep(agent, 1, agent.phase.step + 1)
+    assert.equal((await run("sleep 10")).executed, 1, toolName + " 之后再次确认放行")
+  }
+
+  // 4) 委派错误返回不重置；send_message（续聊催单）不是新派发也不重置
+  const failedDelegation = { isError: true, error: { message: "not allowed" } }
+  assert.equal(await guard.aroundExecute({ name: "subagent", agent }, async () => failedDelegation), failedDelegation)
+  setGuardStep(agent, 1, agent.phase.step + 1)
+  assert.equal((await run("sleep 10")).executed, 1, "委派失败不重置已确认状态")
+  assert.equal(await guard.aroundExecute({ name: "send_message", agent }, async () => ({ isError: false })).then((r) => r.isError), false)
+  setGuardStep(agent, 1, agent.phase.step + 1)
+  assert.equal((await run("sleep 10")).executed, 1, "send_message 不递增世代")
+
+  // 5) wait-inflight 恢复补派 / 冷唤醒 / 断链重建同样是新交付：重置并重新引导
+  guard.noteDispatch({ agent }, { ok: true, task: "task-b", inflight: [{ ok: true, sessionId: "s2", recovered: true, action: "recreated" }] })
+  setGuardStep(agent, 1, agent.phase.step + 1)
+  assert.equal((await run("sleep 10")).executed, 0, "恢复补派后 sleep 重新首次拦截")
+})
+
+test("guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自身异常放行原命令", async () => {
+  const logs = []
+  const guard = createSleepConfirmGuard({ now: () => 0, log: (message) => logs.push(message) })
+  const idleAgent = { id: "lead-idle", phase: { kind: "idle", lastTurn: 1 }, session: { header: { cwd: "/proj" } } }
+  const runOn = async (agent, command, extra = {}) => {
+    const { exec, contexts } = makeGuardExec(agent, command, extra)
+    let executed = 0
+    const result = await guard.aroundExecute(exec, async () => { executed++; return { isError: false, value: { kind: "foreground" } } })
+    return { result, contexts, executed }
+  }
+
+  // 1) phase 读不到（idle）：保守视为同 Step，继续拦截而不是放行
+  const first = await runOn(idleAgent, "sleep 30")
+  assert.equal(first.executed, 0)
+  const second = await runOn(idleAgent, "sleep 30", { callId: "call-2", rootCallId: "root-2" })
+  assert.equal(second.executed, 0, "phase 读不到时不确认放行")
+  assert.match(second.contexts[0].content[0].text, /本回合已引导过/)
+  // 引导时 guidedStep 未知，本回合内一律按"同 Step"保守拦截，不因之后 phase 可读就补认更晚 Step
+  setGuardStep(idleAgent, 1, 3)
+  assert.equal((await runOn(idleAgent, "sleep 30", { callId: "call-3", rootCallId: "root-3" })).executed, 0, "guidedStep 未知时本回合内保守继续拦截")
+  guard.clearTurn("lead-idle")
+  setGuardStep(idleAgent, 2, 1)
+  assert.equal((await runOn(idleAgent, "sleep 30", { callId: "call-4", rootCallId: "root-4" })).executed, 0, "新回合重新引导")
+  setGuardStep(idleAgent, 2, 2)
+  assert.equal((await runOn(idleAgent, "sleep 30", { callId: "call-5", rootCallId: "root-5" })).executed, 1, "可读 Step 的引导在更晚 Step 确认放行")
+
+  // 2) 检测抛错（phase getter 抛错）：fail-open 放行原命令并记日志
+  const brokenAgent = { id: "lead-broken", get phase() { throw new Error("phase 状态损坏") }, session: { header: { cwd: "/proj" } } }
+  const broken = await runOn(brokenAgent, "sleep 30")
+  assert.equal(broken.executed, 1, "guard 异常时放行原命令")
+  assert.ok(logs.some((line) => /phase 状态损坏/.test(line)))
+
+  // 3) 引导递达抛错：同样 fail-open，且不留 guided 残迹（后续仍按首次引导）
+  const deferAgent = makeGuardAgent("lead-defer")
+  const { exec: deferExec } = makeGuardExec(deferAgent, "sleep 30")
+  deferExec.deferContext = () => { throw new Error("递达失败") }
+  let deferRan = 0
+  const deferResult = await guard.aroundExecute(deferExec, async () => { deferRan++; return { isError: false, value: { kind: "foreground" } } })
+  assert.equal(deferRan, 1, "递达失败时放行原命令")
+  assert.equal(deferResult.isError, false)
+  const retryAfterFailure = await runOn(deferAgent, "sleep 30", { callId: "call-defer-2", rootCallId: "root-defer-2" })
+  assert.equal(retryAfterFailure.executed, 0, "递达失败没留下 guided 残迹：下次仍按首次引导")
+  assert.match(retryAfterFailure.contexts[0].content[0].text, /请先自判等待是否必要/)
+})
+
+test("sleep 引导只拦等待：run_in_background、微小 sleep、workdir 与 cwd、非 bash 工具全部透传", async () => {
+  const guard = createSleepConfirmGuard({ now: () => 0 })
+  const agent = makeGuardAgent("lead-pass")
+  const runOn = async (exec) => {
+    let executed = 0
+    const result = await guard.aroundExecute(exec, async () => { executed++; return { isError: false, value: { kind: "foreground" } } })
+    return { result, executed }
+  }
+  for (const [command, extra] of [
+    ["sleep 0.2", {}],
+    ["sleep 30", { runInBackground: true }],
+    ["echo hello", {}],
+  ]) {
+    const { exec } = makeGuardExec(agent, command, extra)
+    assert.equal((await runOn(exec)).executed, 1, command + " 应放行")
+  }
+  const workdirSleep = makeGuardExec(agent, "sleep 30", { workdir: "/custom" })
+  const intercepted = await runOn(workdirSleep.exec)
+  assert.equal(intercepted.executed, 0)
+  assert.equal(intercepted.result.value.cwd, "/custom", "结果 cwd 使用调用 workdir")
+  const relativeWorkdir = await runOn(makeGuardExec(agent, "sleep 30", { workdir: "sub" }).exec)
+  assert.equal(relativeWorkdir.result.value.cwd, "/proj/sub", "相对 workdir 按会话工作目录解析")
+  const toolExec = { name: "run_code", agent, arguments: { code: "await new Promise(() => {})" } }
+  assert.equal((await runOn(toolExec)).executed, 1, "run_code 程序体不检测（宿主 timeoutMs 兜底），guard 不拦")
+  const noAgentExec = { name: "bash", arguments: { command: "sleep 30" } }
+  assert.equal((await runOn(noAgentExec)).executed, 1, "无 agent 上下文时放行")
+})
+
+test("TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约", () => {
+  assert.equal(TW_DISPATCH_OUTPUT_SCHEMA.type, "object")
+  assert.deepEqual(TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.enum, ["wait-children", "needs-user-report", "recover", "complete"])
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait" }), true)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait", passthrough: true }), false)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait", persistenceConfirmed: false }), false)
+  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 0), true)
+  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 1), false)
+  assert.equal(isHealthyInflightBatch([], 0), false)
 })

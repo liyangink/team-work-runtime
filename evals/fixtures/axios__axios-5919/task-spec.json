@@ -1,0 +1,18 @@
+{
+  "id": "axios__axios-5919",
+  "benchmark": "Multi-SWE-bench",
+  "repo": "axios/axios",
+  "baseCommit": "bc9af51b1886d1b3529617702f2a21a6c0ed5d92",
+  "entryStage": "implementation",
+  "writable": [
+    {
+      "path": "lib/adapters/adapters.js",
+      "kind": "source"
+    },
+    {
+      "path": "lib/defaults/index.js",
+      "kind": "source"
+    }
+  ],
+  "prompt": "请修复当前仓库中的以下缺陷（Repository: axios/axios）：\n\n## fix(adapters): improved adapters loading logic to have clear error messages;\n\n### Issue #5844: Tests No Longer Passing since Upgrading to v1.5.0\n### Describe the bug\n\nAfter upgrading axios from 1.4.0 to 1.5.0, tests that use network calls all fail consistently.\r\n\r\nIn my tests, I use Vitetest with Pretender intercepting network calls. None of my network tests pass with axios `1.5.0`. I get the following error messages:\r\n\r\n```javascript\r\n  code: 'ECONNREFUSED',\r\n  errors: [\r\n    Error: connect ECONNREFUSED 127.0.0.1:80\r\n        at createConnectionError (node:net:1630:14)\r\n        at afterConnectMultiple (node:net:1660:40) {\r\n      errno: -61,\r\n      code: 'ECONNREFUSED',\r\n      syscall: 'connect',\r\n      address: '127.0.0.1',\r\n      port: 80\r\n    },\r\n    Error: connect ECONNREFUSED ::1:80\r\n        at createConnectionError (node:net:1630:14)\r\n        at afterConnectMultiple (node:net:1660:40) {\r\n      errno: -61,\r\n      code: 'ECONNREFUSED',\r\n      syscall: 'connect',\r\n      address: '::1',\r\n      port: 80\r\n    }\r\n  ],\r\n```\r\n\r\nCan confirm this is from axios. Downgrading back to `1.4.0` resolves the problem. \r\n\n\n### To Reproduce\n\nUsing the last version of Pretender and an axios instance using v1.5.0, attempt to intercept a network call in a test environment, using Jest or Vitest.\n\n### Code snippet\n\n_No response_\n\n### Expected behavior\n\nPretender should be able to intercept network calls in the test environment.\n\n### Axios Version\n\n1.5.0\n\n### Adapter Version\n\n_No response_\n\n### Browser\n\n_No response_\n\n### Browser Version\n\n_No response_\n\n### Node.js Version\n\n20.4.0\n\n### OS\n\nMac OS 13.4\n\n### Additional Library Versions\n\n```bash\nPretender 3.4.7\r\nReact 18.2.0\n```\n\n\n### Additional context/Screenshots\n\n```bash\nI use axios by creating an instance within my own service class, like so:\r\n\r\n\r\n  constructor(config = {}) {\r\n    /** Configuration settings for the service instance */\r\n    this.config = Object.assign(DEFAULT_CONFIG, config);\r\n    \r\n    /** Make axios send cookies withCredentials=true */\r\n    this.ajax = axios.create({\r\n      baseURL: this.baseURL, // a getter method that cleans strings from erroneous slashes\r\n      withCredentials: this.config.withCredentials, // a boolean field\r\n    });\r\n    \r\n    /** Set content type to json */\r\n    this.ajax.defaults.headers.common['Content-Type'] = 'application/json';\r\n  }\r\n\r\n\r\nThe test config for Vite has the baseURL set to `/`. Pretender doesn't allow you to set a URL path. These configurations have not changed. \r\n\r\nPretender doesn't have much for the config, it's just `new Pretender` instance.\n```\n\n\n\n\n### Context\nFixes #5844 ;\n\n请直接在当前工作区对应源码文件（lib/adapters/adapters.js, lib/defaults/index.js）中完成修复（保持与现有模块导入和导出接口完全兼容）。"
+}

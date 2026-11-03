@@ -1,0 +1,67 @@
+{
+  "id": "dr-config-hotreload",
+  "entryStage": "design-review",
+  "writable": [
+    {
+      "path": "REVIEW.md",
+      "kind": "design-review"
+    }
+  ],
+  "prompt": "请直接基于当前工作区中的 `docs/hotreload-design.md` 与配套原型 `src/config-manager.mjs` 进行静态方案审查（design-review，无需编写或运行耗时测试脚本），将完整审查结论写入 `REVIEW.md`（不得修改原方案与代码文件）。请区分必须在本轮修复的架构阻塞缺陷（Blocker）与非阻塞排版建议，并给出每项阻塞缺陷的具体触发条件与最小修正方案。",
+  "groundTruth": {
+    "blockers": [
+      {
+        "id": "B1_NON_ATOMIC_WRITE",
+        "keywords": [
+          "writeFile",
+          "原子",
+          "atomic",
+          "rename",
+          "tmp",
+          "截断",
+          "半截",
+          "空文件"
+        ],
+        "description": "saveConfig 直接 writeFile 原地覆写，fs.watch 在文件截断/写入中途会读到空文件或半截 JSON 导致 JSON.parse 抛错或配置丢失；应改为写同目录临时文件后 rename 原子替换。"
+      },
+      {
+        "id": "B2_INFLIGHT_TEARING",
+        "keywords": [
+          "activeConfig",
+          "快照",
+          "snapshot",
+          "撕裂",
+          "中途",
+          "不一致",
+          "prepare"
+        ],
+        "description": "executeRequest 在异步 await 前后多次读取全局可变 activeConfig，热更新发生在 authenticate 与 send 之间会导致同一请求前半段用旧凭据、后半段连新 endpoint；应在请求入口捕获不可变快照。"
+      },
+      {
+        "id": "B3_UNKNOWN_FIELD_LOSS",
+        "keywords": [
+          "sanitizeForSave",
+          "未知字段",
+          "unknown",
+          "丢失",
+          "抹除",
+          "前向兼容",
+          "插件"
+        ],
+        "description": "sanitizeForSave 仅白名单拷贝 endpoint 与 apiKeyRef，静默丢弃新版或扩展插件写入的未知配置字段；应保留未识别字段（如解构透传 ...v）。"
+      }
+    ],
+    "decoys": [
+      {
+        "id": "D1_COLUMN_WIDTH",
+        "keyword": "180px",
+        "description": "附录表格列宽 180px 与浅蓝色背景属纯视觉排版偏好"
+      },
+      {
+        "id": "D2_DASHED_ARROW",
+        "keyword": "虚线",
+        "description": "流程图虚线箭头属纯绘图风格偏好"
+      }
+    ]
+  }
+}

@@ -182,17 +182,89 @@ function twCommand() {
   }
 }
 
-// 组合评审被审制品清单（当前阶段登记产出物按包分组；P4：runtime 自有事实推导）
-function NLART(task) {
-  const stage = task.workflow ? null : null
-  const items = (task.artifacts?.items ?? []).filter((it) => it.stage === (task.reports?.at(-1)?.stage ?? it.stage))
+// 评审/裁决被审制品清单（当前阶段登记产出物按包分组，单包列出当前阶段登记路径；P4：runtime 自有事实推导，排除作废波与 blocked 报告）
+function NLART(task, stageId = null) {
+  const targetStage = stageId ?? task.reports?.at(-1)?.stage
+  const excluded = supersededKeys(task.journal ?? [])
+  const validReportIds = new Set(
+    (task.reports ?? [])
+      .filter((r) => (!targetStage || r.stage === targetStage) && r.role === 'owner' && r.kind === 'deliver' && r.payload?.outcome !== 'blocked' && (!r.dispatchKey || !excluded.has(r.dispatchKey)))
+      .map((r) => r.reportId)
+  )
+  const hasReports = (task.reports ?? []).some((r) => !targetStage || r.stage === targetStage)
+  const items = (task.artifacts?.items ?? []).filter((it) => (!targetStage || it.stage === targetStage) && (!hasReports || !it.reportRef || validReportIds.has(it.reportRef)))
   // 路径:kind 条目解析与 parseWritableEntry 同口径（lastIndexOf 冒号，路径可含冒号）；目录条目覆盖其下路径
   const entryPathOf = (w) => { const s = String(w); const sep = s.lastIndexOf(':'); return sep === -1 ? s : s.slice(0, sep) }
   const lines = (task.packages ?? []).map((p) => {
     const paths = items.filter((it) => writableMatch((p.writable ?? []).map((w) => ({ path: entryPathOf(w) })), it.path)).map((it) => it.path)
     return '- 包 ' + p.id + '：' + (paths.join('、') || '（无登记产出物）')
   })
-  return lines.length ? String.fromCharCode(10) + lines.join(String.fromCharCode(10)) : '（当前阶段登记产出物：' + items.map((it) => it.path).join('、') + '）'
+  return lines.length ? '\n' + lines.join('\n') : '（当前阶段登记产出物：' + (items.map((it) => it.path).join('、') || '无') + '）'
+}
+
+// 按 journal report-accepted seq 第一全序、at 次级破平、ver 再破平比较报告新旧（与 gate.mjs:40-52 同口径，防时钟回拨或同毫秒失序）
+function reportOrderComparator(journal = []) {
+  const seqOf = new Map()
+  for (const e of journal) {
+    if (e.type === 'report-accepted' && e.detail?.reportId) seqOf.set(e.detail.reportId, e.seq ?? -1)
+  }
+  return (a, b) => {
+    const sa = seqOf.get(a.reportId) ?? -1
+    const sb = seqOf.get(b.reportId) ?? -1
+    if (sa !== sb) return sa > sb
+    if ((a.at ?? '') !== (b.at ?? '')) return (a.at ?? '') > (b.at ?? '')
+    return (a.ver ?? 1) > (b.ver ?? 1)
+  }
+}
+
+// 评审/裁决上下文（P4：把本阶段已交付 Owner 摘要与 Challenger 评审结论内嵌到 review/verdict 派单，
+// 避免单包 Challenger 缺被审路径或 Expert 因看不到 Challenger 结论而向 Lead 反问分歧）
+function reviewVerdictContext(task, stageId, wave) {
+  if (wave.kind !== 'review' && wave.kind !== 'verdict') return ''
+  const excluded = supersededKeys(task.journal ?? [])
+  const later = reportOrderComparator(task.journal ?? [])
+  const activePkgSet = Array.isArray(task.packages) && task.packages.length ? new Set(task.packages.map((p) => p.id)) : null
+  const stageReports = (task.reports ?? []).filter((r) => r.stage === stageId && (!r.dispatchKey || !excluded.has(r.dispatchKey)))
+  const owners = new Map()
+  for (const r of stageReports) {
+    if (r.role !== 'owner' || r.kind !== 'deliver' || r.payload?.outcome === 'blocked') continue
+    if (activePkgSet && !activePkgSet.has(r.package)) continue
+    const key = r.package ?? ''
+    const prev = owners.get(key)
+    if (!prev || later(r, prev)) owners.set(key, r)
+  }
+  const ownerLines = []
+  for (const [pkg, r] of owners) {
+    const paths = Array.isArray(r.payload?.paths) ? r.payload.paths : []
+    ownerLines.push('- ' + (pkg ? '包「' + pkg + '」' : '本阶段交付') + '：' + String(r.payload?.summary ?? '') + (paths.length ? '（产出：' + paths.join('、') + '）' : ''))
+  }
+  const sections = []
+  if (wave.scope !== 'consolidation') {
+    sections.push('被审制品清单：' + NLART(task, stageId))
+  }
+  if (ownerLines.length) {
+    sections.push('### 本阶段 Owner 交付摘要\n' + ownerLines.join('\n'))
+  }
+  if (wave.kind === 'verdict') {
+    let challenger = null
+    for (const r of stageReports) {
+      if (r.role !== 'challenger' || r.kind !== 'review') continue
+      if (!challenger || later(r, challenger)) challenger = r
+    }
+    if (challenger?.payload) {
+      const rec = challenger.payload.recommendation
+      const findings = (challenger.payload.findings ?? []).map((f) => '- [' + f.severity + ']' + (f.package ? '（包 ' + f.package + '）' : '') + ' ' + f.statement).join('\n')
+      const emptyNote = rec === 'accept'
+        ? '\n（无结构化 findings 条目；Challenger 已接受本轮交付，无待裁决分歧）'
+        : '\n（无结构化 findings 条目，详见上方评审摘要）'
+      sections.push(
+        '### Challenger 评审结论（' + rec + '）\n' +
+        String(challenger.payload.summary ?? '') +
+        (findings ? '\n' + findings : emptyNote)
+      )
+    }
+  }
+  return sections.length ? '## 本轮被审交付与前序评审上下文\n\n' + sections.join('\n\n') : ''
 }
 
 function parseWritableEntry(entry) {
@@ -373,14 +445,18 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     // §4 写边界补强（phase3 方案）：声明越界后果——三层防线可见化（派单纪律/ deliver 校验/快照恢复）
     wave.role === 'owner' ? '可写范围外的修改会被 deliver 拒绝；已越界污染的产出物可在恢复轮回滚（tw restore 快照恢复）。不要尝试绕过。' : '',
-    wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。被审制品清单：' + NLART(task) : '',
+    wave.scope === 'consolidation' ? '组合评审：对象是本轮全部已交付包的组合制品——重点审包间接缝、需求偏移与集成风险；findings 请标注 package 归属（哪个包的问题）。被审制品清单：' + NLART(task, stageDef.id) : '',
+    reviewVerdictContext(task, stageDef.id, wave),
     // D6（台账）：评审/裁决派单内嵌包计划事实——把编排事实给到裁决者，
     // 消除"缺包误判 rework"（topo-e2e w17 实例：expert 不知道未交付包会自动解锁派发）
     (wave.role === 'challenger' || wave.role === 'expert') && Array.isArray(task.packages) && task.packages.length
-      ? '本任务包计划：' + task.packages.map((p) => {
-          const delivered = task.reports.some((r) => r.kind === 'deliver' && r.package === p.id)
-          return p.id + (delivered ? '（已交付）' : '（未交付' + ((p.dependsOn ?? []).length ? '，依赖满足后自动派发' : '') + '）')
-        }).join('、') + '——未交付包不构成 rework 依据；仅用于了解计划，对完整性的非阻塞顾虑写进 summary 或已有交付物。'
+      ? (() => {
+          const excluded = supersededKeys(task.journal ?? [])
+          return '本任务包计划：' + task.packages.map((p) => {
+            const delivered = (task.reports ?? []).some((r) => r.stage === stageDef.id && r.kind === 'deliver' && r.payload?.outcome !== 'blocked' && (!r.dispatchKey || !excluded.has(r.dispatchKey)) && r.package === p.id)
+            return p.id + (delivered ? '（已交付）' : '（未交付' + ((p.dependsOn ?? []).length ? '，依赖满足后自动派发' : '') + '）')
+          }).join('、') + '——未交付包不构成 rework 依据；仅用于了解计划，对完整性的非阻塞顾虑写进 summary 或已有交付物。'
+        })()
       : '',
     wave.kind === 'produce' || wave.kind === 'respond' ? '完成后调用：' + deliverCmd : '完成后调用：' + reviewCmd,
     wave.kind === 'verdict' ? 'Expert 裁决语义：recommendation 概括立场；verdict 是技术裁决正文（outcome/rationale/confidence/recommendedAction）。两者都通过上面的 review 调用提交，不要只写成文字。' : '',

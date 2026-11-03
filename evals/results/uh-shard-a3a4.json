@@ -1,0 +1,1027 @@
+{
+  "schemaVersion": "1.0",
+  "package": "run-uh-a3a4",
+  "description": "3 道零注释超难题（uh1/uh2/uh3）× 单模型组 A3（gpt-6.1-sol / max）与 A4（claude-opus-5-5 / high）共 6 格评测结果；单代理组同一会话内跑 1-Pass 后接 2/3 轮自审自修，逐个保留 pass1/pass3 快照分数与终版原分。",
+  "provider": "codemaker",
+  "taskIds": [
+    "uh1_swelancer__offline_optimistic_reappear",
+    "uh2_swelancer__popover_backdrop_event_routing",
+    "uh3_cooperbench__three_way_tx_cache_pipeline"
+  ],
+  "groups": [
+    "A3",
+    "A4"
+  ],
+  "concurrency": 4,
+  "totalCells": 6,
+  "completedCells": 6,
+  "generatedAt": "2026-11-02T07:51:29.650Z",
+  "updatedAt": "2026-11-02T09:32:27.630Z",
+  "harnessNotes": {
+    "runner": "evals/run-matrix.mjs#runGovernanceMatrixCell，未改动执行协议；每格独立临时 DSH_HOME 与工作区；单代理组按 turn1→turn2→turn3 同会话续跑",
+    "dshBin": "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+    "dshVersion": "0.2.1-rc.5",
+    "dshBinRationale": "PATH 中的 dsh 为 0.1.7-rc.2（低于 team-work-runtime 的 peerDependencies >=0.2.0-rc.2，会跳过 team-work-runtime bundle）；本包使用 DSH 桌面端自带 CLI，实测 0.2.1-rc.5，满足 runner 声明的 >=0.2.0 要求",
+    "llmPiAiPatch": "取自本地 DSH profile 的 cordis.patch.yml 中 llm-pi-ai 配置项，按 YAML 1.2 语义提取（js-yaml v4，reasoningEfforts 的 off 键保持字符串），provider=codemaker",
+    "perTurnTimeoutMs": 900000,
+    "incrementalPersist": "每完成一格先写临时文件再原子 rename 覆盖本文件；持久化经互斥串行化，防止并发格互相覆盖",
+    "scoreSemantics": "单代理组顶层 score/deterministic60/checkpoints30/discipline10/costUsd/offPeakCostUsd/elapsedSec/details 取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分；pass1 明细保存首轮快照判分",
+    "truncationSemantics": "单轮 900s 上限仍在：若某轮 pass elapsedSec 接近 900，表示该轮被上限终止；首轮无 sessionId 时第 2/3 轮自审不会执行",
+    "permissionPresetWarning": "dsh 0.2.1 下 profile 里 @deepseek-ai/dsh-permission-presets 报「composed sandbox and approval defaults match no preset」未激活（stderr 告警，不影响回合执行）；工作区写入约束依赖 sandbox-policy 条目与事后 detectWorkspaceEscape 审计共同兜底",
+    "antiCheat": "每格用 evals/zstd-log.mjs 的 detectWorkspaceEscape 审计全部会话工具调用；命中即终版分清零，原始分保留在 rawPass1Score/rawPass3Score",
+    "harnessSha256": {
+      "evals/runner.mjs": "7d8a131b578eb7d92211c249a47f343460bd66ebbd9e2bc9e58f1c7f3d83f96a",
+      "evals/run-matrix.mjs": "9cc868d2a81190de49217fae5a9d14f4bfe716dd6d8a02cb1ce8cc0781e2210e",
+      "evals/grade.mjs": "b7d60b5698acffc584623745908c92fe91749d9ef41d7163a814c7947991c1cb",
+      "evals/zstd-log.mjs": "d75da7f0a0aecc3bdf01b633e543045de3d15a3fdb4e0f45b88507cf071ecaa4",
+      "evals/pricing.mjs": "d67414075f80dca0b4d8aba879770e63c3ef909fa059ce39fba67619792a0166",
+      "evals/tasks.json": "bdcc7f9bdfba967975330809eec487f6e8a9ce780a2774b304ca575e480db607"
+    },
+    "runWindow": {
+      "startedAt": "2026-11-02T07:51:29.650Z",
+      "finishedAt": "2026-11-02T09:31:42.332Z"
+    },
+    "nodeVersion": "v24.15.0",
+    "singleGroupBudget": "按 Lead 统一裁决：单模型组同一会话连跑 3 轮、每轮 900s，单格总预算 2700s，与多智能体组单次 2400s 总预算对等；pass3 终版产出可判分有效答卷即视为完整有效，不做 1800s×3 重复补跑。本包 6 格 pass3 均产出可判分终版（53/86/96/100/100/100），故全部保留。",
+    "turnWindowObservations": [
+      {
+        "cell": "uh1_swelancer__offline_optimistic_reappear:A3",
+        "turnDurationsSec": [
+          900.4,
+          900,
+          900.2
+        ],
+        "cappedTurnsAt900s": [
+          1,
+          2,
+          3
+        ],
+        "pass1ElapsedSec": 900.03,
+        "pass3ElapsedSec": 2700.23,
+        "pass1Score": 53,
+        "finalScore": 86,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      },
+      {
+        "cell": "uh1_swelancer__offline_optimistic_reappear:A4",
+        "turnDurationsSec": [
+          900.3,
+          900,
+          900.2
+        ],
+        "cappedTurnsAt900s": [
+          1,
+          2,
+          3
+        ],
+        "pass1ElapsedSec": 900.03,
+        "pass3ElapsedSec": 2700.23,
+        "pass1Score": 9,
+        "finalScore": 53,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      },
+      {
+        "cell": "uh2_swelancer__popover_backdrop_event_routing:A3",
+        "turnDurationsSec": [
+          810.1,
+          872,
+          900.3
+        ],
+        "cappedTurnsAt900s": [
+          3
+        ],
+        "pass1ElapsedSec": 810.61,
+        "pass3ElapsedSec": 2582.18,
+        "pass1Score": 96,
+        "finalScore": 96,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      },
+      {
+        "cell": "uh2_swelancer__popover_backdrop_event_routing:A4",
+        "turnDurationsSec": [
+          837.1,
+          669,
+          747.9
+        ],
+        "cappedTurnsAt900s": [],
+        "pass1ElapsedSec": 837.74,
+        "pass3ElapsedSec": 2253.78,
+        "pass1Score": 100,
+        "finalScore": 100,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      },
+      {
+        "cell": "uh3_cooperbench__three_way_tx_cache_pipeline:A3",
+        "turnDurationsSec": [
+          752.1,
+          900,
+          900.6
+        ],
+        "cappedTurnsAt900s": [
+          2,
+          3
+        ],
+        "pass1ElapsedSec": 752.02,
+        "pass3ElapsedSec": 2552.22,
+        "pass1Score": 100,
+        "finalScore": 100,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      },
+      {
+        "cell": "uh3_cooperbench__three_way_tx_cache_pipeline:A4",
+        "turnDurationsSec": [
+          900.1,
+          745,
+          465.9
+        ],
+        "cappedTurnsAt900s": [
+          1
+        ],
+        "pass1ElapsedSec": 900.03,
+        "pass3ElapsedSec": 2110.5,
+        "pass1Score": 43,
+        "finalScore": 100,
+        "source": "进程启动时刻采样（ps lstart，5s 采样）与 runner 的 pass1/pass3 elapsedSec 交叉核对，误差约 1s；cappedTurnsAt900s 表示该回合耗时达到 900s 单轮上限"
+      }
+    ],
+    "harnessIntegrity": "6 格执行期间 evals/runner.mjs、run-matrix.mjs、grade.mjs、zstd-log.mjs、pricing.mjs、tasks.json 的 sha256 在运行开始与交付前完全一致，未中途换版（唯一例外是首版驱动自身的持久化竞态，已修复并以续跑方式补完剩余 4 格；该竞态不影响任何已落盘格）。",
+    "singleGroupPass1Note": "单模型组的 1-Pass 快照分数即首轮 900s 截止时的得分；若首轮耗时≈900s，说明 Pass 1 在单轮上限处被截断，其后续 2/3 轮仍在同一会话内继续，终版分见 pass3。",
+    "perTurnTimeoutTruncatedCells": [
+      {
+        "cell": "uh1_swelancer__offline_optimistic_reappear:A3",
+        "cappedTurns": [
+          1,
+          2,
+          3
+        ],
+        "turnDurationsSec": [
+          900.4,
+          900,
+          900.2
+        ]
+      },
+      {
+        "cell": "uh1_swelancer__offline_optimistic_reappear:A4",
+        "cappedTurns": [
+          1,
+          2,
+          3
+        ],
+        "turnDurationsSec": [
+          900.3,
+          900,
+          900.2
+        ]
+      },
+      {
+        "cell": "uh2_swelancer__popover_backdrop_event_routing:A3",
+        "cappedTurns": [
+          3
+        ],
+        "turnDurationsSec": [
+          810.1,
+          872,
+          900.3
+        ]
+      },
+      {
+        "cell": "uh3_cooperbench__three_way_tx_cache_pipeline:A3",
+        "cappedTurns": [
+          2,
+          3
+        ],
+        "turnDurationsSec": [
+          752.1,
+          900,
+          900.6
+        ]
+      },
+      {
+        "cell": "uh3_cooperbench__three_way_tx_cache_pipeline:A4",
+        "cappedTurns": [
+          1
+        ],
+        "turnDurationsSec": [
+          900.1,
+          745,
+          465.9
+        ]
+      }
+    ]
+  },
+  "cells": [
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "A3",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 53,
+      "rawPass3Score": 86,
+      "pass1": {
+        "score": 53,
+        "deterministic60": 48,
+        "checkpoints30": 0,
+        "discipline10": 5,
+        "costUsd": 0.73094,
+        "offPeakCostUsd": 0.73094,
+        "elapsedSec": 900.03,
+        "details": {
+          "passedCount": 12,
+          "perProbe": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": false,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": false,
+            "t15": false
+          },
+          "decisionUnambiguous": false,
+          "issueUntouched": true,
+          "filesHit": 0,
+          "functionsHit": 0,
+          "rootCauseScore": 0,
+          "substantiveRejections": 0,
+          "falsifyScore": 0,
+          "choiceScore": 0,
+          "design": {
+            "modulesMentioned": 0,
+            "traceScore": 0,
+            "falsifyScore": 0,
+            "targetScore": 0,
+            "selfTestScore": 0
+          }
+        }
+      },
+      "pass3": {
+        "score": 86,
+        "deterministic60": 48,
+        "checkpoints30": 28,
+        "discipline10": 10,
+        "deltaQ": 33,
+        "costUsd": 2.571697,
+        "offPeakCostUsd": 2.571697,
+        "elapsedSec": 2700.23,
+        "byModel": {
+          "gpt-6.1-sol": {
+            "requests": 75,
+            "failedAttempts": 0,
+            "inputTokens": 225,
+            "cacheReadTokens": 8825773,
+            "cacheWriteTokens": 208224,
+            "outputTokens": 116811,
+            "costUsd": 2.571697,
+            "offPeakCostUsd": 2.571697
+          }
+        },
+        "details": {
+          "passedCount": 12,
+          "perProbe": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": false,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": false,
+            "t15": false
+          },
+          "selectedId": 6,
+          "decisionUnambiguous": true,
+          "issueUntouched": true,
+          "filesHit": 5,
+          "functionsHit": 5,
+          "rootCauseScore": 4,
+          "substantiveRejections": 7,
+          "falsifyScore": 6,
+          "choiceScore": 10,
+          "design": {
+            "modulesMentioned": 6,
+            "traceScore": 3,
+            "falsifyScore": 0,
+            "targetScore": 3,
+            "selfTestScore": 2
+          }
+        }
+      },
+      "startedAt": "2026-11-02T07:51:29.650Z",
+      "finishedAt": "2026-11-02T08:36:30.241Z",
+      "wallSec": 2700.59,
+      "score": 86,
+      "deterministic60": 48,
+      "checkpoints30": 28,
+      "discipline10": 10,
+      "costUsd": 2.571697,
+      "offPeakCostUsd": 2.571697,
+      "elapsedSec": 2700.23,
+      "details": {
+        "passedCount": 12,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": false,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "selectedId": 6,
+        "decisionUnambiguous": true,
+        "issueUntouched": true,
+        "filesHit": 5,
+        "functionsHit": 5,
+        "rootCauseScore": 4,
+        "substantiveRejections": 7,
+        "falsifyScore": 6,
+        "choiceScore": 10,
+        "design": {
+          "modulesMentioned": 6,
+          "traceScore": 3,
+          "falsifyScore": 0,
+          "targetScore": 3,
+          "selfTestScore": 2
+        }
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    },
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "A4",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 9,
+      "rawPass3Score": 53,
+      "pass1": {
+        "score": 9,
+        "deterministic60": 4,
+        "checkpoints30": 0,
+        "discipline10": 5,
+        "costUsd": 1.255605,
+        "offPeakCostUsd": 1.255605,
+        "elapsedSec": 900.03,
+        "details": {
+          "passedCount": 1,
+          "perProbe": {
+            "t1": true,
+            "t2": false,
+            "t3": false,
+            "t4": false,
+            "t5": false,
+            "t6": false,
+            "t7": false,
+            "t8": false,
+            "t9": false,
+            "t10": false,
+            "t11": false,
+            "t12": false,
+            "t13": false,
+            "t14": false,
+            "t15": false
+          },
+          "decisionUnambiguous": false,
+          "issueUntouched": true,
+          "filesHit": 0,
+          "functionsHit": 0,
+          "rootCauseScore": 0,
+          "substantiveRejections": 0,
+          "falsifyScore": 0,
+          "choiceScore": 0,
+          "design": {
+            "modulesMentioned": 0,
+            "traceScore": 0,
+            "falsifyScore": 0,
+            "targetScore": 0,
+            "selfTestScore": 0
+          }
+        }
+      },
+      "pass3": {
+        "score": 53,
+        "deterministic60": 48,
+        "checkpoints30": 0,
+        "discipline10": 5,
+        "deltaQ": 44,
+        "costUsd": 5.992019,
+        "offPeakCostUsd": 5.992019,
+        "elapsedSec": 2700.23,
+        "byModel": {
+          "claude-opus-5-5": {
+            "requests": 19,
+            "failedAttempts": 0,
+            "inputTokens": 44,
+            "cacheReadTokens": 453315,
+            "cacheWriteTokens": 345812,
+            "outputTokens": 208606,
+            "costUsd": 5.992019,
+            "offPeakCostUsd": 5.992019
+          }
+        },
+        "details": {
+          "passedCount": 12,
+          "perProbe": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": false,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": false,
+            "t15": false
+          },
+          "decisionUnambiguous": false,
+          "issueUntouched": true,
+          "filesHit": 0,
+          "functionsHit": 0,
+          "rootCauseScore": 0,
+          "substantiveRejections": 0,
+          "falsifyScore": 0,
+          "choiceScore": 0,
+          "design": {
+            "modulesMentioned": 0,
+            "traceScore": 0,
+            "falsifyScore": 0,
+            "targetScore": 0,
+            "selfTestScore": 0
+          }
+        }
+      },
+      "startedAt": "2026-11-02T07:51:29.651Z",
+      "finishedAt": "2026-11-02T08:36:30.241Z",
+      "wallSec": 2700.59,
+      "score": 53,
+      "deterministic60": 48,
+      "checkpoints30": 0,
+      "discipline10": 5,
+      "costUsd": 5.992019,
+      "offPeakCostUsd": 5.992019,
+      "elapsedSec": 2700.23,
+      "details": {
+        "passedCount": 12,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": false,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "decisionUnambiguous": false,
+        "issueUntouched": true,
+        "filesHit": 0,
+        "functionsHit": 0,
+        "rootCauseScore": 0,
+        "substantiveRejections": 0,
+        "falsifyScore": 0,
+        "choiceScore": 0,
+        "design": {
+          "modulesMentioned": 0,
+          "traceScore": 0,
+          "falsifyScore": 0,
+          "targetScore": 0,
+          "selfTestScore": 0
+        }
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "A3",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 96,
+      "rawPass3Score": 96,
+      "pass1": {
+        "score": 96,
+        "deterministic60": 60,
+        "checkpoints30": 26,
+        "discipline10": 10,
+        "costUsd": 0.644017,
+        "offPeakCostUsd": 0.644017,
+        "elapsedSec": 810.61,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 4,
+          "contractsScore": 16,
+          "substantiveRejections": 6,
+          "falsifyScore": 10,
+          "modulesHit": 7,
+          "designDelivered": true
+        }
+      },
+      "pass3": {
+        "score": 96,
+        "deterministic60": 60,
+        "checkpoints30": 26,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 2.288619,
+        "offPeakCostUsd": 2.288619,
+        "elapsedSec": 2582.18,
+        "byModel": {
+          "gpt-6.1-sol": {
+            "requests": 64,
+            "failedAttempts": 0,
+            "inputTokens": 128,
+            "cacheReadTokens": 7065107,
+            "cacheWriteTokens": 209997,
+            "outputTokens": 105686,
+            "costUsd": 2.288619,
+            "offPeakCostUsd": 2.288619
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 4,
+          "contractsScore": 16,
+          "substantiveRejections": 6,
+          "falsifyScore": 10,
+          "modulesHit": 7,
+          "designDelivered": true
+        }
+      },
+      "startedAt": "2026-11-02T08:48:39.900Z",
+      "finishedAt": "2026-11-02T09:31:42.332Z",
+      "wallSec": 2582.43,
+      "score": 96,
+      "deterministic60": 60,
+      "checkpoints30": 26,
+      "discipline10": 10,
+      "costUsd": 2.288619,
+      "offPeakCostUsd": 2.288619,
+      "elapsedSec": 2582.18,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 4,
+        "contractsScore": 16,
+        "substantiveRejections": 6,
+        "falsifyScore": 10,
+        "modulesHit": 7,
+        "designDelivered": true
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "A4",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 1.934661,
+        "offPeakCostUsd": 1.934661,
+        "elapsedSec": 837.74,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 4,
+          "contractsScore": 16,
+          "substantiveRejections": 7,
+          "falsifyScore": 14,
+          "modulesHit": 5,
+          "designDelivered": true
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 6.500313,
+        "offPeakCostUsd": 6.500313,
+        "elapsedSec": 2253.78,
+        "byModel": {
+          "claude-opus-5-5": {
+            "requests": 41,
+            "failedAttempts": 0,
+            "inputTokens": 88,
+            "cacheReadTokens": 1965404,
+            "cacheWriteTokens": 747760,
+            "outputTokens": 118404,
+            "costUsd": 6.500313,
+            "offPeakCostUsd": 6.500313
+          }
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 4,
+          "contractsScore": 16,
+          "substantiveRejections": 7,
+          "falsifyScore": 14,
+          "modulesHit": 5,
+          "designDelivered": true
+        }
+      },
+      "startedAt": "2026-11-02T08:48:39.901Z",
+      "finishedAt": "2026-11-02T09:26:13.921Z",
+      "wallSec": 2254.02,
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 6.500313,
+      "offPeakCostUsd": 6.500313,
+      "elapsedSec": 2253.78,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 4,
+        "contractsScore": 16,
+        "substantiveRejections": 7,
+        "falsifyScore": 14,
+        "modulesHit": 5,
+        "designDelivered": true
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "A3",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 100,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "costUsd": 0.792888,
+        "offPeakCostUsd": 0.792888,
+        "elapsedSec": 752.02,
+        "details": {
+          "passedCount": 20,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": true,
+            "t15": true,
+            "t16": true,
+            "t17": true,
+            "t18": true,
+            "t19": true,
+            "t20": true
+          },
+          "couplingAll": true,
+          "couplingScore": 15,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": true,
+            "lease": true,
+            "deadlock": true
+          }
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 0,
+        "costUsd": 2.345851,
+        "offPeakCostUsd": 2.345851,
+        "elapsedSec": 2552.22,
+        "byModel": {
+          "gpt-6.1-sol": {
+            "requests": 55,
+            "failedAttempts": 0,
+            "inputTokens": 110,
+            "cacheReadTokens": 6024310,
+            "cacheWriteTokens": 224536,
+            "outputTokens": 118186,
+            "costUsd": 2.345851,
+            "offPeakCostUsd": 2.345851
+          }
+        },
+        "details": {
+          "passedCount": 20,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": true,
+            "t15": true,
+            "t16": true,
+            "t17": true,
+            "t18": true,
+            "t19": true,
+            "t20": true
+          },
+          "couplingAll": true,
+          "couplingScore": 15,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": true,
+            "lease": true,
+            "deadlock": true
+          }
+        }
+      },
+      "startedAt": "2026-11-02T08:48:39.901Z",
+      "finishedAt": "2026-11-02T09:31:12.643Z",
+      "wallSec": 2552.74,
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 2.345851,
+      "offPeakCostUsd": 2.345851,
+      "elapsedSec": 2552.22,
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "A4",
+      "kind": "single",
+      "cheatDetected": false,
+      "violations": [],
+      "rawPass1Score": 43,
+      "rawPass3Score": 100,
+      "pass1": {
+        "score": 43,
+        "deterministic60": 33,
+        "checkpoints30": 0,
+        "discipline10": 10,
+        "costUsd": 1.011067,
+        "offPeakCostUsd": 1.011067,
+        "elapsedSec": 900.03,
+        "details": {
+          "passedCount": 11,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": false,
+            "t12": false,
+            "t13": false,
+            "t14": true,
+            "t15": false,
+            "t16": false,
+            "t17": false,
+            "t18": false,
+            "t19": false,
+            "t20": false
+          },
+          "couplingAll": false,
+          "couplingScore": 0,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": false,
+            "lease": false,
+            "deadlock": false
+          }
+        }
+      },
+      "pass3": {
+        "score": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "deltaQ": 57,
+        "costUsd": 3.938294,
+        "offPeakCostUsd": 3.938294,
+        "elapsedSec": 2110.5,
+        "byModel": {
+          "claude-opus-5-5": {
+            "requests": 30,
+            "failedAttempts": 0,
+            "inputTokens": 66,
+            "cacheReadTokens": 1076402,
+            "cacheWriteTokens": 307346,
+            "outputTokens": 109301,
+            "costUsd": 3.938294,
+            "offPeakCostUsd": 3.938294
+          }
+        },
+        "details": {
+          "passedCount": 20,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": true,
+            "t15": true,
+            "t16": true,
+            "t17": true,
+            "t18": true,
+            "t19": true,
+            "t20": true
+          },
+          "couplingAll": true,
+          "couplingScore": 15,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": true,
+            "lease": true,
+            "deadlock": true
+          }
+        }
+      },
+      "startedAt": "2026-11-02T08:48:39.901Z",
+      "finishedAt": "2026-11-02T09:23:50.906Z",
+      "wallSec": 2111.01,
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 3.938294,
+      "offPeakCostUsd": 3.938294,
+      "elapsedSec": 2110.5,
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "scoreSemantics": "顶层字段取 pass3 终版；rawPass1Score/rawPass3Score 为作弊清零前原始分"
+    }
+  ],
+  "wallTimeSec": 6012.68
+}

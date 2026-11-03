@@ -1,0 +1,1244 @@
+{
+  "generatedAt": "2026-11-02T07:57:46.443Z",
+  "updatedAt": "2026-11-02T09:09:58.456Z",
+  "provider": "codemaker",
+  "taskIds": [
+    "uh1_swelancer__offline_optimistic_reappear",
+    "uh2_swelancer__popover_backdrop_event_routing",
+    "uh3_cooperbench__three_way_tx_cache_pipeline"
+  ],
+  "groups": [
+    "B1",
+    "C1"
+  ],
+  "totalCells": 6,
+  "completedCells": 6,
+  "harnessNotes": {
+    "runner": "evals/run-matrix.mjs#runGovernanceMatrixCell（与其他分片同一实现）",
+    "dshVersion": "0.2.1-rc.5",
+    "timeoutPolicy": "Lead 统一裁决：先以默认 900s 单轮窗取得观测；900s 内自然走完/完成交付的保留；被 900s 截断、缺关键交付物、或 TWR 缺 Challenger/Expert 裁决波的单元格，以 timeoutMs=2400000 补跑，主字段为补跑后的完整结果，previous900sObservation 保留 900s 观测值。",
+    "auditPolicy": "Lead 裁决：① 仅在『read/path 手敲自身 cell 工作区绝对路径笔误且目标路径不存在』时恢复真实能力分；② 裸 /tmp 路径（norm === '/tmp'）系 zstd-log.mjs#isSafeTmpScratch 缺少无尾斜杠分支的检测器边界误报，同样恢复；两种情况均置 cheatDetected=false，并在 auditHistory 保留原始 violations、差异/边界证据与核验说明；若仍存在其他真实外部访问则保持清零。",
+    "rerunCells": 6,
+    "isolation": "独立临时 DSH_HOME；workspace-write 沙箱；approval never；tool-web 禁用；禁用 goal 自动续轮",
+    "offlineGuard": "PATH 前置离线桩（curl/wget/nc/ncat/telnet/pip/pip3/npm/npx/pnpm/yarn/uv）+ PIP_NO_INDEX 等包管理器离线环境变量",
+    "knownWarning": "dsh 0.2.1-rc.5 下 permission-presets 插件因 workspace-write + approval never 不命中内置预设而告警不激活；sandbox-policy 与 approval 插件仍按 workspace-write/never 生效（已用预检进程实测确认）。",
+    "concurrency": 3,
+    "protocol": "B1/C1 输入同一份原始任务提示；B1 关闭 team-work、挂载 J+S+E 三个固定子代理；C1 启用 team-work，Lead=S/Owner=J/Challenger=S/Expert=E",
+    "scoreSemantics": "B1/C1 score = deterministic60 + checkpoints30 + discipline10；cheatDetected=true 时 score 已被清零（经 auditHistory 复核恢复的格除外）"
+  },
+  "cells": [
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "B1",
+      "kind": "free-team",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 88,
+      "deterministic60": 48,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": null,
+      "deltaQ": null,
+      "costUsd": 0.914901,
+      "offPeakCostUsd": 0.914901,
+      "elapsedSec": 1244.73,
+      "sessionCount": 2,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 37,
+          "failedAttempts": 0,
+          "inputTokens": 204890,
+          "cacheReadTokens": 1165248,
+          "cacheWriteTokens": 0,
+          "outputTokens": 73884,
+          "costUsd": 0.914901,
+          "offPeakCostUsd": 0.914901
+        }
+      },
+      "twrMeta": null,
+      "details": {
+        "passedCount": 12,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": false,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "selectedId": 6,
+        "decisionUnambiguous": true,
+        "issueUntouched": true,
+        "filesHit": 5,
+        "functionsHit": 5,
+        "rootCauseScore": 4,
+        "substantiveRejections": 7,
+        "falsifyScore": 6,
+        "choiceScore": 10,
+        "design": {
+          "modulesMentioned": 6,
+          "traceScore": 3,
+          "falsifyScore": 2,
+          "targetScore": 3,
+          "selfTestScore": 2
+        }
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:14:57.928Z",
+      "finishedAt": "2026-11-02T08:35:42.852Z",
+      "completionStatus": "relaxed-rerun",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 90,
+        "deterministic60": 52,
+        "checkpoints30": 28,
+        "discipline10": 10,
+        "elapsedSec": 900.18,
+        "costUsd": 0.880723,
+        "offPeakCostUsd": 0.879073,
+        "sessionCount": 5,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": null,
+        "details": {
+          "passedCount": 13,
+          "perProbe": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": false,
+            "t15": false
+          },
+          "selectedId": 6,
+          "decisionUnambiguous": true,
+          "issueUntouched": true,
+          "filesHit": 5,
+          "functionsHit": 5,
+          "rootCauseScore": 4,
+          "substantiveRejections": 6,
+          "falsifyScore": 4,
+          "choiceScore": 10,
+          "design": {
+            "modulesMentioned": 6,
+            "traceScore": 3,
+            "falsifyScore": 2,
+            "targetScore": 3,
+            "selfTestScore": 2
+          }
+        }
+      }
+    },
+    {
+      "taskId": "uh1_swelancer__offline_optimistic_reappear",
+      "groupId": "C1",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 90,
+      "deterministic60": 52,
+      "checkpoints30": 28,
+      "discipline10": 10,
+      "round1Score": 90,
+      "deltaQ": 0,
+      "costUsd": 1.546815,
+      "offPeakCostUsd": 1.458156,
+      "elapsedSec": 1552.99,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 53,
+          "failedAttempts": 0,
+          "inputTokens": 117659,
+          "cacheReadTokens": 2088192,
+          "cacheWriteTokens": 0,
+          "outputTokens": 38301,
+          "costUsd": 0.876176,
+          "offPeakCostUsd": 0.876176
+        },
+        "gpt-6.1-sol": {
+          "requests": 28,
+          "failedAttempts": 0,
+          "inputTokens": 56,
+          "cacheReadTokens": 1294416,
+          "cacheWriteTokens": 74803,
+          "outputTokens": 17676,
+          "costUsd": 0.493321,
+          "offPeakCostUsd": 0.493321
+        },
+        "deepseek-flash": {
+          "requests": 81,
+          "failedAttempts": 0,
+          "inputTokens": 57945,
+          "cacheReadTokens": 7816960,
+          "cacheWriteTokens": 0,
+          "outputTokens": 94194,
+          "costUsd": 0.177318,
+          "offPeakCostUsd": 0.088659
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 15,
+        "reportCount": 6,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv5",
+            "role": "challenger",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv6",
+            "role": "expert",
+            "round": 2,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 13,
+        "perProbe": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": false,
+          "t15": false
+        },
+        "selectedId": 6,
+        "decisionUnambiguous": true,
+        "issueUntouched": true,
+        "filesHit": 5,
+        "functionsHit": 5,
+        "rootCauseScore": 4,
+        "substantiveRejections": 6,
+        "falsifyScore": 4,
+        "choiceScore": 10,
+        "design": {
+          "modulesMentioned": 6,
+          "traceScore": 3,
+          "falsifyScore": 2,
+          "targetScore": 3,
+          "selfTestScore": 2
+        }
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:28:03.500Z",
+      "finishedAt": "2026-11-02T08:53:56.790Z",
+      "completionStatus": "relaxed-rerun",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 92,
+        "deterministic60": 52,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "elapsedSec": 900.23,
+        "costUsd": 0.458115,
+        "offPeakCostUsd": 0.389916,
+        "sessionCount": 3,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "taskName": "eval-task",
+          "journalCount": 6,
+          "reportCount": 2,
+          "dispatchedModels": [
+            {
+              "waveId": "wv1",
+              "role": "owner",
+              "round": 1,
+              "model": "deepseek-flash"
+            },
+            {
+              "waveId": "wv2",
+              "role": "challenger",
+              "round": 1,
+              "model": "glm-5.3"
+            }
+          ],
+          "hasBlockedOrEscalate": false
+        },
+        "details": {
+          "passedCount": 13,
+          "perProbe": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": false,
+            "t15": false
+          },
+          "selectedId": 6,
+          "decisionUnambiguous": true,
+          "issueUntouched": true,
+          "filesHit": 5,
+          "functionsHit": 5,
+          "rootCauseScore": 4,
+          "substantiveRejections": 7,
+          "falsifyScore": 6,
+          "choiceScore": 10,
+          "design": {
+            "modulesMentioned": 6,
+            "traceScore": 3,
+            "falsifyScore": 2,
+            "targetScore": 3,
+            "selfTestScore": 2
+          }
+        }
+      }
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "B1",
+      "kind": "free-team",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": null,
+      "deltaQ": null,
+      "costUsd": 1.907606,
+      "offPeakCostUsd": 1.907606,
+      "elapsedSec": 1976.16,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 27,
+          "failedAttempts": 0,
+          "inputTokens": 110386,
+          "cacheReadTokens": 717568,
+          "cacheWriteTokens": 0,
+          "outputTokens": 58573,
+          "costUsd": 0.59883,
+          "offPeakCostUsd": 0.59883
+        },
+        "gpt-6.1-sol": {
+          "requests": 37,
+          "failedAttempts": 0,
+          "inputTokens": 97,
+          "cacheReadTokens": 1774892,
+          "cacheWriteTokens": 141305,
+          "outputTokens": 77783,
+          "costUsd": 1.308776,
+          "offPeakCostUsd": 1.308776
+        }
+      },
+      "twrMeta": null,
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 4,
+        "contractsScore": 16,
+        "substantiveRejections": 7,
+        "falsifyScore": 14,
+        "modulesHit": 7,
+        "designDelivered": true
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:14:57.928Z",
+      "finishedAt": "2026-11-02T08:47:54.325Z",
+      "completionStatus": "relaxed-rerun",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 70,
+        "deterministic60": 60,
+        "checkpoints30": 0,
+        "discipline10": 10,
+        "elapsedSec": 900.11,
+        "costUsd": 1.001312,
+        "offPeakCostUsd": 0.964174,
+        "sessionCount": 5,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": null,
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 2,
+          "contractsScore": 8,
+          "substantiveRejections": 7,
+          "falsifyScore": 14,
+          "modulesHit": 7,
+          "designDelivered": false
+        }
+      }
+    },
+    {
+      "taskId": "uh2_swelancer__popover_backdrop_event_routing",
+      "groupId": "C1",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 2.260502,
+      "offPeakCostUsd": 2.120069,
+      "elapsedSec": 2400.05,
+      "sessionCount": 5,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 52,
+          "failedAttempts": 0,
+          "inputTokens": 422261,
+          "cacheReadTokens": 1266496,
+          "cacheWriteTokens": 0,
+          "outputTokens": 27009,
+          "costUsd": 1.039294,
+          "offPeakCostUsd": 1.039294
+        },
+        "gpt-6.1-sol": {
+          "requests": 25,
+          "failedAttempts": 0,
+          "inputTokens": 75,
+          "cacheReadTokens": 1735977,
+          "cacheWriteTokens": 125854,
+          "outputTokens": 45196,
+          "costUsd": 0.940343,
+          "offPeakCostUsd": 0.940343
+        },
+        "deepseek-flash": {
+          "requests": 54,
+          "failedAttempts": 0,
+          "inputTokens": 81942,
+          "cacheReadTokens": 5465472,
+          "cacheWriteTokens": 0,
+          "outputTokens": 186241,
+          "costUsd": 0.280865,
+          "offPeakCostUsd": 0.140432
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 15,
+        "reportCount": 6,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv4",
+            "role": "owner",
+            "round": 2,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv5",
+            "role": "challenger",
+            "round": 2,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv6",
+            "role": "expert",
+            "round": 2,
+            "model": "gpt-6.1-sol"
+          },
+          {
+            "waveId": "wv7",
+            "role": "owner",
+            "round": 3,
+            "model": "deepseek-flash"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "selectedId": 5,
+        "srcUntouched": true,
+        "matrixHits": 24,
+        "matrixCells": 24,
+        "matrixScore": 36,
+        "choiceScore": 24,
+        "contractHits": 4,
+        "contractsScore": 16,
+        "substantiveRejections": 7,
+        "falsifyScore": 14,
+        "modulesHit": 7,
+        "designDelivered": true
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:28:03.500Z",
+      "finishedAt": "2026-11-02T09:08:03.923Z",
+      "completionStatus": "truncated-at-relaxed-timeout",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 96,
+        "deterministic60": 60,
+        "checkpoints30": 26,
+        "discipline10": 10,
+        "elapsedSec": 900.15,
+        "costUsd": 0.729148,
+        "offPeakCostUsd": 0.681195,
+        "sessionCount": 4,
+        "cheatDetected": false,
+        "violations": [],
+        "twrMeta": {
+          "taskName": "eval-task",
+          "journalCount": 9,
+          "reportCount": 3,
+          "dispatchedModels": [
+            {
+              "waveId": "wv1",
+              "role": "owner",
+              "round": 1,
+              "model": "deepseek-flash"
+            },
+            {
+              "waveId": "wv2",
+              "role": "challenger",
+              "round": 1,
+              "model": "glm-5.3"
+            },
+            {
+              "waveId": "wv3",
+              "role": "expert",
+              "round": 1,
+              "model": "gpt-6.1-sol"
+            },
+            {
+              "waveId": "wv4",
+              "role": "owner",
+              "round": 2,
+              "model": "deepseek-flash"
+            }
+          ],
+          "hasBlockedOrEscalate": false
+        },
+        "details": {
+          "selectedId": 5,
+          "srcUntouched": true,
+          "matrixHits": 24,
+          "matrixCells": 24,
+          "matrixScore": 36,
+          "choiceScore": 24,
+          "contractHits": 3,
+          "contractsScore": 12,
+          "substantiveRejections": 7,
+          "falsifyScore": 14,
+          "modulesHit": 7,
+          "designDelivered": true
+        }
+      }
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "B1",
+      "kind": "free-team",
+      "cheatDetected": false,
+      "violations": [
+        {
+          "sessionId": "session-552707ff-3036-40e2-9d68-516917ceadab",
+          "turn": 1,
+          "step": 3,
+          "tool": "read",
+          "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-3KerWV/work-root/workspace/src/txengine/coordinator/__init__.py"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 9,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 15,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 18,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 22,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 48,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        },
+        {
+          "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+          "turn": 1,
+          "step": 56,
+          "tool": "glob",
+          "reason": "参数 path 越界访问工作区外路径 /tmp"
+        }
+      ],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": null,
+      "deltaQ": null,
+      "costUsd": 4.056572,
+      "offPeakCostUsd": 3.872243,
+      "elapsedSec": 2330.98,
+      "sessionCount": 6,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 77,
+          "failedAttempts": 0,
+          "inputTokens": 127391,
+          "cacheReadTokens": 3082752,
+          "cacheWriteTokens": 0,
+          "outputTokens": 57862,
+          "costUsd": 1.234456,
+          "offPeakCostUsd": 1.234456
+        },
+        "gpt-6.1-sol": {
+          "requests": 88,
+          "failedAttempts": 0,
+          "inputTokens": 176,
+          "cacheReadTokens": 7775865,
+          "cacheWriteTokens": 242124,
+          "outputTokens": 107021,
+          "costUsd": 2.453458,
+          "offPeakCostUsd": 2.453458
+        },
+        "deepseek-flash": {
+          "requests": 114,
+          "failedAttempts": 0,
+          "inputTokens": 131863,
+          "cacheReadTokens": 15093376,
+          "cacheWriteTokens": 0,
+          "outputTokens": 198783,
+          "costUsd": 0.368658,
+          "offPeakCostUsd": 0.184329
+        }
+      },
+      "twrMeta": null,
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:14:57.928Z",
+      "finishedAt": "2026-11-02T08:53:49.365Z",
+      "auditHistory": [
+        {
+          "decision": "Lead 裁决：仅存在自身 cell 路径笔误（目标不存在）与/或裸 /tmp 检测器边界误报 → 恢复真实能力分",
+          "reviewedAt": "2026-11-02T09:09:58.456Z",
+          "restoredScore": 100,
+          "originalViolations": [
+            {
+              "sessionId": "session-552707ff-3036-40e2-9d68-516917ceadab",
+              "turn": 1,
+              "step": 3,
+              "tool": "read",
+              "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-3KerWV/work-root/workspace/src/txengine/coordinator/__init__.py"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 9,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 15,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 18,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 22,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 48,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            },
+            {
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 56,
+              "tool": "glob",
+              "reason": "参数 path 越界访问工作区外路径 /tmp"
+            }
+          ],
+          "typoRecords": [
+            {
+              "type": "self-cell-path-typo-nonexistent-target",
+              "originalPath": "/private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-3KerWV/work-root/workspace/src/txengine/coordinator/__init__.py",
+              "tool": "read",
+              "sessionId": "session-552707ff-3036-40e2-9d68-516917ceadab",
+              "turn": 1,
+              "step": 3,
+              "expectedWorkspaceRoot": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-B1-3KerWV/work-root/workspace",
+              "expectedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-B1-3KerWV",
+              "observedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-3KerWV",
+              "cellDirCommonPrefixLength": 39,
+              "tmpdirSegmentObserved": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+              "tmpdirSegmentActual": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+              "targetExists": false,
+              "firstExistingAncestor": "/private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+              "dataLeakAssessment": "目标路径在文件系统中不存在（ENOENT），首条存在祖先为 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T，未读取任何其他 cell 或外部真实文件"
+            }
+          ],
+          "bareTmpRecords": [
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 9,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            },
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 15,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            },
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 18,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            },
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 22,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            },
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 48,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            },
+            {
+              "type": "bare-tmp-path-boundary-false-positive",
+              "originalPath": "/tmp",
+              "tool": "glob",
+              "sessionId": "1c89bf36-a57c-4234-947f-d9aa00ab43a1",
+              "turn": 1,
+              "step": 56,
+              "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+              "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+            }
+          ],
+          "remainingViolations": []
+        }
+      ],
+      "rawScore": 100,
+      "violationsReviewedAsFalsePositive": true,
+      "completionStatus": "relaxed-rerun",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 67,
+        "rawScore": 67,
+        "deterministic60": 57,
+        "checkpoints30": 0,
+        "discipline10": 10,
+        "elapsedSec": 900.03,
+        "costUsd": 0.697802,
+        "offPeakCostUsd": 0.660094,
+        "sessionCount": 5,
+        "cheatDetected": false,
+        "violations": [
+          {
+            "sessionId": "session-d060e6fe-b921-4f55-a464-732e72c0fa61",
+            "turn": 1,
+            "step": 3,
+            "tool": "read",
+            "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-YhxOPM/work-root/workspace/src/txengine/cache/lease_cache.py"
+          },
+          {
+            "sessionId": "1d3b7d1f-42ba-4c93-b458-19db238d433a",
+            "turn": 1,
+            "step": 8,
+            "tool": "glob",
+            "reason": "参数 path 越界访问工作区外路径 /tmp"
+          }
+        ],
+        "auditHistory": [
+          {
+            "decision": "Lead 裁决：仅存在自身 cell 路径笔误（目标不存在）与/或裸 /tmp 检测器边界误报 → 恢复真实能力分",
+            "reviewedAt": "2026-11-02T09:09:58.455Z",
+            "restoredScore": 67,
+            "originalViolations": [
+              {
+                "sessionId": "session-d060e6fe-b921-4f55-a464-732e72c0fa61",
+                "turn": 1,
+                "step": 3,
+                "tool": "read",
+                "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-YhxOPM/work-root/workspace/src/txengine/cache/lease_cache.py"
+              },
+              {
+                "sessionId": "1d3b7d1f-42ba-4c93-b458-19db238d433a",
+                "turn": 1,
+                "step": 8,
+                "tool": "glob",
+                "reason": "参数 path 越界访问工作区外路径 /tmp"
+              }
+            ],
+            "typoRecords": [
+              {
+                "type": "self-cell-path-typo-nonexistent-target",
+                "originalPath": "/private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-YhxOPM/work-root/workspace/src/txengine/cache/lease_cache.py",
+                "tool": "read",
+                "sessionId": "session-d060e6fe-b921-4f55-a464-732e72c0fa61",
+                "turn": 1,
+                "step": 3,
+                "expectedWorkspaceRoot": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-B1-YhxOPM/work-root/workspace",
+                "expectedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-B1-YhxOPM",
+                "observedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_pipeline-B1-YhxOPM",
+                "cellDirCommonPrefixLength": 39,
+                "tmpdirSegmentObserved": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+                "tmpdirSegmentActual": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+                "targetExists": false,
+                "firstExistingAncestor": "/private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+                "dataLeakAssessment": "目标路径在文件系统中不存在（ENOENT），首条存在祖先为 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T，未读取任何其他 cell 或外部真实文件"
+              }
+            ],
+            "bareTmpRecords": [
+              {
+                "type": "bare-tmp-path-boundary-false-positive",
+                "originalPath": "/tmp",
+                "tool": "glob",
+                "sessionId": "1d3b7d1f-42ba-4c93-b458-19db238d433a",
+                "turn": 1,
+                "step": 8,
+                "detectorBoundary": "evals/zstd-log.mjs#isSafeTmpScratch 仅判断 norm.startsWith('/tmp/')，未包含 norm === '/tmp'（裸 /tmp 或 /private/tmp 无尾斜杠）",
+                "assessment": "按 Lead 补充裁决与核验：裸 /tmp 白名单缺无尾斜杠分支属检测器边界误报；评测期间 /tmp 下不存在 uh3 判分资产（探针在回合结束后运行，判分脚本与真值位于仓库评测目录），未获取答案或隐藏测试"
+              }
+            ],
+            "remainingViolations": []
+          }
+        ],
+        "twrMeta": null,
+        "details": {
+          "passedCount": 19,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": true,
+            "t15": true,
+            "t16": true,
+            "t17": true,
+            "t18": true,
+            "t19": false,
+            "t20": true
+          },
+          "couplingAll": false,
+          "couplingScore": 0,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": false,
+            "lease": false,
+            "deadlock": false
+          }
+        }
+      }
+    },
+    {
+      "taskId": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "groupId": "C1",
+      "kind": "twr",
+      "cheatDetected": false,
+      "violations": [],
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "round1Score": 100,
+      "deltaQ": 0,
+      "costUsd": 0.982501,
+      "offPeakCostUsd": 0.927488,
+      "elapsedSec": 1101.25,
+      "sessionCount": 4,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 29,
+          "failedAttempts": 0,
+          "inputTokens": 163478,
+          "cacheReadTokens": 640320,
+          "cacheWriteTokens": 0,
+          "outputTokens": 26587,
+          "costUsd": 0.512336,
+          "offPeakCostUsd": 0.512336
+        },
+        "gpt-6.1-sol": {
+          "requests": 11,
+          "failedAttempts": 0,
+          "inputTokens": 22,
+          "cacheReadTokens": 362860,
+          "cacheWriteTokens": 56359,
+          "outputTokens": 18291,
+          "costUsd": 0.360138,
+          "offPeakCostUsd": 0.360138
+        },
+        "deepseek-flash": {
+          "requests": 40,
+          "failedAttempts": 0,
+          "inputTokens": 47564,
+          "cacheReadTokens": 2984064,
+          "cacheWriteTokens": 0,
+          "outputTokens": 64878,
+          "costUsd": 0.110027,
+          "offPeakCostUsd": 0.055014
+        }
+      },
+      "twrMeta": {
+        "taskName": "eval-task",
+        "journalCount": 9,
+        "reportCount": 3,
+        "dispatchedModels": [
+          {
+            "waveId": "wv1",
+            "role": "owner",
+            "round": 1,
+            "model": "deepseek-flash"
+          },
+          {
+            "waveId": "wv2",
+            "role": "challenger",
+            "round": 1,
+            "model": "glm-5.3"
+          },
+          {
+            "waveId": "wv3",
+            "role": "expert",
+            "round": 1,
+            "model": "gpt-6.1-sol"
+          }
+        ],
+        "hasBlockedOrEscalate": false
+      },
+      "details": {
+        "passedCount": 20,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true,
+          "t11": true,
+          "t12": true,
+          "t13": true,
+          "t14": true,
+          "t15": true,
+          "t16": true,
+          "t17": true,
+          "t18": true,
+          "t19": true,
+          "t20": true
+        },
+        "couplingAll": true,
+        "couplingScore": 15,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "subpackagesOk": true,
+        "design": {
+          "layered": true,
+          "lease": true,
+          "deadlock": true
+        }
+      },
+      "attempt": 1,
+      "startedAt": "2026-11-02T08:28:03.500Z",
+      "finishedAt": "2026-11-02T08:46:25.321Z",
+      "completionStatus": "relaxed-rerun",
+      "timeoutMsUsed": 2400000,
+      "previous900sObservation": {
+        "score": 100,
+        "rawScore": 100,
+        "deterministic60": 60,
+        "checkpoints30": 30,
+        "discipline10": 10,
+        "elapsedSec": 900.06,
+        "costUsd": 0.460886,
+        "offPeakCostUsd": 0.384692,
+        "sessionCount": 3,
+        "cheatDetected": false,
+        "violations": [
+          {
+            "sessionId": "8959273f-3e64-449d-9f7e-cf4d7b3ce1bf",
+            "turn": 1,
+            "step": 3,
+            "tool": "read",
+            "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs/work-root/workspace/src/txengine/coordinator/pipeline.py"
+          }
+        ],
+        "auditHistory": [
+          {
+            "decision": "Lead 裁决：仅存在自身 cell 路径笔误（目标不存在）与/或裸 /tmp 检测器边界误报 → 恢复真实能力分",
+            "reviewedAt": "2026-11-02T09:09:58.456Z",
+            "restoredScore": 100,
+            "originalViolations": [
+              {
+                "sessionId": "8959273f-3e64-449d-9f7e-cf4d7b3ce1bf",
+                "turn": 1,
+                "step": 3,
+                "tool": "read",
+                "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs/work-root/workspace/src/txengine/coordinator/pipeline.py"
+              }
+            ],
+            "typoRecords": [
+              {
+                "type": "self-cell-path-typo-nonexistent-target",
+                "originalPath": "/private/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs/work-root/workspace/src/txengine/coordinator/pipeline.py",
+                "tool": "read",
+                "sessionId": "8959273f-3e64-449d-9f7e-cf4d7b3ce1bf",
+                "turn": 1,
+                "step": 3,
+                "expectedWorkspaceRoot": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs/work-root/workspace",
+                "expectedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs",
+                "observedCellDir": "twr-cell-uh3_cooperbench__three_way_tx_cache_pipeline-C1-gvBdNs",
+                "cellDirCommonPrefixLength": 63,
+                "tmpdirSegmentObserved": "/var/folders/yw/sw4vsv4f11_wyzz3lrp8dc0000gq/T",
+                "tmpdirSegmentActual": "/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T",
+                "targetExists": false,
+                "firstExistingAncestor": "/private/var/folders/yw",
+                "dataLeakAssessment": "目标路径在文件系统中不存在（ENOENT），首条存在祖先为 /private/var/folders/yw，未读取任何其他 cell 或外部真实文件"
+              }
+            ],
+            "bareTmpRecords": [],
+            "remainingViolations": []
+          }
+        ],
+        "twrMeta": {
+          "taskName": "eval-task",
+          "journalCount": 5,
+          "reportCount": 1,
+          "dispatchedModels": [
+            {
+              "waveId": "wv1",
+              "role": "owner",
+              "round": 1,
+              "model": "deepseek-flash"
+            },
+            {
+              "waveId": "wv2",
+              "role": "challenger",
+              "round": 1,
+              "model": "glm-5.3"
+            }
+          ],
+          "hasBlockedOrEscalate": false
+        },
+        "details": {
+          "passedCount": 20,
+          "perTest": {
+            "t1": true,
+            "t2": true,
+            "t3": true,
+            "t4": true,
+            "t5": true,
+            "t6": true,
+            "t7": true,
+            "t8": true,
+            "t9": true,
+            "t10": true,
+            "t11": true,
+            "t12": true,
+            "t13": true,
+            "t14": true,
+            "t15": true,
+            "t16": true,
+            "t17": true,
+            "t18": true,
+            "t19": true,
+            "t20": true
+          },
+          "couplingAll": true,
+          "couplingScore": 15,
+          "syntaxOk": true,
+          "conflictFree": true,
+          "subpackagesOk": true,
+          "design": {
+            "layered": true,
+            "lease": true,
+            "deadlock": true
+          }
+        }
+      }
+    }
+  ]
+}

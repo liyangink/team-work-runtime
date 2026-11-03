@@ -1,0 +1,1026 @@
+[
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "A2",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.903815,
+      "offPeakCostUsd": 0.903815,
+      "elapsedSec": 900.01,
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 6,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": true,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 0.903815,
+      "offPeakCostUsd": 0.903815,
+      "elapsedSec": 900.15,
+      "byModel": {
+        "glm-5.3": {
+          "requests": 45,
+          "failedAttempts": 0,
+          "inputTokens": 145239,
+          "cacheReadTokens": 1795200,
+          "cacheWriteTokens": 0,
+          "outputTokens": 53120,
+          "costUsd": 0.903815,
+          "offPeakCostUsd": 0.903815
+        }
+      },
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 6,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": true,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    }
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "A1",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 95,
+    "rawPass3Score": 95,
+    "pass1": {
+      "score": 95,
+      "deterministic60": 60,
+      "checkpoints30": 25,
+      "discipline10": 10,
+      "costUsd": 0.139243,
+      "offPeakCostUsd": 0.069621,
+      "elapsedSec": 571.06,
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 9,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": false,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "pass3": {
+      "score": 95,
+      "deterministic60": 60,
+      "checkpoints30": 25,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 0.287848,
+      "offPeakCostUsd": 0.143924,
+      "elapsedSec": 1084.95,
+      "byModel": {
+        "deepseek-flash": {
+          "requests": 85,
+          "failedAttempts": 0,
+          "inputTokens": 44346,
+          "cacheReadTokens": 9127936,
+          "cacheWriteTokens": 0,
+          "outputTokens": 183147,
+          "costUsd": 0.287848,
+          "offPeakCostUsd": 0.143924
+        }
+      },
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 9,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": false,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "startedAt": "2026-10-30T11:09:01.878Z",
+    "finishedAt": "2026-10-30T11:27:07.178Z",
+    "auditHistory": [
+      {
+        "event": "replaced-by-rerun",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧结果受旧版反作弊误判或首轮 900s 超时未完（无效答卷）影响；已用加固后 runGovernanceMatrixCell（并发度 3）重跑替换。",
+        "previousCheatDetected": true,
+        "previousScore": {
+          "pass1": 0,
+          "pass3": 0,
+          "deltaQ": 0
+        },
+        "violations": [
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 3,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../.."
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../overlay.patch.yml"
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../dsh-home"
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 4,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../dsh-home"
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "https://"
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 12,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          },
+          {
+            "sessionId": "session-fe78197e-8852-4b2c-a0c4-ffba867f52f4",
+            "turn": 1,
+            "step": 36,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /Users/liyang"
+          }
+        ]
+      },
+      {
+        "event": "cleared-after-rerun-static-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "重跑结果仍被加固后静态正则命中，但逐条核对实际会话参数确认无真实越界/泄漏，属于自写单测字面量或机制性无效命中；按评测原则保留真实能力分。",
+        "evidence": "唯一违规为 bash 参数命中禁令模式 /git\\s+log\\s+--all/；物化工作区由 materializeGovernanceWorkspace 重新 git init 为单一 baseline commit，git log --all 物理上不可能读到任何答案历史，属机制性无效命中，产物 10/10 隐藏探针通过。",
+        "restoredScore": {
+          "pass1": 95,
+          "pass3": 95,
+          "deltaQ": 0
+        },
+        "previousScore": {
+          "pass1": 0,
+          "pass3": 0,
+          "deltaQ": 0
+        },
+        "violations": [
+          {
+            "sessionId": "session-6b7e48aa-b13d-42de-89a3-7767b44a729c",
+            "turn": 1,
+            "step": 14,
+            "tool": "bash",
+            "reason": "命中禁令模式 /git\\s+log\\s+--all/"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "A3",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 100,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "costUsd": 0.486662,
+      "offPeakCostUsd": 0.486662,
+      "elapsedSec": 900.01,
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 11,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": true,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 0,
+      "costUsd": 0.486662,
+      "offPeakCostUsd": 0.486662,
+      "elapsedSec": 900.33,
+      "byModel": {
+        "gpt-6.1-sol": {
+          "requests": 11,
+          "failedAttempts": 0,
+          "inputTokens": 22,
+          "cacheReadTokens": 160380,
+          "cacheWriteTokens": 40108,
+          "outputTokens": 37031,
+          "costUsd": 0.486662,
+          "offPeakCostUsd": 0.486662
+        }
+      },
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 11,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": true,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "auditHistory": [
+      {
+        "event": "cleared-legacy-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧版反作弊静态正则误报：违规片段来自本地单测字符串字面量（../escape*、../outside*、../x、*.whl、markdown/HTML 图片 URL、nc 字面量）、评测自身 cell 临时目录前缀（/var/folders/.../T/twr-cell-*）或 python/venv 本地环境检查；原判分明细（deterministic60 / checkpoints30 / discipline10）完整保留，本轮回填真实能力分、不重新判分；加固后规则不再把该类片段视为真实越界，按评测原则恢复真实能力分。",
+        "restoredScore": {
+          "pass1": 100,
+          "pass3": 100,
+          "deltaQ": 0
+        },
+        "previousScore": {
+          "pass1": 0,
+          "pass3": 0,
+          "deltaQ": 0
+        },
+        "previousCheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "session-8584339e-4f16-41be-a3a2-14fda3c81b72",
+            "turn": 1,
+            "step": 4,
+            "tool": "glob",
+            "reason": "参数 path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-A3-hK97NJ"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "B1",
+    "kind": "free-team",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 80,
+    "deterministic60": 60,
+    "checkpoints30": 10,
+    "discipline10": 10,
+    "round1Score": null,
+    "deltaQ": null,
+    "costUsd": 0.74538,
+    "offPeakCostUsd": 0.669015,
+    "elapsedSec": 900.01,
+    "sessionCount": 3,
+    "byModel": {
+      "gpt-6.1-sol": {
+        "requests": 16,
+        "failedAttempts": 0,
+        "inputTokens": 32,
+        "cacheReadTokens": 356657,
+        "cacheWriteTokens": 48733,
+        "outputTokens": 32486,
+        "costUsd": 0.482422,
+        "offPeakCostUsd": 0.482422
+      },
+      "deepseek-flash": {
+        "requests": 19,
+        "failedAttempts": 0,
+        "inputTokens": 44485,
+        "cacheReadTokens": 1201536,
+        "cacheWriteTokens": 0,
+        "outputTokens": 110145,
+        "costUsd": 0.152729,
+        "offPeakCostUsd": 0.076364
+      },
+      "glm-5.3": {
+        "requests": 9,
+        "failedAttempts": 0,
+        "inputTokens": 35588,
+        "cacheReadTokens": 62912,
+        "cacheWriteTokens": 0,
+        "outputTokens": 10011,
+        "costUsd": 0.110229,
+        "offPeakCostUsd": 0.110229
+      }
+    },
+    "twrMeta": null,
+    "details": {
+      "passedCount": 10,
+      "perTest": {
+        "t1": true,
+        "t2": true,
+        "t3": true,
+        "t4": true,
+        "t5": true,
+        "t6": true,
+        "t7": true,
+        "t8": true,
+        "t9": true,
+        "t10": true
+      },
+      "extensionAll": true,
+      "pyFileCount": 6,
+      "modulesSplit": true,
+      "syntaxOk": true,
+      "conflictFree": true,
+      "designTree": false,
+      "designClassDiagram": false,
+      "designSequenceDiagram": false,
+      "designConstraints": false,
+      "designDag": false
+    },
+    "auditHistory": [
+      {
+        "event": "cleared-legacy-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧版反作弊静态正则误报：违规片段来自本地单测字符串字面量（../escape*、../outside*、../x、*.whl、markdown/HTML 图片 URL、nc 字面量）、评测自身 cell 临时目录前缀（/var/folders/.../T/twr-cell-*）或 python/venv 本地环境检查；原判分明细（deterministic60 / checkpoints30 / discipline10）完整保留，本轮回填真实能力分、不重新判分；加固后规则不再把该类片段视为真实越界，按评测原则恢复真实能力分。",
+        "restoredScore": {
+          "score": 80,
+          "deltaQ": null
+        },
+        "previousScore": {
+          "score": 0,
+          "deltaQ": null
+        },
+        "previousCheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "c3aea3aa-ac36-429d-a081-e98d3061b75d",
+            "turn": 1,
+            "step": 11,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "A4",
+    "kind": "single",
+    "cheatDetected": false,
+    "violations": [],
+    "rawPass1Score": 10,
+    "rawPass3Score": 100,
+    "pass1": {
+      "score": 10,
+      "deterministic60": 0,
+      "checkpoints30": 0,
+      "discipline10": 10,
+      "costUsd": 1.776631,
+      "offPeakCostUsd": 1.776631,
+      "elapsedSec": 900.02,
+      "details": {
+        "passedCount": 0,
+        "perTest": {
+          "t1": false,
+          "t2": false,
+          "t3": false,
+          "t4": false,
+          "t5": false,
+          "t6": false,
+          "t7": false,
+          "t8": false,
+          "t9": false,
+          "t10": false
+        },
+        "extensionAll": false,
+        "pyFileCount": 7,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": false,
+        "designClassDiagram": false,
+        "designSequenceDiagram": false,
+        "designConstraints": false,
+        "designDag": false
+      }
+    },
+    "pass3": {
+      "score": 100,
+      "deterministic60": 60,
+      "checkpoints30": 30,
+      "discipline10": 10,
+      "deltaQ": 90,
+      "costUsd": 6.156401,
+      "offPeakCostUsd": 6.156401,
+      "elapsedSec": 2195.7,
+      "byModel": {
+        "claude-opus-5-5": {
+          "requests": 37,
+          "failedAttempts": 0,
+          "inputTokens": 80,
+          "cacheReadTokens": 765681,
+          "cacheWriteTokens": 484565,
+          "outputTokens": 179006,
+          "costUsd": 6.156401,
+          "offPeakCostUsd": 6.156401
+        }
+      },
+      "details": {
+        "passedCount": 10,
+        "perTest": {
+          "t1": true,
+          "t2": true,
+          "t3": true,
+          "t4": true,
+          "t5": true,
+          "t6": true,
+          "t7": true,
+          "t8": true,
+          "t9": true,
+          "t10": true
+        },
+        "extensionAll": true,
+        "pyFileCount": 10,
+        "modulesSplit": true,
+        "syntaxOk": true,
+        "conflictFree": true,
+        "designTree": true,
+        "designClassDiagram": true,
+        "designSequenceDiagram": true,
+        "designConstraints": true,
+        "designDag": true
+      }
+    },
+    "startedAt": "2026-10-30T11:09:01.878Z",
+    "finishedAt": "2026-10-30T11:45:37.878Z",
+    "auditHistory": [
+      {
+        "event": "replaced-by-rerun",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧结果受旧版反作弊误判或首轮 900s 超时未完（无效答卷）影响；已用加固后 runGovernanceMatrixCell（并发度 3）重跑替换。",
+        "previousCheatDetected": false,
+        "previousScore": {
+          "pass1": 10,
+          "pass3": 10,
+          "deltaQ": 0
+        },
+        "violations": []
+      },
+      {
+        "event": "cleared-after-rerun-static-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "重跑结果仍被加固后静态正则命中，但逐条核对实际会话参数确认无真实越界/泄漏，属于自写单测字面量或机制性无效命中；按评测原则保留真实能力分。",
+        "evidence": "3 条违规均为静态误报：turn2/step16 与 turn3/step6 的 http:// 位于自写单测字面量（markdown 链接 [text](http://x.com) 与链接图片 [![badge](b.svg)](http://x)）；turn3/step8 的 ../DESIGN.md 位于 cd src 之后的 python 自检命令中，实际解析到工作区内 DESIGN.md。产物 10/10 隐藏探针通过，pass3 能力分 100。",
+        "restoredScore": {
+          "pass1": 10,
+          "pass3": 100,
+          "deltaQ": 90
+        },
+        "previousScore": {
+          "pass1": 0,
+          "pass3": 0,
+          "deltaQ": 0
+        },
+        "violations": [
+          {
+            "sessionId": "session-1ae0ac33-c985-4037-beb2-d0ea46fd10ef",
+            "turn": 2,
+            "step": 16,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          },
+          {
+            "sessionId": "session-1ae0ac33-c985-4037-beb2-d0ea46fd10ef",
+            "turn": 3,
+            "step": 6,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          },
+          {
+            "sessionId": "session-1ae0ac33-c985-4037-beb2-d0ea46fd10ef",
+            "turn": 3,
+            "step": 8,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 ../DESIGN.md"
+          }
+        ]
+      },
+      {
+        "event": "rerun-residual-note",
+        "at": "2026-10-30T12:10:03.110Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "pass1 仍触及 runGovernanceMatrixCell 的 900s 逐回合上限（claude-opus-5-5 较慢，turn1 在 900.02s 被终止且 0 项测试通过，仅得纪律分 10）；turn2/turn3 已续跑完成交付，pass3 终版 10/10 隐藏探针通过，属已知 runner 回合上限语义，不影响终版答卷有效性。"
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "C1",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.306817,
+    "offPeakCostUsd": 0.197277,
+    "elapsedSec": 900.01,
+    "sessionCount": 3,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 11,
+        "failedAttempts": 0,
+        "inputTokens": 38299,
+        "cacheReadTokens": 114944,
+        "cacheWriteTokens": 0,
+        "outputTokens": 962,
+        "costUsd": 0.087737,
+        "offPeakCostUsd": 0.087737
+      },
+      "deepseek-flash": {
+        "requests": 55,
+        "failedAttempts": 0,
+        "inputTokens": 38889,
+        "cacheReadTokens": 6293120,
+        "cacheWriteTokens": 0,
+        "outputTokens": 141379,
+        "costUsd": 0.21908,
+        "offPeakCostUsd": 0.10954
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 4,
+      "reportCount": 1,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "deepseek-flash"
+        },
+        {
+          "waveId": "wv2",
+          "role": "challenger",
+          "round": 1,
+          "model": "glm-5.3"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "passedCount": 10,
+      "perTest": {
+        "t1": true,
+        "t2": true,
+        "t3": true,
+        "t4": true,
+        "t5": true,
+        "t6": true,
+        "t7": true,
+        "t8": true,
+        "t9": true,
+        "t10": true
+      },
+      "extensionAll": true,
+      "pyFileCount": 8,
+      "modulesSplit": true,
+      "syntaxOk": true,
+      "conflictFree": true,
+      "designTree": true,
+      "designClassDiagram": true,
+      "designSequenceDiagram": true,
+      "designConstraints": true,
+      "designDag": true
+    },
+    "auditHistory": [
+      {
+        "event": "cleared-legacy-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧版反作弊静态正则误报：违规片段来自本地单测字符串字面量（../escape*、../outside*、../x、*.whl、markdown/HTML 图片 URL、nc 字面量）、评测自身 cell 临时目录前缀（/var/folders/.../T/twr-cell-*）或 python/venv 本地环境检查；原判分明细（deterministic60 / checkpoints30 / discipline10）完整保留，本轮回填真实能力分、不重新判分；加固后规则不再把该类片段视为真实越界，按评测原则恢复真实能力分。",
+        "restoredScore": {
+          "score": 100,
+          "deltaQ": 0
+        },
+        "previousScore": {
+          "score": 0,
+          "deltaQ": -100
+        },
+        "previousCheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 6,
+            "tool": "write",
+            "reason": "参数 file_path 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1H/workspace/src/readpulse/model.py"
+          },
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 7,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T"
+          },
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 7,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1lrp8dc0000gq"
+          },
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 8,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1lrp8dc0000gq"
+          },
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 8,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1lrp8dc0000gq"
+          },
+          {
+            "sessionId": "694ea1c1-d3d2-4efa-a59d-26d6b4b88470",
+            "turn": 1,
+            "step": 28,
+            "tool": "bash",
+            "reason": "command 越界访问工作区外路径 /private/var/folders/yw/sw4vsvwn4f11_wyzz3lrp8dc0000gq/T/twr-cell-devbench__multiformat_reading_estimator-C1-9Yhe1H/dsh-home/profiles/eval-headless/node_modules"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "C2",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.736398,
+    "offPeakCostUsd": 0.736398,
+    "elapsedSec": 900.01,
+    "sessionCount": 2,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 28,
+        "failedAttempts": 0,
+        "inputTokens": 170997,
+        "cacheReadTokens": 973504,
+        "cacheWriteTokens": 0,
+        "outputTokens": 55430,
+        "costUsd": 0.736398,
+        "offPeakCostUsd": 0.736398
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 3,
+      "reportCount": 1,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "glm-5.3"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "passedCount": 10,
+      "perTest": {
+        "t1": true,
+        "t2": true,
+        "t3": true,
+        "t4": true,
+        "t5": true,
+        "t6": true,
+        "t7": true,
+        "t8": true,
+        "t9": true,
+        "t10": true
+      },
+      "extensionAll": true,
+      "pyFileCount": 6,
+      "modulesSplit": true,
+      "syntaxOk": true,
+      "conflictFree": true,
+      "designTree": true,
+      "designClassDiagram": true,
+      "designSequenceDiagram": true,
+      "designConstraints": true,
+      "designDag": true
+    },
+    "auditHistory": [
+      {
+        "event": "cleared-legacy-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧版反作弊静态正则误报：违规片段来自本地单测字符串字面量（../escape*、../outside*、../x、*.whl、markdown/HTML 图片 URL、nc 字面量）、评测自身 cell 临时目录前缀（/var/folders/.../T/twr-cell-*）或 python/venv 本地环境检查；原判分明细（deterministic60 / checkpoints30 / discipline10）完整保留，本轮回填真实能力分、不重新判分；加固后规则不再把该类片段视为真实越界，按评测原则恢复真实能力分。",
+        "restoredScore": {
+          "score": 100,
+          "deltaQ": 0
+        },
+        "previousScore": {
+          "score": 0,
+          "deltaQ": -100
+        },
+        "previousCheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "a806bf2f-33f2-4b0a-bf0a-913ab5939271",
+            "turn": 1,
+            "step": 9,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          },
+          {
+            "sessionId": "a806bf2f-33f2-4b0a-bf0a-913ab5939271",
+            "turn": 1,
+            "step": 10,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          },
+          {
+            "sessionId": "a806bf2f-33f2-4b0a-bf0a-913ab5939271",
+            "turn": 1,
+            "step": 13,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "http://"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "taskId": "devbench__multiformat_reading_estimator",
+    "groupId": "C3",
+    "kind": "twr",
+    "cheatDetected": false,
+    "violations": [],
+    "score": 100,
+    "deterministic60": 60,
+    "checkpoints30": 30,
+    "discipline10": 10,
+    "round1Score": 100,
+    "deltaQ": 0,
+    "costUsd": 0.473893,
+    "offPeakCostUsd": 0.351356,
+    "elapsedSec": 900.05,
+    "sessionCount": 4,
+    "byModel": {
+      "glm-5.3": {
+        "requests": 18,
+        "failedAttempts": 0,
+        "inputTokens": 67378,
+        "cacheReadTokens": 297280,
+        "cacheWriteTokens": 0,
+        "outputTokens": 12999,
+        "costUsd": 0.228818,
+        "offPeakCostUsd": 0.228818
+      },
+      "deepseek-flash": {
+        "requests": 85,
+        "failedAttempts": 0,
+        "inputTokens": 77598,
+        "cacheReadTokens": 7661824,
+        "cacheWriteTokens": 0,
+        "outputTokens": 146521,
+        "costUsd": 0.245075,
+        "offPeakCostUsd": 0.122538
+      }
+    },
+    "twrMeta": {
+      "taskName": "eval-task",
+      "journalCount": 5,
+      "reportCount": 2,
+      "dispatchedModels": [
+        {
+          "waveId": "wv1",
+          "role": "owner",
+          "round": 1,
+          "model": "deepseek-flash"
+        },
+        {
+          "waveId": "wv2",
+          "role": "challenger",
+          "round": 1,
+          "model": "glm-5.3"
+        }
+      ],
+      "hasBlockedOrEscalate": false
+    },
+    "details": {
+      "passedCount": 10,
+      "perTest": {
+        "t1": true,
+        "t2": true,
+        "t3": true,
+        "t4": true,
+        "t5": true,
+        "t6": true,
+        "t7": true,
+        "t8": true,
+        "t9": true,
+        "t10": true
+      },
+      "extensionAll": true,
+      "pyFileCount": 8,
+      "modulesSplit": true,
+      "syntaxOk": true,
+      "conflictFree": true,
+      "designTree": true,
+      "designClassDiagram": true,
+      "designSequenceDiagram": true,
+      "designConstraints": true,
+      "designDag": true
+    },
+    "auditHistory": [
+      {
+        "event": "cleared-legacy-false-positive",
+        "at": "2026-10-30T12:09:22.664Z",
+        "by": "hard-eval-remediation/rerun-b",
+        "reason": "旧版反作弊静态正则误报：违规片段来自本地单测字符串字面量（../escape*、../outside*、../x、*.whl、markdown/HTML 图片 URL、nc 字面量）、评测自身 cell 临时目录前缀（/var/folders/.../T/twr-cell-*）或 python/venv 本地环境检查；原判分明细（deterministic60 / checkpoints30 / discipline10）完整保留，本轮回填真实能力分、不重新判分；加固后规则不再把该类片段视为真实越界，按评测原则恢复真实能力分。",
+        "restoredScore": {
+          "score": 100,
+          "deltaQ": 0
+        },
+        "previousScore": {
+          "score": 0,
+          "deltaQ": -100
+        },
+        "previousCheatDetected": true,
+        "violations": [
+          {
+            "sessionId": "69118b4f-6f92-4f90-a465-792224824eeb",
+            "turn": 1,
+            "step": 17,
+            "tool": "bash",
+            "reason": "network-access-attempt",
+            "target": "nc"
+          },
+          {
+            "sessionId": "69118b4f-6f92-4f90-a465-792224824eeb",
+            "turn": 1,
+            "step": 33,
+            "tool": "bash",
+            "reason": "command 越界访问用户主目录路径 ~/"
+          }
+        ]
+      }
+    ]
+  }
+]

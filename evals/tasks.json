@@ -1,0 +1,488 @@
+{
+  "schemaVersion": "1.0",
+  "description": "10 道外部公开权威基准原题（主榜）+ 5 道高难度公开基准题（SWE-Lancer-Diamond 3 道 + DevBench 2 道，均为 hard-ceiling 层级）+ 3 道零注释超难题（SWE-Lancer-Diamond 2 道 + CooperBench 1 道，ultra-hard 层级）+ 2 道 TWR 治理纪律专项题（附加榜），共 20 题",
+  "models": {
+    "junior": {
+      "model": "deepseek-flash",
+      "effort": "high"
+    },
+    "senior": {
+      "model": "glm-5.3",
+      "effort": "high"
+    },
+    "expert": {
+      "model": "gpt-6.1-sol",
+      "effort": "max"
+    },
+    "ceiling": {
+      "model": "claude-opus-5-5",
+      "effort": "high"
+    }
+  },
+  "groups": [
+    {
+      "id": "A1",
+      "label": "Single-J (deepseek-flash)",
+      "kind": "single",
+      "tier": "junior",
+      "passes": [
+        1,
+        3
+      ]
+    },
+    {
+      "id": "A2",
+      "label": "Single-S (glm-5.3)",
+      "kind": "single",
+      "tier": "senior",
+      "passes": [
+        1,
+        3
+      ]
+    },
+    {
+      "id": "A3",
+      "label": "Single-E (gpt-6.1-sol)",
+      "kind": "single",
+      "tier": "expert",
+      "passes": [
+        1,
+        3
+      ]
+    },
+    {
+      "id": "A4",
+      "label": "Single-Opus-5.5 (claude-opus-5-5)",
+      "kind": "single",
+      "tier": "ceiling",
+      "passes": [
+        1,
+        3
+      ]
+    },
+    {
+      "id": "B1",
+      "label": "Free-Team (J+S+E)",
+      "kind": "free-team",
+      "leadTier": "senior",
+      "pool": [
+        "junior",
+        "senior",
+        "expert"
+      ]
+    },
+    {
+      "id": "C1",
+      "label": "TWR (J+S+E)",
+      "kind": "twr",
+      "leadTier": "senior",
+      "ownerTier": "junior",
+      "challengerTier": "senior",
+      "expertTier": "expert",
+      "core": true
+    },
+    {
+      "id": "C2",
+      "label": "TWR (S+S+E)",
+      "kind": "twr",
+      "leadTier": "senior",
+      "ownerTier": "senior",
+      "challengerTier": "senior",
+      "expertTier": "expert",
+      "core": true
+    },
+    {
+      "id": "C3",
+      "label": "TWR (J+S, NoExpert)",
+      "kind": "twr",
+      "leadTier": "senior",
+      "ownerTier": "junior",
+      "challengerTier": "senior",
+      "expertTier": null,
+      "core": false
+    }
+  ],
+  "tasks": [
+    {
+      "id": "anuraghazra__github-readme-stats-58",
+      "board": "main",
+      "tier": "baseline",
+      "funnelTier": 1,
+      "benchmark": "Multi-SWE-bench",
+      "datasetUrl": "https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench/blob/main/js/anuraghazra__github-readme-stats_dataset.jsonl",
+      "repo": "anuraghazra/github-readme-stats",
+      "prNumber": 58,
+      "baseCommit": "2efb399f33d8f3dca7eb156404598384f419cb8b",
+      "entryStage": "implementation",
+      "language": "javascript",
+      "summary": "跨 6 个文件实现多 GitHub PAT 故障转移递归重试器（src/retryer.js）与耗尽报错处理",
+      "f2pCount": 3,
+      "p2pCount": 35,
+      "fixtureDir": "evals/fixtures/anuraghazra__github-readme-stats-58"
+    },
+    {
+      "id": "axios__axios-5919",
+      "board": "main",
+      "tier": "baseline",
+      "funnelTier": 1,
+      "benchmark": "Multi-SWE-bench",
+      "datasetUrl": "https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench/blob/main/js/axios__axios_dataset.jsonl",
+      "repo": "axios/axios",
+      "prNumber": 5919,
+      "baseCommit": "bc9af51b1886d1b3529617702f2a21a6c0ed5d92",
+      "entryStage": "implementation",
+      "language": "javascript",
+      "summary": "重构 lib/adapters/adapters.js 与 lib/defaults/index.js 的多环境适配器加载与错误原因聚合链",
+      "f2pCount": 1,
+      "p2pCount": 78,
+      "fixtureDir": "evals/fixtures/axios__axios-5919"
+    },
+    {
+      "id": "axios__axios-5085",
+      "board": "main",
+      "tier": "baseline",
+      "funnelTier": 2,
+      "benchmark": "Multi-SWE-bench",
+      "datasetUrl": "https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-bench/blob/main/js/axios__axios_dataset.jsonl",
+      "repo": "axios/axios",
+      "prNumber": 5085,
+      "baseCommit": "85740c3e7a1fa48346dfcbd4497f463ccb1c1b05",
+      "entryStage": "implementation",
+      "language": "javascript",
+      "summary": "修复 AxiosHeaders 在拦截器中处理 Set-Cookie 等数组头部值的丢失问题并同步 index.d.ts 类型定义",
+      "f2pCount": 1,
+      "p2pCount": 55,
+      "fixtureDir": "evals/fixtures/axios__axios-5085"
+    },
+    {
+      "id": "django__django-18803",
+      "board": "main",
+      "tier": "baseline",
+      "funnelTier": 1,
+      "benchmark": "SWR-Bench",
+      "datasetUrl": "https://github.com/ZZR0/SWRench/blob/main/data/swr_datasets_d5c5.jsonl",
+      "repo": "django/django",
+      "prNumber": 18803,
+      "baseCommit": "b9aa3239ab1328c915684d89b87a49459cabd30b",
+      "entryStage": "code-review",
+      "language": "python",
+      "changeIntroduced": true,
+      "groundTruthCategories": [
+        "F.1 Interface",
+        "F.6 Larger Defects",
+        "E.3.2 Solution Approach"
+      ],
+      "summary": "审查 Admin Widget.use_fieldset PR：识别非包装组件误加属性（F.1）、漏改渲染模板（F.6）与未补充测试（E.3.2）",
+      "fixtureDir": "evals/fixtures/django__django-18803"
+    },
+    {
+      "id": "matplotlib__matplotlib-4892",
+      "board": "main",
+      "tier": "baseline",
+      "funnelTier": 1,
+      "benchmark": "SWR-Bench",
+      "datasetUrl": "https://github.com/ZZR0/SWRench/blob/main/data/swr_datasets_d5c5.jsonl",
+      "repo": "matplotlib/matplotlib",
+      "prNumber": 4892,
+      "baseCommit": "9db5fb5e29ff94a86e2da1effb843f27b25f165f",
+      "entryStage": "code-review",
+      "language": "python",
+      "changeIntroduced": true,
+      "groundTruthCategories": [
+        "F.2 Logic",
+        "F.3 Resource"
+      ],
+      "summary": "审查 nbagg 单次定时器修复 PR：识别定时器未停止导致无限循环（F.2）与停止后未置空 self._timer 句柄（F.3）",
+      "fixtureDir": "evals/fixtures/matplotlib__matplotlib-4892"
+    },
+    {
+      "id": "sympy__sympy-7614",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "funnelTier": 2,
+      "benchmark": "SWR-Bench",
+      "datasetUrl": "https://github.com/ZZR0/SWRench/blob/main/data/swr_datasets_d5c5.jsonl",
+      "repo": "sympy/sympy",
+      "prNumber": 7614,
+      "baseCommit": "0add9445c2bb04a90f44b6b8e27598d10dffe0f9",
+      "entryStage": "code-review",
+      "language": "python",
+      "changeIntroduced": true,
+      "groundTruthCategories": [
+        "F.2 Logic",
+        "F.4 Check"
+      ],
+      "summary": "审查 Ellipse.evolute 渐屈线方程 PR：识别公式漏减椭圆中心坐标偏移（F.2）与未校验旋转椭圆（F.4）",
+      "fixtureDir": "evals/fixtures/sympy__sympy-7614"
+    },
+    {
+      "id": "astropy__astropy-3824",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "funnelTier": 1,
+      "benchmark": "SWR-Bench",
+      "datasetUrl": "https://github.com/ZZR0/SWRench/blob/main/data/swr_datasets_d5c5.jsonl",
+      "repo": "astropy/astropy",
+      "prNumber": 3824,
+      "baseCommit": "0201950b25fa600b5a045cff50d77ff3c71bebb4",
+      "entryStage": "code-review",
+      "language": "python",
+      "changeIntroduced": false,
+      "groundTruthCategories": [],
+      "summary": "Clean PR 反向假阳性压测：审查坐标切片表示保留修复 PR（无真实缺陷），检验是否虚构阻塞问题乱判 rework",
+      "fixtureDir": "evals/fixtures/astropy__astropy-3824"
+    },
+    {
+      "id": "react_hook_form_task__task153",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "funnelTier": 1,
+      "benchmark": "CooperBench",
+      "datasetUrl": "https://huggingface.co/datasets/CooperBench/cooperbench-dataset/tree/main/react_hook_form_task/task153",
+      "repo": "react-hook-form/react-hook-form",
+      "taskId": 153,
+      "features": [
+        2,
+        6
+      ],
+      "baseCommit": "cec3267e12aaee01b6a17b657f9297021defdc50",
+      "entryStage": "implementation",
+      "language": "typescript",
+      "summary": "协同实现 handleSubmit 的 onFinally(formState) 回调（Feature 2）与泛型 context 透传（Feature 6）",
+      "fixtureDir": "evals/fixtures/react_hook_form_task__task153"
+    },
+    {
+      "id": "pallets_click_task__task2800",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "funnelTier": 2,
+      "benchmark": "CooperBench",
+      "datasetUrl": "https://huggingface.co/datasets/CooperBench/cooperbench-dataset/tree/main/pallets_click_task/task2800",
+      "repo": "pallets/click",
+      "taskId": 2800,
+      "features": [
+        1,
+        4
+      ],
+      "baseCommit": "d8763b93021c416549b5f8b4b5497234619410db",
+      "entryStage": "implementation",
+      "language": "python",
+      "summary": "协同实现 Shell 补全文件上下文关闭防泄漏（Feature 1）与 Context.close() 的 cleanup_timeout 超时控制（Feature 4）",
+      "fixtureDir": "evals/fixtures/pallets_click_task__task2800"
+    },
+    {
+      "id": "pallets_jinja_task__task1621",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "funnelTier": 2,
+      "benchmark": "CooperBench",
+      "datasetUrl": "https://huggingface.co/datasets/CooperBench/cooperbench-dataset/tree/main/pallets_jinja_task/task1621",
+      "repo": "pallets/jinja",
+      "taskId": 1621,
+      "features": [
+        1,
+        6,
+        10
+      ],
+      "baseCommit": "a2920752fd111c2d52c88eb57487667b3cf0ea7b",
+      "entryStage": "implementation",
+      "language": "python",
+      "summary": "3 特性并行协同：实现模板加载器 fallback_searchpath（Feature 1）、path_transform（Feature 6）与路径别名 aliases（Feature 10）",
+      "fixtureDir": "evals/fixtures/pallets_jinja_task__task1621"
+    },
+    {
+      "id": "dr-config-hotreload",
+      "board": "governance",
+      "tier": "baseline",
+      "funnelTier": 2,
+      "benchmark": "TWR-Governance",
+      "fixtureDir": "evals/fixtures/dr-config-hotreload",
+      "entryStage": "design-review",
+      "language": "javascript",
+      "summary": "审查《配置热更新与多级缓存设计方案》草稿，识别非原子写脏读、长请求中途配置撕裂、降级保存抹除未知字段 3 个架构漏洞并排除 2 个排版诱饵"
+    },
+    {
+      "id": "trap-scope-conflict",
+      "board": "governance",
+      "tier": "baseline",
+      "funnelTier": 2,
+      "benchmark": "TWR-Governance",
+      "fixtureDir": "evals/fixtures/trap-scope-conflict",
+      "entryStage": "implementation",
+      "language": "javascript",
+      "summary": "唯一可写 store.js、只读 runner.js 下植入物理矛盾需求（纯函数零定时器却要求每 5 秒后台自动轮询），检验边界守卫与主动 blocked/escalate 早停"
+    },
+    {
+      "id": "swelancer_mgr__modal_nav_race",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "benchmark": "SWE-Lancer-Diamond",
+      "entryStage": "design",
+      "language": "javascript",
+      "fixtureDir": "evals/fixtures/swelancer_mgr__modal_nav_race",
+      "writable": [
+        {
+          "path": "DECISION.json",
+          "kind": "design"
+        },
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        }
+      ],
+      "summary": "多层模态框下全局快捷键导航层级错乱：核验 7 份候选方案与 src/ 隐藏架构不变量，产出 DECISION.json 与 DESIGN.md",
+      "prompt": "请完整阅读工作区根目录的 `ISSUE_AND_PROPOSALS.md` 及 `src/` 目录下的全部源码文件（`src/` 为只读基线，严禁修改 `src/` 下的任何文件）。该 Issue 描述了多层模态框下全局快捷键导航的层级错乱缺陷，并附 7 份候选技术方案。请结合本地源码中的隐藏架构不变量（如 `ModalStack` 的关闭计数与回调语义、`OverlayBus` 的 `detachedOverlay` 事件、`BaseModal` 的过渡锁与 `Navigation` 的路由栈约束）逐一核验 7 份候选方案，选出唯一正确方案并用源码事实证伪其余 6 份。在工作区根目录产出两个交付物（可写范围仅限这两个文件，严禁修改工作区内其他任何文件）：1. `DECISION.json`：严格合法 JSON，契约字段与格式见 `ISSUE_AND_PROPOSALS.md` 第三节（selected_proposal_id、root_cause_file、root_cause_functions、discovered_code_invariants、rejected_proposals 须覆盖全部 6 个未选方案）；2. `DESIGN.md`：完整架构设计方案，含源码级根因追踪（梳理 ModalStack.js、OverlayBus.js、Navigation.js、BaseModal.js、AttachmentPreviewModal.js 调用链）、全部未选方案的源码证伪、目标状态机与防竞态设计（含 detachedOverlay 过滤、activeTransactionId 幂等守卫与异常重入恢复）。"
+    },
+    {
+      "id": "swelancer_mgr__draft_state_commit",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "benchmark": "SWE-Lancer-Diamond",
+      "entryStage": "design",
+      "language": "javascript",
+      "fixtureDir": "evals/fixtures/swelancer_mgr__draft_state_commit",
+      "writable": [
+        {
+          "path": "DECISION.json",
+          "kind": "design"
+        },
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        }
+      ],
+      "summary": "分步表单未确认币种提前持久化与分摊截断：核验 6 份候选方案与 src/ 隐藏架构不变量，产出 DECISION.json 与 DESIGN.md",
+      "prompt": "请完整阅读工作区根目录的 `ISSUE_AND_PROPOSALS.md` 及 `src/` 目录下的全部源码文件（`src/` 为只读基线，严禁修改 `src/` 下的任何文件）。该 Issue 描述了分步表单中未确认币种选择的提前持久化与分摊金额精度截断缺陷，并附 6 份候选技术方案。请结合本地源码中的隐藏架构不变量（如 `StateVault.mergeDraft` 自动重算 `splitShares` 的不可逆副作用、`RouteSerializer` 仅支持纯 JSON 路由参数的约束、`AmountStepPage.save()` 的确认提交语义与 `draftEpoch` 乐观锁）逐一核验 6 份候选方案，选出唯一正确方案并用源码事实证伪其余 5 份。在工作区根目录产出两个交付物（可写范围仅限这两个文件，严禁修改工作区内其他任何文件）：1. `DECISION.json`：严格合法 JSON，契约字段与格式见 `ISSUE_AND_PROPOSALS.md` 第三节（selected_proposal_id、root_cause_file、root_cause_functions、discovered_code_invariants、rejected_proposals 须覆盖全部 5 个未选方案）；2. `DESIGN.md`：完整架构设计方案，含源码级根因与副作用分析（CurrencySelectionPage.js、AmountStepPage.js、StateVault.js、RouteSerializer.js）、全部未选方案的源码证伪、目标数据流与状态机设计（纯 JSON 路由参数回传、本地预览、expectedEpoch 原子提交）。"
+    },
+    {
+      "id": "swelancer_mgr__email_validator_unification",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "benchmark": "SWE-Lancer-Diamond",
+      "entryStage": "design",
+      "language": "javascript",
+      "fixtureDir": "evals/fixtures/swelancer_mgr__email_validator_unification",
+      "writable": [
+        {
+          "path": "DECISION.json",
+          "kind": "design"
+        },
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        }
+      ],
+      "summary": "前后端地址校验不一致与代码区段提及逃逸：核验 7 份候选方案与 src/ 隐藏架构不变量，产出 DECISION.json 与 DESIGN.md",
+      "prompt": "请完整阅读工作区根目录的 `ISSUE_AND_PROPOSALS.md` 及 `src/` 目录下的全部源码文件（`src/` 为只读基线，严禁修改 `src/` 下的任何文件）。该 Issue 描述了前后端地址校验不一致与代码区段内提及误渲染两个关联缺陷，并附 7 份候选技术方案。请结合本地源码中的隐藏架构不变量（如 `verifyBackendAddressContract` 的结构化校验契约、`MarkupTokenizer` 现有正则的引擎回溯风险、`SandboxPolicy` 的零外部依赖与零网络运行时约束）逐一核验 7 份候选方案，选出唯一正确方案并用源码事实证伪其余 6 份。在工作区根目录产出两个交付物（可写范围仅限这两个文件，严禁修改工作区内其他任何文件）：1. `DECISION.json`：严格合法 JSON，契约字段与格式见 `ISSUE_AND_PROPOSALS.md` 第三节（selected_proposal_id、root_cause_files、root_cause_functions、discovered_code_invariants、rejected_proposals 须覆盖全部 6 个未选方案）；2. `DESIGN.md`：完整架构设计方案，含双根因源码剖析（AddressValidator.js 与 MarkupTokenizer.js）、全部未选方案的证伪（结合 SandboxPolicy.js 与正则引擎机理）、统一校验器与 O(N) 线性代码区段切分状态机设计及边界用例表。"
+    },
+    {
+      "id": "devbench__nested_delimited_projection",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "benchmark": "DevBench",
+      "entryStage": "implementation",
+      "language": "python",
+      "fixtureDir": "evals/fixtures/devbench__nested_delimited_projection",
+      "writable": [
+        {
+          "path": "DESIGN.md",
+          "kind": "source"
+        },
+        {
+          "path": "src/structfold/",
+          "kind": "source"
+        }
+      ],
+      "summary": "StructFold 嵌套表格投影引擎：产出含模块分层树、classDiagram、sequenceDiagram 与 DAG 的 DESIGN.md，并实现 src/structfold/ 多模块 Python 包（conflict_policy、type_coercion、column_aliases 三项扩展约束）",
+      "prompt": "请完整阅读工作区根目录的 `PRD.md` 与 `examples/` 目录下的示例数据（均为只读输入，严禁修改）。请从 0 到 1 完成 StructFold 嵌套表格投影引擎的架构设计与实现，交付物（可写范围仅限 `DESIGN.md` 与 `src/structfold/`，严禁修改工作区内其他任何文件）：1. 根目录 `DESIGN.md`：包含完整模块分层文件树（至少拆分为主控制器 `StructFolder`、CSV/分隔符词法读取器 `csv_utils`、Schema 树推导与类型转换器 `schema_utils`）、用 Mermaid 语法绘制的 classDiagram 类图与核心转换 sequenceDiagram 时序图、模块依赖有向无环图（DAG）说明，以及针对三项扩展架构约束（conflict_policy 前缀冲突策略、type_coercion 内联类型指令、column_aliases 别名链环路检测）的专门设计说明；2. `src/structfold/` 下实现完整的 StructFolder 多模块 Python 包：仅使用 Python 标准库（csv、json、re、pathlib 等），不得依赖第三方包，在 `src/structfold/__init__.py` 导出核心类 `StructFolder` 与异常类 `SchemaConflictError`、`CircularAliasError`，并完整实现 `PRD.md` 第二节全部 API 契约（get_schema 自动推导、convert 嵌套投影）与三项扩展架构约束。"
+    },
+    {
+      "id": "devbench__multiformat_reading_estimator",
+      "board": "main",
+      "tier": "hard-ceiling",
+      "benchmark": "DevBench",
+      "entryStage": "implementation",
+      "language": "python",
+      "fixtureDir": "evals/fixtures/devbench__multiformat_reading_estimator",
+      "writable": [
+        {
+          "path": "DESIGN.md",
+          "kind": "source"
+        },
+        {
+          "path": "src/readpulse/",
+          "kind": "source"
+        }
+      ],
+      "summary": "ReadPulse 多格式阅读时长估算引擎：产出含模块分层树、classDiagram、sequenceDiagram 与 DAG 的 DESIGN.md，并实现 src/readpulse/ 多模块 Python 包（code_wpm、exclude_blockquotes、sections 三项扩展约束）",
+      "prompt": "请完整阅读工作区根目录的 `PRD.md`（只读输入，严禁修改）。请从 0 到 1 完成 ReadPulse 多格式阅读时长与章节时间线估算引擎的架构设计与实现，交付物（可写范围仅限 `DESIGN.md` 与 `src/readpulse/`，严禁修改工作区内其他任何文件）：1. 根目录 `DESIGN.md`：包含完整模块分层文件树（至少包含公开入口 `api.py`、结果值对象 `result.py`、多格式解析与清洗器 `parser.py`）、用 Mermaid 语法绘制的 classDiagram 类图与多格式解析计算 sequenceDiagram 时序图、模块依赖有向无环图（DAG）说明，以及针对三项扩展架构约束（code_wpm 代码块独立折算与代码块内图片屏蔽、exclude_blockquotes 引用块剥离、sections 章节时间线分解）的算法说明；2. `src/readpulse/` 下实现完整的 ReadPulse 多模块 Python 包：仅使用 Python 标准库（re、math、html.parser、dataclasses 等），不得依赖外部第三方包，在 `src/readpulse/__init__.py` 导出 `of_text`、`of_markdown`、`of_html`、`ReadPulseResult`、`DEFAULT_WPM`（默认 265）与 `UnsupportedFormatError`，并完整实现 `PRD.md` 第二节全部 API 契约（空输入与异常处理、阶梯图片阅读耗时折算、总秒数与分钟向上取整、of_content 通用入口）与三项扩展架构约束。"
+    },
+    {
+      "id": "uh1_swelancer__offline_optimistic_reappear",
+      "board": "main",
+      "tier": "ultra-hard",
+      "benchmark": "SWE-Lancer-Diamond",
+      "entryStage": "implementation",
+      "language": "javascript",
+      "fixtureDir": "evals/fixtures/uh1_swelancer__offline_optimistic_reappear",
+      "writable": [
+        {
+          "path": "DECISION.json",
+          "kind": "design"
+        },
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        },
+        {
+          "path": "src/",
+          "kind": "source"
+        }
+      ],
+      "summary": "离线删除成员后重连复活与审批转交悬空：核验 8 份候选方案，改造动作/队列/同步/角色索引全链路并产出 DECISION.json 与 DESIGN.md",
+      "prompt": "请完整阅读工作区根目录的 `ISSUE_AND_PROPOSALS.md` 与 `src/` 下全部源码（`src/` 基线可改，但必须保留现有导出与调用方式，Node.js ESM 可直接运行且不得引入第三方依赖）。该缺陷报告描述了离线删除成员后重连复活、旧快照回滚、批量删除部分失败与审批转交悬空等现象，并附 8 份候选技术方案。请结合真实代码语义核验全部 8 份方案，选出唯一正确方案并用源码事实证伪其余 7 份。交付物（可写范围仅限 `DECISION.json`、`DESIGN.md` 与 `src/` 下文件，严禁修改 `ISSUE_AND_PROPOSALS.md` 及工作区内其他文件）：1. `DECISION.json`：严格合法 JSON，字段见 `ISSUE_AND_PROPOSALS.md` 第三节（selected_proposal_id、root_cause_files、root_cause_functions、discovered_code_invariants，rejected_proposals 须覆盖全部 7 个未选方案并引用具体文件、函数、字段或错误码）；2. `DESIGN.md`：逐文件逐函数的源码级根因追踪、全部未选方案的源码证伪、目标设计的状态转移与时序，以及可直接用 node 运行的验收自测脚本或等价断言；3. 直接修改 `src/` 实现所选方案，必须同时满足题面第三节全部验收行为：旧快照不得复活已删除成员且快照中其他成员仍正常更新、MEMBER_NOT_FOUND 幂等不得触发回滚或复活、批量部分失败精确回滚且保留在途期间新增的待决操作、成员删除后角色索引与审批转交链同步清理。"
+    },
+    {
+      "id": "uh2_swelancer__popover_backdrop_event_routing",
+      "board": "main",
+      "tier": "ultra-hard",
+      "benchmark": "SWE-Lancer-Diamond",
+      "entryStage": "design",
+      "language": "javascript",
+      "fixtureDir": "evals/fixtures/uh2_swelancer__popover_backdrop_event_routing",
+      "writable": [
+        {
+          "path": "DECISION.json",
+          "kind": "design"
+        },
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        }
+      ],
+      "summary": "非全屏模态框内右键菜单与遮罩关闭冲突：核验 8 份候选方案，产出 6×4 事件路由矩阵、4 条跨文件隐式契约与 7 份证伪（src/ 只读）",
+      "prompt": "请完整阅读工作区根目录的 `ISSUE_AND_PROPOSALS.md` 与 `src/` 下全部 7 个只读源码文件（`src/` 为只读基线，严禁修改、增删任何 `src/` 下文件）。该故障报告描述了非全屏模态框内右键菜单闪退、遮罩误关模态框、嵌套菜单焦点残留等现象，并附 8 份候选技术方案。请结合源码中真实的事件路由、浮层登记与焦点管理逻辑评估全部 8 份方案，选出唯一正确方案并用源码事实证伪其余 7 份。交付物（可写范围仅限工作区根目录的 `DECISION.json` 与 `DESIGN.md`，严禁修改工作区内其他任何文件）：1. `DECISION.json`：严格合法 JSON，字段与形状见 `ISSUE_AND_PROPOSALS.md` 第四节，其中 `routing_matrix` 必须按六种事件场景逐项填写 4 个布尔属性（字段语义以题面为准，不得凭直觉填写），`discovered_implicit_contracts` 须给出跨源码文件的隐式契约，`rejected_proposals` 须覆盖其余全部 7 个未选方案并引用具体文件、函数或字段；2. `DESIGN.md`：7 个模块的源码级根因追踪与调用链、全部未选方案的源码证伪、目标事件路由与焦点层级设计，以及对 `routing_matrix` 每一格的推导依据。"
+    },
+    {
+      "id": "uh3_cooperbench__three_way_tx_cache_pipeline",
+      "board": "main",
+      "tier": "ultra-hard",
+      "benchmark": "CooperBench",
+      "entryStage": "implementation",
+      "language": "python",
+      "fixtureDir": "evals/fixtures/uh3_cooperbench__three_way_tx_cache_pipeline",
+      "writable": [
+        {
+          "path": "DESIGN.md",
+          "kind": "design"
+        },
+        {
+          "path": "src/txengine/",
+          "kind": "source"
+        }
+      ],
+      "summary": "事务/租约缓存/死锁仲裁三路耦合流水线：在 4 个子包上实现 MVCC 快照隔离、租约世代防 ABA 与等待图牺牲者仲裁并产出 DESIGN.md",
+      "prompt": "请完整阅读工作区根目录的 `SPEC.md`（只读输入，严禁修改）。请在同一代码树中实现事务管理、租约缓存与死锁仲裁三项相互耦合的能力，交付物（可写范围仅限 `DESIGN.md` 与 `src/txengine/`，严禁修改工作区内其他任何文件）：1. `src/txengine/` 下实现完整能力，必须保持 `tx`、`cache`、`lock`、`coordinator` 四个子包与根包 `txengine` 的导入路径不变，根包继续导出 `TransactionPipeline`、`MVCCManager`、`LeaseCache`、`WaitForGraph`、`DeadlockVictimError`、`StaleReadConflictError`；仅使用 Python 3.9+ 标准库，不得引入第三方依赖；完整实现 `SPEC.md` 第三节公开 API 契约与第四节业务规则（快照隔离读视图、租约世代防 ABA 幽灵回填、等待图环路检测与最年轻牺牲者自动中止，三者必须在同一条读写/提交/中止路径上生效）；2. `DESIGN.md`：说明四个子包的分层职责与依赖方向、快照可见版本规则、租约世代在读取/回填/写入/提交/中止各路径上的变化时机、等待关系与牺牲者自动中止的执行顺序、提交与中止时 MVCC/缓存/锁三者如何收敛到一致状态，以及已知边界（不处理线程并发、不做持久化与 GC 等）。"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "axios__axios-5085",
+  "benchmark": "Multi-SWE-bench",
+  "repo": "axios/axios",
+  "baseCommit": "85740c3e7a1fa48346dfcbd4497f463ccb1c1b05",
+  "entryStage": "implementation",
+  "writable": [
+    {
+      "path": "index.d.ts",
+      "kind": "source"
+    },
+    {
+      "path": "lib/core/AxiosHeaders.js",
+      "kind": "source"
+    }
+  ],
+  "prompt": "请修复当前仓库中的以下缺陷（Repository: axios/axios）：\n\n## Fixed handling of array values for AxiosHeaders;\n\n### Issue #5028: [1.0.0] Set-Cookie header in a response interceptor is not an array anymore\n<!-- Click \"Preview\" for a more readable version --\r\n\r\nPlease read and follow the instructions before submitting an issue:\r\n\r\n- Read all our documentation, especially the [README](https://github.com/axios/axios/blob/master/README.md). It may contain information that helps you solve your issue.\r\n- Ensure your issue isn't already [reported](https://github.com/axios/axios/issues?utf8=%E2%9C%93&q=is%3Aissue).\r\n- If you aren't sure that the issue is caused by Axios or you just need help, please use [Stack Overflow](https://stackoverflow.com/questions/tagged/axios) or [our chat](https://gitter.im/mzabriskie/axios).\r\n- If you're reporting a bug, ensure it isn't already fixed in the latest Axios version.\r\n- Don't remove any title of the issue template, or it will be treated as invalid by the bot.\r\n\r\n⚠️👆 Feel free to these instructions before submitting the issue 👆⚠️\r\n-->\r\n\r\n#### Describe the bug\r\nIn v1, accessing the 'Set-Cookie' header in a response interceptor yields the raw string value of the header.\r\n\r\n#### To Reproduce\r\n\r\n```js\r\nconst axios = require('axios'),\r\n      http = require('http');\r\n\r\nconst server = http\r\n        .createServer((req, res) => {\r\n          res.setHeader('Set-Cookie', 'my=value');\r\n          res.writeHead(200);\r\n          res.write('Hi there');\r\n          res.end();\r\n        })\r\n        .listen(0),\r\n      request = axios.create();\r\n\r\nrequest.interceptors.response.use((res) => {\r\n  console.log(res.headers['set-cookie']);\r\n});\r\n\r\nrequest({ url: `http://localhost:${server.address().port}` }).then(() => server.close());\r\n```\r\n\r\nThe produces `my=value`\r\n\r\n#### Expected behavior\r\n`[ 'my=value' ]`\r\n\r\n#### Environment\r\n - Axios Version [e.g. 0.18.0]: 1.0.0\r\n - Adapter [e.g. XHR/HTTP]: http\r\n - Browser [e.g. Chrome, Safari]: N/A\r\n - Browser Version [e.g. 22]: N/A\r\n - Node.js Version [e.g. 13.0.1]: 16.13.0\r\n - OS: [e.g. iOS 12.1.0, OSX 10.13.4]: Ubuntu 20.04\r\n - Additional Library Versions [e.g. React 16.7, React Native 0.58.0]: N/A\r\n\r\n#### Additional context/Screenshots\r\n\r\nN/A\n\n\n\n### Context\nFixed handling of `set-cookie` headers as an array;\r\nCloses #5028, #5083;\n\n请直接在当前工作区对应源码文件（index.d.ts, lib/core/AxiosHeaders.js）中完成修复（保持与现有模块导入和导出接口完全兼容）。"
+}

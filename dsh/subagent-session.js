@@ -65,18 +65,16 @@ export function coldResumePrompt(read, prompt, promptFull = prompt) {
   return read.received ? { resume: "incremental", text: prompt } : { resume: "full", text: promptFull }
 }
 
-// 业务正文保持精确匹配；规则独立成块，不影响冷收单判定。
-function memberMessage(text, requiredGuidance) {
-  const rules = typeof requiredGuidance === "string" && requiredGuidance.trim()
-    ? requiredGuidance
-    : "Clarity 自动规则未带入：派单缺少有效 requiredGuidance 投影。请核对当前 Runtime 与插件是否来自同一根包后重试；本次不猜测或补造规则，原派单与验收合同仍有效。"
-  return [{ type: "text", text }, { type: "text", text: rules }]
+// 成员消息是单块业务正文：派单卡自带规范段，绑定层不再追加规则块或缺失诊断句。
+// 冷收单按整块文本精确匹配，单块正文与历史多块日志都能判定本轮是否已收。
+function memberMessage(text) {
+  return [{ type: "text", text }]
 }
 
-export async function followupChild({ subagents, parent, signal }, childId, text, requiredGuidance) {
+export async function followupChild({ subagents, parent, signal }, childId, text) {
   if (typeof subagents?.sendMessage !== "function") return failure("TW_SUB_FOLLOWUP_UNAVAILABLE", "subagents.sendMessage 不可用，请检查宿主", childId)
   try {
-    const messageId = await subagents.sendMessage(parent, childId, memberMessage(text, requiredGuidance), { signal: signal ?? new AbortController().signal })
+    const messageId = await subagents.sendMessage(parent, childId, memberMessage(text), { signal: signal ?? new AbortController().signal })
     return { ok: true, sessionId: childId, messageId }
   } catch (error) {
     const code = error?.code === "UNAUTHORIZED" ? "TW_SUB_TAKEOVER_CONFLICT" : error?.code === "NOT_RESUMABLE" ? "TW_SUB_NOT_RESUMABLE" : "TW_SUB_FOLLOWUP_FAILED"
@@ -103,7 +101,7 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     let subagents
     try { subagents = get("subagents") } catch (error) { return failure("TW_SUB_FOLLOWUP_UNAVAILABLE", describe(error), id) }
     const followup = coldResumePrompt(read, input.prompt, input.promptFull?.trim() ? input.promptFull : input.prompt)
-    const sent = await followupChild({ subagents, parent: input.exec?.agent, signal: input.exec?.signal }, id, followup.text, input.requiredGuidance)
+    const sent = await followupChild({ subagents, parent: input.exec?.agent, signal: input.exec?.signal }, id, followup.text)
     return sent.ok ? { ...sent, refollowed: true, resume: followup.resume, source: "reconciled" } : sent
   }
   const target = input.target
@@ -131,7 +129,7 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     const activation = typeof subagents.startActivation === "function"
     const create = activation ? subagents.startActivation : subagents.startContinuable
     start = await create.call(subagents, { provider: deps.subagentProviderName ?? SUBAGENT_PROVIDER, label: input.description, childId: id,
-      request: { parent: input.exec.agent, prompt: memberMessage(input.promptFull?.trim() ? input.promptFull : input.prompt, input.requiredGuidance), agentOptions, maxDepth },
+      request: { parent: input.exec.agent, prompt: memberMessage(input.promptFull?.trim() ? input.promptFull : input.prompt), agentOptions, maxDepth },
       ...(activation ? { delivery: "parent" } : {}),
       signal: input.exec.signal ?? new AbortController().signal })
   } catch (error) { return failure("TW_SUB_START_FAILED", "成员创建失败：" + describe(error) + "；保留映射，先核对同 ID 会话后重试", id) }

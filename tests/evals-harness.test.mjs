@@ -8,7 +8,7 @@ import zlib from "node:zlib"
 import { fileURLToPath } from "node:url"
 import { calculateUsageCostUsd, MODEL_PRICING_PER_1M } from "../evals/pricing.mjs"
 import { decompressMultiFrameZstd, summarizeSessionEvents, detectWorkspaceEscape } from "../evals/zstd-log.mjs"
-import { assertSafeScratchDir, loadTasksRegistry, resolveEvalEnvironment, buildGroupOverlayPatch, buildGroupPolicy, materializeGovernanceWorkspace, buildMultiSweBenchPrompt, createOfflineGuardBin, runHeadlessTurn, OFFLINE_BLOCKED_COMMANDS, OFFLINE_PACKAGE_MANAGER_ENV } from "../evals/runner.mjs"
+import { assertSafeScratchDir, loadTasksRegistry, resolveEvalEnvironment, buildGroupOverlayPatch, buildGroupPolicy, materializeGovernanceWorkspace, buildMultiSweBenchPrompt, createOfflineGuardBin, runHeadlessTurn, OFFLINE_BLOCKED_COMMANDS, OFFLINE_PACKAGE_MANAGER_ENV, OFFLINE_PYTHON_SITE_CUSTOMIZE, OFFLINE_GIT_BLOCKED_SUBCOMMANDS } from "../evals/runner.mjs"
 import { gradeDevBenchTask, gradeDrConfigHotreload, gradeMultiSweBenchResult, gradePublicCodeTask, gradeSweLancerManagerTask, gradeTrapScopeConflict, gradeUltraHardTask } from "../evals/grade.mjs"
 
 test("evals/pricing：四款模型官方单价与未命中输入/缓存命中/缓存写入/输出计费公式精确对齐", () => {
@@ -102,9 +102,16 @@ test("evals/zstd-log：多帧解码、截断帧 tornStart 拒绝、assistant/att
   assert.equal(allPasses.wallClockMs, 5000)
 })
 
-test("evals/runner：组 A/B/C 的 Patch 与 Policy 严格满足工具隔离、maxDepth:2、junior 助手不污染与 C3 NoExpert 消融", async () => {
+test("evals/runner：组 A/B/C 的 Patch 与 Policy 严格满足工具隔离、maxDepth:2、junior 助手不污染与 C3 NoExpert / C4 双 junior 消融", async () => {
   const reg = await loadTasksRegistry()
   assert.equal(reg.tasks.length, 20)
+  assert.equal(reg.groups.length, 9, "实验组注册表必须是 A1-A4、B1、C1-C4 共 9 组")
+  assert.equal(new Set(reg.groups.map((g) => g.id)).size, 9, "实验组 id 必须全局唯一")
+  assert.deepEqual(
+    reg.groups.map((g) => g.id),
+    ["A1", "A2", "A3", "A4", "B1", "C1", "C2", "C3", "C4"],
+    "实验组按单代理、自由组队、TWR 的顺序登记，C4 追加在 C3 之后"
+  )
   assert.equal( resolveEvalEnvironment({}).status, "unresolved" )
 
   // 组 A（Single）：必须禁用 tool-skill 与 skill-filesystem
@@ -116,11 +123,12 @@ test("evals/runner：组 A/B/C 的 Patch 与 Policy 严格满足工具隔离、m
   const patchB1 = buildGroupOverlayPatch(reg.groups.find((g) => g.id === "B1"), reg.models, "example-provider")
   assert.ok(patchB1.some((p) => p.id === "subagent" && p.config?.maxDepth === 2), "组 B 必须设置 maxDepth: 2")
 
-  // 组 C（C1/C2/C3）：tiers.junior 恒为 deepseek-flash（不因 C2 Owner=senior 污染只读助手），且原生 tool-subagent 绑定 junior
+  // 组 C（C1/C2/C3/C4）：tiers.junior 恒为 deepseek-flash（不因 C2 Owner=senior 污染只读助手），且原生 tool-subagent 绑定 junior
   const gC1 = reg.groups.find((g) => g.id === "C1")
   const gC2 = reg.groups.find((g) => g.id === "C2")
   const gC3 = reg.groups.find((g) => g.id === "C3")
-  for (const g of [gC1, gC2, gC3]) {
+  const gC4 = reg.groups.find((g) => g.id === "C4")
+  for (const g of [gC1, gC2, gC3, gC4]) {
     const p = buildGroupOverlayPatch(g, reg.models, "example-provider")
     assert.ok(p.some((x) => x.id === "subagent" && x.config?.maxDepth === 2))
     const twrCfg = p.find((x) => x.id === "team-work-dsh")?.config?.tiers
@@ -140,6 +148,28 @@ test("evals/runner：组 A/B/C 的 Patch 与 Policy 严格满足工具隔离、m
   assert.equal(polC2.scenes.implementation.ownerTier, "senior")
   assert.equal(polC3.scenes.implementation.core, false)
   assert.equal(polC3.scenes["code-review"].core, false)
+
+  // 组 C4：控制变量 Lead=glm-5.3 不变，Owner/Challenger 双 junior + Expert=gpt-6.1-sol，core:true；
+  // 用于隔离"异构交叉复审是否必须由更强的 Challenger 承担"，与 C1 仅差 Challenger 档位。
+  assert.equal(gC4?.label, "TWR (J+J+E)", "C4 的实验组标签必须是 TWR (J+J+E)")
+  assert.equal(gC4?.kind, "twr", "C4 必须走 TWR 实验组类型")
+  assert.equal(gC4?.leadTier, "senior", "C4 的 Lead 必须保持 senior 档（与 C1-C3 同为 glm-5.3 控制变量）")
+  assert.equal(gC4?.ownerTier, "junior", "C4 的 Owner 必须是 junior 档")
+  assert.equal(gC4?.challengerTier, "junior", "C4 的 Challenger 必须是 junior 档")
+  assert.equal(gC4?.expertTier, "expert", "C4 的 Expert 必须是 expert 档")
+  assert.equal(gC4?.core, true, "C4 必须开启 core 场景的 Expert 技术裁决")
+  assert.equal(reg.models[gC4.leadTier].model, "glm-5.3", "C4 的 Lead 模型必须解析为 glm-5.3")
+  assert.equal(reg.models[gC4.ownerTier].model, "deepseek-flash", "C4 的 Owner 模型必须解析为 deepseek-flash")
+  assert.equal(reg.models[gC4.challengerTier].model, "deepseek-flash", "C4 的 Challenger 模型必须解析为 deepseek-flash")
+  assert.equal(reg.models[gC4.expertTier].model, "gpt-6.1-sol", "C4 的 Expert 模型必须解析为 gpt-6.1-sol")
+  const patchC4 = buildGroupOverlayPatch(gC4, reg.models, "example-provider")
+  assert.equal(patchC4.find((p) => p.id === "agent-default-model")?.config?.model, "glm-5.3", "C4 的默认模型（Lead）必须是 glm-5.3")
+  const polC4 = buildGroupPolicy(basePolicy, gC4)
+  assert.equal(polC4.scenes.implementation.core, true, "C4 的 core:true 必须让实施场景保留 Expert 裁决")
+  assert.equal(polC4.scenes["code-review"].core, true, "C4 的 core:true 必须让代码审查场景保留 Expert 裁决")
+  assert.equal(polC4.scenes.implementation.ownerTier, "junior", "C4 的 Owner 档位必须写入场景策略")
+  assert.equal(polC4.scenes.implementation.challengerTier, "junior", "C4 的 Challenger 档位必须写入场景策略")
+  assert.deepEqual(polC4.riskTiers, { critical: "junior", high: "junior" }, "C4 的风险升档不得把 Owner 抬出 junior 档")
 })
 
 test("evals/runner：离线命令桩覆盖包管理器，runHeadlessTurn 注入离线环境变量且不设代理", async () => {
@@ -212,8 +242,100 @@ test("evals/runner：离线命令桩覆盖包管理器，runHeadlessTurn 注入�
     assert.equal(childEnv.DSH_HOME, dshHomeDir)
     const firstPathEntry = childEnv.PATH.split(path.delimiter)[0]
     assert.ok(path.basename(firstPathEntry).startsWith("twr-offline-bin-"), "离线桩目录必须前置到 PATH")
+    // PYTHONPATH 必须前置同一个 guard 目录，否则被测 agent 派生的 python 子进程不会加载 sitecustomize
+    const firstPythonPathEntry = childEnv.PYTHONPATH.split(path.delimiter)[0]
+    assert.equal(firstPythonPathEntry, firstPathEntry, "PYTHONPATH 必须前置离线 guard 目录")
+    assert.ok(path.basename(firstPythonPathEntry).startsWith("twr-offline-bin-"), "PYTHONPATH 前置项必须是离线 guard 目录")
   } finally {
     await rm(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test("evals/runner：guardDir 物理阻断 Python 外网与 git 远程子命令，本地 git 与回环访问保持可用", async () => {
+  const guardDir = await createOfflineGuardBin()
+  const repoDir = await mkdtemp(path.join(os.tmpdir(), "twr-offline-git-repo-"))
+  // 子进程只继承 guard 环境：PATH 前置 guardDir，PYTHONPATH 指向 guardDir（与 runHeadlessTurn 注入一致）
+  const guardedEnv = { ...process.env, PATH: `${guardDir}${path.delimiter}${process.env.PATH ?? ""}`, PYTHONPATH: guardDir }
+  const runGuarded = (command, args) => {
+    try {
+      const stdout = execFileSync(command, args, { env: guardedEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      return { status: 0, stdout, stderr: "" }
+    } catch (error) {
+      return { status: error.status ?? null, stdout: String(error.stdout ?? ""), stderr: String(error.stderr ?? "") }
+    }
+  }
+  try {
+    // 1) sitecustomize.py 必须在场并接管五个 socket 入口（connect/connect_ex/create_connection 为基线，
+    //    getaddrinfo/gethostbyname 用于同时封死 DNS 泄露通道）
+    const siteCustomizeSource = await readFile(path.join(guardDir, "sitecustomize.py"), "utf8")
+    assert.equal(siteCustomizeSource, OFFLINE_PYTHON_SITE_CUSTOMIZE)
+    for (const patchedName of ["socket.socket.connect", "socket.socket.connect_ex", "socket.create_connection", "socket.getaddrinfo", "socket.gethostbyname"]) {
+      assert.ok(siteCustomizeSource.includes(patchedName + " = _guarded"), patchedName + " 必须被 sitecustomize 接管")
+    }
+
+    // 2) Python 侧：urllib / http.client / 裸 socket 连接都立即失败并给出离线提示
+    const urlopenAttempt = runGuarded("python3", ["-c", "import urllib.request; urllib.request.urlopen('https://example.com/answers.json', timeout=5)"])
+    assert.equal(urlopenAttempt.status, 1, "urllib.request.urlopen 必须失败")
+    assert.match(urlopenAttempt.stderr, /离线评测环境：Python 外部网络访问已被禁用/)
+    const httpClientAttempt = runGuarded("python3", ["-c", "import http.client; http.client.HTTPSConnection('example.com').request('GET', '/')"])
+    assert.equal(httpClientAttempt.status, 1, "http.client.HTTPSConnection 必须失败")
+    assert.match(httpClientAttempt.stderr, /离线评测环境：Python 外部网络访问已被禁用/)
+    const rawSocketAttempt = runGuarded("python3", ["-c", "import socket; socket.socket().connect(('example.com', 80))"])
+    assert.equal(rawSocketAttempt.status, 1, "裸 socket.connect 必须失败")
+    assert.match(rawSocketAttempt.stderr, /离线评测环境：Python 外部网络访问已被禁用/)
+    const resolutionAttempt = runGuarded("python3", ["-c", "import socket; socket.gethostbyname('example.com')"])
+    assert.equal(resolutionAttempt.status, 1, "外部域名解析必须失败（DNS 也是外发通道）")
+    assert.match(resolutionAttempt.stderr, /离线评测环境：Python 外部网络访问已被禁用/)
+
+    // 3) 回环地址保持可用：本地被测服务自测不受影响
+    const loopbackResolution = runGuarded("python3", ["-c", "import socket; print(socket.getaddrinfo('localhost', 80)[0][4][0])"])
+    assert.equal(loopbackResolution.status, 0, "localhost 解析必须放行")
+    assert.equal(loopbackResolution.stdout.trim(), "127.0.0.1")
+    const loopbackConnect = runGuarded("python3", ["-c", [
+      "import socket",
+      "try:",
+      "    socket.create_connection(('127.0.0.1', 9), timeout=1)",
+      "except OSError as error:",
+      "    print(type(error).__name__)",
+      ""
+    ].join("\n")])
+    assert.equal(loopbackConnect.status, 0, "127.0.0.1 连接必须真的发起（失败原因只能是拒绝连接）")
+    assert.doesNotMatch(loopbackConnect.stdout, /Python 外部网络访问已被禁用/)
+    // 被测 Python 题目常用「起一个本地测试服务再自测」的写法，回环 HTTP 必须端到端可用
+    const localServerProbe = runGuarded("python3", ["-c", [
+      "import http.server, threading, urllib.request",
+      "server = http.server.HTTPServer(('127.0.0.1', 0), http.server.SimpleHTTPRequestHandler)",
+      "threading.Thread(target=server.serve_forever, daemon=True).start()",
+      "with urllib.request.urlopen('http://127.0.0.1:%d/' % server.server_address[1], timeout=5) as response:",
+      "    print(response.status)",
+      "server.shutdown()",
+      ""
+    ].join("\n")])
+    assert.equal(localServerProbe.status, 0, "回环 HTTP 自测必须可用")
+    assert.equal(localServerProbe.stdout.trim(), "200")
+
+    // 4) git 包装桩：远程子命令一律失败，本地工作流完好
+    for (const remoteArgs of [["clone", "https://example.com/hidden-oracle.git"], ["fetch", "origin"], ["pull"], ["push", "origin", "main"], ["ls-remote", "https://example.com/hidden-oracle.git"], ["submodule", "update", "--init"]]) {
+      const blocked = runGuarded("git", remoteArgs)
+      assert.equal(blocked.status, 1, "git " + remoteArgs[0] + " 必须被阻断")
+      assert.match(blocked.stderr, /离线评测环境：git 远程子命令已被禁用/)
+      assert.match(blocked.stderr, new RegExp(remoteArgs[0]), "提示必须指明被拦的子命令")
+    }
+    assert.equal(runGuarded("git", ["init", "-q", repoDir]).status, 0, "git init 必须可用")
+    await writeFile(path.join(repoDir, "answer.txt"), "local only\n")
+    assert.equal(runGuarded("git", ["-C", repoDir, "add", "answer.txt"]).status, 0, "git -C <dir> add 必须可用（-C 的取值不能被子命令解析吃掉）")
+    assert.equal(runGuarded("git", ["-C", repoDir, "-c", "commit.gpgsign=false", "-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "commit", "-q", "-m", "init"]).status, 0, "git -c k=v commit 必须可用")
+    const statusResult = runGuarded("git", ["-C", repoDir, "status", "--short"])
+    assert.equal(statusResult.status, 0, "git status 必须可用")
+    const logResult = runGuarded("git", ["-C", repoDir, "log", "--oneline"])
+    assert.equal(logResult.status, 0, "git log 必须可用")
+    assert.match(logResult.stdout, /init/)
+    assert.equal(runGuarded("git", ["--git-dir", path.join(repoDir, ".git"), "--work-tree", repoDir, "status", "--short"]).status, 0, "git --git-dir/--work-tree 的取值必须被跳过")
+    assert.equal(runGuarded("git", ["--version"]).status, 0, "git --version 必须可用")
+    assert.deepEqual(OFFLINE_GIT_BLOCKED_SUBCOMMANDS, ["clone", "fetch", "pull", "push", "ls-remote", "submodule"])
+  } finally {
+    await rm(repoDir, { recursive: true, force: true })
+    await rm(guardDir, { recursive: true, force: true })
   }
 })
 
@@ -1627,6 +1749,75 @@ test("evals/zstd-log：detectWorkspaceEscape 拦截 curl/wget/git clone/https://
     }], workspaceRoot)
     assert.equal(audit.cheatDetected, false, JSON.stringify(safe.args) + " 不应被判为网络作弊")
     assert.equal(audit.violations.length, 0)
+  }
+})
+
+test("evals/zstd-log：补齐 urllib/http.client/requests 编程式联网审计，且不误报工具探测、tw 交付摘要、Markdown 链接与 axios 内部相对导入", () => {
+  // 与真实评测单元格同样的布局 <tmp>/twr-eval-<task>/work-root/workspace，
+  // 这样 ../secret/... 会落在评测保留目录内，能验证"消除误报"没有顺带放过越界
+  const workspaceRoot = path.join(os.tmpdir(), "twr-eval-network-api-root", "work-root", "workspace")
+  const audit = (tool, args) => detectWorkspaceEscape([{
+    id: "s-api",
+    toolCalls: [{ type: "tool/ptc-dispatch", turn: 1, step: 1, name: tool, arguments: args }]
+  }], workspaceRoot)
+
+  // 1) 编程式联网：不经过 curl/wget，直接由 Python/Node 客户端发起，必须被识别
+  const programmaticCalls = [
+    { tool: "bash", args: { command: `python3 -c "import urllib.request; urllib.request.urlopen('https://example.com/answers.json')"` }, target: "urllib.request.urlopen" },
+    { tool: "run_code", args: { code: "body = urllib.request.urlopen('http://example.com/hidden').read()" }, target: "urllib.request.urlopen" },
+    { tool: "bash", args: { command: `python3 -c "import http.client; http.client.HTTPSConnection('example.com')"` }, target: "http.client.HTTPSConnection" },
+    { tool: "run_code", args: { code: "const conn = new http.client.HTTPConnection('example.com', 80)" }, target: "http.client.HTTPConnection" },
+    { tool: "run_code", args: { code: "resp = requests.get('http://example.com/hidden-oracle')" }, target: "requests.get" },
+    { tool: "run_code", args: { code: "resp = requests.post('http://example.com/leak', json={'answer': 'x'})" }, target: "requests.post" }
+  ]
+  for (const attempt of programmaticCalls) {
+    const result = audit(attempt.tool, attempt.args)
+    assert.equal(result.cheatDetected, true, attempt.target + " 属于外网访问，必须被拦截")
+    assert.equal(result.violations.length, 1)
+    assert.equal(result.violations[0].reason, "network-access-attempt")
+    assert.equal(result.violations[0].target, attempt.target)
+  }
+
+  // 2) 误报消除：工具探测、交付摘要自然语言、Markdown 链接字面量、axios 内部相对导入
+  const safeCalls = [
+    // which/command -v/type 只查本地可执行文件；npx 出现在探测参数里不是拉取远程包
+    { tool: "bash", args: { command: "which mmdc node npx 2>/dev/null" } },
+    { tool: "bash", args: { command: "command -v npx >/dev/null 2>&1; echo ok" } },
+    { tool: "bash", args: { command: "type npx" } },
+    // 探测之后同一行真正的 npx 拉包命令仍要检出（见下方 stillDetected 断言）
+    // Markdown 普通链接、带空格的链接写法与自动链接都是被断言的文本样例
+    { tool: "bash", args: { command: 'echo "[离线说明](https://example.com/docs)"' } },
+    { tool: "bash", args: { command: 'echo "[离线说明]( https://example.com/docs )"' } },
+    { tool: "bash", args: { command: 'echo "<https://example.com/docs>"' } },
+    { tool: "run_code", args: { code: 'const link = "[docs](https://example.com/guide)"; console.log(link)' } },
+    // team-work CLI 的交付/评审摘要只是自然语言说明，不是被执行的内容
+    { tool: "bash", args: { command: 'node bin/tw.mjs deliver --task anticheat-plug --key d1-demo --outcome delivered --summary "已用 curl 与 urllib.request.urlopen 验证离线阻断生效"' } },
+    { tool: "bash", args: { command: 'node bin/tw.mjs review --task anticheat-plug --key d1-demo --verdict accept --findings "确认 http://example.com 只是样例字面量，且 git clone 已被阻断"' } },
+    // axios 源码内部的相对模块引用（lib/axios.js 引用 ../core ../helpers ../platform ../adapters ../defaults）
+    { tool: "run_code", args: { code: 'import Axios from "../core/Axios.js"\nimport buildURL from "../helpers/buildURL.js"' } },
+    { tool: "run_code", args: { code: 'import httpAdapter from "../adapters/http.js"\nimport defaults from "../defaults/index.js"' } },
+    { tool: "run_code", args: { code: 'import platform from "../platform/node/index.js"' } }
+  ]
+  for (const safe of safeCalls) {
+    const result = audit(safe.tool, safe.args)
+    assert.equal(result.cheatDetected, false, JSON.stringify(safe.args) + " 不应被判为越界或网络作弊")
+    assert.equal(result.violations.length, 0)
+  }
+
+  // 3) 误报消除不得变成漏报：剥离只看探测子句与摘要取值
+  const stillDetected = [
+    { tool: "bash", args: { command: 'which npx >/dev/null 2>&1 && npx create-react-app demo' }, target: "npx create-react-app" },
+    { tool: "bash", args: { command: 'node bin/tw.mjs deliver --task demo --summary "ok" && curl -sS https://example.com/hidden.json' }, target: "curl" },
+    { tool: "run_code", args: { code: 'import answers from "../secret/answers.json"' }, reason: "越界访问工作区外路径" }
+  ]
+  for (const attempt of stillDetected) {
+    const result = audit(attempt.tool, attempt.args)
+    assert.equal(result.cheatDetected, true, JSON.stringify(attempt.args) + " 仍须判定违规")
+    if (attempt.target) {
+      assert.ok(result.violations.some((violation) => violation.reason === "network-access-attempt" && violation.target === attempt.target), "仍须命中网络审计目标 " + attempt.target)
+    } else {
+      assert.ok(result.violations.some((violation) => String(violation.reason).includes(attempt.reason)), "仍须命中越界审计")
+    }
   }
 })
 

@@ -23,7 +23,7 @@ OpenSpec 是默认 SPEC Provider，由 Workflow 路由；它不是 Runtime 存�
 ## 四个 Module（v3 形态）
 
 - **Workflow**（`workflow/definitions/`）：机器可读的研发阶段、合法边、门禁声明、SPEC/E2E 路由 Policy；gate 推导的数据源。
-- **Team-work**（`team-work/policies/` + `team-work/guidance/` + `skills/team-work-v3/`）：角色档位、场景拓扑、收敛轮次等 Policy 数据；角色/场景公共引导库（`guidance/roles/<role>.md`、`guidance/scenes/<sceneId>.md`，派单按 role+teamScene 检索注入，包内基线可被项目根同名文件覆盖，缺失静默跳过）；协作策略与判断指引保存在 skill。Policy 是数据，不是代码。
+- **Team-work**（`team-work/policies/` + `team-work/rules/` + `skills/team-work-v3/`）：角色档位、场景拓扑、收敛轮次等 Policy 数据；成员与 Lead 规则库（`rules/common/index.md` 与 `rules/common/<teamScene>.md`、`rules/<角色>/README.md` 与 `rules/<角色>/<场景>/`、`rules/lead/<时点>/`），派单按 role+teamScene 检索注入。TWR 工作流必需职责锁在包内 `## 工作流职责（TWR 固定契约）` 段，不可被外部目录覆盖；角色/场景执行守则在可 DIY 层：同一相对路径优先读用户公共目录 `~/.team-work/rules/`、缺失回退包内出厂默认，再与项目根 `team-work/rules/` 同名文件按 `## 规范` / `## 红线` / `## 建议` 三标题追加合并，缺失静默跳过。协作策略与判断指引保存在 skill。Policy 是数据，不是代码。
 - **CoreRuntime**（`runtime-v3/`，含 domain/persistence 复用件）：`tw` CLI（Lead 与成员的唯一接口）、波次推进/门禁/状态推导纯函数、任务目录读写、deliver/review 调用内同步总检查。原子写、文件锁、路径防逃逸、digest 由 persistence 原语提供。
 - **PlatformBinding**：目标形态 = 平台编排工具执行团队拓扑（`tw dispatch-plan` 导出波次事实，编排脚本按 tier→模型映射派发成员）+ skill 装载 + （调查中）插件 hook。Runtime 不实现派发循环与 DAG 调度；任务数据必须留在项目 `.team-work/`。
 

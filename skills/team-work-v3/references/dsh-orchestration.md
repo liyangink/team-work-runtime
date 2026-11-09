@@ -4,7 +4,7 @@
 
 正式成员需要可续聊的子会话：Owner 修订、Challenger 复审、Expert 重裁都由 `tw-dispatch` 创建或恢复。普通委派使用原生 `subagent`，继承父历史用 `subagent_fork`。需要续聊时使用支持续聊的原生后端；返回的 `subagentId` 是会话 ID，可直接用于 `send_message`。参数以当前工具 schema 为准，不补造模式字段；旧版非会话回执不作续聊身份。
 
-原样投递 Runtime 业务派单，两种正文都已带当前验收基线；绑定层只选变体，不改业务条件。requiredGuidance 是根包规范的只读投影，DSH 同条消息追加规则 text 块，Lead 最终结果保留自身 presentation；无需主动调 skill。独立入口可依宿主选源，TWR 自动规则固定来自根包，见[派单引导库](guidance.md)。intent/done/可写目录不授权扩需求，变更仍经用户明确批准及原人工门/SPEC；分流见[场景指导](scenarios.md#验收基线与意见分流)。
+原样投递 Runtime 业务派单，两种正文都已带当前验收基线；绑定层只选变体，不改业务条件。成员消息是单块业务正文：派单卡纪律区已含包内锁定的「工作流职责」与规则库条目，绑定层不再追加规则 text 块或缺失诊断。Lead 的呈现由返回卡 `presentation` 反吐 `team-work/rules/lead/<时点>/` 规则与根包明晰必读段，无需主动调 clarity 技能；Lead 规则指路见下节，独立入口可依宿主选源，TWR 规则固定来自根包，见[规则库](rules.md)。intent/done/可写目录不授权扩需求，变更仍经用户明确批准及原人工门/SPEC；分流见[场景指导](scenarios.md#验收基线与意见分流)。
 
 ## 波次推进：一律 tw-dispatch
 
@@ -29,12 +29,16 @@ Lead 在报告到达后先核未决授权争议，无争议才继续 tw-dispatch
 | 主动追问已有子会话 | 原生 send_message |
 | 任务簿记：决定、门禁查询、交付、评审、补登记 | tw |
 
+## Lead 规则通道（skill 指路 + 工具反吐）
+
+Lead 不读成员派单：开工读 `team-work/rules/lead/README.md`（职责边界、推进、判断升级与汇报纪律）；按当前时点读 `team-work/rules/lead/decision|dispatch|progress/index.md`。同时，`tw` 与 `tw-dispatch` 在决定点、派发与在途、进展三个时点把对应 `lead/<时点>/` 规则与明晰必读段附到返回卡 `presentation`（决定点加审阅段）；时点判定与现有呈现判定一致，机械回执不命中，终态重复查询每次在场。两通道互补：反吐不依赖主动性但只在三个时点触发，主动读 md 覆盖其他时点。改措辞改 md，不改代码。
+
 ## 续派：宿主 sendMessage（Lead 主动追问用 send_message）
 
 - continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投 wave.prompt 续派正文，无上下文则投 wave.promptFull 全量变体。两种正文均含当前基线。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelHint 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
 - 用户点名换人（replace-owner）或映射缺失（expectedAgentIdMissing + resumeNote）：同一 fresh 重建通道。
 
-初派、增量、全量、重建和冷轻提醒同消息追加适用原文段，不改冷收单对业务 text 块的精确匹配；仅规则更新不算未收单。角色/场景业务正文真的改变时沿原算法，不承诺总是轻提醒。live 零消息，不为刷新规范催单；缺资源诊断保留恢复指引，不以备用长规则或新门禁替代。
+初派、增量、全量、重建和冷轻提醒都投单块业务正文；冷收单按整块文本精确匹配，规则变更随正文一起投递，但不为刷新规则催活 live 会话。角色/场景业务正文真的改变时沿原算法，不承诺总是轻提醒。live 零消息，不为刷新规范催单；缺资源诊断保留恢复指引，不以内置备用长规则或新门禁替代。
 
 ## 评审修订纪律（D5）
 

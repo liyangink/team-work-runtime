@@ -3,7 +3,8 @@
 
 import test from "node:test"
 import assert from "assert/strict"
-import { mkdir, mkdtemp, writeFile, readFile, readdir, stat } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdir, mkdtemp, writeFile, readFile, readdir, stat, access, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { execFile } from "node:child_process"
@@ -11,6 +12,10 @@ import { promisify } from "node:util"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { artifactsFingerprint } from "../runtime-v3/gate.mjs"
+
+// 用户公共规则隔离：把 HOME 指到临时目录，派单只读该目录下的 ~/.team-work/rules，
+// 不读开发机上的真实用户规则（否则断言会随本机自定义漂移）。
+process.env.HOME = await mkdtemp(path.join(tmpdir(), "tw-cli-home-"))
 
 test("范围争议 blocked：恢复提示先确认授权，保留原 re-scope 非决定接口", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-scope-pause-"))
@@ -264,13 +269,17 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   const d1 = await call(["dispatch-plan", "--task", "present-check", "--writable", "REPORT.md:code-review"])
   assert.equal(d1.stop, null)
   assert.ok(d1.presentation, "派发计划带呈现简报")
-  assert.match(d1.presentation, /原样转发给成员/)
+  assert.match(d1.presentation, /派发后向用户简报/, "派发时点反吐 lead/dispatch 规则")
+  assert.ok(d1.human.some((text) => text.includes("派单正文直接投递给成员")), "人读通道携带 lead/dispatch 规则全文")
+  assert.doesNotMatch(d1.presentation, /## clarity 审阅必读/, "派发时点只带公共必读段")
+  assert.doesNotMatch(JSON.stringify(d1.waves), /requiredGuidance/, "成员派单不再投影第二块规则")
+  assert.doesNotMatch(d1.waves[0].prompt, /## clarity 公共必读/, "成员卡不含明晰段")
 
   // 成员 deliver 回执：不是用户汇报点，不注入
   await writeFile(path.join(projectRoot, "REPORT.md"), "# 报告\n覆盖八视角", "utf8")
   const delivered = await call(["deliver", "--task", "present-check", "--key", d1.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成八视角审查", "--paths", "REPORT.md"])
   assert.equal(delivered.accepted, true)
-  assert.equal(delivered.presentation, undefined, "成员回执不注入呈现纪律")
+  assert.equal(delivered.presentation, undefined, "机械回执不注入呈现规则")
 
   // challenger accept → expert 裁决 → e2e skip → 人工门卡（用户决定点）
   const d2 = await call(["dispatch-plan", "--task", "present-check"])
@@ -280,7 +289,7 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   // 路由卡也是用户决定点：同样带完整纪律与阶段工作摘要
   const routeCard = await call(["run", "--task", "present-check"])
   assert.equal(routeCard.next, "route")
-  assert.match(routeCard.presentation, /呈现纪律/)
+  assert.match(routeCard.presentation, /当前要决定什么/, "决定点反吐 lead/decision 规则")
   assert.match(routeCard.progress, /完成八视角审查/)
   await call(["route", "--task", "present-check", "--route", "e2e", "--decision", "skip", "--basis", "审查类任务，无跨系统路径"])
   // 人工门首签归 dispatch 通道；run 只读渲染已签发的待决卡
@@ -289,8 +298,9 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   const gate = await call(["run", "--task", "present-check"])
   assert.equal(gate.status, "awaiting-user")
 
-  // 完整呈现纪律 + 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
-  assert.match(gate.presentation, /呈现纪律/)
+  // 完整呈现规则（lead/decision）+ 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
+  assert.match(gate.presentation, /当前要决定什么/)
+  assert.match(gate.presentation, /推荐和依据/)
   const required = async (relative) => (await readFile(new URL("../" + relative, import.meta.url), "utf8")).split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
   const publicRules = await required("skills/clarity-guidance/output-standard.md")
   const reviewRules = await required("skills/clarity-review/references/review-rules.md")
@@ -314,7 +324,7 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   // dispatch-plan 的嵌套 stop 卡同样注入（编排通道与 run 通道同纪律，素材同携）
   const plan = await call(["dispatch-plan", "--task", "present-check", "--json"])
   assert.equal(plan.stop, "awaiting-user")
-  assert.match(plan.card.presentation, /呈现纪律/)
+  assert.match(plan.card.presentation, /当前要决定什么/)
   assert.equal(plan.card.presentation, gate.presentation, "run 与 dispatch 的决定呈现规则一致")
   assert.equal(plan.card.progress, gate.progress)
   for (const flags of [[], ["--json"]]) {
@@ -332,7 +342,7 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   await call(["decide", "--task", "present-check", "--choice", "1"])
   const done = await call(["dispatch-plan", "--task", "present-check"])
   assert.equal(done.stop, "completed")
-  assert.match(done.card.presentation, /自然语言完整说明/)
+  assert.match(done.card.presentation, /向用户汇报当前进展/, "进展时点反吐 lead/progress 规则")
   assert.ok(done.human.some((text) => text.includes(publicRules)))
   assert.doesNotMatch(done.card.presentation, /## clarity 审阅必读/)
   const repeated = await call(["run", "--task", "present-check"])
@@ -831,3 +841,79 @@ test("artifacts.json 损坏自愈：deliver/review 锁内照常接受（freshSta
   assert.equal(await readFile(artifactsFile, "utf8"), '{"items":[{"path":', "run 不写账本")
 })
 
+
+// init 的用户公共规则释放：与技能目录装载独立，按文件摘要增量同步并保护用户修改。
+const USER_RULES_SOURCE = new URL("../team-work/rules/", import.meta.url)
+const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex")
+const exists = (file) => access(file).then(() => true, () => false)
+
+test("init 增量释放用户公共规则：缺失补齐、未改默认静默升版、已改文件保留并写 .default.md 旁路", async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-init-rules-"))
+  const userRulesRoot = await mkdtemp(path.join(tmpdir(), "tw-user-rules-"))
+  const call = (argv) => tw(argv, { projectRoot, userRulesRoot })
+  const sourceFile = (relative) => path.join(USER_RULES_SOURCE.pathname, ...relative.split("/"))
+  const userFile = (relative) => path.join(userRulesRoot, ...relative.split("/"))
+
+  // ① 首次释放：缺失文件直接写入，摘要记录落盘
+  const first = await call(["init"])
+  assert.equal(first.ok, true)
+  assert.equal(first.rules.action, "synced")
+  assert.equal(first.rules.root, userRulesRoot)
+  assert.ok(first.rules.summary.installed > 0, "首次释放补齐出厂模板：" + JSON.stringify(first.rules.summary))
+  const indexText = await readFile(sourceFile("common/index.md"), "utf8")
+  assert.equal(await readFile(userFile("common/index.md"), "utf8"), indexText, "文件内容与出厂模板一致")
+  assert.ok(await exists(path.join(userRulesRoot, ".tw-init-hashes.json")), "安装摘要写入用户规则根")
+  const hashes = JSON.parse(await readFile(path.join(userRulesRoot, ".tw-init-hashes.json"), "utf8"))
+  assert.equal(hashes.files["common/index.md"], sha256(indexText), "摘要记录出厂内容 hash")
+
+  // ② 再次释放：全部与出厂同名同内容，没有写入动作
+  const second = await call(["init"])
+  assert.equal(second.rules.action, "synced")
+  assert.equal(second.rules.summary.installed, 0)
+  assert.equal(second.rules.summary.updated, 0)
+  assert.equal(second.rules.summary.kept, 0)
+  assert.ok(second.rules.summary.unchanged > 0)
+
+  // ③ 用户改过的文件保留原样，新版默认写成同目录旁路；--force 同样不覆盖用户版本
+  await writeFile(userFile("common/index.md"), "## 规范\n\n- 用户自己的通用规则\n", "utf8")
+  for (const force of [false, true]) {
+    const run = await call(force ? ["init", "--force"] : ["init"])
+    assert.equal(run.rules.summary.kept, 1, "用户改过的文件只报保留一次（force=" + force + "）")
+    assert.equal(await readFile(userFile("common/index.md"), "utf8"), "## 规范\n\n- 用户自己的通用规则\n", "用户版本不被覆盖（force=" + force + "）")
+    assert.equal(await readFile(userFile("common/index.default.md"), "utf8"), indexText, "新版默认写旁路供对照合并（force=" + force + "）")
+  }
+
+  // ④ 用户没改过的旧版默认（与上次释放摘要一致）静默升版为新版出厂内容
+  const stalePath = userFile("lead/progress/index.md")
+  await writeFile(stalePath, "旧版默认正文", "utf8")
+  const staleHashes = JSON.parse(await readFile(path.join(userRulesRoot, ".tw-init-hashes.json"), "utf8"))
+  staleHashes.files["lead/progress/index.md"] = sha256("旧版默认正文")
+  await writeFile(path.join(userRulesRoot, ".tw-init-hashes.json"), JSON.stringify(staleHashes, null, 2) + "\n", "utf8")
+  const updated = await call(["init"])
+  assert.equal(updated.rules.summary.updated, 1)
+  assert.equal(await readFile(stalePath, "utf8"), await readFile(sourceFile("lead/progress/index.md"), "utf8"), "未改过的旧默认升级为新版出厂内容")
+  assert.equal(await exists(path.join(userRulesRoot, "lead/progress/index.default.md")), false, "升版不写旁路")
+})
+
+test("init 用户公共规则：测试进程未显式指定目录时不写主目录；出厂模板缺失不阻塞技能装载", async () => {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-init-rules-skip-"))
+  const skipped = await tw(["init"], { projectRoot })
+  assert.equal(skipped.rules.action, "skipped")
+  assert.match(skipped.rules.note, /NODE_TEST_CONTEXT/, "测试进程默认不写用户主目录")
+  assert.equal(skipped.ok, true)
+
+  // 隔离包根缺少 team-work/rules：规则项单独报不可用，技能目录照常逐项处理
+  const packageRoot = await mkdtemp(path.join(tmpdir(), "tw-init-rules-missing-"))
+  for (const folder of ["runtime-v3", "policy", "skills"]) {
+    await cp(new URL("../" + folder, import.meta.url), path.join(packageRoot, folder), { recursive: true })
+  }
+  const { pathToFileURL } = await import("node:url")
+  const { tw: isolatedTw } = await import(pathToFileURL(path.join(packageRoot, "runtime-v3/cli.mjs")))
+  const userRulesRoot = await mkdtemp(path.join(tmpdir(), "tw-user-rules-missing-"))
+  const isolatedProject = await mkdtemp(path.join(tmpdir(), "tw-init-rules-missing-project-"))
+  const result = await isolatedTw(["init"], { projectRoot: isolatedProject, userRulesRoot })
+  assert.equal(result.rules.action, "unavailable")
+  assert.match(result.rules.note, /出厂规则模板不可用/)
+  assert.equal(Object.hasOwn(result.rules, "root"), false, "源缺失时不声称已释放")
+  for (const key of ["skill", "writingSkill", "reviewSkill", "outputStandard"]) assert.equal(result[key].action, "installed", key + " 不受规则释放失败影响")
+})

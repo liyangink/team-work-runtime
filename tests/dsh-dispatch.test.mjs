@@ -161,7 +161,6 @@ function ownerWave(overrides = {}) {
     round: 1,
     continuation: false,
     prompt: "派单全文 PROMPT",
-    requiredGuidance: "公共必读规则：结论前置，保留真实风险。",
     deliver: "deliver",
     modelHint: { provider: "p-a", model: "m-j1", source: "global-settings" },
     weight: 1,
@@ -286,13 +285,14 @@ function makeTool(deps = {}, ctxOverrides = {}) {
   return { tool, ...made }
 }
 
-test("自动短规则实际到达初派/续派/重建/在途冷提醒，Lead 最终 render 只保留自身段", async (t) => {
-  const rules = "公共必读段原文\n专项必读段原文\n资源：包内规范"
+test("成员投递为单块业务正文：初派/续派/重建/在途冷提醒都不带规则块，Lead presentation 原样透传", async (t) => {
+  const rules = "旧投影规则段原文\n专项必读段原文\n资源：包内规范"
   for (const mode of ["fresh", "incremental", "full", "reminder", "rebuild", "inflight-reminder", "inflight-recreate"]) {
     const h = makeCtx()
     // 禁止模型调用技能入口；装配服务仍在，不把移除服务当成验收。
     h.ctx.skills = { register() { return () => {} }, get() { assert.fail("不应主动调用 skill") } }
     const continuation = ["incremental", "full", "reminder", "rebuild"].includes(mode)
+    // 旧 Runtime 投影仍可能带 requiredGuidance：绑定层必须忽略，不得追加第二个 text 块。
     const wave = ownerWave({ continuation, ...(continuation ? { expectedAgentId: "prior-example" } : {}), prompt: "本轮增量正文", promptFull: "本轮完整正文", requiredGuidance: rules })
     if (["incremental", "full", "reminder", "inflight-reminder"].includes(mode)) h.injectCold("prior-example", { received: mode === "incremental" ? "旧轮正文" : ["reminder", "inflight-reminder"].includes(mode) ? wave.promptFull : null })
     const lead = { purpose: "进展汇报", requiredGuidance: "Lead 公共必读原文" }
@@ -303,8 +303,8 @@ test("自动短规则实际到达初派/续派/重建/在途冷提醒，Lead 最
     const tool = twDispatchDefinition(h.ctx, { runTw })
     const result = await tool.execute({ task: "demo-t" }, EXEC)
     const sent = h.started[0]?.request.prompt ?? h.followups[0]?.content
-    assert.equal(sent.length, 2, mode)
-    assert.equal(sent[1].text, rules, mode)
+    assert.equal(sent.length, 1, mode + "：成员消息只有业务正文一块")
+    assert.equal(sent[0].type, "text", mode)
     if (mode.includes("reminder")) {
       assert.match(sent[0].text, /已收到本轮派单正文/)
       assert.doesNotMatch(sent[0].text, /本轮完整正文|本轮增量正文/)
@@ -313,23 +313,37 @@ test("自动短规则实际到达初派/续派/重建/在途冷提醒，Lead 最
     assert.deepEqual(result.presentation, lead)
     const rendered = tool.output.render({}, result)[0].text
     assert.equal(JSON.parse(rendered).presentation.requiredGuidance, lead.requiredGuidance)
-    assert.doesNotMatch(rendered, /公共必读段原文|本轮完整正文|本轮增量正文/)
-    t.diagnostic(mode + "：规则 2 段/" + rules.length + " 字符，实际投递 1 条消息；非 token 统计")
+    assert.doesNotMatch(rendered, /旧投影规则段原文|专项必读段原文|本轮完整正文|本轮增量正文/)
+    t.diagnostic(mode + "：单块业务正文 " + sent[0].text.length + " 字符，实际投递 1 条消息；非 token 统计")
   }
 })
 
-test("规则变化后的冷对账仍提醒，live 与 awaiting-user 不投递也不调用技能", async () => {
+test("requiredGuidance 缺失或为空时只投业务正文，不注入规则未带入诊断句", async () => {
+  for (const value of [undefined, "", "   "]) {
+    const h = makeCtx()
+    const wave = ownerWave({ ...(value === undefined ? {} : { requiredGuidance: value }) })
+    const { runTw } = makeRunTw(planCard([wave]))
+    const out = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
+    assert.equal(out.dispatched[0].ok, true)
+    assert.deepEqual(h.started[0].request.prompt, [{ type: "text", text: wave.prompt }])
+    assert.doesNotMatch(JSON.stringify(h.started[0].request.prompt), /规则未带入|requiredGuidance/)
+  }
+})
+
+test("规则字段变化不改变业务正文收单与冷提醒；live 与 awaiting-user 不投递也不调用技能", async () => {
   const h = makeCtx()
   const wave = ownerWave({ requiredGuidance: "第一版规则" })
   const { runTw } = makeRunTw(planCard([wave], { presentation: { requiredGuidance: "Lead 规则" } }))
   const tool = twDispatchDefinition(h.ctx, { runTw })
   await tool.execute({ task: "demo-t" }, EXEC)
-  // 已持久化全部块，模拟仅活会话离开；业务文本没有变化。
+  // 业务正文已持久化，模拟仅活会话离开；业务文本没有变化，规则字段变化不构成重投理由。
   h.ctx.sessions.get = () => undefined
   wave.requiredGuidance = "第二版规则"
   const retry = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(retry.dispatched[0].resume, "reminder")
-  assert.equal(h.followups[0].content[1].text, "第二版规则")
+  assert.equal(h.followups[0].content.length, 1, "冷提醒也只有业务正文一块")
+  assert.match(h.followups[0].content[0].text, /已收到本轮派单正文/)
+  assert.doesNotMatch(h.followups[0].content[0].text, /第一版规则|第二版规则/)
   h.ctx.sessions.get = () => ({ header: { parentSession: EXEC.agent.id } })
   await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(h.started.length, 1)
@@ -342,7 +356,7 @@ test("规则变化后的冷对账仍提醒，live 与 awaiting-user 不投递也
   assert.equal(h.followups.length, 1)
 })
 
-test("真实 CLI 接缝：默认子进程派单经创建核心送达同源两段，最终 render 不泄漏成员正文", async (t) => {
+test("真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 render 只保留 Lead 呈现", async (t) => {
   const project = await mkdtemp(path.join(os.tmpdir(), "twr-clarity-dispatch-"))
   t.after(() => rm(project, { recursive: true, force: true }))
   const snapshot = { entryId: "team-work-dsh", profile: "profile-example", tiers: {
@@ -368,13 +382,12 @@ test("真实 CLI 接缝：默认子进程派单经创建核心送达同源两段
   assert.match(publicRules, /实质争议.*暂停依赖/, "真实 CLI 派单到创建消息的通用暂停提醒，仅证明送达")
   const reviewRules = await required("../skills/clarity-review/references/review-rules.md")
   const message = h.started[0].request.prompt
-  assert.equal(message.length, 2)
-  assert.equal(message[1].text.split(publicRules).length - 1, 1)
-  assert.equal(message[1].text.split(reviewRules).length - 1, 1)
-  assert.equal(message[0].text.includes(publicRules), false)
+  assert.equal(message.length, 1, "成员消息是单块业务正文，不再追加规则块")
+  assert.equal(message[0].type, "text")
+  assert.match(message[0].text, /^# 派单（key: /)
+  assert.match(message[0].text, /任务：clarity-seam；阶段：code-review/)
+  assert.equal(message[0].text.includes(publicRules), false, "明晰段只随 Lead 反吐出现")
   assert.equal(message[0].text.includes(reviewRules), false)
-  assert.match(message[1].text, /skills\/clarity-guidance\/output-standard\.md/)
-  assert.match(message[1].text, /skills\/clarity-review\/references\/review-rules\.md/)
   const rendered = tool.output.render({}, result)[0].text
   const leadText = JSON.parse(rendered).presentation
   assert.equal(typeof leadText, "string")
@@ -382,7 +395,7 @@ test("真实 CLI 接缝：默认子进程派单经创建核心送达同源两段
   assert.equal(leadText.includes(reviewRules), false)
   assert.equal("waves" in JSON.parse(rendered), false)
   assert.equal(rendered.includes(JSON.stringify(message[0].text)), false)
-  t.diagnostic("真实子进程 → 插件核心 → start 参数：公共＋专项 2 段，" + message[1].text.length + " 字符；Lead 仅公共段，无主动 skill 调用或真实 LLM。")
+  t.diagnostic("真实子进程 → 插件核心 → start 参数：成员单块业务正文 " + message[0].text.length + " 字符；Lead 仅自身呈现，无主动 skill 调用或真实 LLM。")
 })
 
 test("buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表", () => {

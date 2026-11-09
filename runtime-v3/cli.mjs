@@ -1,9 +1,10 @@
 // cli.mjs — tw CLI：v3 工具契约的参考实现（§4）
 // 卡片输出为 JSON（Lead 在 DSH 里用 bash 调用并解析）；拒绝输出带修复指引（P2）。
-import { randomBytes } from "node:crypto"
+import { randomBytes, createHash } from "node:crypto"
 import { accessSync, constants } from "node:fs"
-import { readFile, rm, mkdir, access, lstat, realpath, mkdtemp } from "node:fs/promises"
+import { readFile, rm, mkdir, access, lstat, realpath, mkdtemp, readdir } from "node:fs/promises"
 import fsPromises from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -12,7 +13,7 @@ import { deriveTask } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFingerprint, humanDecisionFresh } from "./gate.mjs"
 import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
-import { loadGuidance, createClarityGuidanceReader, memberNeedsClarityReview, requiredClarityText } from "./guidance.mjs"
+import { lockedWorkflowContract, resolveMemberRules, composeMemberRules, resolveLeadRules, createClarityGuidanceReader, requiredClarityText } from "./rules.mjs"
 import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
 import { writableMatch, writablePathsOverlap } from "./domain/writable.mjs"
 
@@ -86,21 +87,29 @@ function fixHint(code) {
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
-// 呈现入口只说明本卡沟通目的；通用规则从根包规范提取，避免静态常量副本。
-const PRESENTATION_DECISION = "呈现纪律：向用户说明当前要决定什么、推荐与依据、选项后果、核心阻碍及下一步；结合 progress 事实与完整产物，遵守下列同源规则。"
-const PRESENTATION_PROGRESS = "向用户汇报本卡片时用自然语言完整说明（做了什么、下一步会发生什么、需要用户做什么），不要输出卡片字段名或内部编号。"
-const PRESENTATION_DISPATCH = "向用户简报：本阶段派发了什么角色的成员做什么工作。派单全文（dispatch.prompt）原样转发给成员执行，不要复述给用户。"
+// 呈现注入：Lead 规则通道的代码半边——只决定"在哪个时点读哪个目录、拼哪几段"，
+// 文案本身是规则数据 team-work/rules/lead/<时点>/*.md（见 rules.mjs 的 resolveLeadRules）。
+// 反吐内容 = 该时点目录下文件正文（按文件名排序）+ 根包明晰必读段（决定点加审阅段，同源提取）。
+// 时点判定完全沿用原口径：决定点 = status/stop/transition 为 awaiting-user/blocked；
+// 派发 = transition 为 dispatch；进展 = advance/complete/wait-inflight 或 completed/archived/wait-inflight
+// 或 run 的 working+next=dispatch；机械回执不命中。
+async function presentationText({ kind, projectRoot, readGuidance, review = false }) {
+  const rules = await resolveLeadRules({ kind, projectRoot })
+  const leadText = rules.map((rule) => rule.text.trim()).filter(Boolean).join("\n\n")
+  const clarity = await readGuidance({ review })
+  return leadText ? leadText + "\n\n" + clarity : clarity
+}
 
-// 决定/阻塞带公共与专项，其他实际汇报点仅公共；机械回执不命中。
-async function attachPresentation(card, readGuidance, stop = null, runProgress = false) {
+async function attachPresentation(card, readGuidance, stop = null, runProgress = false, projectRoot = null) {
   if (!card || typeof card !== "object" || Array.isArray(card) || card.presentation) return card
   const decision = [card.status, stop, card.transition].some((v) => v === "awaiting-user" || v === "blocked")
   const dispatch = card.transition === "dispatch"
   const progress = ["advance", "complete", "wait-inflight"].includes(card.transition) ||
     [card.status, stop].some((v) => ["completed", "archived", "wait-inflight"].includes(v)) ||
     (runProgress && card.status === "working" && card.next === "dispatch")
-  if (decision || dispatch || progress) return { ...card, presentation: (decision ? PRESENTATION_DECISION : dispatch ? PRESENTATION_DISPATCH : PRESENTATION_PROGRESS) + "\n\n" + await readGuidance({ review: decision }) }
-  return card
+  if (!decision && !dispatch && !progress) return card
+  const kind = decision ? "decision" : dispatch ? "dispatch" : "progress"
+  return { ...card, presentation: await presentationText({ kind, projectRoot, readGuidance, review: decision }) }
 }
 
 // 阶段工作摘要（P4：从 reports/artifacts 自有事实推导，给 Lead 现成的人话素材，
@@ -293,6 +302,21 @@ function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
   return null
 }
 
+// 成员规则解析（规则库 team-work/rules，见 rules.mjs）：按 role×teamScene 合成卡片三段文本。
+// 只在该波真正派发或在途重建时调用，同一批次的同角色只解析一次；三段全空返回空字符串（卡上整段省略）。
+// teamScenes 直接取自已加载的工作流定义（避免重复读盘，也避免集合缺失时的警告噪声）。
+// 规则是增强不是门禁：读取失败由 rules.mjs 按"该层没有条目"降级，不阻塞派发。
+async function memberRulesText({ projectRoot, workflow, teamScene, roles }) {
+  const teamScenes = (workflow?.stages ?? [])
+    .map((stage) => stage?.teamScene)
+    .filter((scene) => typeof scene === "string" && scene)
+  const texts = new Map()
+  for (const role of new Set(roles)) {
+    texts.set(role, composeMemberRules(await resolveMemberRules({ role, teamScene: teamScene ?? null, projectRoot, teamScenes })))
+  }
+  return texts
+}
+
 // 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）。
 // §7.3 兜底三字段（dispatch 自身崩溃窗口的恢复事实，由 runtime 锁内投影——绑定层不直读账本）。
 // 调用方约束：必须在任务锁内调用（registered 查 agents.json 与 journal 读取要求同一临界区）。
@@ -302,10 +326,17 @@ function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
 // - promptFull：仅续派条目——全量 prompt 变体（C②：断链 fresh 重建/空壳补发用，绑定层只选用不拼装）；
 // - registered：锁内查 mappings 该 key 有无对应代理（tw-dispatch 判定链的判定事实；
 //   agents.json 缺失/损坏时字段降级为缺失，消费方透传不补派）。
-async function inflightDispatches(task, stageId, guidance = null) {
+// 规则（memberRules）按每个在途条目的 role 重建同文本，与首派卡一致；只在本次真正重建时读盘。
+async function inflightDispatches(projectRoot, task, stageId) {
   const stageDef = task.workflow.stages.find((st) => st.id === stageId)
   const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
   if (!inflight) return []
+  const memberRules = await memberRulesText({
+    projectRoot,
+    workflow: task.workflow,
+    teamScene: stageDef?.teamScene,
+    roles: inflight.open.map((d) => d.role),
+  })
   // agents.json 缺失 = 零登记事实（registered=false，补派安全）；损坏 = 判定事实不可得（registered
   // 字段降级为缺失，tw-dispatch 透传不补派——宁透传不误派）。
   let mappings = {}
@@ -318,7 +349,7 @@ async function inflightDispatches(task, stageId, guidance = null) {
   const excludedKeys = supersededKeys(task.journal)
   const resolvedTiers = await resolveTiers()
   return inflight.open.map((d) => {
-    const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, guidance).dispatch
+    const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, memberRules.get(d.role) ?? "").dispatch
     // modelHint 回填降级链：journal 快照 → 按重建 tier 从调用快照解析 → 不可解析标记（指 retire）
     let modelHint = d.modelHint && d.modelHint.provider && d.modelHint.model ? d.modelHint : null
     let modelHintUnresolved = false
@@ -388,8 +419,11 @@ function currentReviewFpOf(task, state, workflow, policy) {
 }
 
 // 派单卡（v3.2 波组：detail = {key, package, round, continuation, writable}）
-// guidance（可选）：角色/场景公共引导库（team-work/guidance），按 role+teamScene 检索注入；
-// 缺失或未加载时跳过——引导是增强，不阻塞派发。
+// 段序固定（方案第二节 2）：卡头 → 本轮验收基线 → 工作流职责（TWR 固定契约，包内锁定）
+// → 规范/红线/建议（规则库可 DIY 三段）→ 行动与交付。填充只有两种来源：
+// runtime = 任务事实投影 + lockedWorkflowContract(role)；rules = 调用方解析好的三段文本 memberRules
+// （resolveMemberRules + composeMemberRules 的结果，为空字符串时整段省略）。
+// 带当波任务事实的包限定、组合评审/裁决覆盖句留在行动与交付段（纪律通用句已进锁定契约）。
 // 上一轮 blocked 上下文（扩权重派场景）：该包最新 owner 报告为 blocked 时注入派单卡，
 // 让重派后的 Owner（可能是新会话）知道上次为什么做不了、本轮范围已重新声明。
 // 注意：本函数用 at 墙钟选取"最新报告"，仅服务于派单卡展示文案；blocked 的**有效性**判定
@@ -403,7 +437,7 @@ function lastOwnerBlockedSummary(task, pkg) {
   return last && last.payload?.outcome === 'blocked' ? String(last.payload.summary ?? '') : null
 }
 
-function dispatchCard(task, stageDef, wave, detail, guidance = null) {
+function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const pkg = detail.package ?? null
   const currentPackage = pkg == null ? null : task.packages?.find((p) => p.id === pkg)
@@ -414,15 +448,6 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
   const intro = detail.continuation ? '# 续派（key: ' + detail.key + '）——你在原上下文基础上继续' : '# 派单（key: ' + detail.key + '）'
   const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '')
-  const roleHint = guidance?.roles?.[wave.role]
-  const sceneHint = guidance?.scenes?.[stageDef.teamScene]
-  const memberBoundary = [
-    '## 成员职责边界',
-    '你是已分配的 ' + wave.role + ' 成员，不是 Lead。不得重建整个审查团队或自行再招募八视角团队；不得自行开任务、拆包或派发正式波次。已分配的完整检查内容照常完成。',
-    wave.role === 'owner' && pkg ? '你仅承担本包 ' + pkg + '；总目标中的其他包与团队组织要求由 Lead 处理。' : '仅承担本派单声明的职责。',
-    wave.scope === 'consolidation' || (wave.kind === 'verdict' && task.packages?.length) ? '组合评审/裁决仍覆盖本轮已交付包的组合制品。' : '',
-    '需要辅助时，可就本职责内的限定小问题委托 junior 只读助手：可写范围为空，不作完整审查、不替代正式 deliver/review；助手不得继续委托。你必须核验并整合结果。转发消息也须带完整职责边界，不得把总目标直接复制成助手派单。',
-  ].filter(Boolean).join('\n')
   // 当前验收基线由同一事实投影，两种正文及在途重建都携带一次。
   const contextParts = [
     '## 本轮验收基线',
@@ -434,14 +459,14 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
       ? '各包完成标准（仅验收已交付包）：\n' + task.packages.filter((p) => Array.isArray(p.done) && p.done.length).map((p) => p.id + '：\n' + p.done.map((d) => '- ' + d).join('\n')).join('\n')
       : '',
   ]
-  const headParts = [
-    intro,
-    headLine,
-    memberBoundary,
-    roleHint ? '## 角色指引（' + wave.role + '）\n' + roleHint : '',
-    sceneHint ? '## 场景指引（' + stageDef.teamScene + '）\n' + sceneHint : '',
+  // 包限定与组合职责带着本波任务事实（哪个包、本轮已交付哪些包），属 runtime 尾段而非固定契约。
+  const scopeParts = [
+    wave.role === 'owner' && pkg ? '你仅承担本包 ' + pkg + '；总目标中的其他包与团队组织要求由 Lead 处理。' : '仅承担本派单声明的职责。',
+    wave.scope === 'consolidation' || (wave.kind === 'verdict' && task.packages?.length) ? '组合评审/裁决仍覆盖本轮已交付包的组合制品。' : '',
   ]
   const tailParts = [
+    scopeParts[0],
+    scopeParts[1],
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',
     // §4 写边界补强（phase3 方案）：声明越界后果——三层防线可见化（派单纪律/ deliver 校验/快照恢复）
     wave.role === 'owner' ? '可写范围外的修改会被 deliver 拒绝；已越界污染的产出物可在恢复轮回滚（tw restore 快照恢复）。不要尝试绕过。' : '',
@@ -466,14 +491,16 @@ function dispatchCard(task, stageDef, wave, detail, guidance = null) {
   ]
   // 保留全量变体与恢复选择；续派也带当前基线，不依赖成员记忆旧条件。
   const join = (sections) => sections.filter(Boolean).join('\n\n')
-  const prompt = join([...headParts, ...contextParts, ...tailParts])
+  const disciplineParts = [lockedWorkflowContract(wave.role), memberRules]
+  const prompt = join([intro, headLine, ...contextParts, ...disciplineParts, ...tailParts])
   const promptFull = detail.continuation
     ? join([
-        ['# 续派全量变体（key: ' + detail.key + '）——原会话上下文不可用时的自足派单', headLine],
-        headParts.slice(2),
-        contextParts,
-        tailParts,
-      ].flat())
+        '# 续派全量变体（key: ' + detail.key + '）——原会话上下文不可用时的自足派单',
+        headLine,
+        ...contextParts,
+        ...disciplineParts,
+        ...tailParts,
+      ])
     : prompt
   return {
     ok: true,
@@ -581,8 +608,7 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
     // F3/F4 在途重建（只读）：卡内嵌原派单全文与兜底判定事实（modelHint/expectedAgentId/registered）。
     // 恢复入口 = tw-dispatch：按条目 registered/expectedAgentId 逐条自动处置（已登记等待/续派指引/补派）；
     // 无插件终端按 dsh-orchestration 的 wait-inflight 规程手工处置。
-    const guidance = await loadGuidance(projectRoot) // 惰性：在途重建按需加载
-    const inflight = await inflightDispatches(task, state.stage, guidance)
+    const inflight = await inflightDispatches(projectRoot, task, state.stage) // 惰性：在途重建按需解析规则
     return {
       ok: true, task: name, stage: state.stage, status: "working", next: "wait", transition: "wait-inflight",
       dispatchKey: state.next.dispatchKey,
@@ -744,15 +770,14 @@ function pendingDecisionDetail(journal) {
   return open.find((d) => !settled.has(d.decisionId)) ?? null
 }
 
-// 引导库惰性加载（P3-5）：loadGuidance 只在"真正派发"与"在途重建"两个分支内按需调用——
+// 规则库惰性读取（P3-5）：memberRulesText 只在"真正派发"与"在途重建"两个分支内按需调用——
 // 任务不存在（归档卡）、终态幂等完成卡、awaiting-user 静止、advance/blocked 等非派发路径
-// 零引导 I/O（每次调用 = 4 次 readdir（包内 + 项目根 roles/scenes，项目根缺失静默跳过）
-// + 全部引导文件读取，见 guidance.mjs）。
-// 无模块级缓存：每次派发/补发重新全量读取，保住"改引导文件即下次派发生效"的热变语义。
+// 零成员规则 I/O（每次调用按 role×teamScene 读取规则库三层目录，见 rules.mjs）。
+// 无模块级缓存：每次派发/补发重新全量读取，保住"改规则文件即下次派发生效"的热变语义。
 // 锁内执行权衡：本函数整体在任务锁（locks/task.lock，见 cmdDispatchPlan 的 withOwnerLock）内运行，
-// 引导读取计入持锁时间——代价通过惰性控制在最小（仅派发/在途重建分支才读），
-// 换取"判定与写入同锁"（复核修复原则）：注入引导的派单文本与 dispatched/journal 事实
-// 在同一临界区内落盘，并发 run 不会出现引导内容与派发事实错位或读到半程覆盖层的竞态。
+// 规则读取计入持锁时间——代价通过惰性控制在最小（仅派发/在途重建分支才读），
+// 换取"判定与写入同锁"（复核修复原则）：注入规则的派单文本与 dispatched/journal 事实
+// 在同一临界区内落盘，并发 run 不会出现规则内容与派发事实错位或读到半程覆盖层的竞态。
 // 待决卡选择表（F5 四类僵局/返工/人工门/默认收敛；runTransition 签发与 runStatusCard 只读渲染共用）：
 // 僵局卡对既有 converge-user choices 的扩展——「追加一轮」对僵局包会立即再判僵局（用户可见空转），不得沿用；
 // blocked 卡用专用两选项「重派 respond（新绑定波）/ 结束任务」——不沿用「追加一轮」
@@ -788,8 +813,8 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const round = (projectRounds({ journal: task.journal, reports: task.reports }).get(null) ?? 0) + 1
     const wave = { kind: 'produce', role: 'owner', round, owners: [{ package: null, round, continuation: false }] }
     const d = { key: 'd' + dispatchSeq + '-' + randomBytes(3).toString('hex'), waveId, package: null, round, continuation: false, writable: decl }
-    const guidance = await loadGuidance(projectRoot)
-    const dispatch = withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint)
+    const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
+    const dispatch = withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, decl) }])
     return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch, dispatches: [dispatch], wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '已按传入可写范围重派 produce（机械恢复不代表产品授权）；派单卡保留上一轮 blocked 原因' }
   }
@@ -862,21 +887,24 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         if (declined) {
           const tiersBackup = task.packages
           task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
-          const guidance = await loadGuidance(projectRoot) // 惰性：降档同样要派发，派发前加载
-          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
+          // 惰性：降档同样要派发，派发前解析规则
+          const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
+          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint))
           task.packages = tiersBackup
           await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
           return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
         }
       }
-      const guidance = await loadGuidance(projectRoot) // 惰性：仅到达真正派发点才加载
-      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, guidance).dispatch, selectModelHint))
+      // 惰性：仅到达真正派发点才解析规则
+      const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
+      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint))
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = newKey()
-    const guidance = await loadGuidance(projectRoot) // 惰性：非 owner 派发同样只在派发点加载
-    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, guidance)
+    // 惰性：非 owner 派发同样只在派发点解析规则
+    const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: [wave.role] })
+    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, rules.get(wave.role) ?? "")
     const dispatch = withModelHint(card.dispatch, selectModelHint)
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
     return { ...card, dispatch }
@@ -908,8 +936,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
   if (state.next.kind === 'wait-inflight') {
     // F3/F4：在途卡内嵌原派单全文（从 journal dispatched 事实重建）+ §7.3 兜底判定事实三字段；
     // 恢复入口 = dispatch 通道（tw-dispatch 按条目自动处置；无插件终端按 orchestration 规程手工补派）。
-    const guidance = await loadGuidance(projectRoot) // 惰性：在途重建（补发路径）按需加载
-    const inflight = await inflightDispatches(task, state.stage, guidance)
+    const inflight = await inflightDispatches(projectRoot, task, state.stage) // 惰性：在途重建按需解析规则
     return {
       ok: true, task: name, stage: state.stage, status: 'working', next: 'wait', transition: 'wait-inflight',
       dispatchKey: state.next.dispatchKey,
@@ -1590,9 +1617,122 @@ async function cmdModels({ projectRoot }) {
   }
 }
 
-// init：只处理三技能目录与公共单文件，逐项验证/暂存/替换，保留其他内容。
+// ---- tw init 的用户公共规则释放（方式 A 的同步半边，见方案第二节 4）----
+// 出厂模板 = 包内 team-work/rules/；目标 = 用户公共规则目录（默认 ~/.team-work/rules，测试可传 userRulesRoot）。
+// 逐文件判定用户是否改过：
+//   目标缺失 → 直接写入新版默认；
+//   与出厂新版逐字相同 → 无变化（只刷新摘要记录）；
+//   与"上次释放的出厂摘要"相同（记录在 .tw-init-hashes.json）= 用户没改过 → 静默更新为新版默认；
+//   其余（无记录或摘要不符）= 用户可能改过 → 保留用户版本，新版默认写同目录 <stem>.default.md 旁路供对照合并。
+// 摘要记录始终更新为本次出厂版本：下一版仍能区分"用户改过"与"版本升级"。
+// --force 不覆盖用户改过的规则文件——规则是用户数据，force 只用于重新装载技能目录；
+// 装载器忽略 *.default.md 旁路（见 rules.mjs 的 BYPASS_SUFFIXES），旁路只在用户手工合并时有用。
+// 测试进程（node --test 子进程带 NODE_TEST_CONTEXT）未显式传 userRulesRoot 时跳过写入，
+// 避免套件里已有的 tw init 调用把开发机主目录当副作用；需要验证释放逻辑时显式传 userRulesRoot。
+const RULES_TEMPLATE_SEGMENTS = ["team-work", "rules"]
+const RULES_HASH_FILE = ".tw-init-hashes.json"
+const RULES_BYPASS_SUFFIXES = [".default.md", ".new.md"]
+
+function sha256(text) {
+  return createHash("sha256").update(text, "utf8").digest("hex")
+}
+
+// 出厂模板文件清单：递归收集 *.md（跳过旁路副本），相对路径统一用 "/" 分隔。
+async function listTemplateFiles(dir, prefix = "") {
+  const files = []
+  for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const relative = prefix ? prefix + "/" + entry.name : entry.name
+    if (entry.isDirectory()) files.push(...await listTemplateFiles(path.join(dir, entry.name), relative))
+    else if (entry.isFile() && entry.name.endsWith(".md") && !RULES_BYPASS_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) files.push(relative)
+  }
+  return files
+}
+
+// 用户公共规则目录：显式参数优先；缺省为 ~/.team-work/rules；测试进程未显式指定时返回 null（跳过写入）。
+function userRulesRootFor(explicit) {
+  if (explicit !== undefined && explicit !== null && explicit !== "") return path.resolve(explicit)
+  if (process.env.NODE_TEST_CONTEXT) return null
+  return path.join(os.homedir(), ".team-work", "rules")
+}
+
+async function syncUserRules({ packageRoot, userRulesRoot }) {
+  const sourceRoot = path.join(packageRoot, ...RULES_TEMPLATE_SEGMENTS)
+  try {
+    if (!(await lstat(sourceRoot)).isDirectory()) throw new Error("出厂模板须为目录")
+  } catch (error) {
+    return { action: "unavailable", source: sourceRoot, note: "出厂规则模板不可用（" + (error?.code ?? error?.message) + "）；跳过用户公共规则释放，技能装载不受影响" }
+  }
+  if (!userRulesRoot) {
+    return { action: "skipped", source: sourceRoot, note: "测试进程（NODE_TEST_CONTEXT）默认不写用户主目录；需要验证规则释放时显式传 userRulesRoot" }
+  }
+  try {
+    const files = await listTemplateFiles(sourceRoot)
+    // 旧摘要记录：缺失 = 首次释放；损坏 = 无法判断"用户改过"，按与出厂逐字比对处理（保守方向不覆盖）
+    const hashFile = path.join(userRulesRoot, RULES_HASH_FILE)
+    let previous = {}
+    let hashState = "ok"
+    try {
+      const parsed = JSON.parse(await readFile(hashFile, "utf8"))
+      if (parsed && typeof parsed === "object" && parsed.files && typeof parsed.files === "object" && !Array.isArray(parsed.files)) previous = parsed.files
+      else hashState = "invalid"
+    } catch (error) {
+      hashState = error?.code === "ENOENT" ? "missing" : "invalid"
+    }
+    await mkdir(userRulesRoot, { recursive: true })
+    const next = {}
+    const changes = []
+    const summary = { installed: 0, updated: 0, kept: 0, unchanged: 0 }
+    for (const relative of files) {
+      const source = await readFile(path.join(sourceRoot, ...relative.split("/")), "utf8")
+      next[relative] = sha256(source)
+      const target = path.join(userRulesRoot, ...relative.split("/"))
+      let current = null
+      try {
+        current = await readFile(target, "utf8")
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw new Error("读取用户规则 " + target + " 失败：" + (error?.code ?? error?.message))
+      }
+      if (current === null) {
+        await mkdir(path.dirname(target), { recursive: true })
+        await atomicWrite(target, source)
+        summary.installed += 1
+        changes.push({ path: relative, action: "installed" })
+        continue
+      }
+      if (current === source) {
+        summary.unchanged += 1
+        continue
+      }
+      if (previous[relative] === sha256(current)) {
+        await atomicWrite(target, source)
+        summary.updated += 1
+        changes.push({ path: relative, action: "updated" })
+        continue
+      }
+      const bypass = relative.replace(/\.md$/, ".default.md")
+      const bypassPath = path.join(userRulesRoot, ...bypass.split("/"))
+      await mkdir(path.dirname(bypassPath), { recursive: true })
+      const existingBypass = await readFile(bypassPath, "utf8").catch(() => null)
+      if (existingBypass !== source) await atomicWrite(bypassPath, source)
+      summary.kept += 1
+      changes.push({ path: relative, action: "kept", bypass })
+    }
+    await atomicWrite(hashFile, JSON.stringify({ version: 1, files: next }, null, 2) + "\n")
+    return {
+      action: "synced",
+      root: userRulesRoot,
+      summary,
+      ...(changes.length ? { files: changes } : {}),
+      ...(hashState === "invalid" ? { warning: hashFile + " 不可读或格式不符，已按「与出厂逐字比对」处理：内容与出厂相同的文件按未改过刷新，其余保留用户版本并写旁路" } : {}),
+    }
+  } catch (error) {
+    return { action: "unavailable", root: userRulesRoot, note: "用户公共规则释放失败：" + (error?.code ?? error?.message) + "；技能装载不受影响，修复后原样重跑 init" }
+  }
+}
+
+// init：装载三技能目录与公共单文件（逐项验证/暂存/替换，保留其他内容），并释放用户公共规则模板。
 // 核心流程（安装 → open → run）不需要它。
-async function cmdInit({ projectRoot, force = false }) {
+async function cmdInit({ projectRoot, force = false, userRulesRoot } = {}) {
   const root = await realpath(projectRoot)
   const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
   const targets = [
@@ -1679,6 +1819,12 @@ async function cmdInit({ projectRoot, force = false }) {
   const actions = targets.map(([key]) => result[key].action)
   result.note = "init 仅装载三个技能目录与公共规范单文件，不创建配置或任务事实；--force 仅覆盖这四个目标，其他文件保留。" +
     (actions.includes("unavailable") ? "存在部分失败，按逐项诊断恢复；不能声明完整同版。" : actions.includes("skipped") ? "含已有副本，版本混用待核；无法据存在性确认兼容。" : "四目标均来自当前根包；模型配置仍由 DSH 当前 profile 管理。")
+  // 用户公共规则单独一项：失败不影响技能装载，也不并入上面的技能同版判断（两者是不同制品）。
+  result.rules = await syncUserRules({ packageRoot, userRulesRoot: userRulesRootFor(userRulesRoot) })
+  const rulesNote = result.rules.action === "synced"
+    ? "用户公共规则已同步到 " + result.rules.root + "（新增 " + result.rules.summary.installed + "、更新 " + result.rules.summary.updated + "、保留用户修改 " + result.rules.summary.kept + "、未变 " + result.rules.summary.unchanged + "）"
+    : "用户公共规则未释放（" + result.rules.action + "，见 rules 字段）"
+  result.note = result.note.replace(/。$/, "；") + rulesNote + "。"
   return result
 }
 
@@ -1697,7 +1843,7 @@ function helpCard() {
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
       gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
       models: "tw models：只读调用配置快照的 tier→模型解析结果与 entry/profile 来源",
-      init: "tw init [--force]：装载 .dsh/skills/ 下 team-work-v3、clarity-writing、clarity-review 三目录及 clarity-guidance/output-standard.md 单文件；默认逐项保留，--force 只覆盖四目标，不清理其他文件",
+      init: "tw init [--force]：装载 .dsh/skills/ 下 team-work-v3、clarity-writing、clarity-review 三目录及 clarity-guidance/output-standard.md 单文件（默认逐项保留，--force 只覆盖四目标，不清理其他文件），并把包内 team-work/rules/ 出厂模板增量释放到用户公共规则目录 ~/.team-work/rules/（缺失补齐；用户未改过的旧默认静默升版；用户改过的保留并写 <stem>.default.md 旁路，--force 也不覆盖用户修改）",
       restore: "tw restore --task <n> --path <路径>：从最后注册快照恢复产出物",
       retire: "tw retire --task <n> --wave <wvN> --reason <原因>：作废未结波（仅 Lead；解除在途，已交付报告保留审计）",
       migrate: "tw migrate --task <n>：既有任务波身份迁移（追加 wave-assigned 事件；异 digest 冲突出选择卡）",
@@ -1712,7 +1858,7 @@ function helpCard() {
   }
 }
 
-async function twInner(argv, { projectRoot = process.cwd(), stdout = process.stdout } = {}) {
+async function twInner(argv, { projectRoot = process.cwd(), stdout = process.stdout, userRulesRoot } = {}) {
   const [cmd, ...rest] = argv
   const args = {}
   for (let i = 0; i < rest.length; i += 2) args[rest[i].replace(/^--/, "")] = rest[i + 1]
@@ -1741,7 +1887,7 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
       case "agent-map": return await cmdAgentMap({ ...common, name: args.task, key: args.key, agent: args.agent, modelHint: args["model-hint"] })
       case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
       case "models": return await cmdModels(common)
-      case "init": return await cmdInit({ ...common, force: argv.includes("--force") })
+      case "init": return await cmdInit({ ...common, force: argv.includes("--force"), userRulesRoot })
       case "help": return helpCard()
       case "deliver": return await cmdDeliver({ ...common, name: args.task, key: args.key, payload: {
         outcome: args.outcome, summary: args.summary,
@@ -1788,45 +1934,21 @@ async function markTreeReadOnly(rootDir) {
 }
 
 // 唯一公共出口同时覆盖 JSON 与终端人读；只读投影不参与任务事实或收单判重。
-// 业务正文保持原样，成员规则单独输出，绑定层在同一投递中追加一个 text 块。
+// 成员侧只有业务正文一块：规则已全部进派单卡 prompt（锁定契约 + 可 DIY 三段），不再追加第二块投影。
+// Lead 侧在本出口按呈现时点反吐 lead/<时点>/ 规则与明晰必读段（决定点加审阅段）。
 export async function tw(argv, opts = {}) {
   let result = await twInner(argv, opts)
   if (!result || typeof result !== "object" || Array.isArray(result)) return result
+  const projectRoot = opts.projectRoot ?? process.cwd()
   const readGuidance = createClarityGuidanceReader()
-  const hasMembers = [result, result.card].some((card) => card?.dispatch || card?.dispatches?.length || card?.waves?.length || card?.inflight?.length)
-  let teamScene
-  if (hasMembers) {
-    const { workflow } = await loadDefinitions(opts.projectRoot ?? process.cwd())
-    teamScene = workflow.stages.find((stage) => stage.id === (result.stage ?? result.card?.stage))?.teamScene
-  }
-  const member = async (item) => ({ ...item, requiredGuidance: await readGuidance({ review: memberNeedsClarityReview(item, teamScene) }) })
-  const projectMembers = async (card) => {
-    if (!card || typeof card !== "object") return card
-    const projected = { ...card }
-    if (card.dispatch) projected.dispatch = await member(card.dispatch)
-    for (const key of ["dispatches", "waves", "inflight"]) {
-      if (Array.isArray(card[key]) && card[key].length) projected[key] = await Promise.all(card[key].map(member))
-    }
-    return projected
-  }
-  result = await projectMembers(result)
   if (result.card && typeof result.card === "object") {
-    result.card = await projectMembers(result.card)
     if (result.stop === null && result.waves?.length) {
-      result.presentation = PRESENTATION_DISPATCH + "\n\n" + await readGuidance()
-    } else result.card = await attachPresentation(result.card, readGuidance, result.stop)
-  } else result = await attachPresentation(result, readGuidance, null, argv[0] === "run")
+      result.presentation = await presentationText({ kind: "dispatch", projectRoot, readGuidance })
+    } else result.card = await attachPresentation(result.card, readGuidance, result.stop, false, projectRoot)
+  } else result = await attachPresentation(result, readGuidance, null, argv[0] === "run", projectRoot)
   if (argv[0] === "dispatch-plan" && !argv.includes("--json")) {
-    // 人读通道独立可用：成员只需原样投递下方的正文和规则，不手拼资源。
+    // 人读通道独立可用：业务正文在 waves/inflight 里原样给，规则只反吐给 Lead。
     if (!result.human) result.human = stopHumanLines(result.stop, result.card ?? result, result)
-    const routes = new Map()
-    for (const item of [...(result.waves ?? []), ...(result.inflight ?? [])]) {
-      const key = item.dispatchKey ?? item.key
-      const position = result.human.push("成员 " + key + " 必读规则（与选定业务正文一起原样投递；仅随实际恢复投递，不催活会话）：\n" + item.requiredGuidance) - 1
-      routes.set(key, "完整成员必读规则见 human[" + position + "]；与选定业务正文一起原样投递。")
-      item.requiredGuidance = routes.get(key)
-    }
-    for (const item of result.card?.inflight ?? []) item.requiredGuidance = routes.get(item.dispatchKey ?? item.key) ?? item.requiredGuidance
     const presentation = result.presentation ?? result.card?.presentation
     if (presentation) {
       const position = result.human.push(presentation) - 1

@@ -24,7 +24,7 @@ description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/rev
 - **审查强度**：默认正式轻量交叉审查，按本次问题选少量互补视角；一个 Owner 聚焦改动，非作者 Challenger 交叉核验，核心 Expert 照旧，不固定人数或包数。复杂完整代码交付、复杂状态与并发、高失败成本且范围确需全面覆盖，或用户明确要求时，才由 Lead 组织一次完整八视角；跨几个文件或某个敏感点本身不触发八视角。方案审查选需求、取舍、接口、失败恢复等相关方向。返工先查变更及关联视角，新范围或系统风险再重判覆盖。
 - **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与档位（junior/senior/expert 预算）正交——裁决者每轮一个（波次机结构），expert 档的 owner 包完全正常，见拓扑与成本篇。
 
-场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；审查覆盖与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；派单内按角色/场景自动注入的公共引导库见 **[派单引导库](references/guidance.md)**。
+场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；审查覆盖与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；成员卡纪律区与 Lead 呈现要求的来源见 **[规则库](references/rules.md)**：包内锁定的工作流职责 + 可 DIY 规则，Lead 时点指路与工具反吐。
 
 ## Lead 操作
 
@@ -44,7 +44,7 @@ tw archive --task <名字>                                              # 用户
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
 - 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/升档/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。
-- **自动表达规则**：成员的 `requiredGuidance` 与 Lead 卡片的 `presentation` 自动带入根包同源必读段，以现有 `progress` 为素材，不要求主动调用 clarity 技能。公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)；深看按工具给出的准确路径，不读取独立账本。
+- **Lead 规则与表达**：开工读 `team-work/rules/lead/README.md`；按当前时点读 `lead/decision/index.md`、`lead/dispatch/index.md`、`lead/progress/index.md`。工具在决定点、派发与在途、进展三个时点把对应规则与根包同源明晰必读段反吐到返回卡（决定点加审阅段）；成员卡不再有独立的明晰段，交卷摘要与表达要求由规则库条目承载。明晰段仍从根包 clarity 技能文件提取、无静态副本：公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)。不要求主动调用 clarity 技能；深看按工具给出的准确路径，不读取独立账本。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
@@ -53,6 +53,6 @@ tw archive --task <名字>                                              # 用户
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径> [--checks '[{"name":"...","result":"pass"}]']`
 - Challenger/Expert 阅卷：`tw review --task <名字> --key <派单key> --recommendation accept|rework|escalate --summary "<一句话>" [--findings '[{"severity":"risk","statement":"..."}]']`（Expert 另加 --verdict）
 - `recommendation` 评价这版交付：实施交付违反需求可以返工；审查制品发现产品缺陷应报告，不因此要求审查 Owner 修产品，报告质量缺陷仍可返工。rework 的 findings 只放本轮关闭依据，其他发现放 summary 或已有交付物；详细规则见场景指导。
-- 派单按角色/场景带专业引导与同源明晰短段（见 [派单引导库](references/guidance.md)）；专业引导项目覆盖不替换包规范源，不改变派单授权和交付合同。规则缺失诊断不形成新门禁。
+- 派单纪律区由包内锁定的「工作流职责（TWR 固定契约）」与可 DIY 规则（用户公共目录 `~/.team-work/rules/` 优先、包内默认回退、项目 `team-work/rules/` 追加合并）组成（见 [规则库](references/rules.md)）；规则不改变派单授权和交付合同，项目只能追加不能删除包内默认；规则缺失或读取失败不形成新门禁。
 - 上下文与派单全文已内嵌：成员不需要也不应该读取 `.team-work` 内部状态或扫描项目外路径。
 - 只读助手经原生工具派发，明确 junior 档与可写范围为空；结果由发起成员核验整合，不登记为正式波次成员。

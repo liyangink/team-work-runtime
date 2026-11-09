@@ -100,6 +100,16 @@
       "challengerTier": "senior",
       "expertTier": null,
       "core": false
+    },
+    {
+      "id": "C4",
+      "label": "TWR (J+J+E)",
+      "kind": "twr",
+      "leadTier": "senior",
+      "ownerTier": "junior",
+      "challengerTier": "junior",
+      "expertTier": "expert",
+      "core": true
     }
   ],
   "tasks": [

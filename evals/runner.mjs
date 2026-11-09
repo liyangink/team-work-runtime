@@ -292,10 +292,144 @@ export const OFFLINE_BLOCKED_COMMANDS = [
 ]
 const OFFLINE_GUARD_SOURCE = [
   "#!/bin/sh",
-  'echo "离线评测环境：网络访问命令已被禁用（$0）。请仅使用工作区内已有资料。" >&2',
+  'echo "离线评测环境：网络访问命令已被禁用（${0}）。请仅使用工作区内已有资料。" >&2',
   "exit 1",
   ""
 ].join("\n")
+
+// Python 侧物理阻断：把 guardDir 前置进被测进程的 PYTHONPATH，CPython 启动时会自动导入
+// sitecustomize，其中的 socket 补丁在任何连接建立之前抛出 OSError。因此被测 agent 直接写
+// urllib.request / http.client / requests 也拿不到外部资料，与 PATH 同名桩、包管理器离线变量
+// 共同构成“事前阻断”，zstd-log.mjs 的事后审计只作兜底。
+// 只放行回环地址（127.0.0.1 / localhost / ::1 / 0.0.0.0），保留对本地被测服务的自测能力。
+// 刻意同时拦 getaddrinfo/gethostbyname：域名解析本身也是外发通道（DNS 泄露），先拦解析还能让
+// 阻断信息稳定可见，不依赖宿主当前是否连得上 DNS。
+// 已知缺口：python -S（跳过 site 模块）与 python -I（忽略 PYTHONPATH）不会加载本补丁，
+// 这两条路径由 zstd-log.mjs 的事后审计识别。
+export const OFFLINE_PYTHON_SITE_CUSTOMIZE = [
+  "# 离线评测环境：封死 Python 标准库的外部网络访问（由评测 runner 注入 PYTHONPATH 自动加载）。",
+  "import socket",
+  "",
+  '_BLOCK_MESSAGE = "离线评测环境：Python 外部网络访问已被禁用"',
+  // 本机地址白名单：回环/通配/未指定地址（"" 与 "::" 在 Python 里表示“任意本机地址”，
+  // 常用于本地测试服务绑定，不会连到外部网络），另加 ip6-localhost/ip6-loopback 主机名别名。
+  '_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "0.0.0.0", "", "::", "ip6-localhost", "ip6-loopback")',
+  "",
+  "",
+  "def _is_allowed_host(host):",
+  "    if isinstance(host, bytes):",
+  '        host = host.decode("ascii", "replace")',
+  "    if not isinstance(host, str):",
+  "        return True  # 非主机名字符串（如 AF_UNIX 路径）不在本拦截范围",
+  "    if host in _LOOPBACK_HOSTS:",
+  "        return True",
+  '    return host.startswith("127.")',
+  "",
+  "",
+  "def _check_address(address):",
+  "    if isinstance(address, (tuple, list)) and address and not _is_allowed_host(address[0]):",
+  "        raise OSError(_BLOCK_MESSAGE)",
+  "",
+  "",
+  "_original_connect = socket.socket.connect",
+  "_original_connect_ex = socket.socket.connect_ex",
+  "_original_create_connection = socket.create_connection",
+  "_original_getaddrinfo = socket.getaddrinfo",
+  "_original_gethostbyname = socket.gethostbyname",
+  "",
+  "",
+  "def _guarded_connect(self, address, *args, **kwargs):",
+  "    _check_address(address)",
+  "    return _original_connect(self, address, *args, **kwargs)",
+  "",
+  "",
+  "def _guarded_connect_ex(self, address, *args, **kwargs):",
+  "    _check_address(address)",
+  "    return _original_connect_ex(self, address, *args, **kwargs)",
+  "",
+  "",
+  "def _guarded_create_connection(address, *args, **kwargs):",
+  "    _check_address(address)",
+  "    return _original_create_connection(address, *args, **kwargs)",
+  "",
+  "",
+  "def _guarded_getaddrinfo(host, *args, **kwargs):",
+  "    if host is not None and not _is_allowed_host(host):",
+  "        raise OSError(_BLOCK_MESSAGE)",
+  "    return _original_getaddrinfo(host, *args, **kwargs)",
+  "",
+  "",
+  "def _guarded_gethostbyname(host, *args, **kwargs):",
+  "    if host is not None and not _is_allowed_host(host):",
+  "        raise OSError(_BLOCK_MESSAGE)",
+  "    return _original_gethostbyname(host, *args, **kwargs)",
+  "",
+  "",
+  "socket.socket.connect = _guarded_connect",
+  "socket.socket.connect_ex = _guarded_connect_ex",
+  "socket.create_connection = _guarded_create_connection",
+  "socket.getaddrinfo = _guarded_getaddrinfo",
+  "socket.gethostbyname = _guarded_gethostbyname",
+  ""
+].join("\n")
+
+// git 远程子命令同样是“获取外部资料”的通道（clone 拉答案仓库、ls-remote 探测远端、
+// submodule 递归拉取）。但 git 的本地子命令（init/add/commit/status/diff/log）是正常开发动作，
+// 不能用“整命令禁用”的桩一律打死，因此单独生成只拦远程子命令的包装桩：解析出第一个非选项
+// 参数作为子命令（跳过 -C / -c / --git-dir / --work-tree 等选项的取值），命中远程子命令时
+// 立即失败，其余命令透传给 PATH 中除 guardDir 之外的真实系统 git。
+export const OFFLINE_GIT_BLOCKED_SUBCOMMANDS = ["clone", "fetch", "pull", "push", "ls-remote", "submodule"]
+
+// POSIX shell 单引号转义：guardDir 由 mkdtemp 生成，正常不含引号，这里仍做防御性处理。
+function shellSingleQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'"
+}
+
+function buildOfflineGitWrapperSource(guardDir) {
+  const blockedPattern = OFFLINE_GIT_BLOCKED_SUBCOMMANDS.join("|")
+  return [
+    "#!/bin/sh",
+    "# 离线评测 git 包装桩：只拦截与远端通信的子命令，本地子命令透传给真实系统 git。",
+    "# 生成方：evals/runner.mjs createOfflineGuardBin()。",
+    "OFFLINE_GUARD_DIR=" + shellSingleQuote(guardDir),
+    'subcommand=""',
+    "skip_next=0",
+    'for arg in "$@"; do',
+    '  if [ "$skip_next" = "1" ]; then skip_next=0; continue; fi',
+    '  case "$arg" in',
+    "    -C|-c|--git-dir|--work-tree|--namespace|--exec-path) skip_next=1; continue ;;",
+    "    --git-dir=*|--work-tree=*|--namespace=*|--exec-path=*) continue ;;",
+    "    -*) continue ;;",
+    '    *) subcommand="$arg"; break ;;',
+    "  esac",
+    "done",
+    'case "$subcommand" in',
+    "  " + blockedPattern + ")",
+    '    echo "离线评测环境：git 远程子命令已被禁用（${subcommand}）。请仅使用工作区内已有资料。" >&2',
+    "    exit 1",
+    "    ;;",
+    "esac",
+    'real_git=""',
+    'OLD_IFS="$IFS"',
+    'IFS=":"',
+    'for dir in $PATH; do',
+    '  if [ "${dir%/}" = "${OFFLINE_GUARD_DIR%/}" ]; then continue; fi',
+    '  if [ -n "$dir" ] && [ -f "$dir/git" ] && [ -x "$dir/git" ]; then real_git="$dir/git"; break; fi',
+    "done",
+    'IFS="$OLD_IFS"',
+    'if [ -z "$real_git" ]; then',
+    "  for candidate in /usr/bin/git /bin/git /usr/local/bin/git /opt/homebrew/bin/git; do",
+    '    if [ -f "$candidate" ] && [ -x "$candidate" ]; then real_git="$candidate"; break; fi',
+    "  done",
+    "fi",
+    'if [ -z "$real_git" ]; then',
+    '  echo "离线评测环境：未找到可用的系统 git，无法执行该命令。" >&2',
+    "  exit 127",
+    "fi",
+    'exec "$real_git" "$@"',
+    ""
+  ].join("\n")
+}
 
 export async function createOfflineGuardBin() {
   const guardDir = await mkdtemp(path.join(os.tmpdir(), "twr-offline-bin-"))
@@ -304,6 +438,13 @@ export async function createOfflineGuardBin() {
     await writeFile(commandPath, OFFLINE_GUARD_SOURCE, { mode: 0o755 })
     await chmod(commandPath, 0o755)
   }
+  // sitecustomize.py 不是同名命令桩，靠 PYTHONPATH 前置被 CPython 自动导入
+  const siteCustomizePath = path.join(guardDir, "sitecustomize.py")
+  await writeFile(siteCustomizePath, OFFLINE_PYTHON_SITE_CUSTOMIZE, { mode: 0o644 })
+  // git 包装桩：远程子命令拒绝，本地子命令透传
+  const gitWrapperPath = path.join(guardDir, "git")
+  await writeFile(gitWrapperPath, buildOfflineGitWrapperSource(guardDir), { mode: 0o755 })
+  await chmod(gitWrapperPath, 0o755)
   return guardDir
 }
 
@@ -334,7 +475,12 @@ export async function runHeadlessTurn({ dshBin, dshHomeDir, workspaceDir, patchP
         ...process.env,
         ...OFFLINE_PACKAGE_MANAGER_ENV,
         DSH_HOME: dshHomeDir,
-        PATH: `${offlineGuardDir}${path.delimiter}${process.env.PATH ?? ""}`
+        PATH: `${offlineGuardDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        // PYTHONPATH 前置 guardDir：被测 agent 派生的任何 python 子进程都会自动加载
+        // guardDir/sitecustomize.py，从 socket 层物理阻断外部网络（Node 进程不受影响）。
+        PYTHONPATH: process.env.PYTHONPATH
+          ? `${offlineGuardDir}${path.delimiter}${process.env.PYTHONPATH}`
+          : offlineGuardDir
       }
     })
     let stdout = ""

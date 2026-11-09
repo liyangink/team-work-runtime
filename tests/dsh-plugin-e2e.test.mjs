@@ -70,7 +70,7 @@ test("真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及
     llm: { resolveCallConfig: async (config) => config },
   }
   const result = await createDirectedSubagent({}, { getService: (name) => services[name] }, {
-    sessionId: "child-example", description: "成员", prompt: "业务派单", requiredGuidance: "公共规则",
+    sessionId: "child-example", description: "成员", prompt: "业务派单",
     target: { provider: "provider-example", model: "model-example", effort: "high" }, exec: { agent: parent },
   })
   assert.equal(result.ok, true, JSON.stringify(result))
@@ -81,7 +81,7 @@ test("真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及
   else assert.equal(starts[0].delivery, undefined)
   assert.deepEqual(starts[0].request.agentOptions, { provider: "provider-example", model: "model-example", reasoningEffort: "high" })
   assert.equal(starts[0].request.maxDepth, 1)
-  assert.deepEqual(starts[0].request.prompt.map(({ text }) => text), ["业务派单", "公共规则"])
+  assert.deepEqual(starts[0].request.prompt, [{ type: "text", text: "业务派单" }])
   t.diagnostic("真实公共创建入口通过；调度后端隔离，未调用真实 LLM。")
 })
 test("新版真实 Cordis：空 tiers 可启动，只注册 tw/tw-dispatch 和内嵌 skill", async (t) => {
@@ -175,7 +175,7 @@ test("新版真实 skill 工具：随包正文/相邻资源/来源优先级及�
   t.diagnostic("实际 skill 工具、filesystem 选源和 read-only SandboxedFileSystem 相邻资源读取通过；这是宿主文件接口权限，不是内核 shell sandbox。")
 })
 
-test("新版真实 JSONL 后端：两文本块冷持久读取保留，更新规则不改变本轮业务收单", async (t) => {
+test("新版真实 JSONL 后端：单块业务正文冷持久读取保留，业务正文收单判定不变", async (t) => {
   const ctx = await hostContext(t)
   if (!ctx) return
   const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
@@ -187,7 +187,7 @@ test("新版真实 JSONL 后端：两文本块冷持久读取保留，更新规�
   const backend = ctx.plugin(JsonlPersistence, { root, compression: "none" })
   await backend
   const persistence = ctx.get("sessionPersistence")
-  const content = [{ type: "text", text: "本轮业务派单" }, { type: "text", text: "原规则必读短段" }]
+  const content = [{ type: "text", text: "本轮业务派单" }]
   const writer = await persistence.create({ id: "child-example", version: 4, createdAt: 0, isSeeded: false, delegationDepth: 1, cwd: root, parentSession: "parent-example", origin: "subagent" })
   try {
     await writer.append([{ type: "agent/inbox/spliced", seq: 0, time: 0, data: { target: "next-turn", start: 0, inserted: [createUserMessage({ content, source: { kind: "user" } })] } }])

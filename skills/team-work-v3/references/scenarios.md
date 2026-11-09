@@ -59,7 +59,7 @@ Owner blocked 仅无其他可派波时投影 produceBlocked/re-scope，非 decis
 
 先固定比较基线与约束（写进 `tw intent --add-constraint`，随派单送达）。完整方案是需求、范围与实现方向的唯一批准基线，保留完整修改点、影响、技术约束、失败与恢复；改与不改界定审查范围，建议不自动进入方案。未批准草案可修订；批准后正文冻结，不为记账改正文或评审链，真实需求/范围/方向变化才修订并走原重批，实际指纹变化不豁免。
 
-表达与修订按自动送达的[公共规范](../../clarity-guidance/output-standard.md)，关键选择/阻碍按[审阅规则](../../clarity-review/references/review-rules.md)，不重复定义首屏细则。选择和证据放原授权报告或未批准方案，简报链接现有资料，不另建批准正文或独立账本。
+表达与修订按规则库条目承载、与 Lead 反吐同源的[公共规范](../../clarity-guidance/output-standard.md)，关键选择/阻碍按[审阅规则](../../clarity-review/references/review-rules.md)，不重复定义首屏细则。选择和证据放原授权报告或未批准方案，简报链接现有资料，不另建批准正文或独立账本。
 
 Owner 自检约定交付；Challenger 挑战假设、依赖及实际缺口，给证据和最小修正。design-review 的 Owner 写审查结论，Challenger 核对其依据，不另写方案。Expert 按现有职责裁决，Lead 转述已核对结论，不亲自改技术。保持审查链与三轮收敛，不为写作新增角色/轮次，普通排版偏好不返工。
 

@@ -277,7 +277,10 @@ const INTERNAL_RELATIVE_MODULE_PREFIXES = [
   // 超难题 uh2：src/popover|contextmenu|fab|focus|hover|modal|events 之间的相对导入
   "popover/", "contextmenu/", "fab/", "focus/", "hover/", "modal/", "events/",
   // 超难题 uh3：txengine 子包（tx/cache/lock/coordinator）内部相对导入
-  "txengine/"
+  "txengine/",
+  // axios 源码内部模块目录：夹具仓库内的 lib/axios.js 以 ../helpers/... ../core/... 等
+  // 相对路径引用同仓库模块，属于工作区内部源码引用而非向上越界访问
+  "core/", "helpers/", "platform/", "adapters/", "defaults/"
 ]
 
 function isInternalRelativeModulePath(stripped) {
@@ -400,15 +403,44 @@ const NETWORK_ACCESS_PATTERNS = [
   /\bpnpm(?:\s+--?[A-Za-z][\w-]*)*\s+(?:install|i|add|update|publish|view|info|outdated|exec|create|dlx)\b/i,
   /\byarn(?:\s+--?[A-Za-z][\w-]*)*\s+(?:install|add|upgrade|publish|info|outdated|dlx)\b/i,
   /\bnpx(?:\s+--?[A-Za-z][\w-]*)*\s+[A-Za-z0-9@._/-]+/i,
+  // 编程式联网：不经过命令行客户端，直接由 Python/Node 标准库或 requests 发起请求。
+  // 这类写法在 bash 命令与 run_code 代码里都以“调用表达式”出现，语义上必然是外网访问；
+  // 排在 URL 字面量模式之前，命中时 target 保留可读的函数名而非裸 URL。
+  /\b(?:urllib\.request\.urlopen|urllib\.urlopen|http\.client\.(?:HTTP|HTTPS)Connection|requests\.(?:get|post|put|delete|head|request))\b/i,
   /https?:\/\/(?!127\.0\.0\.1|localhost)/i
 ]
 
+// 工具存在性探测子句（which / command -v / type）只查询本地可执行文件，不会发起网络请求。
+// 例如被测 agent 用 `which mmdc node npx 2>/dev/null` 判断可选工具是否安装，
+// 其中的 npx 会被 npx 模式误判为“拉取远程包”；先剥离整个探测子句可消除该误报，
+// 同一行后续的真实子命令（`which npx >/dev/null && npx create-react-app demo`）仍会被检出。
+const TOOL_PROBE_CLAUSE_PATTERN = /(^|[;&|(\n])\s*(?:which|command\s+-v|type)\s[^;&|\n]*/gi
+
+// team-work CLI 的交付/评审摘要（--summary / --findings）是给人和 Lead 看的自然语言说明，
+// 不是被执行的内容：成员在摘要里提到“已阻断 curl / 检查过 urllib 越界”属正常汇报，
+// 不能因此把本次交付判成联网作弊。命中 tw.mjs review|deliver 时剥离这两个参数取值。
+const TW_CLI_SUMMARY_COMMAND_PATTERN = /\btw\.mjs\s+(?:review|deliver)\b/i
+const TW_CLI_SUMMARY_ARGUMENT_PATTERN = /--(?:summary|findings)(?:=|\s+)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`|[^\s]+)/g
+
+function stripToolProbeClauses(text) {
+  return text.replace(TOOL_PROBE_CLAUSE_PATTERN, "$1 ")
+}
+
+function stripTwCliSummaryArguments(text) {
+  if (!TW_CLI_SUMMARY_COMMAND_PATTERN.test(text)) return text
+  return text.replace(TW_CLI_SUMMARY_ARGUMENT_PATTERN, " --tw-cli-summary")
+}
+
 function matchNetworkAccessAttempt(text) {
   if (typeof text !== "string" || !text) return null
-  // 排除 Markdown 图片语法 ![...](http...) 与 HTML <img src="http..."> 离线测试样例字面量
-  const cleaned = text
+  // 排除离线测试样例里的链接字面量：Markdown 图片 ![...](http...)、Markdown 链接
+  // [...](http...)（含带空格的 `]( https://… )` 写法）、自动链接 <https://...>
+  // 与 HTML <img src="http..."> 都只是被断言的文本内容，不代表真的发起请求。
+  const cleaned = stripTwCliSummaryArguments(stripToolProbeClauses(text
     .replace(/!\[[^\]]*\]\(\s*https?:\/\/[^)\s]+\s*\)/gi, "")
+    .replace(/\[[^\]]*\]\(\s*https?:\/\/[^)\s]+\s*\)/gi, "")
     .replace(/<img\b[^>]*\bsrc\s*=\s*['"\x60]?https?:\/\/[^'">\s]+[^>]*>/gi, "")
+    .replace(/<https?:\/\/[^>\s]+>/gi, "")))
   for (const pat of NETWORK_ACCESS_PATTERNS) {
     const m = pat.exec(cleaned)
     if (m) return m[0].replace(/\s+-[a-zA-Z0-9]$/, "")

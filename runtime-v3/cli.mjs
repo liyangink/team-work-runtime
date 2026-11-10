@@ -461,10 +461,11 @@ function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
   ]
   // 包限定与组合职责带着本波任务事实（哪个包、本轮已交付哪些包），属 runtime 尾段而非固定契约。
   const scopeParts = [
-    wave.role === 'owner' && pkg ? '你仅承担本包 ' + pkg + '；总目标中的其他包与团队组织要求由 Lead 处理。' : '仅承担本派单声明的职责。',
+    wave.role === 'owner' && pkg ? '你仅承担本包 ' + pkg + '；总目标中的其他包与团队组织要求由 Lead 处理。' : '',
     wave.scope === 'consolidation' || (wave.kind === 'verdict' && task.packages?.length) ? '组合评审/裁决仍覆盖本轮已交付包的组合制品。' : '',
   ]
   const tailParts = [
+    '## 行动与交付',
     scopeParts[0],
     scopeParts[1],
     wave.role === 'owner' ? '可写路径（仅限）：\n' + (boundaries.map((b) => '- ' + b).join('\n') || '（无，纯回应派单）') : '只读派单：不得修改任何文件',

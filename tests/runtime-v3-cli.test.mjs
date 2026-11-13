@@ -19,7 +19,7 @@ process.env.HOME = await mkdtemp(path.join(tmpdir(), "tw-cli-home-"))
 
 test("范围争议 blocked：恢复提示先确认授权，保留原 re-scope 非决定接口", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-scope-pause-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "pause-check", "--objective", "按已确认范围审阅示例方案", "--entry", "code-review"])
   const owner = (await call(["dispatch-plan", "--task", "pause-check", "--writable", "R.md:code-review"])).waves[0]
   const receipt = await call(["deliver", "--task", "pause-check", "--key", owner.dispatchKey, "--outcome", "blocked", "--summary", "新增设施是否为本轮必需及是否获授权仍有争议"])
@@ -57,7 +57,7 @@ process.env.TW_DSH_CONFIG = JSON.stringify({
 
 test("返工派单保留原回应轮，提醒授权争议在修补前暂停而非自动扩建", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-rework-scope-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "rework-scope", "--objective", "按原方案审阅重访策略", "--entry", "code-review"])
   const owner = (await call(["dispatch-plan", "--task", "rework-scope", "--writable", "R.md:code-review"])).waves[0]
   await writeFile(path.join(projectRoot, "R.md"), "# 原方案\n保留既有扫描机制")
@@ -75,7 +75,7 @@ test("返工派单保留原回应轮，提醒授权争议在修补前暂停而�
 test("首轮评审升级保持同 key 修订和原卡语义，方向文本不消耗追加轮数卡", async () => {
   for (const role of ["challenger", "expert"]) {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-review-direction-"))
-    const call = (argv) => tw(argv, { projectRoot })
+    const call = autoCaller(projectRoot)
     await call(["open", "--name", "direction-check", "--objective", "在现有机制内审阅虚构方案", "--entry", "code-review"])
     const owner = (await call(["dispatch-plan", "--task", "direction-check", "--writable", "R.md:code-review"])).waves[0]
     await writeFile(path.join(projectRoot, "R.md"), "# 虚构方案\n保留既有机制")
@@ -118,7 +118,7 @@ test("首轮评审升级保持同 key 修订和原卡语义，方向文本不消
 
 test("code-review 介入全链路（CLI 序列）", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-cli-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
 
   // 1. open：名字寻址 + entry 介入
   const opened = await call(["open", "--name", "audit-e2e", "--objective", "审查当前分支，重点安全", "--entry", "code-review"])
@@ -234,7 +234,7 @@ test("code-review 介入全链路（CLI 序列）", async () => {
 
 test("partial 归档：未完成任务由用户终止后归档", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-cli2-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "quick-scan", "--objective", "快速看一眼", "--entry", "code-review"])
   const d1 = await call(["dispatch-plan", "--task", "quick-scan", "--writable", "NOTES.md:code-review"])
 
@@ -262,14 +262,14 @@ test("partial 归档：未完成任务由用户终止后归档", async () => {
 
 test("汇报呈现注入：用户决定点带纪律与素材，回执不注入，幂等稳定", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-present-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "present-check", "--objective", "验证呈现注入", "--entry", "code-review"])
 
   // dispatch 派发：轻量简报纪律随 waves 计划输出提升（派单转发成员，不复述用户）
   const d1 = await call(["dispatch-plan", "--task", "present-check", "--writable", "REPORT.md:code-review"])
   assert.equal(d1.stop, null)
   assert.ok(d1.presentation, "派发计划带呈现简报")
-  assert.match(d1.presentation, /派发后向用户简报/, "派发时点反吐 lead/dispatch 规则")
+  assert.match(d1.presentation, /派发简报的目的是和用户对齐认知 gap/, "派发时点反吐 lead/dispatch 规则")
   assert.ok(d1.human.some((text) => text.includes("派单正文直接投递给成员")), "人读通道携带 lead/dispatch 规则全文")
   assert.doesNotMatch(d1.presentation, /## clarity 审阅必读/, "派发时点只带公共必读段")
   assert.doesNotMatch(JSON.stringify(d1.waves), /requiredGuidance/, "成员派单不再投影第二块规则")
@@ -342,7 +342,7 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   await call(["decide", "--task", "present-check", "--choice", "1"])
   const done = await call(["dispatch-plan", "--task", "present-check"])
   assert.equal(done.stop, "completed")
-  assert.match(done.card.presentation, /向用户汇报当前进展/, "进展时点反吐 lead/progress 规则")
+  assert.match(done.card.presentation, /进展汇报的目的是和用户对齐认知 gap/, "进展时点反吐 lead/progress 规则")
   assert.ok(done.human.some((text) => text.includes(publicRules)))
   assert.doesNotMatch(done.card.presentation, /## clarity 审阅必读/)
   const repeated = await call(["run", "--task", "present-check"])
@@ -378,8 +378,8 @@ test("run 普通进展：待派发、过门和待收尾均带公共段，整个�
       gates: [], terminalStages: mode === "complete" ? ["research"] : ["finish"],
       edges: [{ from: "research", to: "finish", outcome: "pass" }],
     }))
-    await writeFile(path.join(root, "team-work/policies/default.json"), JSON.stringify({ maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { research: {}, finish: {} } }))
-    const call = (argv) => tw(argv, { projectRoot: root })
+    await writeFile(path.join(root, "team-work/policies/default.json"), JSON.stringify({ maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, roles: { owner: "junior", challenger: "senior", expert: "expert" }, scenes: { research: {}, finish: {} } }))
+    const call = autoCaller(root)
     await call(["open", "--name", "progress-check", "--objective", "核验普通进展规则"])
     if (mode !== "pending") {
       const wave = (await call(["dispatch-plan", "--task", "progress-check", "--writable", "none", "--json"])).waves[0]
@@ -401,7 +401,7 @@ test("run 普通进展：待派发、过门和待收尾均带公共段，整个�
 
 test("run 只读：待派发/在途各态出指引卡且零写入；--writable 被拒绝", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-run-ro-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "ro-check", "--objective", "验证只读 run", "--entry", "code-review"])
 
   // 待派发态：run 返回指引卡（带波次信息），不落盘任何任务事实
@@ -429,11 +429,11 @@ test("run 只读：待派发/在途各态出指引卡且零写入；--writable �
   assert.equal(inflightPlan.stop, "wait-inflight")
   const entry = inflightPlan.inflight[0]
   assert.equal(entry.registered, false, "agents.json 缺失 = 零登记事实（registered 由 runtime 锁内投影）")
-  assert.ok(entry.modelHint?.provider, "modelHint 从 journal dispatched 快照回填")
+  assert.ok(entry.modelRef?.provider, "modelRef 从 journal dispatched 快照回填（历史 modelHint 读取时映射）")
   const status2 = await call(["run", "--task", "ro-check"])
   assert.equal(status2.transition, "wait-inflight")
   assert.equal(status2.inflight[0].registered, false)
-  assert.ok(status2.inflight[0].modelHint?.provider)
+  assert.ok(status2.inflight[0].modelRef?.provider)
   assert.match(status2.note, /tw-dispatch/)
 })
 
@@ -449,9 +449,10 @@ test("run 只读：指纹失效待决卡出重签指引且不作废不重签（�
   await mkdir(path.join(projectRoot, "team-work", "policies"), { recursive: true })
   await writeFile(path.join(projectRoot, "team-work", "policies", "default.json"), JSON.stringify({
     maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" },
+    roles: { owner: "junior", challenger: "senior", expert: "expert" },
     scenes: { "code-review": { core: false } },
   }))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "stale-check", "--objective", "验证失效指引", "--entry", "code-review"])
   const plan = await call(["dispatch-plan", "--task", "stale-check", "--writable", "R.md:code-review"])
   await writeFile(path.join(projectRoot, "R.md"), "v1", "utf8")
@@ -486,7 +487,7 @@ test("run 只读：指纹失效待决卡出重签指引且不作废不重签（�
 
 test("dispatch-plan 人读模式：waves 与全部 stop 卡均带 human 指引（--json 不输出）", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-plan-human-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "human-check", "--objective", "验证人读输出", "--entry", "code-review"])
 
   // waves 派发：human 含派单行 + 登记提醒；--json 供编排工具消费，无 human（独立任务验证，避免在途互扰）
@@ -529,128 +530,257 @@ test("dispatch-plan 人读模式：waves 与全部 stop 卡均带 human 指引�
   assert.ok(done.human.some((l) => /任务完成/.test(l)))
 })
 
-// ── §8 修订 v3：升档批准绑定包配置指纹（Expert 裁决 r2：幽灵批准不复活误授权） ──
+// ── 批 D：删除升档审批的反向断言与旧卡收口；批 B/C：意图确认门与换模型确认 ──
 
-import { makeProject, caller, openTask, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, caller, openTask, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 import { loadTask as fixLoadTask } from "../runtime-v3/store.mjs"
 
-test("升档批准绑定包配置指纹：re-plan 改档后旧批准失效重出卡；同配置幂等", async () => {
+test("删除升档审批反向断言：高于默认档的包直接按包级 ModelRef 派发，不再出 escalation 卡、无权重倍数文案", async () => {
   const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "escfp-t")
-  await call(["plan", "--task", "escfp-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "senior", dependsOn: [] },
+  const raw = caller(root)
+  await openTask(root, "no-esc-t")
+  const planned = await raw(["plan", "--task", "no-esc-t", "--packages", JSON.stringify([
+    { id: "hi", writable: ["HI.md:k"], done: ["d"], model: { provider: "vendor-strong", modelName: "model-strong", effort: "max" }, dependsOn: [] },
   ])])
-  const gate1 = await call(["dispatch-plan", "--task", "escfp-t"])
-  assert.equal(gate1.stop, "awaiting-user", "升档审批卡（C）")
-  await call(["decide", "--task", "escfp-t", "--choice", "1"])
-  const d1 = await call(["dispatch-plan", "--task", "escfp-t"])
-  assert.equal(d1.stop, null, "批准后正常出波")
-  assert.equal(d1.waves[0].tier, "senior")
-  // 同批次原样重推（retire 释放在途）：同 batchKey 同包配置指纹 → 批准仍有效，幂等不重复打扰用户
-  await call(["retire", "--task", "escfp-t", "--wave", d1.waves[0].waveId, "--reason", "重推场景"])
-  const d2 = await call(["dispatch-plan", "--task", "escfp-t"])
-  assert.equal(d2.stop, null, "同配置重复推进：不重复出卡")
-  assert.equal(d2.waves[0].tier, "senior")
-  // re-plan 改包档（senior→expert）：batchKey 相同（stage+round+包集同名）但指纹不同 → 幽灵批准失效
-  await call(["retire", "--task", "escfp-t", "--wave", d2.waves[0].waveId, "--reason", "改档场景"])
-  await call(["plan", "--task", "escfp-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "expert", dependsOn: [] },
-  ])])
-  const gate2 = await call(["dispatch-plan", "--task", "escfp-t"])
-  assert.equal(gate2.stop, "awaiting-user", "包配置已变化：旧批准不得授权新批次（重新出卡）")
-  assert.deepEqual(gate2.card.escalations, [{ package: "hi", tier: "expert" }], "升档清单指向新档位包")
-  await call(["decide", "--task", "escfp-t", "--choice", "1"])
-  const d3 = await call(["dispatch-plan", "--task", "escfp-t"])
-  assert.equal(d3.stop, null)
-  assert.equal(d3.waves[0].tier, "expert", "新批准按新档位派发")
+  assert.equal(planned.status, "awaiting-user", "plan 后意图确认卡按新包模型重签")
+  assert.equal(planned.intake.packages[0].modelRef.effort, "max")
+  assert.equal((await raw(["decide", "--task", "no-esc-t", "--choice", "1"])).ok, true)
+  const d = await raw(["dispatch-plan", "--task", "no-esc-t", "--json"])
+  assert.equal(d.stop, null)
+  assert.deepEqual(d.waves[0].modelRef, { provider: "vendor-strong", modelName: "model-strong", effort: "max" })
+  assert.equal(d.waves[0].modelSource, "package")
+  assert.equal(Object.hasOwn(d.waves[0], "modelHint"), false, "waves 不再导出 modelHint（宿主映射只看 modelRef）")
+  const task = await fixLoadTask(root, "no-esc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const text = JSON.stringify(task.journal)
+  assert.doesNotMatch(text, /escalation|approve-escalation|权重倍数|降回默认档/, "不再签发升档卡或写升档授权字段")
+  assert.doesNotMatch(JSON.stringify(d.card), /re-sign-escalation/)
+  const run = await raw(["run", "--task", "no-esc-t"])
+  assert.doesNotMatch(JSON.stringify(run), /升档审批/)
 })
 
-test("升档卡 decide 校验签发指纹：等待期包配置被外部改动（回滚/漂移）后旧卡拒绝直答（F6-3 同构）", async () => {
+test("旧未决升档卡收口：推进一次自动 decided:superseded 并恢复派发，重复推进幂等", async () => {
   const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "escdec-t")
-  await call(["plan", "--task", "escdec-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "senior", dependsOn: [] },
-  ])])
-  const gate = await call(["dispatch-plan", "--task", "escdec-t"])
-  assert.equal(gate.stop, "awaiting-user")
-  // 模拟等待期外部改动包配置（绕过 plan 窗口守卫的异常路径：快照回滚/手工编辑）——
-  // decide 端重算指纹不符 → 拒绝直答，否则答旧卡写入旧语义授权且永不被新批次消费（空转）
-  const task = await fixLoadTask(root, "escdec-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  await writeFile(path.join(task.root, "packages.json"), JSON.stringify({ items: [
-    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "expert", dependsOn: [] },
-  ] }))
-  const bad = await call(["decide", "--task", "escdec-t", "--choice", "1"])
-  assert.equal(bad.ok, false)
-  assert.equal(bad.code, "DECISION_STALE")
-  assert.match(bad.message, /包配置已变化/)
-})
+  const raw = caller(root)
+  await openTask(root, "legacy-esc-t")
+  const task0 = await fixLoadTask(root, "legacy-esc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const journalFile = path.join(task0.root, "journal.jsonl")
+  const journal = await readFile(journalFile, "utf8")
+  const seq = journal.trim().split("\n").length
+  await writeFile(journalFile, journal + JSON.stringify({
+    seq: seq + 1, at: new Date().toISOString(), type: "decision-issued",
+    detail: { decisionId: "esc-legacy", gateId: null, reason: "升档审批：hi→expert（tier 高于场景默认档；权重倍数 junior:senior:expert = 1:10:50）", choices: [{ n: 1, label: "批准升档", grant: "approve-escalation", batchKey: "x" }, { n: 2, label: "降回默认档继续", batchKey: "x" }], escalationFingerprint: "fp", batchKey: "x" },
+  }) + "\n")
 
-// ── 返工终版 §二·B：未决卡统一静止 + 签发幂等 + 渲染同钉 ──────────────────────────
-
-test("升档卡静止化与幂等：签发后 run 呈待决原卡、再调 dispatch-plan 返回同一张卡（choices=账本）；待决期间拒绝重拆", async () => {
-  const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "escstill-t")
-  await call(["plan", "--task", "escstill-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d"], tier: "senior", dependsOn: [] },
-  ])])
-  const gate = await call(["dispatch-plan", "--task", "escstill-t"])
-  assert.equal(gate.stop, "awaiting-user", "升档审批卡首签")
-  const firstId = gate.card.decisionId
-
-  // run 呈待决原卡：question/choices 来自账本（不重算），状态静止
-  const runCard = await call(["run", "--task", "escstill-t"])
+  const runCard = await raw(["run", "--task", "legacy-esc-t"])
   assert.equal(runCard.status, "awaiting-user")
-  assert.equal(runCard.decisionId, firstId)
-  assert.deepEqual(runCard.choices, gate.card.choices, "渲染同钉账本 choices")
-  assert.equal(runCard.question, gate.card.question)
+  assert.equal(runCard.next, "re-sign", "已删除机制的卡只给收口指引，不渲染旧选项")
+  const blocked = await raw(["decide", "--task", "legacy-esc-t", "--choice", "1"])
+  assert.equal(blocked.ok, false, "旧升档卡不可直答")
+  assert.equal(blocked.code, "DECISION_STALE")
 
-  // 再调 dispatch-plan：返回同一张卡（签发幂等——不再作废重签循环）
-  const again = await call(["dispatch-plan", "--task", "escstill-t"])
-  assert.equal(again.stop, "awaiting-user")
-  assert.equal(again.card.decisionId, firstId, "同卡幂等返回")
-  assert.deepEqual(again.card.choices, gate.card.choices)
+  const plan1 = await raw(["dispatch-plan", "--task", "legacy-esc-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(plan1.stop, null, "收口后任务恢复推进")
+  const after = await fixLoadTask(root, "legacy-esc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const settled = after.journal.filter((event) => event.type === "decided" && event.detail.decisionId === "esc-legacy")
+  assert.equal(settled.length, 1)
+  assert.equal(settled[0].detail.choice, "superseded")
+  assert.equal(settled[0].detail.reason, "升档审批机制已删除")
 
-  // 待决期间拒绝重拆（升档卡静止语义与人工门一致：先 decide 再改包配置）
-  const replan = await call(["plan", "--task", "escstill-t", "--packages", JSON.stringify([
-    { id: "hi2", writable: ["H2.md:k"], done: ["d"], dependsOn: [] },
-  ])])
-  assert.equal(replan.ok, false)
-  assert.match(replan.message, /有待决用户卡片/)
-
-  await call(["decide", "--task", "escstill-t", "--choice", "1"])
-  const d = await call(["dispatch-plan", "--task", "escstill-t"])
-  assert.equal(d.stop, null, "批准后恢复派发")
+  // 幂等：重复推进不重复收口
+  const plan2 = await raw(["dispatch-plan", "--task", "legacy-esc-t"])
+  assert.equal(plan2.stop, "wait-inflight")
+  const after2 = await fixLoadTask(root, "legacy-esc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(after2.journal.filter((event) => event.type === "decided" && event.detail.decisionId === "esc-legacy").length, 1)
 })
 
-test("升档指纹扩字段（F-2）：改 writable/done/dependsOn（tier 不变）同样使旧批准失效重出卡", async () => {
+test("意图确认门：open 出卡未确认不派发；确认指纹稳定（不含 decisionId/时间戳）；确认后派发", async () => {
   const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "escwide-t")
-  await call(["plan", "--task", "escwide-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d1"], tier: "senior", dependsOn: [] },
+  const raw = caller(root)
+  const input = ["--objective", "审查示例模块的接口边界", "--entry", "code-review", "--raw-requirement", "原始需求全文不摘要", "--constraint", "约束一", "--exclusion", "排除一", "--acceptance", "验收一", "--gap", JSON.stringify({ question: "范围是否含 B 模块", whyItMatters: "影响工作量和验收", proposedDefault: "只含 A 模块" })]
+  const opened = await raw(["open", "--name", "intake-a", ...input])
+  assert.equal(opened.ok, true, JSON.stringify(opened))
+  assert.equal(opened.status, "awaiting-user")
+  assert.equal(opened.next, "decide")
+  assert.equal(opened.choices[0].grant, "accept-intake")
+  assert.match(opened.question, /原始需求全文不摘要/, "确认卡保留原始需求全文")
+  assert.match(opened.question, /角色模型（3 行，恒定显示）/)
+  assert.match(opened.question, /已拆包的实际模型/)
+  assert.match(opened.question, /范围是否含 B 模块/, "未明确问题作为 gap 呈现")
+  assert.deepEqual(opened.intake.roles.map((entry) => entry.role), ["owner", "challenger", "expert"])
+  assert.equal(opened.intake.roles[0].effortState, "omitted", "effort 未配置时不补空值")
+  assert.equal(opened.intake.roles[2].effortState, "omitted", "该调用快照未给 expert 配置 effort：省略字段而不是空串")
+
+  const early = await raw(["dispatch-plan", "--task", "intake-a", "--writable", "R.md:code-review"])
+  assert.equal(early.stop, "awaiting-user", "未确认不派发")
+  assert.equal(early.card.decisionId, opened.decisionId, "返回同一张未失效卡（签发幂等）")
+  const before = await fixLoadTask(root, "intake-a", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(before.journal.some((event) => event.type === "dispatched"), false, "未确认不写 dispatched 事实")
+
+  // 指纹稳定性：只取 {intent, roles, packages}，不含 decisionId/时间戳——同输入第二个任务指纹相同
+  const twin = await raw(["open", "--name", "intake-b", ...input])
+  assert.equal(twin.intakeFingerprint, opened.intakeFingerprint, "decisionId/时间戳不参与指纹")
+
+  assert.equal((await raw(["decide", "--task", "intake-a", "--choice", "1"])).ok, true)
+  const later = await raw(["run", "--task", "intake-a"])
+  assert.notEqual(later.decisionId, opened.decisionId, "确认后不再渲染确认卡")
+  const d = await raw(["dispatch-plan", "--task", "intake-a", "--writable", "R.md:code-review", "--json"])
+  assert.equal(d.stop, null, "确认后正常派发")
+})
+
+test("意图确认门：改 intent 后确认失效并重签；roles 变更也重签；unresolved 时不提供确认开始", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  const opened = await raw(["open", "--name", "intake-c", "--objective", "目标", "--entry", "code-review"])
+  const changed = await raw(["intent", "--task", "intake-c", "--add-constraint", "新增约束"])
+  assert.equal(changed.status, "awaiting-user")
+  assert.equal(changed.next, "decide")
+  assert.notEqual(changed.intakeFingerprint, opened.intakeFingerprint, "intent 变化使旧确认失效")
+  assert.match(changed.question, /新增约束/)
+  assert.equal((await raw(["decide", "--task", "intake-c", "--choice", "1"])).ok, true)
+
+  const roles = await raw(["roles", "--task", "intake-c", "--set", "challenger=tier:expert@max"])
+  assert.equal(roles.status, "awaiting-user")
+  assert.equal(roles.next, "decide")
+  assert.equal(roles.roles.challenger.effort, "max", "显式 @max 保存为合法枚举")
+  assert.equal(roles.intake.roles.find((entry) => entry.role === "challenger").tierProvenance, "tw roles --set tier:expert@max")
+  const again = await raw(["dispatch-plan", "--task", "intake-c", "--writable", "R.md:code-review"])
+  assert.equal(again.stop, "awaiting-user", "roles 变更后未确认不派发")
+
+  // unresolved：缺配置的角色不提供"确认开始"
+  const broken = await makeProject()
+  process.env.TW_DSH_CONFIG = JSON.stringify({ entryId: "team-work-dsh", profile: "p", tiers: { junior: { provider: "j", model: "mj" } } })
+  try {
+    const card = await caller(broken)(["open", "--name", "intake-u", "--objective", "o", "--entry", "code-review"])
+    assert.equal(card.status, "awaiting-user")
+    assert.equal(card.code, "INTAKE_ROLES_UNRESOLVED")
+    assert.equal(card.choices.some((choice) => choice.grant === "accept-intake"), false, "unresolved 时不提供确认开始")
+    assert.equal(card.choices[0].grant, "revise-intake")
+    const blocked = await caller(broken)(["decide", "--task", "intake-u", "--choice", "1"])
+    assert.equal(blocked.ok, true, "选项 1 是「我先修改」，不落盘确认")
+    assert.match(blocked.note, /重签/)
+  } finally {
+    process.env.TW_DSH_CONFIG = JSON.stringify({
+      entryId: "team-work-dsh", profile: "fixture-profile",
+      tiers: { junior: { provider: "cli-junior", model: "cli-junior" }, senior: { provider: "cli-senior", model: "cli-senior" }, expert: { provider: "cli-expert", model: "cli-expert" } },
+    })
+  }
+})
+
+test("包级 ModelRef 物化：显式 model / tier 语法糖 / 复用 roles.owner；tier+model 冲突与缺档拒绝", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  await openTask(root, "plan-model-t")
+  const explicit = await raw(["plan", "--task", "plan-model-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["A.md:k"], done: ["d"], model: { provider: "vendor-a", modelName: "model-a" }, dependsOn: [] },
   ])])
-  const gate1 = await call(["dispatch-plan", "--task", "escwide-t"])
-  assert.equal(gate1.stop, "awaiting-user")
-  await call(["decide", "--task", "escwide-t", "--choice", "1"])
-  const d1 = await call(["dispatch-plan", "--task", "escwide-t"])
-  assert.equal(d1.stop, null)
-  await call(["retire", "--task", "escwide-t", "--wave", d1.waves[0].waveId, "--reason", "改完成标准场景"])
-  // tier 不变、仅改 done 完成标准：完整包配置指纹（id+tier+writable+done+dependsOn）不同 → 旧批准失效
-  await call(["plan", "--task", "escwide-t", "--packages", JSON.stringify([
-    { id: "hi", writable: ["HI.md:k"], done: ["d1", "d2"], tier: "senior", dependsOn: [] },
+  assert.equal(explicit.packages[0].model.provider, "vendor-a")
+  await raw(["decide", "--task", "plan-model-t", "--choice", "1"])
+  const sugared = await raw(["plan", "--task", "plan-model-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["A.md:k"], done: ["d"], model: { provider: "vendor-a", modelName: "model-a" }, dependsOn: [] },
+    { id: "b", writable: ["B.md:k"], done: ["d"], tier: "expert", dependsOn: [] },
+    { id: "c", writable: ["C.md:k"], done: ["d"], dependsOn: [] },
   ])])
-  const gate2 = await call(["dispatch-plan", "--task", "escwide-t"])
-  assert.equal(gate2.stop, "awaiting-user", "done 变化也触发重新审批（授权对象=完整包配置）")
+  const byId = Object.fromEntries(sugared.packages.map((pkg) => [pkg.id, pkg.model]))
+  assert.equal(byId.b.provider, "cli-expert", "tier 语法糖在 plan 期解析成 ModelRef")
+  assert.equal(byId.c.provider, "cli-junior", "未给模型时复用 roles.owner")
+  const task = await fixLoadTask(root, "plan-model-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const persisted = JSON.parse(await readFile(path.join(task.root, "packages.json"), "utf8")).items
+  assert.equal(persisted.every((pkg) => pkg.model && pkg.tier === undefined), true, "落盘只有 ModelRef，不再持久化 tier")
+  const conflict = await raw(["plan", "--task", "plan-model-t", "--packages", JSON.stringify([
+    { id: "a", writable: ["A.md:k"], done: ["d"], tier: "senior", model: { provider: "x", modelName: "y" }, dependsOn: [] },
+  ])])
+  assert.equal(conflict.ok, false)
+  assert.equal(conflict.code, "PLAN_REJECTED")
+  assert.match(conflict.message, /不能同时给 model 与 tier/)
+  // 落盘与派发导出一致：两包不同模型按各自 ModelRef 派发。
+  await raw(["decide", "--task", "plan-model-t", "--choice", "1"])
+  const dispatched = await raw(["dispatch-plan", "--task", "plan-model-t", "--json"])
+  assert.equal(dispatched.stop, null)
+  const waveRefs = Object.fromEntries(dispatched.waves.map((wave) => [wave.package, wave.modelRef]))
+  assert.deepEqual(waveRefs.a, { provider: "vendor-a", modelName: "model-a" })
+  assert.deepEqual({ ...waveRefs.b, family: undefined }, { provider: "cli-expert", modelName: "cli-expert", family: undefined })
+  assert.equal(dispatched.waves.every((wave) => wave.modelSource === "package"), true)
+})
+
+test("tw roles：只读/--set/--resolve/--clear；已有会话换模型出确认卡，选保留后不再重复出卡", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "roles-t")
+  const read = await call(["roles", "--task", "roles-t"])
+  assert.equal(read.unresolved.length, 0)
+  assert.equal(read.roles.owner.modelName, "cli-junior")
+  assert.equal(read.effortState.owner, "omitted")
+
+  // 单 owner 任务（无包）：首波派发 + 登记会话映射 → 交付 + 评审 rework → respond 续派
+  const first = await call(["dispatch-plan", "--task", "roles-t", "--writable", "R.md:code-review"])
+  const firstKey = first.waves[0].dispatchKey
+  assert.equal(first.waves[0].modelRef.modelName, "cli-junior")
+  await call(["agent-map", "--task", "roles-t", "--key", firstKey, "--agent", "child-roles"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "roles-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const review = await call(["dispatch-plan", "--task", "roles-t"])
+  await call(["review", "--task", "roles-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+
+  // 改 owner 模型（tier 语法糖）：确认卡重签由 autoCaller 确认；下一轮续派检测到模型差异 → 换模型卡
+  const set = await call(["roles", "--task", "roles-t", "--set", "owner=tier:senior"])
+  assert.equal(set.ok, true)
+  assert.equal(set.roles.owner.modelName, "cli-senior")
+  const fresh = await call(["dispatch-plan", "--task", "roles-t", "--writable", "R.md:code-review"])
+  assert.equal(fresh.stop, "awaiting-user", "已有会话换模型必须显式确认")
+  assert.equal(fresh.card.requiresFreshSession.role, "owner")
+  assert.equal(fresh.card.requiresFreshSession.sessionId, "child-roles")
+  assert.equal(fresh.card.requiresFreshSession.fromModelRef.modelName, "cli-junior")
+  assert.equal(fresh.card.requiresFreshSession.toModelRef.modelName, "cli-senior")
+  assert.deepEqual(fresh.card.choices.map((choice) => choice.grant), ["keep-session", "retire-and-recreate", "rollback-model"])
+
+  // 选 1 保留原会话：后续按旧模型固化，不再重复出卡
+  assert.equal((await call(["decide", "--task", "roles-t", "--choice", "1"])).ok, true)
+  const kept = await call(["dispatch-plan", "--task", "roles-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(kept.stop, null)
+  assert.equal(kept.waves[0].modelRef.modelName, "cli-junior", "保留会话 = 按 keptModelRef 继续")
+  assert.equal(kept.waves[0].expectedAgentId, "child-roles")
+  const repeat = await call(["run", "--task", "roles-t"])
+  assert.equal(repeat.next, "wait", "在途等待，不再出卡")
+})
+
+test("换模型选 2：写 session-reset 作废旧映射、重开会话用新模型（全新上下文）", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "fresh-t")
+  const first = await call(["dispatch-plan", "--task", "fresh-t", "--writable", "R.md:code-review"])
+  const firstKey = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "fresh-t", "--key", firstKey, "--agent", "child-fresh"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "fresh-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const review = await call(["dispatch-plan", "--task", "fresh-t"])
+  await call(["review", "--task", "fresh-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["roles", "--task", "fresh-t", "--set", "owner=tier:expert"])
+  const fresh = await call(["dispatch-plan", "--task", "fresh-t", "--writable", "R.md:code-review"])
+  assert.equal(fresh.card.requiresFreshSession.sessionId, "child-fresh")
+  assert.equal((await call(["decide", "--task", "fresh-t", "--choice", "2"])).ok, true)
+  const resetTask = await fixLoadTask(root, "fresh-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const resets = resetTask.journal.filter((event) => event.type === "session-reset")
+  assert.equal(resets.length, 1)
+  assert.equal(resets[0].detail.role, "owner")
+  assert.equal(resets[0].detail.fromModelRef.modelName, "cli-junior")
+  assert.equal(resets[0].detail.toModelRef.modelName, "cli-expert")
+  const rebuilt = await call(["dispatch-plan", "--task", "fresh-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(rebuilt.stop, null)
+  assert.equal(rebuilt.waves[0].modelRef.modelName, "cli-expert", "重开会话用新模型")
+  assert.equal(rebuilt.waves[0].expectedAgentId, undefined, "session-reset 边界前映射一律忽略（不续旧会话）")
+  assert.equal(rebuilt.waves[0].expectedAgentIdMissing, true, "强制新建会话并投全量变体")
+  // 幂等：reset 后另一个推进只进入在途等待，不重复写 session-reset。
+  const repeat = await call(["dispatch-plan", "--task", "fresh-t", "--json"])
+  assert.equal(repeat.stop, "wait-inflight")
+  const repeatTask = await fixLoadTask(root, "fresh-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(repeatTask.journal.filter((event) => event.type === "session-reset").length, 1, "session-reset 幂等：重复推进不重复写")
 })
 
 // ── 返工终版 §二·D：run 无锁只读快照 ─────────────────────────────────────────────
 
 test("run 无锁只读：锁目录只读时照常返回状态卡、盘上零变化（含锁文件）；卡面标注 journal seq", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "lockfree-t")
   const plan = await call(["dispatch-plan", "--task", "lockfree-t", "--writable", "R.md:doc"])
   assert.equal(plan.stop, null)
@@ -675,7 +805,7 @@ test("run 无锁只读：锁目录只读时照常返回状态卡、盘上零变�
 
 test("dispatch-plan 导出 promptFull：续派与在途重建的两种正文各含一次当前验收基线", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "pfull-t", { objective: "修复判定链并补全测试" })
   await call(["intent", "--task", "pfull-t", "--add-constraint", "不改无关文件", "--add-exclusion", "不碰 v2"])
   const seeded = await call(["dispatch-plan", "--task", "pfull-t", "--writable", "R.md:doc"])
@@ -712,7 +842,7 @@ test("dispatch-plan 导出 promptFull：续派与在途重建的两种正文各�
 
 test("快照损坏不构成死门：rebuildArtifacts 按缺失降级进 degraded（含处置建议），run/gate/deliver 全链照常", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "snapbad-t")
   const d = await call(["dispatch-plan", "--task", "snapbad-t", "--writable", "R.md:doc"])
   await writeFile(path.join(root, "R.md"), "内容 v1", "utf8")
@@ -752,7 +882,7 @@ test("快照损坏不构成死门：rebuildArtifacts 按缺失降级进 degraded
 
 test("快照-报告时间校验：最新快照丢失（旧快照在场）→ 按缺失 degraded，不产出 {digest:旧, reportRef:新} 混搭", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "snapstale-t")
   const d = await call(["dispatch-plan", "--task", "snapstale-t", "--writable", "R.md:doc"])
   // 两轮交付：v1 与 v2 内容不同（两个 digest、两个快照文件）
@@ -780,7 +910,7 @@ test("快照-报告时间校验：最新快照丢失（旧快照在场）→ 按
 
   // 对照：最新快照在场时同一重建逐字段等价（时间校验不误伤正常路径）
   const root2 = await makeProject()
-  const call2 = caller(root2)
+  const call2 = autoCaller(root2)
   await openTask(root2, "snapok-t")
   const d2 = await call2(["dispatch-plan", "--task", "snapok-t", "--writable", "R.md:doc"])
   await writeFile(path.join(root2, "R.md"), "内容 v1", "utf8")
@@ -797,7 +927,7 @@ test("快照-报告时间校验：最新快照丢失（旧快照在场）→ 按
 
 test("artifacts.json 损坏自愈：deliver/review 锁内照常接受（freshState 降级重建），deliver 落盘固化", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-cli-corrupt-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   const taskDir = path.join(projectRoot, ".team-work", "tasks", "corrupt-art")
   const artifactsFile = path.join(taskDir, "artifacts.json")
   // 破坏形态：合法 JSON 前缀被截断（JSON.parse SyntaxError，非 ENOENT）
@@ -916,4 +1046,406 @@ test("init 用户公共规则：测试进程未显式指定目录时不写主目
   assert.match(result.rules.note, /出厂规则模板不可用/)
   assert.equal(Object.hasOwn(result.rules, "root"), false, "源缺失时不声称已释放")
   for (const key of ["skill", "writingSkill", "reviewSkill", "outputStandard"]) assert.equal(result[key].action, "installed", key + " 不受规则释放失败影响")
+})
+
+test("ModelRef 校验：缺字段/未知字段/effort 空串或 none 拒绝；缺省不补空值", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  await openTask(root, "mr-t")
+  for (const model of [
+    { provider: "vendor-a" },
+    { provider: "vendor-a", modelName: "" },
+    { provider: "vendor-a", modelName: "model-a", extra: true },
+    { provider: "vendor-a", modelName: "model-a", effort: "" },
+    { provider: "vendor-a", modelName: "model-a", effort: "none" },
+  ]) {
+    const result = await raw(["plan", "--task", "mr-t", "--packages", JSON.stringify([{ id: "a", writable: ["A.md:k"], done: ["d"], model, dependsOn: [] }])])
+    assert.equal(result.ok, false, JSON.stringify(model))
+    assert.equal(result.code, "PLAN_REJECTED")
+    assert.match(result.message, /model 不合法/)
+  }
+  for (const value of ["owner=vendor-a/model-a@none", "owner=vendor-a/model-a@"]) {
+    const rejected = await raw(["roles", "--task", "mr-t", "--set", value])
+    assert.equal(rejected.ok, false, value)
+    assert.equal(rejected.code, "MODEL_REF_INVALID")
+  }
+  const good = await raw(["roles", "--task", "mr-t", "--set", "owner=vendor-a/model-a"])
+  assert.equal(good.ok, true)
+  const read = await raw(["roles", "--task", "mr-t"])
+  assert.equal(Object.hasOwn(read.roles.owner, "effort"), false, "不设置推理强度 = 省略字段（不补空串）")
+})
+
+test("旧 packages.json 的 tier 首次推进物化：按当前快照解析成 ModelRef，journal 记 packages-model-materialized", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  await openTask(root, "legacy-tier-t")
+  const task = await fixLoadTask(root, "legacy-tier-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  await writeFile(path.join(task.root, "packages.json"), JSON.stringify({ items: [
+    { id: "a", tier: "senior", writable: ["A.md:k"], done: ["d"], dependsOn: [] },
+  ] }))
+  const first = await raw(["dispatch-plan", "--task", "legacy-tier-t"])
+  assert.equal(first.stop, "awaiting-user", "包模型出现 → 意图确认卡按逐包模型重签")
+  assert.equal(first.card.intake.packages[0].modelRef.modelName, "cli-senior", "旧 tier 在确认前已物化")
+  await raw(["decide", "--task", "legacy-tier-t", "--choice", "1"])
+  const d = await raw(["dispatch-plan", "--task", "legacy-tier-t", "--json"])
+  assert.equal(d.stop, null)
+  assert.equal(d.waves[0].modelRef.modelName, "cli-senior", "物化不换模型")
+  const after = await fixLoadTask(root, "legacy-tier-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(after.journal.filter((event) => event.type === "packages-model-materialized").length, 1)
+  const persisted = JSON.parse(await readFile(path.join(task.root, "packages.json"), "utf8")).items
+  assert.equal(persisted[0].tier, undefined, "旧 tier 字段在物化后移除")
+  assert.equal(persisted[0].model.modelName, "cli-senior")
+})
+
+test("换模型选 3：回滚 roles 到首派模型并重签确认卡", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "rollback-t")
+  const first = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
+  const firstKey = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "rollback-t", "--key", firstKey, "--agent", "child-rollback"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "rollback-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const review = await call(["dispatch-plan", "--task", "rollback-t"])
+  await call(["review", "--task", "rollback-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["roles", "--task", "rollback-t", "--set", "owner=tier:expert"])
+  const fresh = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
+  assert.equal(fresh.card.requiresFreshSession.toModelRef.modelName, "cli-expert")
+  assert.equal((await call(["decide", "--task", "rollback-t", "--choice", "3"])).ok, true)
+  const roles = await call(["roles", "--task", "rollback-t"])
+  assert.equal(roles.roles.owner.modelName, "cli-junior", "roles 回滚到首派模型")
+  const after = await fixLoadTask(root, "rollback-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(after.journal.filter((event) => event.type === "role-models-changed" && event.detail.changes?.some((change) => change.role === "owner" && change.reason?.includes("回滚"))).length, 1)
+  // 回滚使确认指纹回到旧 roles：计划按 §3.6 重签确认卡，用户确认后恢复续派。
+  const resign = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
+  assert.equal(resign.stop, "awaiting-user", "回滚后重签意图确认卡")
+  assert.equal(resign.card.intake.roles.find((entry) => entry.role === "owner").modelRef.modelName, "cli-junior")
+  assert.equal((await call(["decide", "--task", "rollback-t", "--choice", "1"])).ok, true)
+  const resumed = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(resumed.stop, null)
+  assert.equal(resumed.waves[0].modelRef.modelName, "cli-junior", "回滚后按旧模型续派")
+})
+
+test("intent 扩展字段：范围/验收进入派单基线；gap 答复可结构化落到 intent.json", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  const opened = await raw(["open", "--name", "scope-t", "--objective", "目标", "--entry", "code-review",
+    "--scope-note", "只覆盖 A 模块", "--acceptance", "验收一",
+    "--gap", JSON.stringify({ id: "g1", question: "是否含 B 模块", whyItMatters: "影响范围", proposedDefault: "不含" })])
+  assert.equal(opened.ok, true)
+  assert.equal(opened.intake.scope.notes[0], "只覆盖 A 模块")
+  assert.match(opened.question, /范围补充：\n- 只覆盖 A 模块/, "确认卡展示范围补充")
+  assert.equal(opened.intake.acceptance[0], "验收一")
+  assert.match(opened.question, /验收：\n- 验收一/, "确认卡展示验收项")
+  await raw(["decide", "--task", "scope-t", "--choice", "1"])
+  const d = await raw(["dispatch-plan", "--task", "scope-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(d.stop, null)
+  const prompt = d.waves[0].prompt
+  assert.match(prompt, /范围（intent\.scope）/, "派单基线带范围")
+  assert.match(prompt, /只覆盖 A 模块/)
+  assert.match(prompt, /验收（intent\.acceptance）/, "派单基线带验收")
+  const answered = await raw(["intent", "--task", "scope-t", "--answer-gap", "g1", "--answer", "不含 B 模块"])
+  assert.equal(answered.ok, true)
+  const intent = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "scope-t", "intent.json"), "utf8"))
+  assert.equal(intent.gaps.find((gap) => gap.id === "g1")?.answer, "不含 B 模块")
+})
+
+
+test("tw plan 重拆窗口：意图确认卡期间放行并自动重签；其他 awaiting-user 卡仍拒绝", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  const opened = await raw(["open", "--name", "plan-window", "--objective", "o", "--entry", "code-review"])
+  const planned = await raw(["plan", "--task", "plan-window", "--packages", JSON.stringify([{ id: "a", writable: ["A.md:k"], done: ["d"], dependsOn: [] }])])
+  assert.equal(planned.status, "awaiting-user", "确认卡期间允许拆包")
+  assert.notEqual(planned.decisionId, opened.decisionId, "拆包后按新包模型重签确认卡")
+  assert.equal(planned.intake.packages.length, 1)
+  // 其他类型的待决卡仍禁止重拆（避免改包配置与人工门答案错位）。
+  await raw(["decide", "--task", "plan-window", "--choice", "1"])
+  const task = await fixLoadTask(root, "plan-window", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const journalFile = path.join(task.root, "journal.jsonl")
+  const journal = await readFile(journalFile, "utf8")
+  const seq = journal.trim().split("\n").length
+  await writeFile(journalFile, journal + JSON.stringify({ seq: seq + 1, at: new Date().toISOString(), type: "decision-issued", detail: { decisionId: "gate-x", gateId: null, reason: "某待决卡", choices: [{ n: 1, label: "继续" }] } }) + "\n")
+  const rejected = await raw(["plan", "--task", "plan-window", "--packages", JSON.stringify([{ id: "b", writable: ["B.md:k"], done: ["d"], dependsOn: [] }])])
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.code, "PLAN_REJECTED")
+  assert.match(rejected.message, /有待决用户卡片/)
+})
+
+test("tw roles --clear 与 --resolve：清除角色后按当前快照重建", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "roles-clear-t")
+  const cleared = await call(["roles", "--task", "roles-clear-t", "--clear", "challenger"])
+  assert.equal(cleared.ok, true)
+  const read = await call(["roles", "--task", "roles-clear-t"])
+  assert.equal(read.roles.challenger, undefined)
+  assert.deepEqual(read.unresolved, ["challenger"])
+  const resolved = await call(["roles", "--task", "roles-clear-t", "--resolve"])
+  assert.equal(resolved.roles.challenger.modelName, "cli-senior")
+  assert.deepEqual(resolved.unresolved, [])
+})
+
+test("tw gate 只读提示意图确认状态（不改写任务事实）", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  await raw(["open", "--name", "gate-intake", "--objective", "o", "--entry", "code-review"])
+  const before = await readFile(path.join(root, ".team-work/tasks/gate-intake/journal.jsonl"), "utf8")
+  const gate1 = await raw(["gate", "--task", "gate-intake"])
+  assert.equal(gate1.intake.issued, true)
+  assert.equal(gate1.intake.confirmed, false)
+  assert.equal(await readFile(path.join(root, ".team-work/tasks/gate-intake/journal.jsonl"), "utf8"), before, "gate 只读零写入")
+  await raw(["decide", "--task", "gate-intake", "--choice", "1"])
+  const gate2 = await raw(["gate", "--task", "gate-intake"])
+  assert.equal(gate2.intake.confirmed, true)
+})
+
+
+test("包级模型变更：续派出换模型卡（target=package），回滚恢复 packages[].model 后按旧模型续派", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "pkg-fresh-t")
+  const planned = await call(["plan", "--task", "pkg-fresh-t", "--packages", JSON.stringify([{ id: "core", writable: ["C.md:k"], done: ["d"], dependsOn: [] }])])
+  assert.equal(planned.ok, true)
+  const first = await call(["dispatch-plan", "--task", "pkg-fresh-t"])
+  const firstKey = first.waves[0].dispatchKey
+  assert.equal(first.waves[0].modelRef.modelName, "cli-junior", "无显式 model 的包复用 roles.owner")
+  await call(["agent-map", "--task", "pkg-fresh-t", "--key", firstKey, "--agent", "child-pkg"])
+  await writeFile(path.join(root, "C.md"), "v1", "utf8")
+  await call(["deliver", "--task", "pkg-fresh-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "C.md"])
+  const review = await call(["dispatch-plan", "--task", "pkg-fresh-t"])
+  await call(["review", "--task", "pkg-fresh-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  // 包模型改为显式更强模型（续派已有会话 → 出换模型卡）
+  const replanned = await call(["plan", "--task", "pkg-fresh-t", "--packages", JSON.stringify([{ id: "core", writable: ["C.md:k"], done: ["d"], model: { provider: "vendor-new", modelName: "model-new" }, dependsOn: [] }])])
+  assert.equal(replanned.ok, true)
+  const fresh = await call(["dispatch-plan", "--task", "pkg-fresh-t"])
+  assert.equal(fresh.stop, "awaiting-user")
+  assert.equal(fresh.card.requiresFreshSession.target, "package")
+  assert.equal(fresh.card.requiresFreshSession.package, "core")
+  assert.equal(fresh.card.requiresFreshSession.fromModelRef.modelName, "cli-junior")
+  assert.equal(fresh.card.requiresFreshSession.toModelRef.modelName, "model-new")
+  assert.equal(fresh.card.choices[2].label, "回滚包模型到旧值")
+  assert.equal((await call(["decide", "--task", "pkg-fresh-t", "--choice", "3"])).ok, true)
+  const task = await fixLoadTask(root, "pkg-fresh-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const persisted = JSON.parse(await readFile(path.join(task.root, "packages.json"), "utf8")).items
+  assert.equal(persisted[0].model.modelName, "cli-junior", "包模型回滚到首派模型")
+  assert.ok(task.journal.some((event) => event.type === "re-planned" && event.detail.source === "fresh-session-rollback"))
+  // 回滚改变包模型 → 确认指纹回到旧配置：重签确认卡，用户确认后按旧模型续派。
+  const resign = await call(["dispatch-plan", "--task", "pkg-fresh-t"])
+  assert.equal(resign.stop, "awaiting-user")
+  assert.equal(resign.card.intake.packages[0].modelRef.modelName, "cli-junior")
+  assert.equal((await call(["decide", "--task", "pkg-fresh-t", "--choice", "1"])).ok, true)
+  const resumed = await call(["dispatch-plan", "--task", "pkg-fresh-t", "--json"])
+  assert.equal(resumed.stop, null)
+  assert.equal(resumed.waves[0].modelRef.modelName, "cli-junior")
+})
+
+test("换模型选 2（包级）：写 session-reset 后新会话用新包模型", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "pkg-reset-t")
+  await call(["plan", "--task", "pkg-reset-t", "--packages", JSON.stringify([{ id: "core", writable: ["C.md:k"], done: ["d"], dependsOn: [] }])])
+  const first = await call(["dispatch-plan", "--task", "pkg-reset-t"])
+  const firstKey = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "pkg-reset-t", "--key", firstKey, "--agent", "child-pkg-reset"])
+  await writeFile(path.join(root, "C.md"), "v1", "utf8")
+  await call(["deliver", "--task", "pkg-reset-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "C.md"])
+  const review = await call(["dispatch-plan", "--task", "pkg-reset-t"])
+  await call(["review", "--task", "pkg-reset-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["plan", "--task", "pkg-reset-t", "--packages", JSON.stringify([{ id: "core", writable: ["C.md:k"], done: ["d"], model: { provider: "vendor-new", modelName: "model-new" }, dependsOn: [] }])])
+  const fresh = await call(["dispatch-plan", "--task", "pkg-reset-t"])
+  assert.equal(fresh.card.requiresFreshSession.target, "package")
+  assert.equal((await call(["decide", "--task", "pkg-reset-t", "--choice", "2"])).ok, true)
+  const task = await fixLoadTask(root, "pkg-reset-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const reset = task.journal.find((event) => event.type === "session-reset")
+  assert.equal(reset.detail.package, "core")
+  assert.equal(reset.detail.toModelRef.modelName, "model-new")
+  const rebuilt = await call(["dispatch-plan", "--task", "pkg-reset-t", "--json"])
+  assert.equal(rebuilt.stop, null)
+  assert.equal(rebuilt.waves[0].modelRef.modelName, "model-new")
+  assert.equal(rebuilt.waves[0].expectedAgentIdMissing, true, "reset 边界后不续旧会话")
+})
+
+test("E1：重开会话 B 后的续派基线是 B 首派模型；B→C 也按 B 比较，不重复出卡", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "b-baseline-t")
+  const first = await call(["dispatch-plan", "--task", "b-baseline-t", "--writable", "R.md:code-review"])
+  const k1 = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "b-baseline-t", "--key", k1, "--agent", "child-A"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "b-baseline-t", "--key", k1, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["dispatch-plan", "--task", "b-baseline-t"])
+  await call(["review", "--task", "b-baseline-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+
+  // A 会话（junior）→ 改 expert 出卡 → 选 2 重开 B（expert）
+  await call(["roles", "--task", "b-baseline-t", "--set", "owner=tier:expert"])
+  const freshA = await call(["dispatch-plan", "--task", "b-baseline-t", "--writable", "R.md:code-review"])
+  assert.equal(freshA.card.requiresFreshSession.fromModelRef.modelName, "cli-junior")
+  assert.equal((await call(["decide", "--task", "b-baseline-t", "--choice", "2"])).ok, true)
+  const waveB = await call(["dispatch-plan", "--task", "b-baseline-t", "--json", "--writable", "R.md:code-review"])
+  assert.equal(waveB.stop, null, JSON.stringify(waveB).slice(0, 600))
+  assert.equal(waveB.waves[0].modelRef.modelName, "cli-expert")
+  const kB = waveB.waves[0].dispatchKey
+  await call(["agent-map", "--task", "b-baseline-t", "--key", kB, "--agent", "child-B"])
+
+  // B 交付 + rework：配置没变 → 续派必须按 B 首派 expert 比较，不能再拿 A 的 junior 重复出卡
+  await writeFile(path.join(root, "R.md"), "v2", "utf8")
+  await call(["deliver", "--task", "b-baseline-t", "--key", kB, "--outcome", "delivered", "--summary", "s2", "--paths", "R.md"])
+  const rvB = await call(["dispatch-plan", "--task", "b-baseline-t"])
+  await call(["review", "--task", "b-baseline-t", "--key", rvB.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再重做"])
+  const contB = await call(["dispatch-plan", "--task", "b-baseline-t", "--json", "--writable", "R.md:code-review"])
+  assert.equal(contB.stop, null, "B 会话按自身首派模型比较，不重复出卡")
+  assert.equal(contB.waves[0].modelRef.modelName, "cli-expert")
+  assert.equal(contB.waves[0].expectedAgentId, "child-B")
+
+  // 消化 B 的 respond 波（在途会挡住后续换模型卡）
+  const kB2 = contB.waves[0].dispatchKey
+  await writeFile(path.join(root, "R.md"), "v3", "utf8")
+  await call(["deliver", "--task", "b-baseline-t", "--key", kB2, "--outcome", "delivered", "--summary", "s3", "--paths", "R.md"])
+  const rvB2 = await call(["dispatch-plan", "--task", "b-baseline-t"])
+  await call(["review", "--task", "b-baseline-t", "--key", rvB2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再重做 2"])
+
+  // 轮次上限卡（第 3 轮 rework）先追加一轮，避免把收敛卡误当换模型卡
+  const converge = await call(["dispatch-plan", "--task", "b-baseline-t"])
+  if (converge.stop === "awaiting-user" && converge.card?.choices?.[0]?.grant === "extra-round") {
+    await call(["decide", "--task", "b-baseline-t", "--choice", "1"])
+  }
+
+  // B→C：再改 senior → 换模型卡的 from 必须是 B 的 expert
+  await call(["roles", "--task", "b-baseline-t", "--set", "owner=tier:senior"])
+  const freshB = await call(["dispatch-plan", "--task", "b-baseline-t", "--writable", "R.md:code-review"])
+  assert.ok(freshB.card.requiresFreshSession, JSON.stringify(freshB).slice(0, 800))
+  assert.equal(freshB.card.requiresFreshSession.fromModelRef.modelName, "cli-expert", "B→C 比较 B 首派模型")
+  assert.equal(freshB.card.requiresFreshSession.toModelRef.modelName, "cli-senior")
+  assert.equal((await call(["decide", "--task", "b-baseline-t", "--choice", "2"])).ok, true)
+  const waveC = await call(["dispatch-plan", "--task", "b-baseline-t", "--json", "--writable", "R.md:code-review"])
+  assert.equal(waveC.stop, null)
+  assert.equal(waveC.waves[0].modelRef.modelName, "cli-senior")
+  const task = await fixLoadTask(root, "b-baseline-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const reset = task.journal.filter((event) => event.type === "session-reset").at(-1)
+  assert.equal(reset.detail.fromModelRef.modelName, "cli-expert", "C 的 reset 记录 B 首派模型")
+  assert.equal(reset.detail.toModelRef.modelName, "cli-senior")
+})
+
+test("E1：跨阶段只比较当前阶段会话首派模型，不回看上一阶段", async () => {
+  const wf = { terminalStages: ["code-review"], gates: [], stages: [
+    { id: "research", label: "调研", outputs: [], teamScene: "research" },
+    { id: "code-review", label: "审查", outputs: ["code-review"], teamScene: "code-review" },
+  ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
+  const pol = { maxAutonomousRounds: 3, roles: { owner: "junior", challenger: "senior", expert: "expert" }, scenes: { research: { core: false }, "code-review": { core: false } } }
+  const root = await makeProject({ workflow: wf, policy: pol })
+  const call = autoCaller(root)
+  await openTask(root, "stage-base-t", { entry: null })
+  // research 阶段：junior 派发并收敛 → advance
+  const r1 = await call(["dispatch-plan", "--task", "stage-base-t", "--writable", "none"])
+  const k1 = r1.waves[0].dispatchKey
+  await call(["agent-map", "--task", "stage-base-t", "--key", k1, "--agent", "child-X"])
+  await call(["deliver", "--task", "stage-base-t", "--key", k1, "--outcome", "delivered", "--summary", "调研"])
+  const rv1 = await call(["dispatch-plan", "--task", "stage-base-t"])
+  await call(["review", "--task", "stage-base-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "s"])
+  // 进入 code-review 前改 owner senior：当前阶段首派 = senior（research 首派是 junior）
+  await call(["roles", "--task", "stage-base-t", "--set", "owner=tier:senior"])
+  const d2 = await call(["dispatch-plan", "--task", "stage-base-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(d2.stage, "code-review")
+  assert.equal(d2.waves[0].modelRef.modelName, "cli-senior")
+  const k2 = d2.waves[0].dispatchKey
+  await call(["agent-map", "--task", "stage-base-t", "--key", k2, "--agent", "child-X"]) // 模拟同一会话跨阶段续用
+  await writeFile(path.join(root, "R.md"), "x", "utf8")
+  await call(["deliver", "--task", "stage-base-t", "--key", k2, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv2 = await call(["dispatch-plan", "--task", "stage-base-t"])
+  await call(["review", "--task", "stage-base-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["roles", "--task", "stage-base-t", "--set", "owner=tier:expert"])
+  const fresh = await call(["dispatch-plan", "--task", "stage-base-t", "--writable", "R.md:code-review"])
+  assert.equal(fresh.card.requiresFreshSession.fromModelRef.modelName, "cli-senior", "跨阶段基线只看本阶段首派，不回看 research 的 junior")
+  assert.equal(fresh.card.requiresFreshSession.toModelRef.modelName, "cli-expert")
+})
+
+test("E2：换模型卡未决时改 roles：旧卡 superseded 不叠 intake 卡；decide 选项仍是 keep-session", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "no-stack-t")
+  const first = await call(["dispatch-plan", "--task", "no-stack-t", "--writable", "R.md:code-review"])
+  const key = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "no-stack-t", "--key", key, "--agent", "child-stack"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "no-stack-t", "--key", key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["dispatch-plan", "--task", "no-stack-t"])
+  await call(["review", "--task", "no-stack-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["roles", "--task", "no-stack-t", "--set", "owner=tier:expert"])
+  const fresh1 = await call(["dispatch-plan", "--task", "no-stack-t", "--writable", "R.md:code-review"])
+  const oldFreshId = fresh1.card.decisionId
+  // 未决换模型卡期间再改 roles：旧卡必须 superseded，不能同时挂 intake 卡
+  const changed = await call(["roles", "--task", "no-stack-t", "--set", "owner=tier:senior"])
+  assert.equal(changed.next, "decide")
+  const task = await fixLoadTask(root, "no-stack-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const superseded = task.journal.filter((event) => event.type === "decided" && event.detail.decisionId === oldFreshId)
+  assert.equal(superseded.length, 1, "旧换模型卡被 superseded")
+  assert.equal(superseded[0].detail.choice, "superseded")
+  // 新配置下重新出换模型卡；选择 1 是 keep-session（保留 old 模型），不是 intake 的“确认开始”
+  const fresh2 = await call(["dispatch-plan", "--task", "no-stack-t", "--writable", "R.md:code-review"])
+  assert.equal(fresh2.card.requiresFreshSession.fromModelRef.modelName, "cli-junior")
+  assert.equal(fresh2.card.requiresFreshSession.toModelRef.modelName, "cli-senior")
+  assert.notEqual(fresh2.card.decisionId, oldFreshId)
+  assert.equal((await call(["decide", "--task", "no-stack-t", "--choice", "1"])).ok, true)
+  const kept = await call(["dispatch-plan", "--task", "no-stack-t", "--writable", "R.md:code-review", "--json"])
+  assert.equal(kept.stop, null)
+  assert.equal(kept.waves[0].modelRef.modelName, "cli-junior", "选项 1 = 保留旧会话（不是接受 intake）")
+  assert.equal(kept.waves[0].expectedAgentId, "child-stack")
+})
+
+test("E2：换模型卡签发后外部改 roles → decide 拒绝直答；推进时旧卡自动作废重签", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "fresh-stale-t")
+  const first = await call(["dispatch-plan", "--task", "fresh-stale-t", "--writable", "R.md:code-review"])
+  const key = first.waves[0].dispatchKey
+  await call(["agent-map", "--task", "fresh-stale-t", "--key", key, "--agent", "child-stale"])
+  await writeFile(path.join(root, "R.md"), "v1", "utf8")
+  await call(["deliver", "--task", "fresh-stale-t", "--key", key, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const rv = await call(["dispatch-plan", "--task", "fresh-stale-t"])
+  await call(["review", "--task", "fresh-stale-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做"])
+  await call(["roles", "--task", "fresh-stale-t", "--set", "owner=tier:expert"])
+  const fresh = await call(["dispatch-plan", "--task", "fresh-stale-t", "--writable", "R.md:code-review"])
+  assert.ok(fresh.card.requiresFreshSession)
+  // 绕过 tw roles 直接改 agents.json（模拟外部漂移/手工编辑）
+  const task = await fixLoadTask(root, "fresh-stale-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const agentsFile = path.join(task.root, "agents.json")
+  const agents = JSON.parse(await readFile(agentsFile, "utf8"))
+  agents.roles.owner = { provider: "external", modelName: "external-model" }
+  await writeFile(agentsFile, JSON.stringify(agents))
+  const bad = await call(["decide", "--task", "fresh-stale-t", "--choice", "1"])
+  assert.equal(bad.ok, false, "旧换模型卡不可直答")
+  assert.equal(bad.code, "DECISION_STALE")
+  // 推进通道：作废旧卡并重签（run 只读给 stale 指引）
+  const run = await call(["run", "--task", "fresh-stale-t"])
+  assert.equal(run.next, "re-sign")
+  const reSign = await call(["dispatch-plan", "--task", "fresh-stale-t", "--writable", "R.md:code-review"])
+  assert.equal(reSign.stop, "awaiting-user")
+  assert.ok(reSign.card.intake, "外部改 roles 后先重签意图确认卡")
+  await call(["decide", "--task", "fresh-stale-t", "--choice", "1"])
+  const resigned = await call(["dispatch-plan", "--task", "fresh-stale-t", "--writable", "R.md:code-review"])
+  assert.equal(resigned.stop, "awaiting-user")
+  assert.notEqual(resigned.card.decisionId, fresh.card.decisionId)
+  assert.equal(resigned.card.requiresFreshSession.toModelRef.modelName, "external-model")
+})
+
+
+test("E2：存在其他待决卡时 roles 修改不抢先签 intake 卡，只标 stale（避免选项错位）", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "roles-pending-t")
+  const task = await fixLoadTask(root, "roles-pending-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const journalFile = path.join(task.root, "journal.jsonl")
+  const journal = await readFile(journalFile, "utf8")
+  const seq = journal.trim().split("\n").length
+  await writeFile(journalFile, journal + JSON.stringify({ seq: seq + 1, at: new Date().toISOString(), type: "decision-issued", detail: { decisionId: "other-card", gateId: null, reason: "其他待决卡", choices: [{ n: 1, label: "继续" }] } }) + "\n")
+  const before = (await fixLoadTask(root, "roles-pending-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })).journal.filter((event) => event.type === "decision-issued").length
+  const changed = await call(["roles", "--task", "roles-pending-t", "--set", "owner=tier:senior"])
+  assert.equal(changed.ok, true)
+  assert.equal(changed.intakeRestaled, true)
+  assert.equal(changed.status, undefined, "不返回新卡")
+  assert.match(changed.note, /待决卡/)
+  const after = (await fixLoadTask(root, "roles-pending-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })).journal.filter((event) => event.type === "decision-issued").length
+  assert.equal(after, before, "不叠签第二张卡")
 })

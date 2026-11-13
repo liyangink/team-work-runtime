@@ -15,7 +15,7 @@ import { loadTask } from "../runtime-v3/store.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
 import { projectRounds, inflightBatch, waveGroups, supersededKeys, effectiveBlockedSet } from "../runtime-v3/waves.mjs"
 import { humanDecisionFresh } from "../runtime-v3/gate.mjs"
-import { makeProject, caller, openTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, openTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
 // dispatch-plan 需要完整三档调用快照。
 process.env.TW_DSH_CONFIG = JSON.stringify({
@@ -69,7 +69,7 @@ async function appendEvents(root, name, events) {
 
 test("F1/F8：派发 key 为 d<序号>-<hex>、同批共享 waveId、waveId 全任务递增、dispatched 落盘 waveId", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "wave-id")
   const d1 = await call(["dispatch-plan", "--task", "wave-id", "--json", "--writable", "R.md:code-review"])
   assert.match(d1.waves[0].dispatchKey, KEY_RE, "key 格式 d<序号>-<3字节hex>")
@@ -92,7 +92,7 @@ test("F1/F8：派发 key 为 d<序号>-<hex>、同批共享 waveId、waveId 全�
 
 test("F1/F3：wait-inflight 卡与 dispatch-plan 输出补 waveId；run 只读在途卡带 waveId 字段", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "wave-out")
   await call(["dispatch-plan", "--task", "wave-out", "--json", "--writable", "R.md:code-review"])
   const w = await call(["dispatch-plan", "--task", "wave-out", "--json"])
@@ -164,7 +164,7 @@ test("V3-E2E-01 重启：派发落盘后重新加载推导/重放原 key 不扩�
 
 test("门槛 2：多包部分交付后重复推进返回原在途卡、只等未交付包、不提前派 review、不重派已交付包", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "partial-t")
   await call(["plan", "--task", "partial-t", "--packages", PKGS2])
   const d1 = await call(["dispatch-plan", "--task", "partial-t", "--json"])
@@ -195,7 +195,7 @@ test("门槛 2：多包部分交付后重复推进返回原在途卡、只等未
 
 test("V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序回溯，非紧邻 key）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "chain-t")
   const d1 = await call(["dispatch-plan", "--task", "chain-t", "--json", "--writable", "R.md:code-review"])
   await call(["agent-map", "--task", "chain-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-O"])
@@ -217,7 +217,7 @@ test("V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序
 
 test("F4：replace-owner 后解析新成员（最新映射自然胜出）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "repl-t")
   const d1 = await call(["dispatch-plan", "--task", "repl-t", "--json", "--writable", "R.md:code-review"])
   await call(["agent-map", "--task", "repl-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-A"])
@@ -237,7 +237,7 @@ test("F4：replace-owner 后解析新成员（最新映射自然胜出）", asyn
 
 test("F4：Challenger 复审 expectedAgentId 可解析（无包波按同角色回溯）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "chal-t")
   const d1 = await call(["dispatch-plan", "--task", "chal-t", "--json", "--writable", "R.md:code-review"])
   await deliverContent(call, root, "chal-t", d1.waves[0].dispatchKey, "R.md", "v1")
@@ -264,7 +264,7 @@ test("F4：同名角色/包不跨阶段串线（stage-advanced 边界停止回�
   ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
   const pol = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { research: { core: false }, "code-review": { core: true } } }
   const root = await makeProject({ workflow: wf, policy: pol })
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "xstage-t", { entry: null }) // workflow 模式从 research 起
   const d0 = await call(["dispatch-plan", "--task", "xstage-t", "--json", "--writable", "none"])
   await call(["agent-map", "--task", "xstage-t", "--key", d0.waves[0].dispatchKey, "--agent", "child-R1"])
@@ -285,7 +285,7 @@ test("F4：同名角色/包不跨阶段串线（stage-advanced 边界停止回�
 
 test("F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh、重裁 continuation 并解析原 Expert（台账门槛 3 Expert 侧，D3 同角色回溯）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "vdct-t")
   const d1 = await call(["dispatch-plan", "--task", "vdct-t", "--json", "--writable", "R.md:code-review"])
   await call(["agent-map", "--task", "vdct-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-O"])
@@ -351,7 +351,7 @@ test("V3-E2E-03/F2：同轮重复报告投影轮不虚增；blocked 不入投影
 
 test("V3-E2E-03 全链路：同轮重复 key 迁移后 review 轮次不抬高、accept 后不再重复派 review、快照与判定同源（F2）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "dup-t")
   // 注入历史重复 key（同轮 round 2 两条、无 waveId——迁移前旧事实形态）；
   // 历史重复交付以报告文件 + 双条目制品索引播种（同 digest → 机械合并，不触发异 digest 冲突卡）
@@ -490,7 +490,7 @@ test("有效 blocked（seq 因果纯函数）：同毫秒不误判、墙钟回�
 
 test("F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 blocked → 出 F5 仲裁卡（不被 produceBlocked 遮蔽）；重派交付后不再触发 blocked 仲裁", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "xblk-t")
   await call(["plan", "--task", "xblk-t", "--packages", PKGS2])
   // 走完评审链到人工门：两包交付 → review accept → verdict accept → e2e skip
@@ -549,7 +549,7 @@ test("F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 block
 
 test("r4 边界：轮次耗尽（exhausted）不遮蔽 F5——绑定波含有效 blocked 时直接出 reworkBlocked 仲裁卡，不先出「追加一轮」卡；重派交付后不二次触发", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "exh-t")
   await call(["plan", "--task", "exh-t", "--packages", PKGS2])
   const keyOf = (w, pkg) => w.waves.find((x) => x.package === pkg).dispatchKey
@@ -673,7 +673,7 @@ test("F5：第二次 rework 不能被第一次绑定波报告消费", async () =
 
 test("F5 多包混合：已改包交付进入评审链、未修包僵局卡列清单、仅重派未修包", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "mix-t")
   await call(["plan", "--task", "mix-t", "--packages", PKGS2])
   const d1 = await call(["dispatch-plan", "--task", "mix-t", "--json"])
@@ -743,9 +743,9 @@ test("F6-2：等待期改写 Challenger 报告 → 旧卡自动作废、重签�
   const again = await call(["run", "--task", "f6s-t"])
   assert.equal(again.decisionId, card2.card.decisionId, "新卡只呈一次（重复 run 幂等）")
   const t2 = await loadTask(root, "f6s-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const superseded = t2.journal.filter((e) => e.type === "decided").map((e) => e.detail)
+  // 只看人工门旧卡自身的收口事件（意图确认卡是另一张卡，不计入本断言）。
+  const superseded = t2.journal.filter((e) => e.type === "decided" && e.detail.decisionId === card1.card.decisionId).map((e) => e.detail)
   assert.deepEqual(superseded.map((d) => d.choice), ["superseded"], "旧卡以 decided:superseded 只增作废（不删事实）")
-  assert.equal(superseded[0].decisionId, card1.card.decisionId)
   // 旧卡直答被拒（签发指纹再变化后 decide 旧卡）
   rc.payload.summary = "第三次改写"
   await writeFile(rcPath, JSON.stringify(rc))
@@ -773,7 +773,8 @@ test("F6-1：同门多次决定 → 二次 accept 后门通过、不再成环；
   const done = await call(["dispatch-plan", "--task", "f6m-t", "--json"])
   assert.equal(done.stop, "completed", "二次 accept 后门通过、不再成环")
   const t2 = await loadTask(root, "f6m-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const accepted = t2.journal.filter((e) => e.type === "decided").map((e) => e.detail.choice)
+  // 人工门决定（排除意图确认卡的"确认开始"）：恰好两次 accept，无循环重签。
+  const accepted = t2.decisions.filter((d) => d.gateId && d.gateId !== "intake-approval").map((d) => d.choice)
   assert.deepEqual(accepted, ["accept", "accept"], "恰好两次 accept 决定，无循环重签")
 })
 
@@ -790,7 +791,7 @@ test("F6/R2：旧决定缺 reviewFingerprint 降级仅制品指纹（纯函数�
 
 test("F7：同 key 同 payload 幂等 ver 不变；变 payload ver+1；report-accepted 带 ver+payloadDigest；旧报告视为 ver 1", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "ver-t")
   const d = await call(["dispatch-plan", "--task", "ver-t", "--json", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "v1", "utf8")
@@ -815,7 +816,7 @@ test("F7：同 key 同 payload 幂等 ver 不变；变 payload ver+1；report-ac
 
 test("F7：v1 fail + v2 pass → 门按最新 ver 判定（同 key 修订覆盖单文件）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "verpass-t")
   const d = await call(["dispatch-plan", "--task", "verpass-t", "--json", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "v1", "utf8")
@@ -839,7 +840,7 @@ test("F7：v1 fail + v2 pass → 门按最新 ver 判定（同 key 修订覆盖�
 
 test("F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d 混存回溯不断链", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "wdmix-t")
   // 旧 w 前缀派发（迁移前事实）+ 旧键映射
   await seedDispatch(root, "wdmix-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
@@ -863,7 +864,7 @@ test("F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d �
 
 test("F9：合并规则——同(kind,role,round)不同包合并一波、同包重复各自成波、package=null 各自成波；迁移前后投影等价；重跑幂等", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "mig-t")
   await call(["plan", "--task", "mig-t", "--packages", JSON.stringify([
     { id: "a", writable: ["A.md:k"], done: ["d"], dependsOn: [] },
@@ -906,7 +907,7 @@ test("F9：合并规则——同(kind,role,round)不同包合并一波、同包�
 
 test("F9：中断重跑等价——半迁移 journal（部分已赋号）可续跑至完整、不重复赋号", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "half-t")
   await call(["plan", "--task", "half-t", "--packages", JSON.stringify([
     { id: "a", writable: ["A.md:k"], done: ["d"], dependsOn: [] },
@@ -933,7 +934,7 @@ test("F9：跨阶段不误并——以最近 stage-advanced 事件为界，前�
   ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
   const pol = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, scenes: { research: { core: false }, "code-review": { core: false } } }
   const root = await makeProject({ workflow: wf, policy: pol })
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "seg-t", { entry: null }) // 默认从 research 起（workflow 模式）
   await seedDispatch(root, "seg-t", { key: "w-old-stage", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "A.md", artifactKind: "k" }] })
   await appendEvents(root, "seg-t", [{ type: "stage-advanced", detail: { from: "research", to: "code-review" } }])
@@ -951,7 +952,7 @@ test("F9：跨阶段不误并——以最近 stage-advanced 事件为界，前�
 test("F9 四类恢复矩阵：零/单报告与同 digest 多报告机械收敛；异 digest 多报告出用户选择卡、其余写 dispatch-superseded", async () => {
   // 同 digest 多报告：机械合并，无用户卡
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "m4a-t")
   await seedDispatch(root, "m4a-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "k" }] })
   await seedDispatch(root, "m4a-t", { key: "w2-bb", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "k" }] })
@@ -969,7 +970,7 @@ test("F9 四类恢复矩阵：零/单报告与同 digest 多报告机械收敛�
   assert.equal(migA.equivalent, true)
   // 异 digest 多报告：出用户选择卡，decide 保留一版、其余写 dispatch-superseded，二次迁移收敛
   const root2 = await makeProject()
-  const call2 = caller(root2)
+  const call2 = autoCaller(root2)
   await openTask(root2, "m4b-t")
   await seedDispatch(root2, "m4b-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "k" }] })
   await seedDispatch(root2, "m4b-t", { key: "w2-bb", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "k" }] })
@@ -997,7 +998,7 @@ test("F9 四类恢复矩阵：零/单报告与同 digest 多报告机械收敛�
 
 test("F9 加固：migrate 冲突卡 pending 期间 run 静止（migratePending）、intake 照常接受交付；decide 后恢复推进", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "mgpend-t")
   // 三条历史派发：w1/w2 同轮异 digest（冲突），w3 在途未交付
   await seedDispatch(root, "mgpend-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
@@ -1036,7 +1037,7 @@ test("F9 加固：migrate 冲突卡 pending 期间 run 静止（migratePending�
 
 test("F3 retire 幂等矩阵：缺 reason/未知波/已结波拒绝附指引；合法作废未结波；旧 key 交付被拒；重跑取新卡", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "ret-t")
   const d = await call(["dispatch-plan", "--task", "ret-t", "--json", "--writable", "R.md:code-review"])
   const k1 = d.waves[0].dispatchKey
@@ -1076,7 +1077,7 @@ test("F3 retire 幂等矩阵：缺 reason/未知波/已结波拒绝附指引；�
 
 test("F3 retire：部分交付后 retire——已交付报告保留审计、投影排除（重新派发该包）、回溯跳过 superseded", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "retp-t")
   await call(["plan", "--task", "retp-t", "--packages", PKGS2])
   const d1 = await call(["dispatch-plan", "--task", "retp-t", "--json"])
@@ -1093,7 +1094,7 @@ test("F3 retire：部分交付后 retire——已交付报告保留审计、投�
   assert.ok(d2.waves.some((x) => x.package === "store"))
   // 单 owner：回溯跳过 superseded key 的映射
   const root2 = await makeProject()
-  const call2 = caller(root2)
+  const call2 = autoCaller(root2)
   await openTask(root2, "retb-t")
   const o1 = await call2(["dispatch-plan", "--task", "retb-t", "--json", "--writable", "R.md:code-review"])
   await call2(["agent-map", "--task", "retb-t", "--key", o1.waves[0].dispatchKey, "--agent", "child-A"])
@@ -1112,7 +1113,7 @@ test("F3 retire：部分交付后 retire——已交付报告保留审计、投�
 
 test("B8：无 waveId 派发按 key 兜底各自成波，守卫回退尾部连续批次、不重复派发", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "legacy-t")
   await seedDispatch(root, "legacy-t", { key: "w9-legacy", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   const w = await call(["dispatch-plan", "--task", "legacy-t", "--json"])
@@ -1129,7 +1130,7 @@ test("B8：无 waveId 派发按 key 兜底各自成波，守卫回退尾部连�
 
 test("损坏输入与重复决定：损坏 journal 抛错不静默；重复 decide 拒绝 DECISION_STALE", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "corrupt-t")
   const task = await loadTask(root, "corrupt-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   await writeFile(path.join(task.root, "journal.jsonl"), "{ 这不是 JSON\\n")
@@ -1146,7 +1147,7 @@ test("损坏输入与重复决定：损坏 journal 抛错不静默；重复 deci
 test("并发：retire×run 与 迁移×交付 并发后状态一致（任务锁串行化，任意顺序均收敛）", async () => {
   // retire×run 并发
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "cc1-t")
   const d = await call(["dispatch-plan", "--task", "cc1-t", "--json", "--writable", "R.md:code-review"])
   await Promise.all([
@@ -1164,7 +1165,7 @@ test("并发：retire×run 与 迁移×交付 并发后状态一致（任务锁�
   assert.equal(oldDeliver.ok, false, "旧 key 在任何顺序下都被拒")
   // 迁移×交付并发
   const root2 = await makeProject()
-  const call2 = caller(root2)
+  const call2 = autoCaller(root2)
   await openTask(root2, "cc2-t")
   await seedDispatch(root2, "cc2-t", { key: "w1-cc", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   await writeFile(path.join(root2, "R.md"), "v1", "utf8")

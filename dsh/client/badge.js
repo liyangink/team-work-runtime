@@ -10,15 +10,15 @@ var factory = function (require) {
   var SETTINGS_NS = "team-work-dsh"
   var TIER_ORDER = ["junior", "senior", "expert"]
   var TIER_TEXT = {
-    junior: "低成本的只读探索与常规辅助工作。",
-    senior: "常规实现、复核与需要稳定判断的工作。",
-    expert: "核心场景、技术裁决与高失败成本工作。",
+    junior: "基础档：常规作业与只读探索。",
+    senior: "进阶档：常规开发与复核。",
+    expert: "高推理档：疑难设计与技术裁决。",
   }
-  // 档位价值说明与原生委派指引。
+  // 档位用途说明（不做成本价值判断）：正式派发的模型以任务级 roles 与包级 model 为准。
   var TIER_TRIGGER_TEXT = {
-    junior: "足以负担大部分基础工作；速度优势显著、单位成本最低——批量探索、信息收集、格式化整理、初稿类工作的默认选择。",
-    senior: "平衡档：推理能力与解题率不错，综合能力对比 expert 略有不足，但价格优势明显、性价比高——大多数常规开发任务的默认选择。",
-    expert: "最强推理能力、高解题率、低错误率；价格与执行耗时都最贵——只在高难度设计、疑难定位、关键技术裁决时使用。",
+    junior: "基础档：批量探索、信息收集、格式化整理与初稿类作业。",
+    senior: "进阶档：常规实现、复核与需要稳定判断的工作。",
+    expert: "高推理档：高难度设计、疑难定位与关键技术裁决。",
   }
   var SETTINGS_CSS = [
     ".tw-settings-body{container-type:inline-size;font-family:inherit}",
@@ -285,7 +285,7 @@ var factory = function (require) {
         }
         setEditor({ draft: normalizeTiers(confirmed.value.tiers), revision: confirmed.revision, dirty: false })
         setError("")
-        setNotice("已保存并由宿主确认；后续派单使用新配置。")
+        setNotice("已保存并由宿主确认；后续 tw open / tw roles --resolve 使用新配置，已有任务沿用已固化 roles。")
       } catch (saveError) {
         setError("保存失败，草稿已保留：" + String(saveError?.message ?? saveError))
       } finally { setSaving(false) }
@@ -294,7 +294,7 @@ var factory = function (require) {
     var saveReason = validateForSave(serializeTiers(draft), catalog)
     return h("div", { "data-tw-settings": "tiers", className: "tw-settings-body" },
       h("style", { "data-tw-settings-style": "tiers" }, SETTINGS_CSS),
-      h("p", { className: "tw-settings-overview" }, "当前 profile 内所有项目共用三档候选。Provider 和模型必填，推理等级可选；省略推理等级时采用宿主解析结果。tiers 管理正式团队派发策略，原生允许列表管理普通委派权限，插件不修改该列表。"),
+      h("p", { className: "tw-settings-overview" }, "当前 profile 内所有项目共用三档候选。Provider 和模型必填，推理等级可选；省略推理等级时采用宿主解析结果。正式派发以任务级 roles 与包级 model 为准：tiers 只用于 tw open 初始化角色、tw roles --resolve 重解析与普通委派/@ 候选；已有任务不会因配置热变自动换模型。原生允许列表管理普通委派权限，插件不修改该列表。"),
       snapshot.status !== "ready" ? h("p", { role: "status" }, "正在读取 profile 配置…") : null,
       catalog.status === "loading" || catalog.modelStatus === "loading" ? h("p", { role: "status" }, "正在读取 Provider 和模型目录…") : null,
       catalog.error || catalog.modelError ? h("p", { role: "alert", className: "tw-settings-message tw-settings-error" }, "目录读取失败：" + (catalog.error || catalog.modelError)) : null,

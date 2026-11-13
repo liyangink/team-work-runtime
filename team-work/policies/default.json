@@ -8,6 +8,7 @@
   "concurrencySoftLimit": 4,
   "riskTiers": { "critical": "expert", "high": "senior" },
   "selection": { "diversityWithinTier": true },
+  "roles": { "owner": "junior", "challenger": "senior", "expert": "expert" },
   "scenes": {
     "research": { "ownerTier": "junior", "challengerTier": "senior", "core": false },
     "design": { "ownerTier": "senior", "challengerTier": "senior", "core": true },

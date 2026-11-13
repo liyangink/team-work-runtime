@@ -8,7 +8,7 @@ import path from "node:path"
 import { tw } from "../runtime-v3/cli.mjs"
 import { initTask, loadTask, taskRoot } from "../runtime-v3/store.mjs"
 import { registerDelivery } from "../runtime-v3/intake.mjs"
-import { seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { autoCaller, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
 test("并发 deliver：两个不同 key 同时交付，登记互不丢失", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-conc-"))
@@ -34,7 +34,7 @@ test("并发 deliver：两个不同 key 同时交付，登记互不丢失", asyn
 
 test("并发 dispatch-plan：同波次只派发一次（一个 dispatch key）", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-conc-"))
-  const call = (argv) => tw(argv, { projectRoot })
+  const call = autoCaller(projectRoot)
   await call(["open", "--name", "conc-run", "--objective", "o", "--entry", "code-review"])
   const [c1, c2] = await Promise.all([
     call(["dispatch-plan", "--task", "conc-run", "--writable", "R.md:code-review"]),

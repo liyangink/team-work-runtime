@@ -69,9 +69,9 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
   }
   const sp = scenePolicy(policy, stageDef.teamScene)
   const stageReports = reports.filter((r) => r.stage === stageId)
-  // B（返工终版 §二·B）：所有未决决定卡统一静止——升档/人工门/migrate 任一未决时任务静止
+  // B（返工终版 §二·B）：所有未决决定卡统一静止——意图确认/换模型/人工门/migrate 任一未决时任务静止
   //（不推进、不派发、不重算派发阻塞判定：pending 卡优先于 produceBlocked/routeBlocker——修复
-  //「升档卡期间 run/dispatch 仍走 dispatch 分支重签」的渲染与执行错位）。next.pending 带账本原卡
+  //「待决卡期间 run/dispatch 仍走 dispatch 分支重签」的渲染与执行错位）。next.pending 带账本原卡
   //（decision-issued 的 detail）；渲染层一律用 pending.choices 与 pending.reason 同钉渲染（禁止重算，
   // 防「渲染重算 choices、decide 用账本」两源错位）；指纹失效的作废/重签归 dispatch 通道（写侧）。
   // migrate 冲突卡优先级保持最高（F9：未决冲突内容不得继续参与推导/派发）。

@@ -34,14 +34,6 @@ export class PolicyError extends Error {
   }
 }
 
-export const COST_WEIGHTS = Object.freeze({ junior: 1, senior: 10, expert: 50 })
-
-export function costWeightForTier(tier) {
-  const weight = COST_WEIGHTS[tier]
-  if (weight === undefined) throw new PolicyError("COST_TIER_INVALID", `unknown cost tier: ${tier}`)
-  return weight
-}
-
 function dependsTransitively(byId, assignmentId, dependencyId) {
   const pending = [...(byId.get(assignmentId)?.dependsOn ?? [])]
   const visited = new Set()

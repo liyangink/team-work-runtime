@@ -12,7 +12,7 @@
 
 1. 内部子进程调 `tw dispatch-plan --task <名> --json`（writables 透传）推进到派发点或 stop；
 2. 波次机不在派发点时（awaiting-user / completed / blocked / archived 卡，含拒绝卡）**原样透传卡片**，不创建任何子代理——Lead 按卡片行动；wait-inflight 卡是唯一例外：按条目自动兜底处置（见 stop 处理节）；
-3. 在派发点时对每张派单先登记 dispatchKey→确定性 sessionId（从任务名和派单 key 推导），再按 wave.modelHint 的精确 provider/model/effort 创建成员，不重选档位。重试先核对同 ID：同父活会话等待；同父冷会话读取自身事件后通过宿主 `sendMessage` 续投；异主拒绝接管；确实无记录才同 ID 重建。读取不确定时保留映射并返回恢复指引，不把未知当不存在。标签由派单事实自动拼接。
+3. 在派发点时对每张派单先登记 dispatchKey→确定性 sessionId（从任务名和派单 key 推导），再按 wave.modelRef 的精确 provider/modelName/effort 创建成员（绑定层 toHostTarget 映射成宿主字段），不重选档位、不在派发期查配置。重试先核对同 ID：同父活会话等待；同父冷会话读取自身事件后通过宿主 `sendMessage` 续投；异主拒绝接管；确实无记录才同 ID 重建。读取不确定时保留映射并返回恢复指引，不把未知当不存在。标签由派单事实自动拼接。
 
 返回逐项结果 `[{key, sessionId, provider/model/effort, 标签, registered}]`。单张失败不回滚已成功项，按该项 message 的指引恢复（登记失败可用 tw agent-map 补登记；勿重复创建，避免重复派单）。
 
@@ -35,7 +35,7 @@ Lead 不读成员派单：开工读 `team-work/rules/lead/README.md`（职责边
 
 ## 续派：宿主 sendMessage（Lead 主动追问用 send_message）
 
-- continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投 wave.prompt 续派正文，无上下文则投 wave.promptFull 全量变体。两种正文均含当前基线。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelHint 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
+- continuation=true 且有 expectedAgentId：先登记本轮 key 到原成员会话。同父活会话等待；同父冷会话检查排除继承前缀后的自身消息：已有本轮精确派单正文则只发续行提醒，只有旧上下文则投 wave.prompt 续派正文，无上下文则投 wave.promptFull 全量变体。两种正文均含当前基线。异主由原 Lead 继续或作废该波再派；确实断链才按本波 modelRef 新建，投全量变体并回填映射。查询、读取或回执不确定时按错误卡恢复；
 - 用户点名换人（replace-owner）或映射缺失（expectedAgentIdMissing + resumeNote）：同一 fresh 重建通道。
 
 初派、增量、全量、重建和冷轻提醒都投单块业务正文；冷收单按整块文本精确匹配，规则变更随正文一起投递，但不为刷新规则催活 live 会话。角色/场景业务正文真的改变时沿原算法，不承诺总是轻提醒。live 零消息，不为刷新规范催单；缺资源诊断保留恢复指引，不以内置备用长规则或新门禁替代。
@@ -46,8 +46,8 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 
 ## stop 处理（tw-dispatch 透传卡片后按型行动）
 
-- stop: awaiting-user：先看卡片类型——**升档审批卡**（question 含"高于场景默认档"、choices 为 批准升档/降回默认档继续）：这是唯一的成本核算触点，卡内附包×档位×权重倍数（junior:senior:expert = 1:10:50），按价值判断后 `tw decide`（批准=按升档派发；拒绝=按场景默认档派发，本批不再询问）；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
-- stop: wait-inflight：tw-dispatch 逐条核对已登记或可续会话，按上述活/冷/异主/不存在四种现状恢复。未登记的派单先登记确定性 ID 再补派；缺 registered 判定字段或读取不确定时不自动补派，按卡片指引修复。agents.json 损坏时可通过 tw agent-map 重建登记；modelHint 不可解析且该波不应执行时用 tw retire 作废；
+- stop: awaiting-user：先看卡片类型——**意图确认卡**（question 以"# 任务意图确认（intake-approval）"开头，choices 为 确认开始/我先修改/终止任务；角色 unresolved 时不提供确认开始）：向用户完整呈现原始需求、目标/约束/排除、范围与产出、三个角色模型、逐包模型与 gap，答案走 `tw decide`；**换模型确认卡**（`requiresFreshSession` 在场，choices 为 保留原会话/作废当前波并重开会话/回滚 roles）：已有会话不可热替换模型，按用户选择作答；**人工门卡**（choices 为 accept/rework）：向用户呈现，答案走 tw decide。awaiting-user 期间任务静止（不轮询、不代答、不越门）；
+- stop: wait-inflight：tw-dispatch 逐条核对已登记或可续会话，按上述活/冷/异主/不存在四种现状恢复。未登记的派单先登记确定性 ID 再补派；缺 registered 判定字段或读取不确定时不自动补派，按卡片指引修复。agents.json 损坏时可通过 tw agent-map 重建登记（roles 会按历史/策略迁移重建）；`modelRef` 不可解析且该波不应执行时用 tw retire 作废；
 - stop: completed：问用户是否 tw archive；
 - stop: blocked：核 card.blockers 与 recovery；涉及必要性/授权争议先请用户确认，不能将恢复提示当自行修复/扩权许可。明确授权后按原通道恢复。
 
@@ -64,14 +64,15 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 - 判断要不要拆：目标含多个可独立验收的垂直范围且可写范围能互斥拆分才拆；共享热点收进一个包或设 dependsOn 汇总包；拆分粒度以"子 agent 高注意力"为准（每包一个清晰交付物）；拆分语义质量由 Lead 把关（runtime 只验机械属性：互斥/无环/完成标准在场）；
 - writable 条目路径以 / 结尾 = 目录授权（如 "review/:code-review" 授权 review/ 下全部文件，deliver 与互斥判定都按目录前缀处理）；目录与其下路径视为重叠，不能分给两个包；
 - dependsOn 汇总包 = 整合 Owner：完成标准必须含"合并各包结论、解决冲突、不丢信息"；
-- 登记：tw plan --task <名> --packages '<JSON>'（形状 [{id, writable:["路径:kind"], done:["标准"], dependsOn:["包id"]}]）；待决卡片或在途派发时会被拒绝（先处理再拆；blocked 静止卡除外——重拆扩权正是它的恢复通道）；
+- 登记：tw plan --task <名> --packages '<JSON>'（形状 [{id, model?:{provider,modelName,effort?}, tier?, writable:["路径:kind"], done:["标准"], dependsOn:["包id"]}]）。每包在落盘前解析成 `model:ModelRef`：显式 model 直接采用、tier 语法糖按当前快照解析、都不给则复用 `roles.owner`；解析失败返回 PLAN_MODEL_UNRESOLVED，不落半成品包。待决卡片或在途派发时会被拒绝（先处理再拆；意图确认卡与 blocked 静止卡除外——确认卡期间允许拆包，随后自动重签；重拆扩权是 blocked 的恢复通道）；
 - 复杂目标可先开只读子派单收集事实辅助判断拆分边界。
 - 审查默认正式轻量交叉，一个 Owner 与非作者 Challenger 即可从互补角度核验，core Expert 照旧；不按视角数招募成员。确需独立交付才由 Lead 拆包，done 写明本包职责。复杂完整代码交付等确需全面覆盖或用户明确要求时由 Lead 组织一次八视角，返工先复核变更与关联视角，不每个成员、每轮重新展开。
 
 ## risk 与选人
 
-- tw open --risk critical|high|normal（或 tw intent --risk 修订）：critical→expert Owner、high→senior（只升不降；challenger/expert 不变）。判断：不可逆/数据迁移/安全敏感/核心跨模块 → critical；常规 → normal；
-- 模型来自当前 profile 的插件 Config `team-work-dsh.tiers`；同一 profile 跨项目共用，无项目覆盖。宿主每次操作通过 `TW_DSH_CONFIG` 传快照，`tw models` 显示 entry/profile 来源。三档兼容单对象或数组，provider/model 必填，family/effort 可选；同波优先不同家族，配置热变只影响后续波次，已派模型快照留在 journal。任务级 agents.json 只保存 mappings。
+- `tw open --risk critical|high|normal`：open 期按场景档与 risk 解析 owner 角色（critical→expert 档、high→senior，只升不降；challenger/expert 不受影响）。后续改 risk 不会自动改已有 roles；需要改模型用 `tw roles --set/--resolve`。判断：不可逆/数据迁移/安全敏感/核心跨模块 → critical；常规 → normal；
+- 角色模型读写：`tw roles --task <名>`（只读）、`--set <role>=<provider>/<model>[@<effort>]`（或 `<role>=tier:senior[@<effort>]`）、`--clear <role>`、`--resolve`（按当前快照重解析）；写操作会重签意图确认卡，已有会话换模型在下一轮派发出换模型卡；
+- 模型数据链：默认档来自 `team-work/policies/default.json`；`tw open` 把三角色解析成 `ModelRef` 写 `agents.json.roles`（`tw roles` 唯一显式修改入口）；`tw plan` 把每包解析成 `packages.json[].model`；派发直接读两者的已固化值，不在派发期查配置。配置快照 `team-work-dsh.tiers`（同一 profile 跨项目共用）只用于 open/--resolve 初始化与普通委派候选，`tw models` 显示 entry/profile 来源。配置热变不自动改已有任务，`tw roles --resolve` 才重解析（并重签确认卡）。任务级 agents.json 只保存 mappings 与 roles，已派模型快照在 journal 的 `dispatched.detail.modelRef`。
 - 无宿主终端由编排调用方显式提供 `TW_DSH_CONFIG` JSON `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}`；不自动读旧 YAML 或项目 dsh.json、不写缓存。缺输入的选模返回 unresolved，平台无关操作仍可使用；
 - 升级前备份旧 settings.yaml 与当前 profile 配置：宿主首次导入可能覆盖已有 tiers。旧文件已改名为 settings.yaml.imported 但导入失败时不自动重导，核对旧 tiers 后通过新页面保存；
 - 宿主默认 maxDepth=1；正式成员再开只读助手需要用户允许至少两层，插件不自行提高上限，助手不得继续委托。
@@ -79,7 +80,7 @@ challenger/expert **同 key 重交修订版**（覆盖旧报告）后必须主�
 ## 主动选档（原生普通委派）
 
 - 输入框 `@junior` / `@senior` / `@expert` 与自然语言都表达选档意图，读取当前已保存的第一候选后以精确 provider/model 调原生 subagent；effort 转为 reasoning_effort。档位缺失明确 unresolved，不换成默认模型。正式波次成员一律 tw-dispatch；
-- 档位价值主张：junior 速度优势显著、单位成本最低（批量探索/信息收集/初稿类默认）；senior 推理与性价比平衡（大多数常规开发任务默认）；expert 最强推理、最贵（只在高难度设计/疑难定位/关键技术裁决时用）；
+- 档位用途：junior 用于批量探索、信息收集、初稿类作业；senior 用于常规实现、复核与需要稳定判断的工作；expert 用于高难度设计、疑难定位与关键技术裁决。档位只是普通委派的快捷入口，不代表正式派发的模型选择——正式派发以任务级 roles 与包级 model 为准；
 - 普通精准选模受宿主开关和允许列表限制，旧会话可能须新建后才获得新权限。先查 list_subagent_models 路由；枚举目录未列出不代表不允许，应按 provider+model 精确查询并区分权限拒绝与解析失败。客户端没有精确只读校验 RPC，未广告候选保留草稿，不能据此声称模型不存在；正式创建仍由宿主 resolveCallConfig 实核。
 
 ## 成员标签（由 tw-dispatch 自动生成）

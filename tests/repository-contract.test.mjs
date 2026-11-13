@@ -83,7 +83,7 @@ test("dsh orchestration template stays consistent with skill surface", async () 
   const template = await read("skills/team-work-v3/references/dsh-orchestration.md")
   assert.match(template, /dispatch-plan/)
   assert.match(template, /tw-dispatch/)
-  assert.match(template, /modelHint/)
+  assert.match(template, /modelRef/)
 })
 
 test("AGENTS.md preserves core collaboration invariants", async () => {
@@ -109,4 +109,34 @@ test("charter documents have valid local links", async () => {
       await assert.doesNotReject(access(resolved), `${relativeFile} links to missing ${target}`)
     }
   }
+})
+
+test("成本判据与升档审批已从用户可见文案与 kernel 清理（§9.3 反向断言）", async () => {
+  const surfaces = [
+    "README.md",
+    "skills/team-work-v3/SKILL.md",
+    "skills/team-work-v3/references/topology-and-cost.md",
+    "skills/team-work-v3/references/scenarios.md",
+    "skills/team-work-v3/references/dsh-orchestration.md",
+    "skills/team-work-v3/references/rules.md",
+    "team-work/rules/lead/README.md",
+    "dsh/settings.js",
+    "dsh/client/badge.js",
+    "dsh/tw-dispatch.js",
+  ]
+  for (const surface of surfaces) {
+    const text = await read(surface)
+    assert.doesNotMatch(text, /升档审批|权重倍数|approve-escalation|按失败成本升档|默认 junior|赚便宜|单位成本最低/, surface + " 不得保留旧成本判据或升档审批文案")
+  }
+  const kernel = await read("policy/kernel.mjs")
+  assert.doesNotMatch(kernel, /COST_WEIGHTS|costWeightForTier/, "kernel 死常量已删除")
+  for (const surface of ["runtime-v3/cli.mjs", "runtime-v3/waves.mjs", "runtime-v3/derive.mjs", "runtime-v3/store.mjs", "dsh/subagent-session.js"]) {
+    const text = await read(surface)
+    assert.doesNotMatch(text, /COST_WEIGHTS|costWeightForTier/, surface + " 不得引用已删除的成本常量")
+  }
+  // 文档与默认策略的数据链说明在位（避免只删不补）。
+  const defaultPolicy = JSON.parse(await read("team-work/policies/default.json"))
+  assert.deepEqual(defaultPolicy.roles, { owner: "junior", challenger: "senior", expert: "expert" }, "default.json 提供 roles 兜底段")
+  const inventory = JSON.parse(await read("docs/file-inventory.json"))
+  assert.ok(inventory.newImplementation.includes("docs/dispatch-intent-optimization-plan.md"), "file-inventory 登记本次方案")
 })

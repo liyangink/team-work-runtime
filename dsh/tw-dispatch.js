@@ -50,7 +50,7 @@ export function deterministicSessionId(task, key) {
 
 export function twDispatchToolDescription() {
   return [
-    "team-work 正式成员派发：推进到当前波次、先登记确定性会话 ID、按派单 modelHint 创建成员并拼接展示标签。同 key 重试先检查同 ID：同父活会话等待；同父冷会话用 sendMessage 续投；异主拒绝接管；确认不存在才重建。读取不确定时返回恢复错误，保留映射；初始消息已接收但持久化未确认时保留 sessionId，不回收或另建成员。",
+    "team-work 正式成员派发：推进到当前波次、先登记确定性会话 ID、按派单 modelRef（provider/modelName/effort?）创建成员并拼接展示标签。同 key 重试先检查同 ID：同父活会话等待；同父冷会话用 sendMessage 续投；异主拒绝接管；确认不存在才重建。读取不确定时返回恢复错误，保留映射；初始消息已接收但持久化未确认时保留 sessionId，不回收或另建成员。模型来自任务级 agents.json.roles 与包级 packages.json[].model（派发零配置反查）；新任务首步会先出意图确认卡（awaiting-user 时由 Lead 请用户确认），已有会话换模型会出换模型确认卡（保留原会话 / 重开会话 / 回滚 roles）。",
     '续派先登记本轮 key 到原成员会话，再等待或冷唤醒：日志已含本轮完整正文则发送轻量续行提醒，仅有旧轮上下文则发送本轮增量，尚无上下文则发送全量；断链重建发送全量上下文。正常波次全部在途（nextAction="wait-children"）时输出派发简报后自然结束回合即可，宿主会在成员完成时自动唤醒本会话；确需同步等待时，sleep 类命令首次会被确认引导，在你看到引导后的后续 Step 再次执行即确认放行（更推荐 bash run_in_background + job_output 等原生等待通道）；awaiting-user/completed/blocked/archived 卡停止派发并由 Lead 向用户汇报，wait-inflight 逐项恢复。人工等待时只能等新用户输入，不轮询。主动催单和续聊用原生 send_message。防重复创建不承诺消息恰好投递一次；回执丢失后先核对已有会话 ID。',
     decisionTableText(),
   ].join("\n")
@@ -216,7 +216,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
       // 只透传 Lead 自身呈现；成员规范随派单卡正文下发，不在工具结果重复展开。
       const leadPresentation = plan?.presentation ?? plan?.card?.presentation
       const presentation = leadPresentation === undefined ? {} : { presentation: leadPresentation }
-      const handleContinuation = async ({ key, label, waveFields, expectedAgentId, hint, prompt, promptFull, retireText }) => {
+      const handleContinuation = async ({ key, label, waveFields, expectedAgentId, modelRef, prompt, promptFull, retireText }) => {
         if (typeof prompt !== "string" || !prompt.trim()) {
           return { ok: false, key, label, continuation: true, expectedAgentId, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "续派派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未投递未创建。若为误报请修复任务目录后重新 tw-dispatch；" + retireText }
         }
@@ -255,7 +255,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             message: "续派原会话（" + prior + "）是冷持久会话且归属其他父会话（接管冲突）：本工具不做接管（冷唤醒鉴权与同 ID 重建判重两路必被宿主拒绝）。处置：由原 Lead 会话继续，或 " + retireText,
           }
         }
-        const done = await registerThenCreate({ key, label, waveFields, hint, prompt: full, retireText })
+        const done = await registerThenCreate({ key, label, waveFields, modelRef, prompt: full, retireText })
         if (!done.ok) return { ...done, continuation: true, expectedAgentId: prior }
         return {
           ...done, recovered: true, freshRebuilt: true, action: "fresh_rebuilt", continuation: true, priorAgentId: prior,
@@ -263,8 +263,9 @@ export function twDispatchDefinition(ctx, deps = {}) {
         }
       }
       const retireHint = (item) => "若本波不应执行，立即 tw retire --task " + (plan.task ?? task) + " --wave " + (item?.waveId ?? "<waveId 见本卡>") + " 回收"
-      const hintValid = (hint) => Boolean(hint && typeof hint.provider === "string" && hint.provider && typeof hint.model === "string" && hint.model)
-      const registerThenCreate = async ({ key, label, waveFields, hint, prompt, retireText }) => {
+      // 绑定层只校验 ModelRef 形状；宿主字段映射交给 subagent-session.toHostTarget（单点）。
+      const refValid = (ref) => Boolean(ref && typeof ref === "object" && typeof ref.provider === "string" && ref.provider && typeof ref.modelName === "string" && ref.modelName)
+      const registerThenCreate = async ({ key, label, waveFields, modelRef, prompt, retireText }) => {
         if (typeof prompt !== "string" || !prompt.trim()) {
           return { ok: false, key, label, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未登记未创建。" + retireText + "；若为误报请修复任务目录后重新 tw-dispatch" }
         }
@@ -279,23 +280,23 @@ export function twDispatchDefinition(ctx, deps = {}) {
         const created = await createSubagent(ctx, coreDeps, {
           description: label,
           prompt,
-          ...(hintValid(hint) ? { target: { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) } } : {}),
+          ...(refValid(modelRef) ? { modelRef } : {}),
           sessionId,
           dispatchKey: key,
           exec,
         })
         if (!created || created.ok !== true) {
-          const hintBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !hintValid(hint)
+          const refBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !refValid(modelRef)
           return {
             ok: false, key, label, sessionId, ...waveFields,
             ...(created?.accepted ? { accepted: true, persistenceConfirmed: false, messageId: created.messageId } : {}),
-            code: hintBlocked ? "TW_DISPATCH_MODEL_HINT_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
+            code: refBlocked ? "TW_DISPATCH_MODEL_REF_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
             message:
-              (hintBlocked
-                ? "会话无记录需同 id 重建，但该派单无可用 modelHint（快照缺失且按 tier 从当前 profile 配置无法解析），重建无 target"
+              (refBlocked
+                ? "会话无记录需同 id 重建，但该派单无可用 modelRef（任务 roles/packages 未固化模型），重建无 target"
                 : created?.message ?? "子代理创建失败（未知原因）") +
               "。映射已登记（" + sessionId + "）：重试先检查同 ID 会话；若本波不应执行，" + retireText +
-              (hintBlocked ? "；若仍需执行，修复 team-work-dsh.tiers（tw models 查看解析）后重新 tw-dispatch" : ""),
+              (refBlocked ? "；若仍需执行，tw roles --resolve 重建角色模型（或 tw plan 重登记包模型）后重新 tw-dispatch" : ""),
           }
         }
         return {
@@ -338,26 +339,26 @@ export function twDispatchDefinition(ctx, deps = {}) {
                 message: "在途派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未补发未创建（登记保持不变）。" + retireHint(item) + "；若为误报请修复任务目录后重新 tw-dispatch",
               }
             }
-            const hint = item?.modelHint
+            const modelRef = item?.modelRef
             const created = await createSubagent(ctx, coreDeps, {
               description: label,
               prompt: item.prompt,
               ...(item.continuation && typeof item.promptFull === "string" && item.promptFull.trim() ? { promptFull: item.promptFull } : {}),
-              ...(hintValid(hint) ? { target: { provider: hint.provider, model: hint.model, ...(hint.effort ? { effort: hint.effort } : {}) } } : {}),
+              ...(refValid(modelRef) ? { modelRef } : {}),
               sessionId: targetId,
               dispatchKey: key,
               exec,
             })
             if (!created || created.ok !== true) {
-              const hintBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !hintValid(hint)
+              const refBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !refValid(modelRef)
               return {
                 ok: false, key, label, sessionId: targetId, ...waveFields,
                 ...(created?.accepted ? { accepted: true, persistenceConfirmed: false, messageId: created.messageId } : {}),
                 code: created?.code === "TW_SUB_TAKEOVER_CONFLICT" || created?.code === "TW_SUB_NOT_RESUMABLE" || created?.code === "TW_SUB_FOLLOWUP_UNAVAILABLE"
                   ? created.code
-                  : hintBlocked ? "TW_DISPATCH_MODEL_HINT_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
+                  : refBlocked ? "TW_DISPATCH_MODEL_REF_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
                 message: (created?.message ?? "在途处置失败（未知原因）") + "。登记保持不变，重试先检查同 ID 会话；" + retireHint(item) +
-                  (hintBlocked ? "；若仍需执行，修复 team-work-dsh.tiers（tw models 查看解析）后重新 tw-dispatch" : ""),
+                  (refBlocked ? "；若仍需执行，tw roles --resolve 重建角色模型（或 tw plan 重登记包模型）后重新 tw-dispatch" : ""),
               }
             }
             return {
@@ -375,11 +376,11 @@ export function twDispatchDefinition(ctx, deps = {}) {
           }
           if (item.continuation && item.expectedAgentId) {
             return handleContinuation({
-              key, label, waveFields, expectedAgentId: item.expectedAgentId, hint: item?.modelHint,
+              key, label, waveFields, expectedAgentId: item.expectedAgentId, modelRef: item?.modelRef,
               prompt: item.prompt, promptFull: item.promptFull, retireText: retireHint(item),
             })
           }
-          const done = await registerThenCreate({ key, label, waveFields, hint: hintValid(item?.modelHint) ? item.modelHint : null, prompt: item.prompt, retireText: retireHint(item) })
+          const done = await registerThenCreate({ key, label, waveFields, modelRef: refValid(item?.modelRef) ? item.modelRef : null, prompt: item.prompt, retireText: retireHint(item) })
           if (!done.ok) return done
           return {
             ...done, recovered: true,
@@ -422,12 +423,12 @@ export function twDispatchDefinition(ctx, deps = {}) {
         }
         if (wave.continuation && wave.expectedAgentId) {
           dispatched.push(await handleContinuation({
-            key, label, waveFields, expectedAgentId: wave.expectedAgentId, hint: wave?.modelHint,
+            key, label, waveFields, expectedAgentId: wave.expectedAgentId, modelRef: wave?.modelRef,
             prompt: wave.prompt, promptFull: wave.promptFull, retireText: retireHint(wave),
           }))
           continue
         }
-        const card = await registerThenCreate({ key, label, waveFields, hint: hintValid(wave?.modelHint) ? wave.modelHint : null, prompt: wave.prompt, retireText: retireHint(wave) })
+        const card = await registerThenCreate({ key, label, waveFields, modelRef: refValid(wave?.modelRef) ? wave.modelRef : null, prompt: wave.prompt, retireText: retireHint(wave) })
         dispatched.push(card)
       }
       const failures = dispatched.filter((d) => !d.ok).length

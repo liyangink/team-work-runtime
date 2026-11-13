@@ -162,7 +162,7 @@ function ownerWave(overrides = {}) {
     continuation: false,
     prompt: "派单全文 PROMPT",
     deliver: "deliver",
-    modelHint: { provider: "p-a", model: "m-j1", source: "global-settings" },
+    modelRef: { provider: "p-a", modelName: "m-j1" },
     weight: 1,
     ...overrides,
   }
@@ -368,6 +368,9 @@ test("真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 re
   const configSnapshot = () => snapshot
   const opened = await twToolDefinition({ configSnapshot }).execute({ args: ["open", "--name", "clarity-seam", "--objective", "审查虚构模块的接口边界", "--entry", "code-review"] }, exec)
   assert.equal(opened.ok, true, JSON.stringify(opened))
+  // open 后先出意图确认卡：真实 CLI 接缝按用户确认继续（确认卡本身由 runtime 测试覆盖）。
+  const confirmed = await twToolDefinition({ configSnapshot }).execute({ args: ["decide", "--task", "clarity-seam", "--choice", "1"] }, exec)
+  assert.equal(confirmed.ok, true, JSON.stringify(confirmed))
   const h = makeCtx()
   h.ctx.skills = { register() { return () => {} }, get() { assert.fail("禁止主动调用技能") } }
   // 不替换 runTw/createDirectedSubagent；只替代不会访问真实模型的宿主服务。
@@ -486,7 +489,7 @@ test("三步集成：真实创建核心 + agent-map 登记；先登记后创建�
   assert.equal(spec.childId, fixedId, "确定性 sessionId：同 key 重试推导同一 id（防双发基石）")
   assert.equal(spec.label, "IMPL·owner · 接口改造 #demo-t", "标签按派单事实 + note 自动拼接")
   assert.equal(spec.request.prompt[0].text, "派单全文 PROMPT", "prompt 原样转发")
-  assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-j1" }, "target 直取 modelHint（effort 走直接选择）")
+  assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-j1" }, "target 直取 modelRef（effort 走直接选择）")
 
   assert.deepEqual(out, {
     ok: true,
@@ -508,8 +511,8 @@ test("三步集成：真实创建核心 + agent-map 登记；先登记后创建�
   })
 })
 
-test("modelHint 带 effort 时 target 透传 effort，创建核心验证后生效", async () => {
-  const plan = planCard([ownerWave({ modelHint: { provider: "p-c", model: "m-e1", source: "global-settings", effort: "high" } })])
+test("modelRef 带 effort 时 target 透传 effort，创建核心验证后生效", async () => {
+  const plan = planCard([ownerWave({ modelRef: { provider: "p-c", modelName: "m-e1", effort: "high" } })])
   const { runTw } = makeRunTw(plan)
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
@@ -527,7 +530,7 @@ test("writables 省略时 dispatch-plan 不带 --writable 参数", async () => {
 
 test("多包波：两张派单逐张串行「登记→创建」（先登记后创建），结果逐项返回", async () => {
   const wave1 = ownerWave({ dispatchKey: "d1-p1", package: "store" })
-  const wave2 = ownerWave({ dispatchKey: "d2-p2", waveId: "wv1", package: "intake", modelHint: { provider: "p-b", model: "m-j2", source: "global-settings" } })
+  const wave2 = ownerWave({ dispatchKey: "d2-p2", waveId: "wv1", package: "intake", modelRef: { provider: "p-b", modelName: "m-j2" } })
   const order = []
   const { runTw, calls } = makeRunTw(planCard([wave1, wave2]), {
     onCall: (cmd) => order.push("cli:" + cmd + ":" + (cmd === "agent-map" ? "" : "")),
@@ -584,7 +587,7 @@ test("登记失败：尚未创建子会话（先登记后创建），原样重�
 })
 
 test("创建失败：模型验证失败不留子会话（映射已登记，确定性对账使重试幂等）；继续处理后续派单", async () => {
-  const plan = planCard([ownerWave({ dispatchKey: "d1-bad", modelHint: { provider: "p-x", model: "gone", source: "global-settings" } }), ownerWave({ dispatchKey: "d2-next" })])
+  const plan = planCard([ownerWave({ dispatchKey: "d1-bad", modelRef: { provider: "p-x", modelName: "gone" } }), ownerWave({ dispatchKey: "d2-next" })])
   const { ctx } = makeCtx()
   ctx.llm.resolveCallConfig = async (config) => {
     if (config.model === "gone") throw new Error("unknown model: gone")
@@ -744,7 +747,7 @@ function inflightCard(items, extra = {}) {
   return { ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", waves: [], dispatchKey: items[0]?.key ?? "d1-x", inflight: items, card: { status: "wait-inflight" }, ...extra }
 }
 function inflightItem(overrides = {}) {
-  return { key: "d1-abc123", waveId: "wv1", role: "owner", tier: "junior", round: 1, kind: "produce", continuation: false, prompt: "原派单全文", modelHint: { provider: "p-a", model: "m-j1", source: "global-settings" }, registered: false, ...overrides }
+  return { key: "d1-abc123", waveId: "wv1", role: "owner", tier: "junior", round: 1, kind: "produce", continuation: false, prompt: "原派单全文", modelRef: { provider: "p-a", modelName: "m-j1" }, registered: false, ...overrides }
 }
 
 test("兜底·降级透传：registered 缺失（agents.json 损坏）不补派，附人工核对与修复指引", async () => {
@@ -985,9 +988,9 @@ test("兜底·登记失败回执：登记失败发生在创建之前 → 未创�
   assert.equal(out.failures, 1)
 })
 
-test("兜底·modelHint 不可解析：无会话需重建但无 target → 不创建指 retire；登记先行（重试收敛锚）", async () => {
-  const item = inflightItem({ modelHintUnresolved: true })
-  delete item.modelHint
+test("兜底·modelRef 不可解析：无会话需重建但无 target → 不创建指 retire；登记先行（重试收敛锚）", async () => {
+  const item = inflightItem({ modelRefUnresolved: true })
+  delete item.modelRef
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started, followups } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
@@ -995,7 +998,7 @@ test("兜底·modelHint 不可解析：无会话需重建但无 target → 不�
   assert.equal(followups.length, 0)
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
-  assert.equal(entry.code, "TW_DISPATCH_MODEL_HINT_UNRESOLVED")
+  assert.equal(entry.code, "TW_DISPATCH_MODEL_REF_UNRESOLVED")
   assert.match(entry.message, /重建无 target/)
   assert.match(entry.message, /tw retire --task demo-t --wave wv1/)
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记先行（确定性 id 已落账，修复配置后重试收敛）")
@@ -1003,7 +1006,7 @@ test("兜底·modelHint 不可解析：无会话需重建但无 target → 不�
 
 test("兜底·多条目逐条独立判定：等待/补派混排互不影响，各按自身事实处置", async () => {
   const waiting = inflightItem({ key: "d2-aaa", waveId: "wv2", registered: true, mappedAgentId: "mapped-wait-1" })
-  const recover = inflightItem({ key: "d3-bbb", waveId: "wv3", modelHint: { provider: "p-b", model: "m-x", source: "global-settings" } })
+  const recover = inflightItem({ key: "d3-bbb", waveId: "wv3", modelRef: { provider: "p-b", modelName: "m-x" } })
   const { runTw, calls } = makeRunTw(inflightCard([waiting, recover]))
   const { tool, started, injectLive } = makeTool({ runTw })
   injectLive("mapped-wait-1", { received: "原派单正文" })
@@ -1019,7 +1022,7 @@ test("兜底·多条目逐条独立判定：等待/补派混排互不影响，�
 })
 
 test("兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh 重建（登记回填 key 映射），不再指向幽灵会话", async () => {
-  const item = inflightItem({ key: "d4-cont", waveId: "wv4", kind: "respond", round: 2, continuation: true, expectedAgentId: "ghost-child", registered: false, modelHint: { provider: "p-a", model: "m-s1", source: "global-settings" } })
+  const item = inflightItem({ key: "d4-cont", waveId: "wv4", kind: "respond", round: 2, continuation: true, expectedAgentId: "ghost-child", registered: false, modelRef: { provider: "p-a", modelName: "m-s1" } })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
@@ -1035,15 +1038,15 @@ test("兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh �
   assert.match(entry.message, /fresh 重建/)
 })
 
-test("兜底·续派断链且 modelHint 不可解析：不重建指 retire；登记先行（修复配置后重试收敛）", async () => {
-  const item = inflightItem({ key: "d5-cont", waveId: "wv5", kind: "respond", round: 2, continuation: true, expectedAgentId: "ghost-child", registered: false, modelHintUnresolved: true })
-  delete item.modelHint
+test("兜底·续派断链且 modelRef 不可解析：不重建指 retire；登记先行（修复配置后重试收敛）", async () => {
+  const item = inflightItem({ key: "d5-cont", waveId: "wv5", kind: "respond", round: 2, continuation: true, expectedAgentId: "ghost-child", registered: false, modelRefUnresolved: true })
+  delete item.modelRef
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started, followups } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
-  assert.equal(entry.code, "TW_DISPATCH_MODEL_HINT_UNRESOLVED")
+  assert.equal(entry.code, "TW_DISPATCH_MODEL_REF_UNRESOLVED")
   assert.equal(entry.continuation, true)
   assert.match(entry.message, /重建无 target/)
   assert.match(entry.message, /tw retire --task demo-t --wave wv5/)
@@ -1105,7 +1108,7 @@ test("派发文案不再声称回合已收束：工具描述与 nextAction 说�
   assert.doesNotMatch(nextActionText, /本回合自动收束/)
 })
 
-test("工具定义形态：名称/并发安全/参数面只收语义（key、modelHint、标签均不向模型索要）", () => {
+test("工具定义形态：名称/并发安全/参数面只收语义（key、modelRef、标签均不向模型索要）", () => {
   const def = twDispatchDefinition({}, {})
   assert.equal(def.name, TOOL_NAME)
   assert.equal(def.name, "tw-dispatch")
@@ -1625,4 +1628,17 @@ test("TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约", () 
   assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 0), true)
   assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 1), false)
   assert.equal(isHealthyInflightBatch([], 0), false)
+})
+
+test("工具描述与输出字段：按 modelRef 创建、意图确认卡与换模型卡说明在位，不回退 modelHint", async () => {
+  const description = twDispatchToolDescription()
+  assert.match(description, /modelRef/, "按派单 modelRef 创建")
+  assert.match(description, /意图确认卡/, "说明新任务首步意图确认卡")
+  assert.match(description, /换模型确认卡|已有会话换模型/, "说明已有会话换模型确认")
+  assert.doesNotMatch(description, /按派单 modelHint/)
+  const tool = twDispatchDefinition({}, { runTw: async () => ({ ok: true, stop: "completed", card: {}, waves: [] }) })
+  assert.equal(tool.name, TOOL_NAME)
+  const schema = JSON.stringify(TW_DISPATCH_OUTPUT_SCHEMA)
+  assert.match(schema, /awaiting-user/)
+  assert.doesNotMatch(schema, /modelHint/)
 })

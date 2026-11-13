@@ -205,3 +205,55 @@ test("日志中无法解释的消息内容拒绝续投，仍释放 handle", asyn
   assert.equal(h.sends.length, 0)
   assert.equal(closed, 1)
 })
+
+test("toHostTarget：ModelRef → 宿主 target 的唯一映射（缺 effort 不传字段，禁止空串/none）", async () => {
+  const { toHostTarget } = await import("../dsh/subagent-session.js")
+  assert.deepEqual(toHostTarget({ provider: "vendor-a", modelName: "model-a" }), { provider: "vendor-a", model: "model-a" })
+  assert.deepEqual(toHostTarget({ provider: "vendor-a", modelName: "model-a", effort: "high" }), { provider: "vendor-a", model: "model-a", reasoningEffort: "high" })
+  assert.equal(Object.hasOwn(toHostTarget({ provider: "vendor-a", modelName: "model-a" }), "reasoningEffort"), false, "effort 缺省 = 省略字段")
+  for (const effort of ["", "   ", "none"]) {
+    assert.throws(() => toHostTarget({ provider: "vendor-a", modelName: "model-a", effort }), /effort/, "effort=" + JSON.stringify(effort) + " 必须被防御性拒绝")
+  }
+  assert.throws(() => toHostTarget({ provider: "", modelName: "model-a" }), /provider/)
+  assert.throws(() => toHostTarget({ provider: "vendor-a" }), /modelName/)
+  assert.throws(() => toHostTarget(null), /ModelRef/)
+})
+
+test("createDirectedSubagent 收 modelRef：省略 effort 时不传 reasoningEffort，startActivation 同时带 request 与顶层参数（0.2.1/0.2.2 双兼容）", async () => {
+  const h = host()
+  h.ctx.subagents.startActivation = async (spec) => { h.starts.push(spec); h.live.set(spec.childId, { header: { parentSession: parent.id } }); return { childId: spec.childId, messageId: "activation-message" } }
+  const seen = []
+  h.ctx.llm.resolveCallConfig = async (config) => { seen.push(config); return { ...config } }
+  const result = await createDirectedSubagent(h.ctx, {}, {
+    description: "成员",
+    prompt: "完整派单",
+    sessionId: "child-modelref",
+    modelRef: { provider: "provider-example", modelName: "model-example", family: "model" },
+    exec: { agent: parent },
+  })
+  assert.equal(result.ok, true)
+  assert.deepEqual(seen[0], { provider: "provider-example", model: "model-example" }, "没有 effort 就不要在宿主调用里出现 reasoningEffort 键")
+  const spec = h.starts[0]
+  assert.deepEqual(spec.request.agentOptions, { provider: "provider-example", model: "model-example" })
+  assert.equal(Object.hasOwn(spec.request.agentOptions, "reasoningEffort"), false)
+  // 0.2.2-rc.2 顶层参数签名：与 request 内字段同源，两个入口都可读。
+  assert.deepEqual(spec.parent, spec.request.parent)
+  assert.deepEqual(spec.prompt, spec.request.prompt)
+  assert.deepEqual(spec.agentOptions, spec.request.agentOptions)
+  assert.equal(spec.maxDepth, spec.request.maxDepth)
+  assert.equal(result.effort, undefined, "返回值不发明 effort")
+})
+
+test("createDirectedSubagent 拒绝无效 modelRef（effort 空串/none、缺字段），不进入创建", async () => {
+  for (const modelRef of [
+    { provider: "p", modelName: "m", effort: "" },
+    { provider: "p", modelName: "m", effort: "none" },
+    { provider: "p" },
+  ]) {
+    const h = host()
+    const result = await createDirectedSubagent(h.ctx, {}, { description: "成员", prompt: "派单", sessionId: "child-invalid", modelRef, exec: { agent: parent } })
+    assert.equal(result.ok, false)
+    assert.equal(result.code, "TW_SUB_MODEL_REF_INVALID")
+    assert.equal(h.starts.length, 0, "无效 modelRef 不创建成员")
+  }
+})

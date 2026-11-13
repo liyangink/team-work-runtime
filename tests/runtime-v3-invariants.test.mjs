@@ -10,11 +10,11 @@ import { tw } from "../runtime-v3/cli.mjs"
 import { initTask, loadTask } from "../runtime-v3/store.mjs"
 import { registerDelivery } from "../runtime-v3/intake.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
-import { makeProject, caller, openTask, seedDispatch, seedConvergedStage, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, openTask, seedDispatch, seedConvergedStage, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
 test("I2：名字寻址——重名拒绝并提示、未知任务拒绝并给修复方向（不猜测）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "dup-t")
   const dup = await call(["open", "--name", "dup-t", "--objective", "x", "--entry", "code-review"])
   assert.equal(dup.ok, false)
@@ -27,7 +27,7 @@ test("I2：名字寻址——重名拒绝并提示、未知任务拒绝并给修
 
 test("I4：门禁判定是任务目录的纯函数——两次加载推导一致，快照不变", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "pure-t")
   const d = await call(["dispatch-plan", "--task", "pure-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "内容", "utf8")
@@ -61,7 +61,7 @@ test("I6 契约：deliver 不接受自评 recommendation（作者不自审）", 
 
 test("I3：artifacts.json 删除后从 reports+snapshots 自动重建", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "rebuild-t")
   const d = await call(["dispatch-plan", "--task", "rebuild-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "内容 v1", "utf8")
@@ -77,7 +77,7 @@ test("I3：artifacts.json 删除后从 reports+snapshots 自动重建", async ()
 
 test("E 等价矩阵：多轮 ver 同 path / 跨 key 重交 / 同 digest 重交——重建与损坏前登记逐字段等价；kind 目录继承；degraded 可测", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "eq-t")
   const writable = [{ path: "docs/", artifactKind: "doc" }]
   const key1 = "deq-k1"
@@ -131,7 +131,7 @@ test("E 等价矩阵：多轮 ver 同 path / 跨 key 重交 / 同 digest 重交�
 
 test("agent-map 合法空账本正常登记（不假成功、不误报损坏）；agents.json 空映射数组合法", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "emptymap-t")
   const d = await call(["dispatch-plan", "--task", "emptymap-t", "--writable", "R.md:code-review"])
   const task = await loadTask(root, "emptymap-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
@@ -150,7 +150,7 @@ test("agent-map 合法空账本正常登记（不假成功、不误报损坏）�
 
 test("I9：E2E 路由门——未判定阻塞带恢复边；skip 必须给依据", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "route-t")
   const g1 = await call(["gate", "--task", "route-t"])
   assert.ok(g1.blockers.some((b) => b.route === "e2e"))
@@ -179,7 +179,7 @@ test("E2E-01：人工门签发后 journal 零状态事件（静止）", async ()
 
 test("E2E-02：用户约束与排除项进入派单文本", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "con-t")
   await call(["intent", "--task", "con-t", "--add-constraint", "重点看认证", "--add-exclusion", "不看样式"])
   const d = await call(["dispatch-plan", "--task", "con-t", "--writable", "R.md:code-review"])
@@ -190,7 +190,7 @@ test("E2E-02：用户约束与排除项进入派单文本", async () => {
 
 test("E2E-20：intent 任何时候可修订（固化死局非法）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "intent-t")
   const r = await call(["intent", "--task", "intent-t", "--objective", "目标升级", "--add-constraint", "含性能"])
   assert.equal(r.ok, true)
@@ -199,7 +199,7 @@ test("E2E-20：intent 任何时候可修订（固化死局非法）", async () =
 
 test("E2E-15 契约：open 无 mode/create-resume 分支参数（仓库真实 workflow 兜底）", async () => {
   const root = await makeProject({ workflow: null, policy: null })
-  const call = caller(root)
+  const call = autoCaller(root)
   assert.equal((await call(["open", "--name", "mode-t", "--objective", "o"])).ok, true)
   assert.equal((await call(["run", "--task", "ghost"])).code, "TASK_NOT_FOUND")
 })
@@ -209,7 +209,7 @@ test("E2E-19：v1 遗留 .team-work 上显式 open 自愈且旧文件原样", as
   await mkdir(path.join(root, ".team-work"), { recursive: true })
   await writeFile(path.join(root, ".team-work", "config.yaml"), "legacy: true\n")
   await writeFile(path.join(root, ".team-work", "task.json"), "{}")
-  const call = caller(root)
+  const call = autoCaller(root)
   const r = await call(["open", "--name", "on-legacy", "--objective", "o", "--entry", "code-review"])
   assert.equal(r.ok, true)
   assert.match(await readFile(path.join(root, ".team-work", "config.yaml"), "utf8"), /legacy: true/)
@@ -246,7 +246,7 @@ test("人工门 rework → 回 Owner 回应波次（回归：该分支曾静默�
 
 test("I8：tw restore 从最后注册快照恢复被污染制品", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "restore-t")
   const d = await call(["dispatch-plan", "--task", "restore-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "正确内容", "utf8")
@@ -265,7 +265,7 @@ test("I8：tw restore 从最后注册快照恢复被污染制品", async () => {
 
 test("run/gate 零写：artifacts.json 损坏时只读重建呈现、文件字节不动；dispatch 推进锁内自愈写回（I3 + run 只读承诺）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "ro-t")
   const d = await call(["dispatch-plan", "--task", "ro-t", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "内容", "utf8")
@@ -291,7 +291,7 @@ test("run/gate 零写：artifacts.json 损坏时只读重建呈现、文件字�
 
 test("agent-map 遇损坏账本自愈重建：降级透传卡的修复入口可达（非死门），registered 投影恢复", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "mapfix-t")
   const d = await call(["dispatch-plan", "--task", "mapfix-t", "--writable", "R.md:code-review"])
   const task = await loadTask(root, "mapfix-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
@@ -311,7 +311,7 @@ test("agent-map 遇损坏账本自愈重建：降级透传卡的修复入口可�
 
 test("dispatch-plan 遇损坏 agents.json 降级推进：不抛错、warnings 在场（I5：推进通道不得死门）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "planc-t")
   const task = await loadTask(root, "planc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   await writeFile(path.join(task.root, "agents.json"), "{corrupt", "utf8")
@@ -322,7 +322,7 @@ test("dispatch-plan 遇损坏 agents.json 降级推进：不抛错、warnings �
 
 test("retire 遇损坏账本不挡死：作废成功并重建账本（retire 是兜底恢复工具）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "retc-t")
   const d = await call(["dispatch-plan", "--task", "retc-t", "--writable", "R.md:code-review"])
   const task = await loadTask(root, "retc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
@@ -336,7 +336,7 @@ test("retire 遇损坏账本不挡死：作废成功并重建账本（retire 是
 
 test("E2E-07 v3：respond 派单注入返工原因（意见随派单到达 Owner）", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "rework-ctx")
   const d1 = await call(["dispatch-plan", "--task", "rework-ctx", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "v1", "utf8")
@@ -352,7 +352,7 @@ test("E2E-07 v3：respond 派单注入返工原因（意见随派单到达 Owner
 
 test("E2E-07b v3：单包 review 与 verdict 派单内嵌被审制品清单、Owner 交付摘要与 Challenger 评审结论", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "verdict-ctx")
   const d1 = await call(["dispatch-plan", "--task", "verdict-ctx", "--writable", "R.md:code-review"])
   await writeFile(path.join(root, "R.md"), "v1", "utf8")
@@ -374,7 +374,7 @@ test("E2E-07b v3：单包 review 与 verdict 派单内嵌被审制品清单、Ow
 
 test("E2E-07c v3：NLART 过滤已 retire 作废波次的产物，且 reviewVerdictContext 非 accept 空 findings 不输出已接受文案", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "verdict-edge")
   await call(["plan", "--task", "verdict-edge", "--packages", JSON.stringify([
     { id: "p1", scope: "包1", writable: ["OLD.md:code-review", "NEW.md:code-review"], done: ["完成审查"] },

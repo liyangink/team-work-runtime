@@ -26,8 +26,8 @@ export function pickFromPool(pool, usedFamilies = []) {
   return { ...picked, selectedBy: fresh ? "diversity" : "first" }
 }
 
-// 单波 modelHint 决策：tier 候选池 → 波内家族去重 → effort 透传。
-// 解析失败的档位返回 null，由 dispatch-plan 在写入派发事实前给出可恢复 blocked 卡。
+// 档位候选池 → 家族去重 → 单个 hint（RoleRef 的前身）：只服务 open 期角色初始化与 tw roles --resolve。
+// 派发期不再调用本函数（模型已固化在 roles/packages）；解析失败的档位返回 null，由调用方标 unresolved。
 export function computeModelHint(tierResolution, usedFamilies = []) {
   if (!tierResolution?.pool?.length) return null
   const picked = pickFromPool(tierResolution.pool, usedFamilies)
@@ -40,6 +40,58 @@ export function computeModelHint(tierResolution, usedFamilies = []) {
     ...(picked.selectedBy ? { selectedBy: picked.selectedBy } : {}),
     ...(picked.effort !== undefined ? { effort: picked.effort } : {}),
   }
+}
+
+// —— ModelRef：任务级/包级保存的已解析模型实例（§3.0）——
+// 字段：provider、modelName 必填；effort 可选（配置了合法枚举才出现，缺省=省略字段，禁止 "" 与 "none"）；
+// family 可选（审计/同波多样性用，不投影宿主）。宿主字段映射只在绑定层 toHostTarget 一处发生。
+export const MODEL_REF_KEYS = Object.freeze(["provider", "modelName", "effort", "family"])
+
+function modelRefInvalid(message) {
+  const error = new Error(message)
+  error.code = "MODEL_REF_INVALID"
+  return error
+}
+
+export function normalizeModelRef(value, label = "ModelRef") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw modelRefInvalid(label + " 必须是对象")
+  for (const key of Object.keys(value)) {
+    if (!MODEL_REF_KEYS.includes(key)) throw modelRefInvalid(label + " 含未知字段 " + JSON.stringify(key))
+  }
+  if (typeof value.provider !== "string" || !value.provider.trim() || typeof value.modelName !== "string" || !value.modelName.trim()) {
+    throw modelRefInvalid(label + " 的 provider 与 modelName 必须是非空字符串")
+  }
+  const hasEffort = Object.hasOwn(value, "effort")
+  // effort 语义（宿主实测）：缺省 = 省略字段；出现时必须是非空合法枚举，严禁 "" 与 "none"。
+  if (hasEffort && (typeof value.effort !== "string" || !value.effort.trim() || value.effort.trim() === "none")) {
+    throw modelRefInvalid(label + ' 的 effort 必须是非空字符串且不能为 "none"（不设置推理强度时省略 effort 字段）')
+  }
+  const hasFamily = Object.hasOwn(value, "family")
+  if (hasFamily && (typeof value.family !== "string" || !value.family.trim())) throw modelRefInvalid(label + " 的 family 必须是非空字符串")
+  return {
+    provider: value.provider.trim(),
+    modelName: value.modelName.trim(),
+    ...(hasEffort ? { effort: value.effort.trim() } : {}),
+    ...(hasFamily ? { family: value.family.trim() } : {}),
+  }
+}
+
+// tier 候选/历史 modelHint → ModelRef；解析不出返回 null（不猜测、不补默认值）。
+export function modelRefFromHint(hint, label = "modelHint") {
+  if (!hint || typeof hint !== "object") return null
+  if (typeof hint.provider !== "string" || !hint.provider.trim() || typeof hint.model !== "string" || !hint.model.trim()) return null
+  return normalizeModelRef({
+    provider: hint.provider,
+    modelName: hint.model,
+    ...(hint.effort !== undefined ? { effort: hint.effort } : {}),
+    ...(hint.family !== undefined ? { family: hint.family } : {}),
+  }, label)
+}
+
+// 身份比较只看 provider/modelName/effort；family 仅审计，不参与"是否换模型"判定。
+export function modelRefsEqual(a, b) {
+  if (!a || !b) return a === b
+  return a.provider === b.provider && a.modelName === b.modelName && (a.effort ?? null) === (b.effort ?? null)
 }
 
 function normalizeCandidate(candidate, label) {
@@ -55,8 +107,8 @@ function normalizeCandidate(candidate, label) {
   if (hasFamily && (typeof candidate.family !== "string" || !candidate.family.trim())) {
     throw new Error(`${label} 的 family 必须是非空字符串`)
   }
-  if (hasEffort && (typeof candidate.effort !== "string" || !candidate.effort.trim())) {
-    throw new Error(`${label} 的 effort 必须是非空字符串`)
+  if (hasEffort && (typeof candidate.effort !== "string" || !candidate.effort.trim() || candidate.effort.trim() === "none")) {
+    throw new Error(`${label} 的 effort 必须是非空字符串且不能为 "none"（不设置推理强度时省略 effort 字段）`)
   }
   return {
     provider: candidate.provider.trim(),

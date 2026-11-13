@@ -11,7 +11,7 @@ export const FIX_WORKFLOW = {
   gates: [],
   stages: [{ id: "code-review", label: "代码审查", outputs: ["code-review"], teamScene: "code-review", route: "e2e" }],
 }
-export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" }, scenes: { "code-review": { core: true } } }
+export const FIX_POLICY = { maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 }, riskTiers: { critical: "expert", high: "senior" }, roles: { owner: "junior", challenger: "senior", expert: "expert" }, scenes: { "code-review": { core: true } } }
 
 // dispatch-plan 在派发点校验调用快照。本进程默认提供完整三档；
 // 个别测试文件可覆盖 TW_DSH_CONFIG，隔离测试负责恢复环境。
@@ -34,10 +34,18 @@ process.env.TW_DSH_CONFIG = JSON.stringify({
   }
 })
 
+// 夹具策略补 roles 兜底段：open 初始化三角色 ModelRef 需要（缺 roles.expert 即 unresolved，属被测语义，
+// 夹具统一提供合法默认，个别用例可显式覆盖）。
+export function fixturePolicy(policy = FIX_POLICY) {
+  if (!policy) return policy
+  return { roles: { owner: "junior", challenger: "senior", expert: "expert" }, ...policy }
+}
+
 export async function makeProject({ workflow = FIX_WORKFLOW, policy = FIX_POLICY } = {}) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-fx-"))
+  const effectivePolicy = fixturePolicy(policy)
   if (workflow) await mkdir(path.join(projectRoot, "workflow/definitions"), { recursive: true }).then(() => writeFile(path.join(projectRoot, "workflow/definitions/engineering.json"), JSON.stringify(workflow)))
-  if (policy) await mkdir(path.join(projectRoot, "team-work/policies"), { recursive: true }).then(() => writeFile(path.join(projectRoot, "team-work/policies/default.json"), JSON.stringify(policy)))
+  if (effectivePolicy) await mkdir(path.join(projectRoot, "team-work/policies"), { recursive: true }).then(() => writeFile(path.join(projectRoot, "team-work/policies/default.json"), JSON.stringify(effectivePolicy)))
   return projectRoot
 }
 
@@ -45,11 +53,40 @@ export function caller(projectRoot) {
   return (argv) => tw(argv, { projectRoot })
 }
 
-export async function openTask(projectRoot, name, { objective = "o", entry = "code-review" } = {}) {
+// 既有用例的便捷通道：配置变更类命令（open/plan/intent/roles）返回意图确认卡时按"用户确认"继续，
+// 返回原卡不影响调用方对结果的断言；意图确认门本身由新用例用 caller/tw 原生路径验证。
+const CONFIG_CHANGING_COMMANDS = new Set(["open", "plan", "intent", "roles"])
+export function autoCaller(projectRoot) {
   const call = caller(projectRoot)
-  const r = await call(["open", "--name", name, "--objective", objective, ...(entry ? ["--entry", entry] : [])])
+  return async (argv) => {
+    const result = await call(argv)
+    if (result && result.ok !== false && result.status === "awaiting-user" && result.next === "decide" && result.intakeFingerprint && CONFIG_CHANGING_COMMANDS.has(argv[0])) {
+      const confirmed = await call(["decide", "--task", result.task, "--choice", "1"])
+      if (confirmed.ok === false && confirmed.code !== "DECISION_STALE") throw new Error("auto confirm failed: " + JSON.stringify(confirmed))
+    }
+    return result
+  }
+}
+
+// 开任务但不确认意图（用例需要检查确认卡本身时使用）。
+export async function openTaskRaw(projectRoot, name, { objective = "o", entry = "code-review", extra = [] } = {}) {
+  const call = caller(projectRoot)
+  const r = await call(["open", "--name", name, "--objective", objective, ...(entry ? ["--entry", entry] : []), ...extra])
   if (r.ok === false) throw new Error("openTask failed: " + JSON.stringify(r))
   return r
+}
+
+// 确认意图卡（旧任务无卡时 decide 返回 DECISION_STALE，视为已确认）。
+export async function confirmIntake(projectRoot, name) {
+  const r = await caller(projectRoot)(["decide", "--task", name, "--choice", "1"])
+  if (r.ok === false && r.code !== "DECISION_STALE") throw new Error("confirmIntake failed: " + JSON.stringify(r))
+  return r
+}
+
+export async function openTask(projectRoot, name, options = {}) {
+  const opened = await openTaskRaw(projectRoot, name, options)
+  if (opened.status === "awaiting-user" && opened.next === "decide") await confirmIntake(projectRoot, name)
+  return opened
 }
 
 export async function seedDispatch(projectRoot, name, detail) {

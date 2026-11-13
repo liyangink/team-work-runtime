@@ -2,7 +2,7 @@
 
 状态：历史 v3.2 方案与评审记录；拓扑能力已实施，配置部分已由全局 settings 取代。评审记录：
 
-> **迁移说明（当前实现）**：本方案早期所称项目 `.team-work/platform/dsh.json` 已不再是配置源。tier→模型唯一来自 DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页），每档兼容单对象或候选数组，provider/model 必填，family/effort 可选；同波候选池优先不同 family。`.team-work/tasks/<任务>/agents.json` 仍是 dispatchKey→childId 与 modelHint 快照的项目运行事实。`injectionEnabled`、`projectRoots`、`twBin` 已移除且不兼容读取；注入和 `tw` 工具只以子会话 cwd 定位项目。
+> **迁移说明（当前实现）**：本方案早期所称项目 `.team-work/platform/dsh.json` 已不再是配置源。当前模型数据链：默认档只来自 `team-work/policies/default.json`；`tw open` 把三个角色解析成具体 `ModelRef` 写入 `.team-work/tasks/<任务>/agents.json.roles`（与 mappings 并存），`tw plan` 把每包模型物化到 `packages.json[].model`，派发直接读两者、配置热变不自动改已有任务。DSH 全局 settings 的 `team-work-dsh.tiers`（DSH Web“插件配置”页）只用于 open/`tw roles --resolve` 初始化与普通委派候选；每档兼容单对象或候选数组，provider/model 必填，family/effort 可选。已派发的精确模型快照在 journal 的 `dispatched.detail.modelRef`（历史 `modelHint` 读取时映射）。`injectionEnabled`、`projectRoots`、`twBin` 已移除且不兼容读取；注入和 `tw` 工具只以子会话 cwd 定位项目。
 
 - **评审 A（架构/规范轴，2026-08-24）**：无 blocker；F1–F9 全部吸收（见 §2 各条标注）——F1 DAG 分层派发、F2 按包计轮、F3 findings 包归属与无归属回退、F4 incumbent 降级规程、F5 continuation 基线锚定（agent-map）、F6 重拆窗口事实锚定、F7 整合 Owner=汇总包、F8 consolidation 聚合指纹；A1–A3/A6 判定合规（tw plan 仅机械验收、语义质量归 Lead；packages.json 为决策事实非平行权威；plan 验收即 P2 检查点）。
 - **评审 B（实现轴，2026-08-24，对象 73c8e92+c5623d5）**：无 blocker；F1 损坏锁回收（已修：超龄回收+竞态窗口重试+fixHint）、F3 verdict dispatchExample 缺 --verdict（已修+断言）两个 major；F2 tiers:null（已修）、F5 blocked 卡形状（已修统一对象数组带 recovery）、F6 幂等 registered 形状（已修补 digest）三个 minor；F4 wait-inflight 内嵌全文=本方案 §2.4 范围；review 幂等 findings 顺序敏感判定可接受（顺序即内容）；测试缺口补 5 项；62/62 绿。

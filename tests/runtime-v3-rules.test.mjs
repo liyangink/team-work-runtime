@@ -10,7 +10,7 @@ import path from "node:path"
 import test, { mock } from "node:test"
 
 import { resolveMemberRules, resolveLeadRules, composeMemberRules, lockedWorkflowContract, requiredClarityText, createClarityGuidanceReader } from "../runtime-v3/rules.mjs"
-import { caller, makeProject, openTask } from "./support/v3-fixtures.mjs"
+import { autoCaller, makeProject, openTask } from "./support/v3-fixtures.mjs"
 
 async function makeRoot(t) {
   const root = await mkdtemp(path.join(tmpdir(), "tw-rules-"))
@@ -529,7 +529,7 @@ function assertAscending(values, message) {
 
 test("派单卡段序固定：卡头 → 验收基线 → 锁定契约 → 规范/红线/建议 → 行动与交付", async () => {
   const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: SCENE_POLICY })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "order-t", { objective: "实现示例行为", entry: "implementation" })
   const prompt = (await call(["dispatch-plan", "--task", "order-t", "--writable", "src.mjs:source", "--json"])).waves[0].prompt
@@ -565,7 +565,7 @@ test("规则来源顺序 角色 → 角色×场景 → 场景公共 → 公共�
     "owner/design/project-notes.md": "## 建议\n\n- 项目角色场景建议",
     "challenger/README.md": "## 规范\n\n- 挑战者角色条目不得出现",
   })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "isolation-t", { objective: "设计示例模块", entry: "design" })
   const prompt = (await call(["dispatch-plan", "--task", "isolation-t", "--writable", "DESIGN.md:design", "--json"])).waves[0].prompt
@@ -588,7 +588,7 @@ test("用户公共层整份取代包内默认、项目层追加；锁定契约�
     "common/index.md": "## 规范\n\n- 用户公共通用规范",
   })
   await writeProjectRules(projectRoot, { "owner/README.md": "## 规范\n\n- 项目追加角色规范" })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await openTask(projectRoot, "merge-t", { objective: "实现示例行为", entry: "implementation" })
   const prompt = (await call(["dispatch-plan", "--task", "merge-t", "--writable", "src.mjs:source", "--json"])).waves[0].prompt
   assert.match(prompt, /用户改写角色规范/)
@@ -602,7 +602,7 @@ test("用户公共层整份取代包内默认、项目层追加；锁定契约�
 
 test("成员卡是单块业务正文：无明晰段、无 requiredGuidance；续派与在途重建同源", async () => {
   const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: SCENE_POLICY })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "single-block-t", { objective: "实现示例行为", entry: "implementation" })
   const owner = (await call(["dispatch-plan", "--task", "single-block-t", "--writable", "src.mjs:source", "--json"])).waves[0]
@@ -632,7 +632,7 @@ test("成员卡是单块业务正文：无明晰段、无 requiredGuidance；续
   assert.equal(Object.hasOwn(inflight, "requiredGuidance"), false)
   // wait-inflight 按现状归入进展时点：读 lead/progress 与公共必读段，不读审阅段
   assert.equal(inflightPlan.stop, "wait-inflight")
-  assert.match(inflightPlan.card.presentation, /向用户汇报当前进展/)
+  assert.match(inflightPlan.card.presentation, /进展汇报的目的是和用户对齐认知 gap/)
   assert.doesNotMatch(inflightPlan.card.presentation, /## clarity 审阅必读/)
 })
 
@@ -647,7 +647,7 @@ test("Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共�
     .split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
   const publicRules = await required("skills/clarity-guidance/output-standard.md")
   const reviewRules = await required("skills/clarity-review/references/review-rules.md")
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "lead-t", { objective: "实现示例行为", entry: "implementation" })
 
@@ -679,7 +679,7 @@ test("Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共�
 
 test("八视角已拆包：Owner 只承担本包、组合评审覆盖全部已交付包、裁决带 verdict 语义", async () => {
   const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: { ...SCENE_POLICY, scenes: { ...SCENE_POLICY.scenes, "code-review": { core: true } } } })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   const objective = "对示例变更完成八视角审查，每个视角独立交付证据"
   const perspectives = ["需求", "缺陷安全", "错误处理", "逻辑", "测试", "类型", "规范", "影响"]
   const packages = perspectives.map((perspective, index) => ({
@@ -780,7 +780,7 @@ test("审查类派单：角色×场景规则按场景区分，仍交付并经过
       workflow: SCENE_WORKFLOW,
       policy: { ...SCENE_POLICY, scenes: { ...SCENE_POLICY.scenes, [scene]: { core: true } } },
     })
-    const call = caller(projectRoot)
+    const call = autoCaller(projectRoot)
     await resetUserRules()
     await openTask(projectRoot, "cross-t", { objective: "审查示例局部修改", entry: scene })
     const dispatched = await call(["dispatch-plan", "--task", "cross-t", "--writable", "REVIEW.md:" + scene, "--json"])
@@ -817,7 +817,7 @@ test("场景规则内容：设计、审查、实施与测试各自按约定交�
   }
   for (const [scene, expectation] of Object.entries(expectations)) {
     const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: SCENE_POLICY })
-    const call = caller(projectRoot)
+    const call = autoCaller(projectRoot)
     await resetUserRules()
     await openTask(projectRoot, "scene-t", { objective: "完成约定交付", entry: scene })
     const owner = (await call(["dispatch-plan", "--task", "scene-t", "--writable", "RESULT.md:doc", "--json"])).waves[0]
@@ -830,7 +830,7 @@ test("场景规则内容：设计、审查、实施与测试各自按约定交�
 
 test("方案场景：Owner、Challenger、返工和在途重建均带同一份锁定契约与设计规则", async () => {
   const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: SCENE_POLICY })
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "design-t", { objective: "设计示例模块", entry: "design" })
   const d = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design", "--json"])

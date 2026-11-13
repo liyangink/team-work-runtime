@@ -11,7 +11,7 @@
 - 🚧 **人工门把关**：方案审查（design-approval）与最终验收（final-acceptance）两道人工门，批准绑定制品指纹，制品改动后需重新确认。
 - 💤 **随时中断恢复**：状态全在项目 `.team-work/tasks/` 目录，关掉会话、重启设备后接着推进，不丢上下文。
 - 🧾 **全链路留痕**：每次交付、每条评审意见、每个人工决定、每个路由依据都落盘，可追溯、可审计。
-- 💰 **三档成本可控**：junior / senior / expert 三档映射到模型——常规活默认廉价档，高风险环节自动升档并要你审批。
+- 💰 **模型显式可控**：默认档只来自 `team-work/policies/default.json`；开任务时把 owner / challenger / expert 解析成具体模型实例存进任务，可用 `tw roles` 显式修改，初始意图确认卡逐项展示角色与逐包模型。
 - 🧩 **并行施工**：多个可独立验收的改动自动拆包并行，互斥写范围避免互相踩踏。
 - 🛡️ **越界兜底**：成员只能写派单声明的路径；越界写入被当场拒绝，被污染的产出物可一键恢复快照。
 - 📦 **数据留在本地**：任务数据全部在项目里，不锁云；Runtime 零第三方运行时依赖。
@@ -20,7 +20,7 @@
 
 ### 1. 安装
 
-`1.1.4` 允许 DSH `>=0.2.0-rc.2 <0.3.0-0` 加载，即从 `0.2.0-rc.2` 起的 0.2 系列，不包括 0.3 预发布版。仅 `0.2.0-rc.2` 与 `0.2.1-rc.2` 已完成隔离宿主实测，允许加载不等于范围内所有版本均已验证；尚未发布到市场。包含人工审查摘要优化、默认灵活交叉审查、成员派单职责修复、Clarity 明晰表达/审阅与 TWR 同源规则自动带入，以及范围争议提前暂停指引。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
+`1.1.5` 允许 DSH `>=0.2.0-rc.2 <0.3.0-0` 加载，即从 `0.2.0-rc.2` 起的 0.2 系列，不包括 0.3 预发布版。包含极简角色与包级模型实例（`ModelRef`）固化、任务初期意图与模型人工确认门（`intake-approval`）、已有会话换模型拦截与 `session-reset` 重置、Lead 汇报对齐认知 gap 规则，以及 DSH `0.2.2-rc.2` `startActivation` 顶层参数兼容。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
 
 **方式一：DSH 市场**：在市场搜索并安装 `team-work-runtime`；使用新版适配前先确认安装包已包含本次变更。
 
@@ -42,11 +42,13 @@ dsh plugin --profile profile-demo add ./team-work-runtime-<版本>.tgz   # 安�
 
 DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型。新版配置写入当前 profile：同一 profile 内所有项目共用 tiers，没有项目覆盖，也不自动同步其他 profile。
 
-| 档位 | 干什么活 | 选模建议 |
-| --- | --- | --- |
-| `junior` | 常规实施、日常杂活 | 便宜够用的快模型 |
-| `senior` | 方案设计、审查挑战 | 均衡可靠的模型 |
-| `expert` | 高风险环节技术裁决 | 最强模型；最贵，只在裁决时上场 |
+| 档位 | 默认用途 |
+| --- | --- |
+| `junior` | 常规实施、日常杂活 |
+| `senior` | 方案设计、审查挑战 |
+| `expert` | 高风险环节技术裁决 |
+
+这三个档位是**默认档**：`tw open` 按 `default.json` 的 scene 配置把三个角色解析成具体模型实例（provider/modelName/effort）写进任务 `agents.json.roles`，此后派发直接读该实例，配置热变不会自动改已有任务。需要调整用 `tw roles --task <名> --set owner=<provider>/<model>[@<effort>]`（或 `--resolve` 按当前 profile 重解析）；包级模型在 `tw plan` 时物化到 `packages.json[].model`。
 
 以下展示 tiers 的数据形状；示例模型需替换为该 profile 中实际可用的 provider/model：
 
@@ -58,7 +60,7 @@ DSH Web → 插件配置 → `team-work-dsh`，给三个档位各挑一个模型
 }
 ```
 
-空配置允许首次启动；开始配置后，三档必须齐全，每档兼容单对象或候选数组，provider/model 必填，family/effort 可选。派发优先错开模型家族；热更新只影响后续波次，已派发成员沿用 journal 中的精确模型快照。
+空配置允许首次启动；开始配置后，三档必须齐全，每档兼容单对象或候选数组，provider/model 必填，family/effort 可选。角色初始化时在同档候选里做家族去重选一个；配置热更新只影响之后的 `tw open` 与 `tw roles --resolve`，已有任务沿用已固化 roles 与 journal 中的 `modelRef` 快照。
 
 页面按模型目录验证已列出的候选；未列出不代表模型不存在或不允许。客户端没有精确只读校验 RPC，未列出的候选会保留草稿并提示通过原生 `list_subagent_models` 按 provider+model 精确查询，不会谎报保存成功。正式成员创建前仍由宿主 `llm.resolveCallConfig` 核验真实模型与显式 effort。保存冲突或失败保留本地草稿，重新核对当前配置后再提交。
 
@@ -149,7 +151,7 @@ Lead ──组建团队──▶ 成员子代理：Owner → Challenger → 核�
 | 模块 | 一句话 |
 | --- | --- |
 | **Workflow**（`workflow/definitions/`） | 研发路线图：阶段、合法流转边、门禁、SPEC/E2E 路由——改流程改数据，不改代码 |
-| **Team-work**（`team-work/`） | 团队手册：哪个场景用哪档人、几轮收敛、审查视角、成本权重 |
+| **Team-work**（`team-work/`） | 团队手册：默认档与角色模型来源、几轮收敛、审查视角、costWeights（仅展示） |
 | **CoreRuntime**（`runtime-v3/` + `bin/tw.mjs`） | 唯一引擎：波次推进、门禁推导、任务目录读写、交付/评审检查 |
 | **DSH 绑定**（`dsh/`） | skill 装载、tw/tw-dispatch、精确模型派发与当前 profile 的插件配置页 |
 

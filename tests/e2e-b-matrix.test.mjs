@@ -9,7 +9,7 @@ import path from "node:path"
 import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
-import { makeProject, caller } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller } from "./support/v3-fixtures.mjs"
 
 const BASE_CONFIG = {
   "entryId": "team-work-dsh",
@@ -33,11 +33,11 @@ process.env.TW_DSH_CONFIG = JSON.stringify(BASE_CONFIG)
 
 test("E2E-B F-3：无项目 dsh.json、无插件时，调用快照 tier 配置可完成派发与交付", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await call(["open", "--name", "f3", "--objective", "全流程", "--entry", "code-review"])
   const plan = await call(["dispatch-plan", "--task", "f3", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.ok, true)
-  assert.equal(plan.waves[0].modelHint.model, "e2e-junior")
+  assert.equal(plan.waves[0].modelRef.modelName, "e2e-junior")
   assert.equal(await access(path.join(root, ".team-work", "platform", "dsh.json")).then(() => true, () => false), false)
   await writeFile(path.join(root, "R.md"), "x")
   const dv = await call(["deliver", "--task", "f3", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
@@ -46,7 +46,7 @@ test("E2E-B F-3：无项目 dsh.json、无插件时，调用快照 tier 配置�
 
 test("E2E-B F-9+F-10：八视角形态（tier 升档卡实测）+ 组合评审收敛", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await call(["open", "--name", "f10", "--objective", "八视角审查 runtime-v3", "--entry", "code-review"])
   // 八视角包：2 个 junior 视角 + 1 个 expert 视角（升档）+ 汇总包
   const pkgs = JSON.stringify([
@@ -57,16 +57,12 @@ test("E2E-B F-9+F-10：八视角形态（tier 升档卡实测）+ 组合评审�
   ])
   const planned = await call(["plan", "--task", "f10", "--packages", pkgs])
   assert.equal(planned.ok, true)
-  // 首波：3 个视角并行（汇总包依赖锁）——但 sec-review expert 升档 → 升档审批卡先出
-  // 首波：3 个视角并行（汇总包依赖锁）——但 sec-review expert 升档 → 升档审批卡先出
-  const gate = await call(["dispatch-plan", "--task", "f10"])
-  assert.equal(gate.stop, "awaiting-user", "F-9 升档卡触发")
-  assert.deepEqual(gate.card.escalations, [{ package: "sec-review", tier: "expert" }], "只有 expert 视角列卡（junior 零打扰）")
-  await call(["decide", "--task", "f10", "--choice", "1"]) // 批准
+  // F-9 反向断言：包级 expert 不再出升档审批卡——逐包模型直接由意图确认卡展示（plan 后已确认）。
   const wave1 = await call(["dispatch-plan", "--task", "f10"])
-  assert.equal(wave1.waves.length, 3, "三视角并行")
-  assert.equal(wave1.waves.find((x) => x.package === "sec-review").tier, "expert", "升档生效")
-  assert.equal(wave1.waves.find((x) => x.package === "req-summary").tier, "junior", "junior 保持")
+  assert.equal(wave1.stop, null)
+  assert.equal(wave1.waves.length, 3, "三视角并行（汇总包依赖锁）")
+  assert.equal(wave1.waves.find((x) => x.package === "sec-review").modelRef.modelName, "e2e-expert", "sec-review 按包级 tier 语法糖用 expert 模型")
+  assert.equal(wave1.waves.find((x) => x.package === "req-summary").modelRef.modelName, "e2e-junior", "junior 视角复用 roles.owner")
   // 三视角交付 → 组合评审 → accept → 裁决（core）
   for (const x of wave1.waves) {
     const p = x.prompt.match(new RegExp("- (review/[^(" + String.fromCharCode(92) + "uFF08" + String.fromCharCode(92) + "n]+)"))?.[1]
@@ -117,7 +113,7 @@ test("E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → �
     { packageId: "execution", outputRefs: ["artifact:e2e-result"], dependsOn: ["path-design"], completionCriteria: ["执行留证"] },
   ] }
   const root = await makeProject({ workflow: wf, policy: pol })
-  const call = caller(root)
+  const call = autoCaller(root)
   await call(["open", "--name", "f11", "--objective", "o"])  // workflow 模式：research 起（through-stage 会走 complete 不 advance）
   const r0 = await call(["dispatch-plan", "--task", "f11", "--writable", "none"])
   await call(["deliver", "--task", "f11", "--key", r0.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "调研"])
@@ -130,9 +126,13 @@ test("E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → �
   const rv = await call(["dispatch-plan", "--task", "f11"])
   await call(["review", "--task", "f11", "--key", rv.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "s"])
   await call(["route", "--task", "f11", "--route", "e2e", "--decision", "run", "--basis", "适用"])
+  // e2eTemplate 在 e2e 阶段首轮派发前物化：确认卡按逐包模型重签一次，确认后真正派发。
+  const adv0 = await call(["dispatch-plan", "--task", "f11"])
+  assert.equal(adv0.stop, "awaiting-user", "自动物化触发确认卡重签（列出逐包模型）")
+  assert.equal(adv0.card.intake.packages.length, 2)
+  await call(["decide", "--task", "f11", "--choice", "1"])
   const adv = await call(["dispatch-plan", "--task", "f11"])
   assert.equal(adv.stage, "e2e", "D7 run-e2e 边")
-  // F-11：物化发生（advance 后首轮派发前）——同一锁内推进直接出 path-design 单包
   assert.equal(adv.waves.length, 1, "模板物化：首包")
   assert.equal(adv.waves[0].package, "path-design")
   const w1 = adv
@@ -174,7 +174,7 @@ test("E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 调用快照候选池�
   }
 })
   try {
-    const call = caller(root)
+    const call = autoCaller(root)
     const plans = {}
     for (const name of ["iso-a", "iso-b"]) {
       await call(["open", "--name", name, "--objective", "o", "--entry", "code-review"])
@@ -184,8 +184,8 @@ test("E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 调用快照候选池�
     const keyB = plans["iso-b"].waves[0].dispatchKey
     await call(["agent-map", "--task", "iso-a", "--key", keyA, "--agent", "child-A1"])
     await call(["agent-map", "--task", "iso-b", "--key", keyB, "--agent", "child-B1"])
-    assert.equal(plans["iso-a"].waves[0].modelHint.model, "fam-one", "F-4 调用快照池首选")
-    assert.equal(plans["iso-b"].waves[0].modelHint.model, "fam-one", "不同波次各自从首选开始")
+    assert.equal(plans["iso-a"].waves[0].modelRef.modelName, "fam-one", "F-4 调用快照池首选固化进 roles")
+    assert.equal(plans["iso-b"].waves[0].modelRef.modelName, "fam-one", "不同任务各自从首选开始（open 期一次解析）")
     const agentsA = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-a", "agents.json"), "utf8"))
     const agentsB = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "iso-b", "agents.json"), "utf8"))
     assert.equal(agentsA.modelHints, undefined, "agents.json 收敛纯 mappings")

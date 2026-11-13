@@ -8,6 +8,10 @@
 // 波有实体身份 waveId（wv1/wv2/…，F1）；轮次无实体、唯一算法 = 每包 max(已交付报告 round)（F2）；
 // 在途 = 存在未 superseded 的未结波（F1/F3 守卫，波与波永远串行）；superseded 波在投影/在途/回溯统一排除（F3）。
 
+// 场景策略：场景级 ownerTier/challengerTier 优先，缺省回退 policy.roles 兜底段。
+// E3：选模链不保留任何字面量默认档——场景与 roles 都没给即 null（调用方标 unresolved 并给修复指引），
+// 避免 skill 之外的隐含默认值与伪报档位溯源。档位只用于 open 期一次性解析与展示，
+// 派发期直接读 roles/packages 里已固化的 ModelRef。
 export function scenePolicy(policy, sceneId) {
   const scene = policy?.scenes?.[sceneId]
   if (!scene) {
@@ -15,9 +19,11 @@ export function scenePolicy(policy, sceneId) {
     error.code = "SCENE_UNKNOWN"
     throw error
   }
+  const roleTiers = policy?.roles ?? {}
   return {
-    ownerTier: scene.ownerTier ?? "junior",
-    challengerTier: scene.challengerTier ?? "senior",
+    ownerTier: scene.ownerTier ?? roleTiers.owner ?? null,
+    challengerTier: scene.challengerTier ?? roleTiers.challenger ?? null,
+    expertTier: roleTiers.expert ?? null,
     core: Boolean(scene.core),
     maxRounds: policy.maxAutonomousRounds ?? 3,
   }

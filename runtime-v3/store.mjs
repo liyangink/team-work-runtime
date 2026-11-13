@@ -51,7 +51,9 @@ export async function taskExists(projectRoot, name) {
   }
 }
 
-export async function initTask({ projectRoot, name, objective, entry, completion, workflowDigest, stages, risk }) {
+// intent 初始字段只扩内容、不新增文件（方案 §7.3 骨架断言）：rawRequirement 保留用户原文，
+// scope/acceptance/gaps 承载范围、验收与待对齐问题；缺省字段按空处理（旧文件缺字段同样按空）。
+export async function initTask({ projectRoot, name, objective, entry, completion, workflowDigest, stages, risk, intent = {} }) {
   const root = taskRoot(projectRoot, name)
   if (await taskExists(projectRoot, name)) {
     const error = new Error(`任务 ${name} 已存在。换一个名字，或用 run 继续它。`)
@@ -71,7 +73,17 @@ export async function initTask({ projectRoot, name, objective, entry, completion
   await mkdir(path.join(root, "snapshots"), { recursive: true })
   await mkdir(path.join(root, "locks"), { recursive: true })
   await Promise.all([
-    atomicJson(path.join(root, "intent.json"), { objective, constraints: [], exclusions: [], revisions: [], risk: risk ?? "normal" }),
+    atomicJson(path.join(root, "intent.json"), {
+      rawRequirement: typeof intent.rawRequirement === "string" ? intent.rawRequirement : "",
+      objective,
+      constraints: Array.isArray(intent.constraints) ? intent.constraints : [],
+      exclusions: Array.isArray(intent.exclusions) ? intent.exclusions : [],
+      scope: intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {},
+      acceptance: Array.isArray(intent.acceptance) ? intent.acceptance : [],
+      gaps: Array.isArray(intent.gaps) ? intent.gaps : [],
+      revisions: [],
+      risk: risk ?? "normal",
+    }),
     atomicJson(path.join(root, "scope.json"), { entry, completion, stages, workflowDigest, createdAt: at }),
     atomicJson(path.join(root, "artifacts.json"), { items: [] }),
     atomicWrite(path.join(root, "journal.jsonl"), `${JSON.stringify({ seq: 1, at, type: "task-opened", detail: { name, objective, entry } })}\n`),

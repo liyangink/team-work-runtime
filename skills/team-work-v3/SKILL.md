@@ -19,31 +19,38 @@ description: 用 tw CLI（open/dispatch-plan/decide/intent/archive + deliver/rev
 
 - **验收基线**：用户需求与已批准方案是授权依据；在现有 intent 明确目标、约束、排除项，done 只细化原需求。派单统一携带当前基线，原样转发；改 intent、done 或可写路径不等于扩范围获批，确需扩大授权时先请用户明确决定，细则见场景指导。
 - **选入口**：审查请求 → `code-review`；新功能/改动 → `research` 或直接 `implementation`（已有明确方案时）；测试补充 → `test`；方案讨论 → `design`。显式 `--entry` = 任务只运行到该阶段验收；缺省 research = 完整工作流。
-- **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（**定包 tier：默认 junior**——廉价档胜任绝大多数常规作业，审查链兜底；仅按失败成本升档：错误难发现/返工贵 → senior，不可逆/安全敏感 → expert——依据见拓扑与成本篇；高于场景默认档会触发用户升档审批卡；成员执行中力有不逮可经 unresolved 上抛建议升档）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
-- **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（未显式定 tier 的包兜底升 expert 且免审批；包级判断仍以 tw plan 的显式 tier 优先）；较高风险 → `high`；常规缺省 normal。
+- **是否组团**：单一明确产出且改动面小 → 单 Owner + 一位 Challenger；目标含多个可独立验收的垂直范围且可写范围能互斥拆分 → `tw plan` 拆包（包级模型：显式 `model`、`tier` 语法糖、或省略以复用 `roles.owner`；`tw plan` 落盘前一律解析成具体 `ModelRef`，不再持久化 tier——默认档来源与修改方式见拓扑与成本篇）；多包 = 并行 owner 波 + 组合评审 + findings 包归属选择性重派；汇总包=整合 Owner，完成标准须含合并/解冲突/不丢信息）；拆分语义质量归你把关，runtime 只验互斥/无环/完成标准。
+- **模型角色配置**：`tw open` 按 `default.json` 把 owner/challenger/expert 解析成 `ModelRef` 写入 `agents.json.roles`；`tw roles --task <n>` 查看、`--set/--clear/--resolve` 显式修改（改后重签意图确认卡）；已有会话换模型会出换模型确认卡（保留旧会话 / 重开会话 / 回滚 roles）。配置热变不自动改已有任务。
+- **risk 档**：不可逆/数据迁移/安全敏感/核心跨模块 → `--risk critical`（open 期把 owner 角色解析为 expert 档；challenger/expert 不受影响；包级显式 model 优先）；较高风险 → `high`；常规缺省 normal。
 - **审查强度**：默认正式轻量交叉审查，按本次问题选少量互补视角；一个 Owner 聚焦改动，非作者 Challenger 交叉核验，核心 Expert 照旧，不固定人数或包数。复杂完整代码交付、复杂状态与并发、高失败成本且范围确需全面覆盖，或用户明确要求时，才由 Lead 组织一次完整八视角；跨几个文件或某个敏感点本身不触发八视角。方案审查选需求、取舍、接口、失败恢复等相关方向。返工先查变更及关联视角，新范围或系统风险再重判覆盖。
-- **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与档位（junior/senior/expert 预算）正交——裁决者每轮一个（波次机结构），expert 档的 owner 包完全正常，见拓扑与成本篇。
+- **何时升级**：两轮未收敛 → 第三轮 Expert 裁决（角色=裁决波）；三轮耗尽 → [追加一轮 / 结束任务] 卡片交用户。角色（owner/challenger/裁决者）与模型实例正交——裁决者每轮一个（波次机结构），expert 模型的 owner 包完全正常，见拓扑与成本篇。
 
-场景化的拓扑选择、成本分档与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；审查覆盖与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；成员卡纪律区与 Lead 呈现要求的来源见 **[规则库](references/rules.md)**：包内锁定的工作流职责 + 可 DIY 规则，Lead 时点指路与工具反吐。
+场景化的拓扑选择、模型档位与收敛细节见 **[拓扑与成本](references/topology-and-cost.md)**；审查覆盖与 finding 质量、方案讨论、并行施工、测试协作、用户汇报结构见 **[场景指导](references/scenarios.md)**；DSH 编排层执行团队拓扑（tw-dispatch 波次派发）的规程见 **[DSH 编排](references/dsh-orchestration.md)**；成员卡纪律区与 Lead 呈现要求的来源见 **[规则库](references/rules.md)**：包内锁定的工作流职责 + 可 DIY 规则，Lead 时点指路与工具反吐。
 
 ## Lead 操作
 
 ```bash
-tw open --name <名字> --objective "<目标一句话>" [--entry <stage>]   # 开房间；重名会拒绝并提示
+tw open --name <名字> --objective "<目标一句话>" [--entry <stage>] [--risk normal|high|critical]
+        [--raw-requirement "<原文>"] [--constraint ...] [--exclusion ...] [--scope-note ...] [--acceptance ...] [--gap '<JSON>']
+                                                                    # 开房间并签发意图确认卡；重名会拒绝并提示
+tw roles --task <名字> [--set owner=<provider>/<model>[@<effort>] | owner=tier:senior[@<effort>]] [--clear owner] [--resolve]
+                                                                    # 查看/显式修改任务角色模型（唯一入口）
 tw dispatch-plan --task <名字> [--writable <路径>:<kind> ...]        # 推进一步：输出波次派单或 stop 卡；路径以 / 结尾 = 目录授权（如 docs/:doc）
 tw run --task <名字>                                                  # 只读查状态：当前状态卡 + 下一步指引（不写任务事实）
 tw decide --task <名字> --choice <序号> [--note ...]                 # 回答当前卡片
-tw intent --task <名字> [--objective ...] [--add-constraint ...]     # 随时修订目标/约束
+tw intent --task <名字> [--objective ...] [--raw-requirement ...] [--add-constraint ...] [--add-exclusion ...] \
+          [--acceptance ...] [--scope-note ...] [--add-gap '<JSON>'] [--answer-gap <id> --answer "..."]  # 修订意图（确认卡重签）
+tw plan --task <名字> --packages '<JSON: [{id, model?, tier?, writable, done, dependsOn}]>'  # 拆包并物化逐包 ModelRef
 tw archive --task <名字>                                              # 用户明确要求归档时
 ```
 
 - 推进是 dispatch 侧的单一写者。**推进前先核授权争议**：收到未决范围/必要性/修法报告或看到未批准新增方向，停依赖续派，以普通最终消息请用户确认，不为了取卡调 dispatch。没有该争议时，DSH 用 `tw-dispatch` 开单/创建/登记，终端用 `dispatch-plan`；按返回卡行动，业务派单原样投递，不改边界。恢复与原卡限制见[范围争议暂停](references/scenarios.md#范围争议暂停)。
 - **工具分工**：Lead 用 `tw-dispatch` 派发正式波次成员；普通委派、用户指定档位、成员在任务期间开的只读助手用原生 `subagent`，继承历史用 `subagent_fork`。成员辅助须遵守上文成员入口的限定范围与禁止继续委托要求。`@junior|senior|expert` 保留，选档后按当前候选的精确 provider/model 调原生工具，`effort` 转为 `reasoning_effort`，缺档不得猜默认。原生目录未列出模型不代表禁止，可按 provider+model 精确查询；开关、允许列表与旧会话权限由宿主管理。
-- **配置来源**：当前 profile 的插件 Config 提供 tiers，同一 profile 跨项目共享且无项目覆盖。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 精确模型快照；`tw models` 查看当前 entry/profile 来源。
+- **配置来源**：当前 profile 的插件 Config 提供 tiers，只用于 `tw open` 角色初始化、`tw roles --resolve` 与普通委派候选；正式派发直接读任务级 roles / 包级 model，配置热变不自动改已有任务。宿主每次操作传 `TW_DSH_CONFIG` 调用快照；无宿主终端由调用方显式提供 `{tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>}` JSON，缺失时选模明确 unresolved。已派波次沿用 journal 的 `modelRef` 快照；`tw models` 查看当前 entry/profile 来源。
 - **续聊与深度**：使用支持续聊的原生后端，返回的 `subagentId` 可用于 `send_message`；参数以当前工具 schema 为准，不补造模式字段，旧版非会话回执不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。
-- 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/升档/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。
+- 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/角色模型调整/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。新任务 open 后先向用户呈现意图确认卡（原始需求/目标/约束/排除/范围/角色模型/逐包模型/gap），确认前不派发。
 - **Lead 规则与表达**：开工读 `team-work/rules/lead/README.md`；按当前时点读 `lead/decision/index.md`、`lead/dispatch/index.md`、`lead/progress/index.md`。工具在决定点、派发与在途、进展三个时点把对应规则与根包同源明晰必读段反吐到返回卡（决定点加审阅段）；成员卡不再有独立的明晰段，交卷摘要与表达要求由规则库条目承载。明晰段仍从根包 clarity 技能文件提取、无静态副本：公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)。不要求主动调用 clarity 技能；深看按工具给出的准确路径，不读取独立账本。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）

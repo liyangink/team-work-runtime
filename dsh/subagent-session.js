@@ -65,6 +65,23 @@ export function coldResumePrompt(read, prompt, promptFull = prompt) {
   return read.received ? { resume: "incremental", text: prompt } : { resume: "full", text: promptFull }
 }
 
+// —— ModelRef → 宿主 target 的唯一映射点（方案 §3.0）——
+// runtime 只处理 {provider, modelName, effort?, family?}；宿主字段是 {provider, model, reasoningEffort?}。
+// effort 缺省 = 不传该字段（宿主实测："" 被 assertNonEmpty 拒绝，"none" 被 UNSUPPORTED_REASONING_EFFORT 拒绝）。
+export function toHostTarget(ref) {
+  if (!ref || typeof ref !== "object" || Array.isArray(ref)) throw new Error("ModelRef 必须是对象")
+  if (typeof ref.provider !== "string" || !ref.provider.trim()) throw new Error("ModelRef.provider 必须是非空字符串")
+  if (typeof ref.modelName !== "string" || !ref.modelName.trim()) throw new Error("ModelRef.modelName 必须是非空字符串")
+  if (ref.effort !== undefined && (typeof ref.effort !== "string" || !ref.effort.trim() || ref.effort.trim() === "none")) {
+    throw new Error('ModelRef.effort 必须是非空字符串且不能为 "none"（不设置推理强度时省略 effort）')
+  }
+  return {
+    provider: ref.provider.trim(),
+    model: ref.modelName.trim(),
+    ...(ref.effort !== undefined ? { reasoningEffort: ref.effort.trim() } : {}),
+  }
+}
+
 // 成员消息是单块业务正文：派单卡自带规范段，绑定层不再追加规则块或缺失诊断句。
 // 冷收单按整块文本精确匹配，单块正文与历史多块日志都能判定本轮是否已收。
 function memberMessage(text) {
@@ -104,16 +121,24 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     const sent = await followupChild({ subagents, parent: input.exec?.agent, signal: input.exec?.signal }, id, followup.text)
     return sent.ok ? { ...sent, refollowed: true, resume: followup.resume, source: "reconciled" } : sent
   }
-  const target = input.target
-  if (!target || target.tier !== undefined || typeof target.provider !== "string" || !target.provider.trim() || typeof target.model !== "string" || !target.model.trim() || (target.effort !== undefined && (typeof target.effort !== "string" || !target.effort.trim()))) {
-    return failure("TW_SUB_TARGET_INVALID", "需要精确 target：{provider, model, effort?}；缺档时请修复插件 tiers 配置", id)
+  // 绑定层只收 runtime 的 ModelRef（内部映射为宿主 target）；historical 精确 target 仍接受以兼容旧调用方。
+  let target
+  if (input.modelRef !== undefined) {
+    try { target = toHostTarget(input.modelRef) } catch (error) {
+      return failure("TW_SUB_MODEL_REF_INVALID", "modelRef 无效：" + describe(error) + "；请在 open / tw roles / tw plan 中给出合法 ModelRef（effort 不设置时省略字段）", id)
+    }
+  } else target = input.target
+  if (!target || target.tier !== undefined || typeof target.provider !== "string" || !target.provider.trim() || typeof target.model !== "string" || !target.model.trim() || (target.reasoningEffort !== undefined && (typeof target.reasoningEffort !== "string" || !target.reasoningEffort.trim())) || (target.effort !== undefined && (typeof target.effort !== "string" || !target.effort.trim()))) {
+    return failure("TW_SUB_TARGET_INVALID", "需要精确 target：{provider, model, reasoningEffort?}；缺档时请修复插件 tiers 配置", id)
   }
+  // 兼容入口：旧调用方仍可传 target.effort；统一归一到宿主字段 reasoningEffort，缺省不传。
+  const hostEffort = target.reasoningEffort !== undefined ? target.reasoningEffort : target.effort
   let subagents, llm, resolved, maxDepth
   try {
     subagents = get("subagents"); llm = get("llm")
     if (typeof llm?.resolveCallConfig !== "function") return failure("TW_SUB_LLM_UNAVAILABLE", "llm.resolveCallConfig 不可用", id)
-    resolved = await llm.resolveCallConfig({ provider: target.provider, model: target.model, ...(target.effort ? { reasoningEffort: target.effort } : {}) })
-    if (!resolved || resolved.provider !== target.provider || resolved.model !== target.model || (target.effort !== undefined && resolved.reasoningEffort !== target.effort)) {
+    resolved = await llm.resolveCallConfig({ provider: target.provider, model: target.model, ...(hostEffort ? { reasoningEffort: hostEffort } : {}) })
+    if (!resolved || resolved.provider !== target.provider || resolved.model !== target.model || (hostEffort !== undefined && resolved.reasoningEffort !== hostEffort)) {
       return failure("TW_SUB_EXPLICIT_SELECTION_MISMATCH", "宿主未确认精确模型或显式 effort；未创建成员，请核对 tiers", id)
     }
     if ((typeof subagents?.startActivation !== "function" && typeof subagents?.startContinuable !== "function") || typeof subagents?.resolveMaxDepth !== "function") return failure("TW_SUB_SUBAGENTS_UNAVAILABLE", "subagents.startActivation（旧版 startContinuable）/resolveMaxDepth 不可用", id)
@@ -128,9 +153,12 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
     // 新版显式交给父级接收结果，旧版保留原 continuable 入口；不自行接管生命周期。
     const activation = typeof subagents.startActivation === "function"
     const create = activation ? subagents.startActivation : subagents.startContinuable
+    const request = { parent: input.exec.agent, prompt: memberMessage(input.promptFull?.trim() ? input.promptFull : input.prompt), agentOptions, maxDepth }
+    // DSH 0.2.2-rc.2 的 startActivation 使用顶层参数签名；0.2.1-rc.2 读 request 对象。
+    // 两个入口同时携带 request 与顶层 {parent,prompt,agentOptions,maxDepth}，兼容两版宿主；旧 startContinuable 只传 request。
     start = await create.call(subagents, { provider: deps.subagentProviderName ?? SUBAGENT_PROVIDER, label: input.description, childId: id,
-      request: { parent: input.exec.agent, prompt: memberMessage(input.promptFull?.trim() ? input.promptFull : input.prompt), agentOptions, maxDepth },
-      ...(activation ? { delivery: "parent" } : {}),
+      request,
+      ...(activation ? { parent: request.parent, prompt: request.prompt, agentOptions: request.agentOptions, maxDepth: request.maxDepth, delivery: "parent" } : {}),
       signal: input.exec.signal ?? new AbortController().signal })
   } catch (error) { return failure("TW_SUB_START_FAILED", "成员创建失败：" + describe(error) + "；保留映射，先核对同 ID 会话后重试", id) }
   const childId = start?.childId ?? id

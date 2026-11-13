@@ -3,13 +3,13 @@
 // 单独登记 mappings。本文件保留最小残留断言，防止标签写端被无意恢复。
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdtemp, readFile, access } from "node:fs/promises"
+import { mkdtemp, readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { tw } from "../runtime-v3/cli.mjs"
 
-// dispatch-plan 在派发点强制校验全局 tiers——本文件独立于 v3-fixtures，进程级装一份临时 settings。
+// open 期从调用快照解析三角色（roles 固化后派发零配置反查）——本文件独立于 v3-fixtures，进程级装一份临时快照。
 process.env.TW_DSH_CONFIG = JSON.stringify({ entryId: "team-work-dsh", profile: "profile-example", tiers: {
   junior: { provider: "provider-example", model: "model-junior" },
   senior: { provider: "provider-example", model: "model-senior" },
@@ -22,17 +22,23 @@ test("写端清理：cli 不再导出 tagLabel/persistTagHints（标签落盘链
   assert.equal(cli.persistTagHints, undefined)
 })
 
-test("派发不写 agents.json：dispatch-plan 落盘事实只在 journal（无 tagHints/pendingTags 键）", async () => {
+test("agents.json 只保留 mappings + roles：派发落盘事实只在 journal（无 tagHints/pendingTags/modelHints 键）", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tw-tag-"))
   const card = await tw(["open", "--name", "demo-t", "--objective", "o", "--entry", "code-review"], { projectRoot: root })
   assert.equal(card.ok, true)
+  // 新任务先确认意图，再派发（确认卡是 open 后的正常人工门）。
+  assert.equal((await tw(["decide", "--task", "demo-t", "--choice", "1"], { projectRoot: root })).ok, true)
   const plan = await tw(["dispatch-plan", "--task", "demo-t", "--writable", "R.md:code-review"], { projectRoot: root })
   assert.equal(plan.ok, true)
   assert.equal(plan.stop, null)
   assert.ok(plan.waves.length > 0)
-  const agentsFile = path.join(root, ".team-work", "tasks", "demo-t", "agents.json")
-  const existed = await access(agentsFile).then(() => true, () => false)
-  assert.equal(existed, false, "派发不再写 agents.json（登记唯一入口 = tw agent-map）")
+  const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "demo-t", "agents.json"), "utf8"))
+  assert.deepEqual(Object.keys(agents).sort(), ["mappings", "roles"], "agents.json 只保留 mappings + roles")
+  assert.deepEqual(agents.mappings, {}, "派发不写续派映射（登记唯一入口 = tw agent-map）")
+  assert.deepEqual(Object.keys(agents.roles).sort(), ["challenger", "expert", "owner"], "open 期固化三角色 ModelRef")
   const journal = await readFile(path.join(root, ".team-work", "tasks", "demo-t", "journal.jsonl"), "utf8")
-  assert.ok(journal.includes('"dispatched"'), "派发事实仍落 journal（modelHint 快照在 dispatched.detail 内）")
+  assert.ok(journal.includes('"dispatched"'), "派发事实仍落 journal（modelRef 快照在 dispatched.detail 内）")
+  const dispatched = JSON.parse(journal.trim().split("\n").find((line) => line.includes('"dispatched"')))
+  assert.ok(dispatched.detail.modelRef?.provider && dispatched.detail.modelRef?.modelName, "journal 快照带 modelRef")
+  assert.equal(dispatched.detail.modelHint, undefined, "新派发不再写 modelHint")
 })

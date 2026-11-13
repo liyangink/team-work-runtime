@@ -10,7 +10,7 @@ import test, { mock } from "node:test"
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
 import { resolveTiers, validateTierSettings, TIERS } from "../runtime-v3/dsh-map.mjs"
-import { FIX_WORKFLOW, FIX_POLICY, makeProject, caller, openTask, seedConvergedStage } from "./support/v3-fixtures.mjs"
+import { FIX_WORKFLOW, FIX_POLICY, makeProject, autoCaller, caller, openTask, seedConvergedStage } from "./support/v3-fixtures.mjs"
 
 const BASE_CONFIG = {
   entryId: "team-work-dsh", profile: "fixture-profile", tiers: {
@@ -88,7 +88,7 @@ test("调用快照：未知封套字段和继承来源不当成可信输入", as
   }
 })
 
-test("调用快照：特殊未知档位拒绝派发且不污染原型", async () => {
+test("调用快照：特殊未知档位在 open 期标 unresolved 且不污染原型；已固化 roles 的派发零配置反查", async () => {
   for (const key of ["__proto__", "constructor", "prototype", "legacy"]) {
     const tiers = JSON.parse('{"' + key + '": {"polluted":true}}')
     const resolved = await resolveTiers({ configSnapshot: { ...BASE_CONFIG, tiers } })
@@ -96,13 +96,17 @@ test("调用快照：特殊未知档位拒绝派发且不污染原型", async ()
     assert.match(resolved.warnings.join("\n"), /MAP_INVALID/)
     assert.ok(resolved.warnings.some((warning) => warning.includes(key)))
     const root = await makeProject()
-    const call = caller(root)
-    await openTask(root, "unknown-tier")
+    const call = autoCaller(root)
     await withEnvironment({ TW_DSH_CONFIG: JSON.stringify({ ...BASE_CONFIG, tiers }) }, async () => {
       const models = await call(["models"])
       assert.match(models.warnings.join("\n"), /MAP_INVALID/)
+      // open 期解析档位失败 → 角色标记 unresolved（不猜默认），确认卡不提供“确认开始”。
+      const opened = await call(["open", "--name", "unknown-tier", "--objective", "o", "--entry", "code-review"])
+      assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+      assert.equal(opened.choices.some((choice) => choice.grant === "accept-intake"), false)
       const plan = await call(["dispatch-plan", "--task", "unknown-tier", "--writable", "R.md:code-review", "--json"])
-      assert.equal(plan.stop, "blocked")
+      assert.equal(plan.stop, "awaiting-user", "未确认不派发")
+      // 派发前没有 roles 也没有确认 → 不会写 dispatched 事实
       const task = await loadTask(root, "unknown-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
       assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
     })
@@ -152,7 +156,7 @@ test("调用快照：旧 settings 文件与显式旧参数均不读取，环境�
     assert.equal(resolved.tiers.junior.model, "model-junior")
     assert.equal(resolved.profile, "snapshot-profile")
     const root = await makeProject()
-    const call = caller(root)
+    const call = autoCaller(root)
     const models = await call(["models"])
     assert.equal(models.profile, "snapshot-profile")
     assert.equal(Object.hasOwn(models, "file"), false)
@@ -170,7 +174,7 @@ test("dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全
   await mkdir(path.dirname(legacy), { recursive: true })
   const legacyContent = JSON.stringify({ tiers: { junior: { provider: "legacy-vendor", model: "legacy-model" } } })
   await writeFile(legacy, legacyContent)
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "plan-t")
 
   const plan = await call(["dispatch-plan", "--task", "plan-t", "--writable", "R.md:code-review", "--json"])
@@ -179,15 +183,17 @@ test("dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全
   assert.equal(plan.waves.length, 1)
   const wave = plan.waves[0]
   assert.equal(wave.role, "owner")
-  assert.equal(wave.modelHint.model, "model-junior")
-  assert.equal(wave.modelHint.source, "dsh-plugin-config")
+  assert.equal(wave.modelRef.provider, "vendor-junior")
+  assert.equal(wave.modelRef.modelName, "model-junior")
+  assert.equal(wave.modelSource, "roles")
   assert.deepEqual(plan.modelSettings, { source: "dsh-plugin-config", entryId: "team-work-dsh", profile: "fixture-profile" })
   assert.equal(await readFile(legacy, "utf8"), legacyContent, "遗留文件未被读取后覆盖或改写")
 
   const task = await loadTask(root, "plan-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const dispatched = task.journal.filter((event) => event.type === "dispatched")
   assert.equal(dispatched.length, 1)
-  assert.deepEqual(dispatched[0].detail.modelHint, wave.modelHint, "模型选择与 dispatch-plan 同一事实快照")
+  assert.deepEqual(dispatched[0].detail.modelRef, wave.modelRef, "模型选择与 dispatch-plan 同一事实快照")
+  assert.equal(dispatched[0].detail.modelSource, "roles")
   const again = await call(["dispatch-plan", "--task", "plan-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(again.stop, "wait-inflight", "在途波次不重复派发")
 })
@@ -195,17 +201,17 @@ test("dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全
 test("派发人读卡：显示实际 entry/profile 来源", async () => {
   const root = await makeProject()
   await openTask(root, "source-card")
-  const plan = await caller(root)(["dispatch-plan", "--task", "source-card", "--writable", "R.md:code-review"])
+  const plan = await autoCaller(root)(["dispatch-plan", "--task", "source-card", "--writable", "R.md:code-review"])
   assert.match(plan.human.join("\n"), /team-work-dsh/)
   assert.match(plan.human.join("\n"), /fixture-profile/)
 })
 
-test("调用快照热变：前波沿用快照，后波读取新配置且保留可选 effort", async () => {
+test("调用快照热变不再自动换模型：已有任务沿用 roles；tw roles --resolve 显式重解析后新波变化", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "hot-config")
   const first = await call(["dispatch-plan", "--task", "hot-config", "--writable", "R.md:code-review", "--json"])
-  const oldHint = first.waves[0].modelHint
+  const oldRef = first.waves[0].modelRef
   const changed = { ...BASE_CONFIG, profile: "updated-profile", tiers: {
     junior: { provider: "updated-vendor", model: "updated-junior" },
     senior: { provider: "updated-vendor", model: "updated-senior", effort: "high" },
@@ -214,44 +220,56 @@ test("调用快照热变：前波沿用快照，后波读取新配置且保留�
   await withEnvironment({ TW_DSH_CONFIG: JSON.stringify(changed) }, async () => {
     const waiting = await call(["dispatch-plan", "--task", "hot-config", "--json"])
     assert.equal(waiting.stop, "wait-inflight")
-    assert.deepEqual(waiting.inflight[0].modelHint, oldHint)
+    assert.deepEqual(waiting.inflight[0].modelRef, oldRef, "在途重建使用 journal 快照，不重解析配置")
     await writeFile(path.join(root, "R.md"), "报告")
     const delivered = await call(["deliver", "--task", "hot-config", "--key", first.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成报告", "--paths", "R.md"])
     assert.equal(delivered.accepted, true)
-    const next = await call(["dispatch-plan", "--task", "hot-config", "--json"])
-    assert.equal(next.waves[0].modelHint.model, "updated-senior")
-    assert.equal(next.waves[0].modelHint.effort, "high")
-    assert.equal(next.modelSettings.profile, "updated-profile")
+    // 配置热变不自动改任务 roles（§3.8）：tw roles 读取仍是 open 期固化的旧模型。
+    const staleRoles = await call(["roles", "--task", "hot-config"])
+    assert.equal(staleRoles.roles.challenger.modelName, "model-senior")
+    assert.equal(staleRoles.effortState.challenger, "omitted")
+    // 显式 tw roles --resolve 才更新基线（并重签确认卡，autoCaller 按用户确认继续）。
+    const resolved = await call(["roles", "--task", "hot-config", "--resolve"])
+    assert.equal(resolved.roles.challenger.modelName, "updated-senior")
+    assert.equal(resolved.roles.challenger.effort, "high")
+    const updated = await call(["dispatch-plan", "--task", "hot-config", "--json"])
+    assert.equal(updated.waves[0].modelRef.modelName, "updated-senior")
+    assert.equal(updated.waves[0].modelRef.effort, "high")
+    assert.equal(updated.modelSettings.profile, "updated-profile", "只读快照来源展示反映当前 profile")
     const task = await loadTask(root, "hot-config", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
     const dispatched = task.journal.filter((event) => event.type === "dispatched")
-    assert.deepEqual(dispatched[0].detail.modelHint, oldHint)
-    assert.equal(dispatched[1].detail.modelHint.model, "updated-senior")
+    assert.deepEqual(dispatched[0].detail.modelRef, oldRef)
+    assert.equal(dispatched[1].detail.modelRef.modelName, "updated-senior")
   })
 })
 
-test("旧 journal modelHint：配置变化或快照缺失都不重选已记录的精确模型", async () => {
+test("旧 journal modelHint：读取时映射为 ModelRef，配置变化或快照缺失都不重选已记录的精确模型", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "legacy-hint")
   const first = await call(["dispatch-plan", "--task", "legacy-hint", "--writable", "R.md:code-review", "--json"])
   const journalFile = path.join(root, ".team-work/tasks/legacy-hint/journal.jsonl")
   const events = (await readFile(journalFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
-  const recorded = { provider: "recorded-vendor", model: "recorded-model", source: "global-settings", effort: "low" }
-  events.find((event) => event.type === "dispatched").detail.modelHint = recorded
+  const dispatched = events.find((event) => event.type === "dispatched").detail
+  delete dispatched.modelRef
+  delete dispatched.modelSource
+  dispatched.modelHint = { provider: "recorded-vendor", model: "recorded-model", source: "global-settings", effort: "low", family: "recorded" }
   await writeFile(journalFile, events.map((event) => JSON.stringify(event)).join("\n") + "\n")
+  const recordedRef = { provider: "recorded-vendor", modelName: "recorded-model", effort: "low", family: "recorded" }
   for (const input of [JSON.stringify(BASE_CONFIG), undefined]) {
     await withEnvironment({ TW_DSH_CONFIG: input }, async () => {
       const waiting = await call(["dispatch-plan", "--task", "legacy-hint", "--json"])
       assert.equal(waiting.stop, "wait-inflight")
       assert.equal(waiting.inflight[0].dispatchKey, first.waves[0].dispatchKey)
-      assert.deepEqual(waiting.inflight[0].modelHint, recorded)
+      assert.deepEqual(waiting.inflight[0].modelRef, recordedRef, "历史 modelHint 映射为 ModelRef，不重写历史行")
+      assert.equal(waiting.inflight[0].modelSource, "legacy-journal")
     })
   }
 })
 
 test("平台无关操作：缺配置快照仍可开任务、查状态、交付和评审", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "deliver-without-config")
   const owner = await call(["dispatch-plan", "--task", "deliver-without-config", "--writable", "D.md:code-review", "--json"])
   await openTask(root, "review-without-config")
@@ -269,38 +287,44 @@ test("平台无关操作：缺配置快照仍可开任务、查状态、交付�
   })
 })
 
-test("派发波次固化精确模型快照", async () => {
+test("派发波次固化精确 ModelRef 快照", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "run-hint-t")
   const plan = await call(["dispatch-plan", "--task", "run-hint-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.stop, null)
-  const hint = plan.waves[0]?.modelHint
-  assert.ok(hint?.provider && hint?.model, "派发波次带 modelHint（调用快照配置快照）")
-  assert.equal(hint.source, "dsh-plugin-config")
+  const ref = plan.waves[0]?.modelRef
+  assert.ok(ref?.provider && ref?.modelName, "派发波次带 modelRef（open 期固化的角色模型）")
+  assert.equal(plan.waves[0].modelSource, "roles")
+  assert.equal(Object.hasOwn(plan.waves[0], "modelHint"), false, "waves 不再导出 modelHint")
   const task = await loadTask(root, "run-hint-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const dispatched = task.journal.filter((e) => e.type === "dispatched")
   assert.equal(dispatched.length, 1)
-  assert.equal(dispatched[0].detail.modelHint.provider, hint.provider, "journal dispatched 事实与派发波次同一快照")
-  assert.equal(dispatched[0].detail.modelHint.model, hint.model, "journal dispatched 事实与派发波次同一快照")
-  assert.equal(dispatched[0].detail.modelHint.source, hint.source, "journal dispatched 事实与派发波次同一快照")
+  assert.deepEqual(dispatched[0].detail.modelRef, ref, "journal dispatched 事实与派发波次同一快照")
+  assert.equal(dispatched[0].detail.modelSource, "roles")
 })
 
-test("dispatch-plan：无调用快照模型配置返回可恢复 blocked，且不写 dispatched 事实", async () => {
+test("open 期无调用快照模型配置 → 角色 unresolved；派发返回可恢复 ROLES_UNRESOLVED，不写 dispatched 事实", async () => {
   const root = await makeProject()
-  const call = caller(root)
-  await openTask(root, "no-models")
+  const call = autoCaller(root)
   await setConfig({ ...BASE_CONFIG, tiers: {} })
   try {
+    const opened = await call(["open", "--name", "no-models", "--objective", "o", "--entry", "code-review"])
+    assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
     const plan = await call(["dispatch-plan", "--task", "no-models", "--writable", "R.md:code-review", "--json"])
     assert.equal(plan.ok, true)
-    assert.equal(plan.stop, "blocked")
-    assert.equal(plan.card.status, "blocked")
-    assert.equal(plan.card.next, "configure-models")
-    assert.deepEqual(plan.card.modelSettings, { source: "dsh-plugin-config", entryId: "team-work-dsh", profile: "fixture-profile" })
-    assert.equal(plan.card.blockers[0].code, "MODEL_CONFIG_UNRESOLVED")
-    assert.match(plan.card.blockers[0].recovery, /team-work-dsh\.tiers/)
-    const task = await loadTask(root, "no-models", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    assert.equal(plan.stop, "awaiting-user", "意图确认卡未确认（角色 unresolved 时不提供确认开始）")
+    // 模拟旧任务直接进入派发（无确认卡）：用 initTask 构造的角色缺失状态验证可恢复阻塞。
+    const bare = await makeProject()
+    const { initTask } = await import("../runtime-v3/store.mjs")
+    await initTask({ projectRoot: bare, name: "bare-t", objective: "o", entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd", stages: ["code-review"] })
+    const barePlan = await autoCaller(bare)(["dispatch-plan", "--task", "bare-t", "--writable", "R.md:code-review", "--json"])
+    assert.equal(barePlan.stop, "blocked")
+    assert.equal(barePlan.card.status, "blocked")
+    assert.equal(barePlan.card.next, "configure-model")
+    assert.equal(barePlan.card.blockers[0].code, "ROLES_UNRESOLVED")
+    assert.match(barePlan.card.blockers[0].recovery, /tw roles --resolve|team-work-dsh\.tiers/)
+    const task = await loadTask(bare, "bare-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
     assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
   } finally {
     await setConfig(BASE_CONFIG)
@@ -325,7 +349,7 @@ test("dispatch-plan：门过即跨阶段推进并派发下一阶段首波", asyn
   ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
   const policy = { maxAutonomousRounds: 3, scenes: { research: { core: false }, "code-review": { core: false } } }
   const root = await makeProject({ workflow, policy })
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "adv-t", { entry: null })
   const task = await loadTask(root, "adv-t", { workflow, policy })
   const at = new Date().toISOString()
@@ -334,12 +358,12 @@ test("dispatch-plan：门过即跨阶段推进并派发下一阶段首波", asyn
   const plan = await call(["dispatch-plan", "--task", "adv-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(plan.stop, null)
   assert.equal(plan.stage, "code-review")
-  assert.equal(plan.waves[0].modelHint.model, "model-junior")
+  assert.equal(plan.waves[0].modelRef.modelName, "model-junior")
 })
 
 test("models 只读调用快照来源；init 只安装 skill，不创建项目 dsh.json", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   const dshFile = path.join(root, ".team-work", "platform", "dsh.json")
   const models = await call(["models"])
   assert.equal(models.ok, true)
@@ -550,7 +574,7 @@ test("可选 effort：调用快照候选条目透传", async () => {
 
 test("verdict 派单必须内嵌工具调用指令", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "vd-t")
   const first = await call(["dispatch-plan", "--task", "vd-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
@@ -565,7 +589,7 @@ test("verdict 派单必须内嵌工具调用指令", async () => {
 
 test("dispatch-plan stop:blocked 的 blockers 保持对象数组", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "blk-t")
   const owner = await call(["dispatch-plan", "--task", "blk-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
@@ -587,14 +611,14 @@ test("dispatch-plan stop:blocked 的 blockers 保持对象数组", async () => {
 
 test("agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 --model-hint", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "snapshot-t")
   const plan = await call(["dispatch-plan", "--task", "snapshot-t", "--writable", "R.md:code-review", "--json"])
-  assert.ok(plan.waves[0].modelHint?.provider && plan.waves[0].modelHint?.model, "dispatch-plan 仍输出 modelHint（tw-dispatch 的创建来源）")
+  assert.ok(plan.waves[0].modelRef?.provider && plan.waves[0].modelRef?.modelName, "dispatch-plan 输出 modelRef（tw-dispatch 的创建来源，经 toHostTarget 映射）")
   const mapped = await call(["agent-map", "--task", "snapshot-t", "--key", plan.waves[0].dispatchKey, "--agent", "child-a"])
   assert.equal(mapped.ok, true)
   assert.equal(mapped.agent, "child-a")
-  assert.equal(mapped.modelHint, undefined, "agent-map 不再返回模型快照（模型选择由 tw-dispatch 创建时直接指定）")
+  assert.equal(mapped.modelHint, undefined, "agent-map 不返回模型快照（模型在 roles/packages 固化，tw-dispatch 按 modelRef 创建）")
   const agents = JSON.parse(await readFile(path.join(root, ".team-work", "tasks", "snapshot-t", "agents.json"), "utf8"))
   assert.equal(agents.mappings[plan.waves[0].dispatchKey], "child-a")
   assert.equal(agents.modelHints, undefined, "agents.json 不再落盘 modelHints")
@@ -607,7 +631,7 @@ test("agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 
 
 test("TW_CMD 覆盖派单内的成员工具调用指令", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "cmd-t")
   const previous = process.env.TW_CMD
   process.env.TW_CMD = "twx"
@@ -622,7 +646,7 @@ test("TW_CMD 覆盖派单内的成员工具调用指令", async () => {
 
 test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", async () => {
   const root = await makeProject()
-  const call = caller(root)
+  const call = autoCaller(root)
   await openTask(root, "idem-t")
   const plan = await call(["dispatch-plan", "--task", "idem-t", "--writable", "R.md:code-review", "--json"])
   await writeFile(path.join(root, "R.md"), "x", "utf8")
@@ -635,12 +659,130 @@ test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", as
 
 test("help：调用快照模型来源与全部命令在场", async () => {
   const help = await tw(["help"])
-  for (const command of ["open", "run", "dispatch-plan", "decide", "intent", "route", "gate", "models", "init", "restore", "archive", "deliver", "review"]) {
+  for (const command of ["open", "roles", "plan", "run", "dispatch-plan", "decide", "intent", "route", "gate", "models", "init", "restore", "retire", "migrate", "archive", "deliver", "review"]) {
     assert.ok(help.commands[command], command)
   }
+  assert.match(help.commands.roles, /agents\.json\.roles/, "roles 是角色模型唯一读写入口")
+  assert.match(help.commands.plan, /ModelRef/, "plan 产出逐包 ModelRef")
   const notes = help.notes.join("\n")
   assert.match(notes, /team-work-dsh\.tiers/)
   assert.match(notes, /TW_DSH_CONFIG/)
   assert.match(notes, /entryId.*profile/)
+  assert.match(notes, /modelRef|ModelRef/, "帮助说明模型数据链")
+  assert.match(notes, /意图确认卡/, "帮助说明 open 后的确认卡")
   assert.doesNotMatch(notes, /settingsFile|DSH_SETTINGS|settings\.yaml/)
+  assert.doesNotMatch(notes, /升档审批|权重倍数/)
+})
+
+test("policy.roles.expert 缺失 → expert unresolved（不再硬编码 expert 字面量），补配置后 tw roles --resolve 恢复", async () => {
+  const policy = {
+    maxAutonomousRounds: 3, costWeights: { junior: 1, senior: 10, expert: 50 },
+    riskTiers: { critical: "expert", high: "senior" },
+    roles: { owner: "junior", challenger: "senior" },
+    scenes: { "code-review": { core: true } },
+  }
+  const root = await makeProject({ policy })
+  const call = autoCaller(root)
+  const opened = await call(["open", "--name", "no-expert", "--objective", "o", "--entry", "code-review"])
+  assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+  assert.deepEqual(opened.unresolved, ["expert"], "roles.expert 缺失即 unresolved")
+  assert.equal(opened.choices.some((choice) => choice.grant === "accept-intake"), false, "unresolved 不提供确认开始")
+  const waiting = await call(["dispatch-plan", "--task", "no-expert", "--writable", "R.md:code-review"])
+  assert.equal(waiting.stop, "awaiting-user")
+
+  // 补齐 policy.roles.expert → --resolve 重建（autoCaller 按用户确认继续）
+  const policyFile = path.join(root, "team-work/policies/default.json")
+  const current = JSON.parse(await readFile(policyFile, "utf8"))
+  current.roles.expert = "expert"
+  await writeFile(policyFile, JSON.stringify(current))
+  const resolved = await call(["roles", "--task", "no-expert", "--resolve"])
+  assert.equal(resolved.roles.expert.modelName, "model-expert")
+  const d = await call(["dispatch-plan", "--task", "no-expert", "--writable", "R.md:code-review", "--json"])
+  assert.equal(d.stop, null)
+  assert.equal(d.waves[0].modelRef.modelName, "model-junior")
+})
+
+test("派发零配置反查：open 后调用快照损坏/变化都不影响已固化 roles 的派发", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "zero-parse-t")
+  await withEnvironment({ TW_DSH_CONFIG: "{invalid" }, async () => {
+    const plan = await call(["dispatch-plan", "--task", "zero-parse-t", "--writable", "R.md:code-review", "--json"])
+    assert.equal(plan.stop, null, "派发不依赖调用快照解析")
+    assert.equal(plan.waves[0].modelRef.modelName, "model-junior", "直接用 open 期固化的 roles")
+    assert.equal(plan.waves[0].modelSource, "roles")
+    assert.ok(plan.warnings.some((warning) => /TW_DSH_CONFIG/.test(warning)), "只读快照仍报告解析警告，但不参与派发取值")
+  })
+})
+
+test("旧任务 roles 迁移：owner 取历史实际派发模型（不随新配置换），无历史角色才按 policy 解析", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, "migrate-roles")
+  const first = await call(["dispatch-plan", "--task", "migrate-roles", "--writable", "R.md:code-review", "--json"])
+  const oldOwner = first.waves[0].modelRef
+  // 模拟旧任务：agents.json 只有 mappings（roles 字段缺失）
+  const agentsFile = path.join(root, ".team-work/tasks/migrate-roles/agents.json")
+  await writeFile(agentsFile, JSON.stringify({ mappings: {} }))
+  await writeFile(path.join(root, "R.md"), "x")
+  await call(["deliver", "--task", "migrate-roles", "--key", first.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  const changed = { ...BASE_CONFIG, profile: "updated-profile", tiers: {
+    junior: { provider: "new-vendor", model: "new-junior" },
+    senior: { provider: "new-vendor", model: "new-senior" },
+    expert: { provider: "new-vendor", model: "new-expert" },
+  } }
+  await withEnvironment({ TW_DSH_CONFIG: JSON.stringify(changed) }, async () => {
+    // 迁移先于确认门：roles 已按历史/新配置重建，确认卡因 roles 变化重签。
+    const gated = await call(["dispatch-plan", "--task", "migrate-roles", "--json"])
+    assert.equal(gated.stop, "awaiting-user")
+    const migrated = JSON.parse(await readFile(agentsFile, "utf8"))
+    assert.equal(migrated.roles.owner.modelName, oldOwner.modelName, "owner 取历史实际派发模型，不随新配置换")
+    assert.equal(migrated.roles.challenger.modelName, "new-senior", "无历史的 challenger 按当前快照解析")
+    assert.equal(migrated.mappings.constructor, Object, "mappings 保留")
+    const task = await loadTask(root, "migrate-roles", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+    const initialized = task.journal.filter((event) => event.type === "roles-initialized").at(-1)
+    assert.equal(initialized.detail.source, "migrated")
+    await call(["decide", "--task", "migrate-roles", "--choice", "1"])
+    const next = await call(["dispatch-plan", "--task", "migrate-roles", "--json"])
+    assert.equal(next.stop, null)
+    assert.equal(next.waves[0].modelRef.modelName, "new-senior")
+  })
+})
+
+test("E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved，档位溯源不伪报来源", async () => {
+  const policy = { maxAutonomousRounds: 3, roles: {}, scenes: { "code-review": { core: true } } }
+  const root = await makeProject({ policy })
+  const call = autoCaller(root)
+  const opened = await call(["open", "--name", "no-tiers", "--objective", "o", "--entry", "code-review"])
+  assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+  assert.deepEqual(opened.unresolved, ["owner", "challenger", "expert"], "缺角色默认档不再用 junior/senior/expert 字面量补齐")
+  const roles = await call(["roles", "--task", "no-tiers"])
+  assert.deepEqual(roles.unresolved, ["owner", "challenger", "expert"])
+  for (const detail of roles.details) {
+    assert.match(detail.tierProvenance ?? "", /^unresolved：/, "档位溯源必须如实标 unresolved：" + detail.role)
+  }
+  const plan = await call(["dispatch-plan", "--task", "no-tiers", "--writable", "R.md:code-review"])
+  assert.equal(plan.stop, "awaiting-user", "未确认的意图卡先静止（角色 unresolved 不提供确认开始）")
+  assert.equal(plan.card.choices.some((choice) => choice.grant === "accept-intake"), false)
+
+  // 旧任务（无 intake 卡）直接派发：缺角色档位返回可恢复 blocked，不猜默认模型。
+  const bare = await makeProject({ policy })
+  const { initTask } = await import("../runtime-v3/store.mjs")
+  await initTask({ projectRoot: bare, name: "bare-no-tiers", objective: "o", entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd", stages: ["code-review"] })
+  const blocked = await autoCaller(bare)(["dispatch-plan", "--task", "bare-no-tiers", "--writable", "R.md:code-review"])
+  assert.equal(blocked.stop, "blocked", "缺角色档位时不派发")
+  assert.equal(blocked.card.blockers[0].code, "ROLES_UNRESOLVED")
+  assert.match(blocked.card.blockers[0].message, /roles/)
+})
+
+
+test("E4：stop 卡路径不读取配置快照；配置快照只在派发计划展示时按需读取", async () => {
+  const root = await makeProject()
+  const raw = caller(root)
+  await raw(["open", "--name", "lazy-config-t", "--objective", "o", "--entry", "code-review"])
+  const before = await withEnvironment({ TW_DSH_CONFIG: "{invalid" }, async () => raw(["dispatch-plan", "--task", "lazy-config-t", "--writable", "R.md:code-review"]))
+  assert.equal(before.stop, "awaiting-user", "未确认意图卡先静止")
+  assert.equal(before.warnings, undefined, "stop 路径不依赖 resolveTiers（无配置警告）")
+  const models = await withEnvironment({ TW_DSH_CONFIG: "{invalid" }, async () => raw(["models"]))
+  assert.ok(models.warnings.some((warning) => /TW_DSH_CONFIG/.test(warning)), "tw models 仍显式报告快照问题")
 })

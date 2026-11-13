@@ -4,6 +4,8 @@
 
 ## v3 里程碑（工具中心重写）
 
+- **1.1.5 派发成本、极简角色/包模型实例与初期意图确认门已完成，版本升级并安装到本机**：按用户批准的 [`dispatch-intent-optimization-plan.md`](dispatch-intent-optimization-plan.md)（SHA-256 `04ab622fef47cf43c9ea587e011b70ca8a86c98ee1e22a34e62c20ad8e381628`），默认档位只取 `team-work/policies/default.json`（含 `roles` 兜底段），清除选模链字面量猜档与 `policy/kernel.mjs` 死常量；定义 `ModelRef`（`provider`/`modelName`/`effort?`/`family?`，未设 `effort` 省略字段、禁 `""`/`"none"`），`agents.json` 极简保留 `{mappings, roles}`，`packages.json` 逐包物化 `model: ModelRef`，派发期直接消费 `pkg.model ?? roles[role]` 零配置反查，绑定层集中 `toHostTarget` 单点映射并同时携带顶层参数与 `request` 兼容 DSH `0.2.1-rc.2`/`0.2.2-rc.2` `startActivation`；新增 `tw roles`（只读/`--set`/`--clear`/`--resolve`）；`tw open` 签发 `intake-approval` 确认门（稳定指纹仅计算 `{intent, roles, packages}`，`tw plan` 期间放行并自动重签，未解析角色以 `INTAKE_ROLES_UNRESOLVED` 阻止确认）；续派模型变更签发 `requiresFreshSession` 卡（`keep-session` 持久绑定、`retire-and-recreate` 写 `session-reset` 事件并在 `continuationPrevKey` 加 seq 边界强制新建会话、`rollback` 回滚）；彻底删除独立升档审批卡并将历史未决 `escalation-*` 卡自动按 `decided:superseded` 收口；合入 Lead 汇报对齐认知 gap 规则。隔离测试套件 342 项（334 pass / 0 fail / 8 skip）与本机 DSH `0.2.2-rc.2` 接缝测试 83/83 全部通过，Challenger 与 Expert 终审均 `accept`。
+
 - **独立 clarity 技能源文纳入维护**：`skills/clarity/` 保存技能入口、改写示例和界面元数据，作为全局安装副本的维护源；内容沿用已完成两路交叉审核的版本。现有 Runtime 派单继续使用既有明晰规则。
 
 - **1.1.4 本地安装完成，待体验**：按用户批准，根包版本升至 1.1.4，DSH 加载范围改为 `>=0.2.0-rc.2 <0.3.0-0`；允许从 0.2.0-rc.2 起的 0.2 系列，明确排除 0.3 预发布版。允许加载不等于全版本已验证，隔离宿主实测仍只有 0.2.0-rc.2 与 0.2.1-rc.2。宿主测试入口改用当前 manifest 与官方兼容检查，不再以已测双版名单阻挡后续补丁验证；范围边界测试中的未发布版本号仅作规则输入。两个隔离宿主完整回归均 294/294、零失败零跳过，源码独立复核与 diff 检查通过。

@@ -14,13 +14,25 @@ import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFinge
 import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf } from "./waves.mjs"
 import { registerDelivery, registerReview } from "./intake.mjs"
 import { lockedWorkflowContract, resolveMemberRules, composeMemberRules, resolveLeadRules, createClarityGuidanceReader, requiredClarityText } from "./rules.mjs"
-import { TIERS, resolveTiers, computeModelHint } from "./dsh-map.mjs"
+import { TIERS, resolveTiers, computeModelHint, normalizeModelRef, modelRefFromHint, modelRefsEqual } from "./dsh-map.mjs"
+import { digestValue } from "./domain/digests.mjs"
 import { writableMatch, writablePathsOverlap } from "./domain/writable.mjs"
 
 function collectList(argv, flag) {
   const out = []
   for (let i = 0; i < argv.length; i += 1) if (argv[i] === `--${flag}`) out.push(argv[i + 1])
   return out.flatMap((v) => String(v).split(",")).map((s) => s.trim()).filter(Boolean)
+}
+
+// 可重复的文本参数（不按逗号切分）：open 的约束/排除/范围/验收/gap、intent 的同名增补、roles 的 --set。
+function collectFlags(argv, flag) {
+  const out = []
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] !== `--${flag}`) continue
+    const value = argv[i + 1]
+    if (value !== undefined) out.push(value)
+  }
+  return out
 }
 
 function parseJsonArg(value, label) {
@@ -84,6 +96,15 @@ function fixHint(code) {
     RETIRE_SETTLED_WAVE: "该波已全部交付（已结波），无需作废；要解除未交付在途请核对 waveId（run 卡片列出当前未结波）",
     LOCK_UNAVAILABLE: "任务锁被并发写者占用（成员交付/Lead 推进同时进行）：等几秒原样重试同一命令即可；崩溃进程的锁会被自动回收",
     LOCK_CORRUPT: "任务锁读取异常：崩溃残留的损坏锁会在约 10 秒后自动回收；持续失败且确认无并发写者时，可手动删除任务目录 locks/task.lock",
+    INTAKE_UNCONFIRMED: "意图确认未完成：调 tw-dispatch（或 tw dispatch-plan）重签确认卡，decide 确认后再派发",
+    INTAKE_FINGERPRINT_STALE: "意图/角色/包模型在确认后发生变化：调 tw-dispatch 重签确认卡后重新 decide",
+    INTAKE_ROLES_UNRESOLVED: "角色模型仍有 unresolved：补齐 DSH 当前 profile 的 team-work-dsh.tiers（tw models 查看）后 tw roles --resolve；unresolved 时不能确认开始",
+    ROLES_CORRUPT: "agents.json 损坏：tw roles --resolve 重建角色模型（损坏内容无法保留时历史映射丢失，续派按 fresh 重建）",
+    ROLES_UNRESOLVED: "角色模型未解析：tw roles 查看 unresolved 清单，补齐 team-work-dsh.tiers 后 tw roles --resolve，或 tw roles --set <role>=<provider>/<model>[@<effort>]",
+    PACKAGE_MODEL_UNRESOLVED: "包缺已固化模型：tw plan 为每包给 model（或省略以复用 roles.owner），或先 tw roles --resolve",
+    MODEL_REF_INVALID: "ModelRef 只接受 {provider, modelName, effort?, family?}；effort 不设置时省略字段（禁止 \"\" 与 \"none\"）",
+    REQUIRES_FRESH_SESSION: "已有会话不可热替换模型：按换模型确认卡选择 保留原会话 / 重开会话 / 回滚 roles",
+    PLAN_MODEL_UNRESOLVED: "包级模型解析失败：补齐 team-work-dsh.tiers 后重试，或为包显式给 model",
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
@@ -288,9 +309,13 @@ function parseWritableEntry(entry) {
 // 包波必须同包同角色——全局放宽会让包2 respond 误继承包1 的 agent、续错会话。
 // 消费方：dispatch-plan 的 waves 导出（expectedAgentId）与 wait-inflight 兜底重建（§7.3）共用。
 function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
+  // 会话重置边界（§3.6）：最近一次同 role+package 的 session-reset seq 之前的映射一律忽略——
+  // 选"作废当前波、重开会话"后，更早已结波映射不得把续派拉回旧会话（否则新模型永远用不上）。
+  const resetSeq = latestSessionResetSeq(journal, d)
   for (let i = journal.length - 1; i >= 0; i -= 1) {
     const e = journal[i]
     if (e.type === 'stage-advanced') break
+    if (resetSeq >= 0 && (e.seq ?? -1) <= resetSeq) break
     if (e.type !== 'dispatched') continue
     const detail = e.detail
     if (detail.key === d.key) continue
@@ -300,6 +325,19 @@ function continuationPrevKey({ journal, agentMaps, excludedKeys }, d) {
     if (agentMaps[detail.key]) return detail.key
   }
   return null
+}
+
+// 最近一次会话重置事件的 seq（同角色；包波同包，无包波匹配 package=null 的重置）。
+function latestSessionResetSeq(journal, d) {
+  let seq = -1
+  for (const e of journal) {
+    if (e.type !== 'session-reset') continue
+    if (e.detail?.role !== d.role) continue
+    if ((e.detail?.package ?? null) !== (d.package ?? null)) continue
+    const current = e.seq ?? -1
+    if (current > seq) seq = current
+  }
+  return seq
 }
 
 // 成员规则解析（规则库 team-work/rules，见 rules.mjs）：按 role×teamScene 合成卡片三段文本。
@@ -320,8 +358,8 @@ async function memberRulesText({ projectRoot, workflow, teamScene, roles }) {
 // 在途派单重建（F3/F4）：当前未结波中尚无 report 的派发，重建完整派单文本（统一走 waves.inflightBatch）。
 // §7.3 兜底三字段（dispatch 自身崩溃窗口的恢复事实，由 runtime 锁内投影——绑定层不直读账本）。
 // 调用方约束：必须在任务锁内调用（registered 查 agents.json 与 journal 读取要求同一临界区）。
-// - modelHint：journal dispatched 快照回填；老 journal 无快照时按重建 tier 从本次调用快照解析降级
-//   （§7.5.7 降级链）；仍不可解析置 modelHintUnresolved（消费方不得据此创建，指 tw retire --wave 回收）；
+// - modelRef：journal dispatched 快照回填（历史 modelHint 读取时映射）；无快照时按文件 roles/packages 取值；
+//   仍不可解析置 modelRefUnresolved（消费方不得据此创建，指 tw retire --wave 回收）；
 // - expectedAgentId：仅续派条目——continuationPrevKey 回溯老 key 查 mappings；
 // - promptFull：仅续派条目——全量 prompt 变体（C②：断链 fresh 重建/空壳补发用，绑定层只选用不拼装）；
 // - registered：锁内查 mappings 该 key 有无对应代理（tw-dispatch 判定链的判定事实；
@@ -339,31 +377,27 @@ async function inflightDispatches(projectRoot, task, stageId) {
   })
   // agents.json 缺失 = 零登记事实（registered=false，补派安全）；损坏 = 判定事实不可得（registered
   // 字段降级为缺失，tw-dispatch 透传不补派——宁透传不误派）。
-  let mappings = {}
-  let registryCorrupt = null
-  try {
-    mappings = ((await readJson(path.join(task.root, "agents.json"), { allowMissing: true })) ?? {}).mappings ?? {}
-  } catch (error) {
-    registryCorrupt = String(error?.message ?? error)
-  }
+  const registry = await readRegistry(task)
+  const mappings = registry.mappings
+  const registryCorrupt = registry.corrupt
+  const roles = normalizeRoleEntries(registry.roles).roles
   const excludedKeys = supersededKeys(task.journal)
-  const resolvedTiers = await resolveTiers()
   return inflight.open.map((d) => {
-    const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, memberRules.get(d.role) ?? "").dispatch
-    // modelHint 回填降级链：journal 快照 → 按重建 tier 从调用快照解析 → 不可解析标记（指 retire）
-    let modelHint = d.modelHint && d.modelHint.provider && d.modelHint.model ? d.modelHint : null
-    let modelHintUnresolved = false
-    if (!modelHint) {
-      const hint = computeModelHint(resolvedTiers.tiers[card.tier], [])
-      if (hint?.provider && hint?.model) modelHint = hint
-      else modelHintUnresolved = true
+    // 模型投影：journal 已记录的 ModelRef（历史 modelHint 读取时映射）→ 文件里的 pkg.model ?? roles[role]；
+    // 仍不可解析置 modelRefUnresolved（消费方不得据此创建，指 tw retire --wave 回收）。
+    let modelRef = refFromDispatchDetail(d)
+    let modelSource = modelRef ? (d.modelRef ? d.modelSource ?? "roles" : "legacy-journal") : null
+    if (!modelRef) {
+      const fallback = modelRefForDispatch(task, roles, d.role, d.package ?? null)
+      if (!fallback.error) { modelRef = fallback.modelRef; modelSource = fallback.source }
     }
+    const card = dispatchCard({ ...task, policy: task.policy }, stageDef, { kind: d.kind, role: d.role, round: d.round, ...(d.scope ? { scope: d.scope } : {}) }, { key: d.key, package: d.package ?? null, round: d.round, continuation: d.continuation, writable: d.writable ?? [], waveId: d.waveId ?? null }, memberRules.get(d.role) ?? "", modelRef ? { modelRef, source: modelSource } : null).dispatch
     const prevKey = d.continuation ? continuationPrevKey({ journal: task.journal, agentMaps: mappings, excludedKeys }, d) : null
     return {
       ...card,
       dispatchKey: card.key,  // D4：输出层补 dispatchKey（与 dispatch-plan waves[] 字段统一；key 字段保留兼容）
-      ...(modelHint ? { modelHint } : {}),
-      ...(modelHintUnresolved ? { modelHintUnresolved: true } : {}),
+      ...(modelRef ? { modelRef, modelSource } : {}),
+      ...(modelRef ? {} : { modelRefUnresolved: true }),
       ...(d.continuation && prevKey && mappings[prevKey] ? { expectedAgentId: mappings[prevKey] } : {}),
       // mappedAgentId：该 key 已登记的 childId 值（判定链四态用：registered=true ≠ 子代理存在，
       // 消费方按四态处置——活→等待/冷归属一致→冷唤醒/异主→接管冲突/无记录→同 id 重建；机器防双发的事实源，P4 投影）
@@ -374,34 +408,583 @@ async function inflightDispatches(projectRoot, task, stageId) {
   })
 }
 
-// 档位序与 risk 升档（v3.2）：risk 由用户在 open/intent 给出，仅升 owner 档（challenger/expert 不受影响）
+// ── 档位、ModelRef 与任务角色/包级模型（方案 §3；派发期零配置反查）──────────────────
+// roles 在 open 一次性解析并写入 agents.json，tw roles 显式更新；packages[].model 在 plan 物化；
+// 派发只读 pkg.model ?? roles[role]，不再在派发期解析 tier 配置。档位只用于初始化与展示溯源。
 const TIER_RANK = { junior: 1, senior: 2, expert: 3 }
-// 档位计算（pre-phase3 §A）：实际档 = max(包 tier ?? 场景默认, riskTiers[risk])
-function ownerTierFor(task, sp, pkg = null) {
+const ROLE_KEYS = ["owner", "challenger", "expert"]
+const INTAKE_GATE = "intake-approval"
+
+function ownerTierWithRisk(task, sp) {
   const base = sp.ownerTier
-  const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
-  // risk 语义修正（用户裁决）：risk 不再无差别抬全部包——仅当包未显式定 tier 时作为兜底抬档；
-  // 包有显式 tier = Lead 的包级判断优先（risk 任务里的外围机械包保持默认档）。
-  if (pkgTier) return pkgTier
-  const up = task.policy?.riskTiers?.[task.intent?.risk]
+  const up = task?.policy?.riskTiers?.[task?.intent?.risk]
+  if (!base) return up ?? null // 场景与 roles 都缺时，riskTiers 仍是显式配置；否则保持 null（unresolved）
   return up && (TIER_RANK[up] ?? 0) > (TIER_RANK[base] ?? 0) ? up : base
 }
-// 升档审批判定（C 触发条件）：包 tier 高于场景默认（直接比较）。
-// risk=critical/high 且包未显式定 tier 的升档免审批——用户在 open 时已知情授权，不重复打扰。
-function isEscalatedTier(task, sp, pkg) {
-  const pkgTier = (task.packages ?? []).find((p) => p.id === pkg)?.tier
-  return Boolean(pkgTier && (TIER_RANK[pkgTier] ?? 0) > (TIER_RANK[sp.ownerTier] ?? 0))
+
+// 展示与权重用的角色档位（不再读包 tier；包级只存具体 ModelRef）。缺配置时明确 unresolved，
+// 不再用 junior/expert 字面量掩盖配置缺口。
+function roleTierFor(task, sp, role) {
+  if (role === "owner") return ownerTierWithRisk(task, sp) ?? "unresolved"
+  if (role === "challenger") return sp.challengerTier ?? "unresolved"
+  return sp.expertTier ?? "unresolved"
 }
-// 升档批准指纹（Expert 裁决 r2 幽灵复活封堵 + 返工终版 F-2 扩字段）：授权对象 = 完整包配置序列化
-//（id+tier+writable+done+dependsOn——re-plan 改任何包配置维度都使旧批准失效）。签发、批准落盘、
-// 幂等查找、decide 校验四处共用同一指纹；历史批准记录无该字段视为失效（多问一次优于误授权）。
-// 排序保证同配置不同书写顺序同指纹；纯函数（四处同源，防漂移）。
-function escalationFingerprint(task) {
-  return JSON.stringify(
-    (task.packages ?? [])
-      .map((p) => ({ id: p.id, tier: p.tier ?? null, writable: p.writable ?? [], done: p.done ?? [], dependsOn: p.dependsOn ?? [] }))
-      .sort((a, b) => (a.id < b.id ? -1 : 1)),
-  )
+
+// 档位溯源只报真实来源（E3）：场景、roles 兜底、risk 覆盖逐项记录；缺配置如实标 unresolved，
+// 不得伪报 "policy.roles.owner=..."。角色模型来源是 journal roles-initialized/modelRef，不在此。
+function tierProvenanceOf(task, policy, stageDef, role) {
+  const sceneId = stageDef?.teamScene ?? "implementation"
+  const scene = policy?.scenes?.[sceneId] ?? {}
+  const risk = task?.intent?.risk
+  const up = policy?.riskTiers?.[risk]
+  const field = role === "owner" ? "ownerTier" : role === "challenger" ? "challengerTier" : null
+  const sceneTier = field ? scene[field] ?? null : null
+  const roleTier = role === "owner" ? policy?.roles?.owner ?? null : role === "challenger" ? policy?.roles?.challenger ?? null : policy?.roles?.expert ?? null
+  const base = sceneTier ?? roleTier
+  const parts = []
+  if (sceneTier) parts.push("scene." + sceneId + "." + field + "=" + sceneTier)
+  else if (roleTier) parts.push("policy.roles." + role + "=" + roleTier)
+  if (role === "owner" && up && base && (TIER_RANK[up] ?? 0) > (TIER_RANK[base] ?? 0)) parts.push("policy.riskTiers." + risk + "=" + up)
+  else if (role === "owner" && up && !base) parts.push("policy.riskTiers." + risk + "=" + up)
+  if (!parts.length) {
+    return field
+      ? "unresolved：scene." + sceneId + "." + field + " 与 policy.roles." + role + " 均缺失"
+      : "unresolved：policy.roles." + role + " 缺失"
+  }
+  return parts.join(" + ")
+}
+
+function canonicalModelRef(ref) {
+  if (!ref || typeof ref !== "object" || Array.isArray(ref)) return null
+  if (typeof ref.provider !== "string" || !ref.provider.trim() || typeof ref.modelName !== "string" || !ref.modelName.trim()) return null
+  return {
+    provider: ref.provider,
+    modelName: ref.modelName,
+    ...(ref.effort !== undefined ? { effort: ref.effort } : {}),
+    ...(ref.family !== undefined ? { family: ref.family } : {}),
+  }
+}
+
+function describeModelRef(ref) {
+  if (!ref) return "（unresolved）"
+  return ref.provider + "/" + ref.modelName + "（推理强度 " + (ref.effort ?? "省略") + "）"
+}
+
+// agents.json 只保留 mappings + roles：读取时区分"缺失/损坏"（损坏 → ROLES_CORRUPT 恢复边）。
+async function readRegistry(task) {
+  try {
+    const agents = (await readJson(path.join(task.root, "agents.json"), { allowMissing: true })) ?? {}
+    return {
+      mappings: agents.mappings && typeof agents.mappings === "object" && !Array.isArray(agents.mappings) ? agents.mappings : {},
+      roles: agents.roles ?? null,
+      agents,
+      corrupt: null,
+    }
+  } catch (error) {
+    return { mappings: {}, roles: null, agents: null, corrupt: String(error?.message ?? error) }
+  }
+}
+
+async function updateAgents(task, mutate) {
+  const file = path.join(task.root, "agents.json")
+  let current = null
+  let rebuilt = null
+  try {
+    current = (await readJson(file, { allowMissing: true })) ?? {}
+  } catch (error) {
+    rebuilt = String(error?.message ?? error)
+    current = {}
+  }
+  const next = { ...current, mappings: { ...(current.mappings ?? {}) } }
+  await mutate(next)
+  await atomicJson(file, next)
+  return { agents: next, rebuilt }
+}
+
+function normalizeRoleEntries(raw) {
+  const roles = {}
+  const invalid = []
+  if (raw === null || raw === undefined) return { roles, invalid, present: false }
+  if (typeof raw !== "object" || Array.isArray(raw)) return { roles, invalid: [{ role: null, reason: "roles 不是对象" }], present: true }
+  for (const key of Object.keys(raw)) {
+    if (!ROLE_KEYS.includes(key)) {
+      invalid.push({ role: key, reason: "未知角色键（只允许 owner/challenger/expert）" })
+      continue
+    }
+    try {
+      roles[key] = normalizeModelRef(raw[key], "roles." + key)
+    } catch (error) {
+      invalid.push({ role: key, reason: String(error?.message ?? error) })
+    }
+  }
+  return { roles, invalid, present: true }
+}
+
+// 按当前调用快照把三个角色解析成 ModelRef（open 初始化 / tw roles --resolve 共用）。
+// 缺档或候选池空 → 该角色 unresolved（不猜默认值），不阻塞 open。
+async function resolveRoleModels({ task, workflow, policy }) {
+  const resolved = await resolveTiers()
+  const state = deriveTask(task)
+  const stageDef = workflow.stages.find((s) => s.id === state.stage)
+  const sp = scenePolicy(policy, stageDef?.teamScene ?? "implementation")
+  // 家族去重只在同一档位内有效：不同角色若落在同一档，才需要错开家族。
+  const usedFamiliesByTier = new Map()
+  const details = []
+  const roles = {}
+  for (const role of ROLE_KEYS) {
+    const tier = role === "expert" ? sp.expertTier : role === "owner" ? ownerTierWithRisk(task, sp) : sp.challengerTier
+    const tierProvenance = tierProvenanceOf(task, policy, stageDef, role)
+    let modelRef = null
+    let reason = null
+    if (!tier) reason = "角色 " + role + " 的档位未配置（scene." + (stageDef?.teamScene ?? "implementation") + " 与 policy.roles." + role + " 均缺失，unresolved）"
+    else if (!resolved.tiers[tier]?.pool?.length) reason = "档位 " + tier + " 在当前调用快照未解析（unresolved）"
+    else {
+      const usedFamilies = usedFamiliesByTier.get(tier) ?? []
+      const hint = computeModelHint(resolved.tiers[tier], usedFamilies)
+      if (!hint) reason = "档位 " + tier + " 候选池为空"
+      else {
+        try {
+          modelRef = modelRefFromHint(hint)
+          if (modelRef?.family) usedFamiliesByTier.set(tier, [...usedFamilies, modelRef.family])
+        } catch (error) {
+          reason = String(error?.message ?? error)
+        }
+      }
+    }
+    if (modelRef) roles[role] = modelRef
+    details.push({ role, tier: tier ?? null, tierProvenance, modelRef, effortState: modelRef ? (modelRef.effort ? "configured" : "omitted") : "unresolved", resolution: modelRef ? "resolved" : "unresolved", ...(reason ? { reason } : {}) })
+  }
+  return { roles, details, warnings: resolved.warnings, profile: resolved.profile, entryId: resolved.entryId, source: resolved.source }
+}
+
+function refFromDispatchDetail(detail) {
+  if (!detail) return null
+  if (detail.modelRef) {
+    try { return normalizeModelRef(detail.modelRef) } catch { return null }
+  }
+  // 兼容历史 journal：modelHint{provider,model,effort,family} → ModelRef（不重写历史行）。
+  try { return modelRefFromHint(detail.modelHint) } catch { return null }
+}
+
+function lastDispatchedModelRef(task, role) {
+  for (let i = task.journal.length - 1; i >= 0; i -= 1) {
+    const event = task.journal[i]
+    if (event.type !== "dispatched" || event.detail?.role !== role) continue
+    const ref = refFromDispatchDetail(event.detail)
+    if (ref) return ref
+  }
+  return null
+}
+
+// 同角色同包最近一条派发模型：会话起始映射缺失时的保守降级（比全任务最早更接近当前会话，
+// 但仍不用于替代 sessionFirstModelRef 的正常路径）。
+function lastDispatchModelRefFor(task, role, pkg = null) {
+  for (let i = task.journal.length - 1; i >= 0; i -= 1) {
+    const event = task.journal[i]
+    if (event.type !== "dispatched" || event.detail?.role !== role) continue
+    if ((event.detail.package ?? null) !== (pkg ?? null)) continue
+    const ref = refFromDispatchDetail(event.detail)
+    if (ref) return ref
+  }
+  return null
+}
+
+// 全任务最早一条同角色同包派发模型：仅作旧任务/无映射数据的降级基准（不用于新会话比较）。
+function firstDispatchModelRef(task, role, pkg = null) {
+  for (const event of task.journal) {
+    if (event.type !== "dispatched" || event.detail?.role !== role) continue
+    if ((event.detail.package ?? null) !== (pkg ?? null)) continue
+    const ref = refFromDispatchDetail(event.detail)
+    if (ref) return ref
+  }
+  return null
+}
+
+// 当前阶段与最近一次同角色同包 session-reset 之后的边界 seq（纯函数）：
+// 会话首派模型必须以"当前会话 + 当前阶段"为范围，不能拿重置前/上一阶段的旧会话比较。
+function sessionBoundarySeq(task, role, pkg = null) {
+  let boundary = -1
+  for (const event of task.journal) {
+    if (event.type === "stage-advanced") boundary = Math.max(boundary, event.seq ?? -1)
+    else if (event.type === "session-reset" && event.detail?.role === role && (event.detail.package ?? null) === (pkg ?? null)) boundary = Math.max(boundary, event.seq ?? -1)
+  }
+  return boundary
+}
+
+// 当前会话首派模型：边界之后、映射到该 sessionId 的最早一条派发模型（E1 修复）。
+// mismatchedMappings / 旧任务缺起始 key 映射时，由调用方回退 firstDispatchModelRef 降级，不在这里猜。
+function sessionFirstModelRef(task, mappings, role, pkg, sessionId) {
+  if (!sessionId || !mappings) return null
+  const boundary = sessionBoundarySeq(task, role, pkg)
+  for (const event of task.journal) {
+    if (event.type !== "dispatched" || event.detail?.role !== role) continue
+    if ((event.seq ?? -1) <= boundary) continue
+    if ((event.detail.package ?? null) !== (pkg ?? null)) continue
+    if (mappings[event.detail.key] !== sessionId) continue
+    const ref = refFromDispatchDetail(event.detail)
+    if (ref) return ref
+  }
+  return null
+}
+
+function latestSessionForRole(task, mappings, role) {
+  for (let i = task.journal.length - 1; i >= 0; i -= 1) {
+    const event = task.journal[i]
+    if (event.type !== "dispatched" || event.detail?.role !== role) continue
+    const mapped = mappings?.[event.detail.key]
+    if (typeof mapped === "string" && mapped) return { key: event.detail.key, sessionId: mapped, package: event.detail.package ?? null }
+  }
+  return null
+}
+
+// 角色溯源（journal roles-initialized / role-models-changed 只增事实）：卡面与 tw roles 共用。
+function roleMeta(task) {
+  const meta = new Map()
+  for (const event of task.journal) {
+    if (event.type === "roles-initialized") {
+      meta.clear()
+      for (const entry of event.detail?.roles ?? []) meta.set(entry.role, { ...entry })
+    } else if (event.type === "role-models-changed") {
+      for (const change of event.detail?.changes ?? []) {
+        const prev = meta.get(change.role) ?? { role: change.role }
+        const to = change.to ?? null
+        meta.set(change.role, { ...prev, ...change, modelRef: to, effortState: to ? (to.effort ? "configured" : "omitted") : "unresolved", resolution: to ? "resolved" : "unresolved" })
+      }
+    }
+  }
+  return meta
+}
+
+function profileOf(task) {
+  return task.journal.filter((e) => e.type === "roles-initialized").at(-1)?.detail?.profile ?? "unresolved"
+}
+
+function roleDetailsForCard(task, roles, invalid = []) {
+  const meta = roleMeta(task)
+  return ROLE_KEYS.map((role) => {
+    const previous = meta.get(role) ?? {}
+    const modelRef = roles?.[role] ?? null
+    return {
+      role,
+      modelRef,
+      effortState: modelRef ? (modelRef.effort ? "configured" : "omitted") : "unresolved",
+      tier: previous.tier ?? null,
+      tierProvenance: previous.tierProvenance ?? null,
+      ...(modelRef ? {} : { reason: invalid.find((i) => i.role === role)?.reason ?? previous.reason ?? "未解析（缺配置或未初始化）" }),
+    }
+  })
+}
+
+// ── 意图确认门（§3.4）：复用 decisions/journal，不新增存储 ─────────────────────────
+// 稳定配置投影：只取 {intent, roles, packages}，不含指纹自身、时间戳、decisionId、profile 等运行元数据。
+function intakeSnapshot({ task, roles, packages }) {
+  const intent = task.intent ?? {}
+  const scope = intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {}
+  return {
+    intent: {
+      objective: String(intent.objective ?? ""),
+      constraints: Array.isArray(intent.constraints) ? intent.constraints.map(String) : [],
+      exclusions: Array.isArray(intent.exclusions) ? intent.exclusions.map(String) : [],
+      rawRequirement: String(intent.rawRequirement ?? ""),
+      scope,
+      acceptance: Array.isArray(intent.acceptance) ? intent.acceptance.map(String) : [],
+      gaps: Array.isArray(intent.gaps) ? intent.gaps.map((gap) => ({ ...gap })) : [],
+      risk: String(intent.risk ?? "normal"),
+    },
+    roles: Object.fromEntries(ROLE_KEYS.map((role) => [role, canonicalModelRef(roles?.[role])])),
+    packages: (Array.isArray(packages) ? packages : []).map((p) => ({
+      id: p.id,
+      model: canonicalModelRef(p.model),
+      writable: Array.isArray(p.writable) ? p.writable.map(String) : [],
+      done: Array.isArray(p.done) ? p.done.map(String) : [],
+      dependsOn: Array.isArray(p.dependsOn) ? p.dependsOn.map(String) : [],
+    })),
+  }
+}
+
+function intakeConfirmation(task) {
+  return (task.decisions ?? []).filter((d) => d.gateId === INTAKE_GATE && d.grant === "accept-intake").at(-1) ?? null
+}
+
+async function intakeState(task) {
+  const registry = await readRegistry(task)
+  const normalized = normalizeRoleEntries(registry.roles)
+  const snapshot = intakeSnapshot({ task, roles: normalized.roles, packages: task.packages })
+  return { registry, roles: normalized.roles, invalid: normalized.invalid, snapshot, fingerprint: digestValue(snapshot) }
+}
+
+// 确认卡正文：固定段序（原始需求 → 目标 → 约束/排除 → 范围/产出 → 角色模型 3 行 → 逐包模型 → gap → 选项）。
+function intakeCardText({ task, workflow, snapshot, details, choices = [] }) {
+  const lines = []
+  lines.push("# 任务意图确认（intake-approval）", "")
+  lines.push("## 你的原始需求（不摘要、不删改）")
+  lines.push(snapshot.intent.rawRequirement || "（未提供原始需求全文；可用 tw intent --task <n> --raw-requirement <原文> 补充）", "")
+  lines.push("## 目标 / 约束 / 排除")
+  lines.push("目标：" + (snapshot.intent.objective || "（未提供）"))
+  if (snapshot.intent.constraints.length) lines.push("约束：", ...snapshot.intent.constraints.map((c) => "- " + c))
+  else lines.push("约束：（未提供）")
+  if (snapshot.intent.exclusions.length) lines.push("排除：", ...snapshot.intent.exclusions.map((c) => "- " + c))
+  else lines.push("排除：（未提供）")
+  lines.push("", "## 范围与产出")
+  const entryStage = workflow?.stages?.find((stage) => stage.id === task.scope?.entry)
+  lines.push("入口阶段：" + String(task.scope?.entry ?? "未提供") + (task.scope?.completion?.mode === "through-stage" ? "（运行到该阶段验收）" : "（运行完整工作流）"))
+  lines.push("预期产出物：" + ((entryStage?.outputs ?? []).map(String).join("、") || "（入口阶段无声明产出物）"))
+  const scopeNotes = Array.isArray(snapshot.intent.scope?.notes) ? snapshot.intent.scope.notes.map(String) : []
+  if (scopeNotes.length) lines.push("范围补充：", ...scopeNotes.map((note) => "- " + note))
+  if (snapshot.intent.acceptance.length) lines.push("验收：", ...snapshot.intent.acceptance.map((c) => "- " + c))
+  lines.push("", "## 角色模型（3 行，恒定显示）")
+  lines.push("| 角色 | provider | modelName | 推理强度 | 档位溯源 |", "| --- | --- | --- | --- | --- |")
+  for (const detail of details) {
+    lines.push("| " + detail.role + " | " + (detail.modelRef?.provider ?? "（unresolved）") + " | " + (detail.modelRef?.modelName ?? "—") + " | " + (detail.modelRef ? (detail.modelRef.effort ?? "省略（不设置）") : "—") + " | " + (detail.tierProvenance ?? "未记录") + " |")
+  }
+  const unresolved = details.filter((detail) => !detail.modelRef)
+  if (unresolved.length) lines.push("", "未解析角色：" + unresolved.map((detail) => detail.role + "（" + (detail.reason ?? "未解析") + "）").join("；"))
+  lines.push("", "## 已拆包的实际模型")
+  if (!snapshot.packages.length) lines.push("（未拆包；拆包后本卡会重签并列出逐包模型）")
+  else {
+    lines.push("| 包 | provider | modelName | 推理强度 | 与 roles.owner |", "| --- | --- | --- | --- | --- |")
+    for (const pkg of snapshot.packages) {
+      const same = pkg.model && snapshot.roles.owner ? modelRefsEqual(pkg.model, snapshot.roles.owner) : null
+      lines.push("| " + pkg.id + " | " + (pkg.model?.provider ?? "（unresolved）") + " | " + (pkg.model?.modelName ?? "—") + " | " + (pkg.model ? (pkg.model.effort ?? "省略（不设置）") : "—") + " | " + (same === null ? "无法比较" : same ? "等于" : "不同") + " |")
+    }
+  }
+  lines.push("", "## 仍未明确的问题（gap）")
+  if (!snapshot.intent.gaps.length) lines.push("（无：目标、约束、排除、范围与验收均可指回原始需求）")
+  else snapshot.intent.gaps.forEach((gap, index) => {
+    lines.push((index + 1) + ". " + String(gap.question ?? "（未填写问题）") + " —— 影响：" + String(gap.whyItMatters ?? "未说明") + "；若确认开始将按“" + String(gap.proposedDefault ?? "无默认假设（需用户补充）") + "”执行" + (gap.answer ? "（已答复：" + String(gap.answer) + "）" : ""))
+  })
+  lines.push("")
+  lines.push(unresolved.length ? "（角色模型 unresolved：本卡不提供“确认开始”；修复配置后 tw roles --resolve 重签）" : "（若计划拆包，建议先 tw plan 再确认；拆包会触发一次重签并列出逐包模型）")
+  if (choices.length) {
+    lines.push("", "## 选项")
+    for (const choice of choices) lines.push(choice.n + ". " + choice.label + (choice.desc ? "——" + choice.desc : ""))
+  }
+  return lines.join("\n")
+}
+
+async function signIntakeApproval({ task, workflow, roles, details, profile, source }) {
+  const snapshot = intakeSnapshot({ task, roles, packages: task.packages })
+  const fingerprint = digestValue(snapshot)
+  const pending = pendingDecisionDetail(task.journal)
+  const events = []
+  // 同一时刻只允许一张未决卡：若正在等待的是换模型卡，配置已变化也该作废它，避免下次 decide
+  // 展示 intake 选项却实际答到旧 fresh 卡的 keep-session（E2）。
+  if (pending && (pending.gateId === INTAKE_GATE || pending.requiresFreshSession)) {
+    events.push({ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "意图、角色模型或包模型已变化，按新配置重签确认卡" } })
+  }
+  const unresolved = details.filter((detail) => !detail.modelRef)
+  const choices = []
+  let number = 0
+  if (!unresolved.length) choices.push({ n: ++number, label: "确认开始", desc: "按以上意图、角色模型与逐包模型进入执行", grant: "accept-intake" })
+  choices.push({ n: ++number, label: "我先修改", desc: "用 tw intent / tw roles / tw plan 修改后重出确认卡", grant: "revise-intake" })
+  choices.push({ n: ++number, label: "终止任务", desc: "以当前形态终止并归档", grant: "stop-task" })
+  const question = intakeCardText({ task, workflow, snapshot, details, choices })
+  const decisionId = "intake-" + randomBytes(3).toString("hex")
+  const intake = {
+    rawRequirement: snapshot.intent.rawRequirement,
+    objective: snapshot.intent.objective,
+    constraints: snapshot.intent.constraints,
+    exclusions: snapshot.intent.exclusions,
+    scope: snapshot.intent.scope,
+    acceptance: snapshot.intent.acceptance,
+    gaps: snapshot.intent.gaps,
+    roles: details.map((detail) => ({ role: detail.role, modelRef: detail.modelRef, effortState: detail.effortState, tierProvenance: detail.tierProvenance })),
+    packages: snapshot.packages.map((pkg) => ({ id: pkg.id, modelRef: pkg.model, vsRolesOwner: pkg.model && snapshot.roles.owner ? (modelRefsEqual(pkg.model, snapshot.roles.owner) ? "equal" : "different") : null })),
+    profile: profile ?? "unresolved",
+    source: source ?? "unresolved",
+  }
+  events.push({ type: "decision-issued", detail: { decisionId, gateId: INTAKE_GATE, reason: question, choices, intakeFingerprint: fingerprint, intake } })
+  await appendEventsUnlocked(task, events)
+  return { decisionId, question, choices, intakeFingerprint: fingerprint, intake, ...(unresolved.length ? { code: "INTAKE_ROLES_UNRESOLVED", unresolved: unresolved.map((detail) => detail.role) } : {}) }
+}
+
+// 派发前的确认门：只在"本任务签发过确认卡"时生效（旧任务不补卡、不静止，§3.4.5）。
+// 已确认指纹与当前稳定投影不一致（意图/roles/packages 变化）→ 作废旧卡并重签，停止派发。
+async function intakeGateCard({ task, workflow, state }) {
+  const issued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+  if (!issued) return null
+  const stateInfo = await intakeState(task)
+  const accepted = intakeConfirmation(task)
+  if (accepted && accepted.intakeFingerprint === stateInfo.fingerprint) return null
+  const details = roleDetailsForCard(task, stateInfo.roles, stateInfo.invalid)
+  const card = await signIntakeApproval({ task, workflow, roles: stateInfo.roles, details, profile: profileOf(task), source: "role-registry" })
+  return {
+    ok: true,
+    task: task.name,
+    stage: state.stage,
+    status: "awaiting-user",
+    next: "decide",
+    transition: "await-decision",
+    ...card,
+    // 恢复边错误码：无匹配确认 vs 确认后配置变化；roles unresolved 时保留 INTAKE_ROLES_UNRESOLVED。
+    ...(card.code ? {} : { code: accepted ? "INTAKE_FINGERPRINT_STALE" : "INTAKE_UNCONFIRMED" }),
+    note: accepted ? "意图、角色模型或包模型在确认后发生变化：已重签意图确认卡，确认前不派发" : "意图确认尚未完成：确认意图与模型后再派发",
+  }
+}
+
+// 旧任务迁移：无 roles → 优先取该角色最近一次实际派发模型，无历史才按 policy 解析（"迁移不换模型"）。
+async function ensureRolesInitialized({ task, workflow, policy }) {
+  const registry = await readRegistry(task)
+  const normalized = normalizeRoleEntries(registry.roles)
+  const missing = ROLE_KEYS.filter((role) => !normalized.roles[role])
+  if (!registry.corrupt && normalized.present && missing.length === 0 && normalized.invalid.length === 0) {
+    return { roles: normalized.roles, source: "roles", registry, details: roleDetailsForCard(task, normalized.roles) }
+  }
+  const resolved = await resolveRoleModels({ task, workflow, policy })
+  const roles = {}
+  const details = []
+  for (const detail of resolved.details) {
+    const history = lastDispatchedModelRef(task, detail.role)
+    const modelRef = normalized.roles[detail.role] ?? history ?? detail.modelRef ?? null
+    if (modelRef) roles[detail.role] = modelRef
+    details.push({ ...detail, modelRef, effortState: modelRef ? (modelRef.effort ? "configured" : "omitted") : "unresolved", resolution: modelRef ? "resolved" : "unresolved", ...(history && !normalized.roles[detail.role] ? { migratedFrom: "journal-dispatched" } : {}) })
+  }
+  const unresolved = ROLE_KEYS.filter((role) => !roles[role])
+  const updated = await updateAgents(task, (agents) => { agents.roles = roles })
+  await appendEventsUnlocked(task, [{ type: "roles-initialized", detail: { roles: details, source: unresolved.length ? "unresolved" : "migrated", profile: resolved.profile, entryId: resolved.entryId, ...(registry.corrupt ? { registryRebuilt: registry.corrupt } : {}) } }])
+  return { roles, details, source: "migrated", unresolved, warnings: resolved.warnings, registry: { ...registry, mappings: updated.agents.mappings, corrupt: null } }
+}
+
+// 旧 packages.json 只有 tier：首次 plan/推进时按当前快照物化（不换模型），失败不落半成品。
+async function materializePackages({ task }) {
+  const packages = Array.isArray(task.packages) ? task.packages : null
+  if (!packages || packages.length === 0) return { packages }
+  const needs = packages.filter((pkg) => !(pkg?.model && typeof pkg.model.provider === "string" && typeof pkg.model.modelName === "string"))
+  if (needs.length === 0) return { packages }
+  const registry = await readRegistry(task)
+  const roles = normalizeRoleEntries(registry.roles).roles
+  const resolved = await resolveTiers()
+  const next = []
+  const materialized = []
+  for (const pkg of packages) {
+    if (pkg?.model) {
+      // 已有 model 的包不再保留旧 tier 字面量（tier 只作 tw plan 入参语法糖）。
+      const { tier: _staleTier, ...rest } = pkg
+      next.push({ ...rest, model: normalizeModelRef(pkg.model, "packages." + pkg.id + ".model") })
+      continue
+    }
+    let modelRef = null
+    if (pkg?.tier) {
+      const hint = computeModelHint(resolved.tiers[pkg.tier], [])
+      if (hint) {
+        try { modelRef = modelRefFromHint(hint) } catch { modelRef = null }
+      }
+      if (!modelRef) {
+        return { error: { code: "PLAN_MODEL_UNRESOLVED", message: "包 " + pkg.id + " 的旧 tier=" + pkg.tier + " 在当前调用快照无法解析（tier 未配置或候选池为空）", recovery: "补齐 team-work-dsh.tiers 后重试，或用 tw plan 重新登记包级模型（不改模型时可省略 model/tier，复用 roles.owner）" } }
+      }
+    } else {
+      if (!roles.owner) return { error: { code: "PLAN_MODEL_UNRESOLVED", message: "包 " + pkg.id + " 未给 model/tier，且 agents.json.roles.owner 缺失", recovery: "先 tw roles --resolve 初始化角色模型，或 tw plan 为每包显式指定 model" } }
+      modelRef = normalizeModelRef(roles.owner)
+    }
+    const { tier: _legacyTier, ...rest } = pkg
+    next.push({ ...rest, model: modelRef })
+    materialized.push({ id: pkg.id, modelRef, from: pkg.tier ? "tier" : "roles.owner" })
+  }
+  await atomicJson(path.join(task.root, "packages.json"), { items: next })
+  task.packages = next
+  await appendEventsUnlocked(task, [{ type: "packages-model-materialized", detail: { packages: materialized } }])
+  return { packages: next, materialized }
+}
+
+// 派发取值（§3.8）：包级优先，否则角色级；缺失返回可恢复码，不现场解析配置、不猜。
+function modelRefForDispatch(task, roles, role, pkg) {
+  if (role === "owner" && pkg != null) {
+    const def = (task.packages ?? []).find((entry) => entry.id === pkg)
+    if (def?.model) return { modelRef: normalizeModelRef(def.model, "packages." + pkg + ".model"), source: "package" }
+  }
+  const ref = roles?.[role]
+  if (ref) return { modelRef: normalizeModelRef(ref, "roles." + role), source: "roles" }
+  return { error: role === "owner" && pkg != null ? "PACKAGE_MODEL_UNRESOLVED" : "ROLES_UNRESOLVED" }
+}
+
+// 旧未决升档卡收口（§3.3.3）：升档审批删除后，历史未决 escalation 卡必须幂等追加 decided:superseded，
+// 否则任务会落在"已签发未失效"渲染分支永久静止。只增不改，审计保留。
+function isLegacyEscalationCard(detail) {
+  if (!detail) return false
+  if (detail.escalationFingerprint !== undefined) return true
+  return (detail.choices ?? []).some((choice) => choice?.grant === "approve-escalation" || /降回默认档/.test(String(choice?.label ?? "")))
+}
+
+async function settleLegacyEscalations(task) {
+  const settled = new Set(task.journal.filter((event) => event.type === "decided").map((event) => event.detail.decisionId))
+  const stale = task.journal.filter((event) => event.type === "decision-issued" && event.detail && !settled.has(event.detail.decisionId) && isLegacyEscalationCard(event.detail))
+  if (!stale.length) return 0
+  await appendEventsUnlocked(task, stale.map((event) => ({ type: "decided", detail: { decisionId: event.detail.decisionId, choice: "superseded", reason: "升档审批机制已删除" } })))
+  return stale.length
+}
+
+// 换模型卡的当前指纹（E2）：按当前 roles/packages 与当前会话首派模型重算，供 decide/run/推进校验
+// "展示的卡仍是当前配置对应的那张卡"；配置变了旧卡必须 superseded 重签，不能答成 keep-session。
+async function currentFreshFingerprint(task, detail) {
+  if (!detail || typeof detail !== "object") return { error: "REQUIRES_FRESH_SESSION" }
+  const registry = await readRegistry(task)
+  const roles = normalizeRoleEntries(registry.roles).roles
+  const model = modelRefForDispatch(task, roles, detail.role, detail.package ?? null)
+  if (model.error) return { error: model.error }
+  const from = sessionFirstModelRef(task, registry.mappings, detail.role, detail.package ?? null, detail.sessionId)
+    ?? (detail.fromModelRef ? canonicalModelRef(detail.fromModelRef) : null)
+  if (!from) return { error: "REQUIRES_FRESH_SESSION" }
+  return {
+    fingerprint: digestValue({ role: detail.role, sessionId: detail.sessionId, from, to: model.modelRef }),
+    fromModelRef: from,
+    toModelRef: model.modelRef,
+  }
+}
+
+// 已有会话换模型门（§3.6）：续派会话首派模型与当前配置不一致 → 签发三选项卡；选"保留"后按 keptModelRef
+// 固化（rolesDigest 变化才再问）。会话不可热替换模型，本门只决定"保留旧会话 / 重开 / 回滚"。
+async function freshSessionGate({ task, state, cards }) {
+  const registry = await readRegistry(task)
+  const excludedKeys = supersededKeys(task.journal)
+  const roles = normalizeRoleEntries(registry.roles).roles
+  // 绑定指纹只覆盖模型配置（roles + packages）；intent 文本变化不应让"保留旧会话"重新问一次。
+  const snapshot = intakeSnapshot({ task, roles, packages: task.packages })
+  const rolesDigest = digestValue({ roles: snapshot.roles, packages: snapshot.packages })
+  for (const card of cards) {
+    if (!card.continuation) continue
+    const prevKey = continuationPrevKey({ journal: task.journal, agentMaps: registry.mappings, excludedKeys }, { key: card.key, role: card.role, package: card.package ?? null })
+    const sessionId = prevKey ? registry.mappings[prevKey] : null
+    if (!sessionId) continue
+    // 基线 = 当前会话（sessionId）在当前阶段/最近 reset 之后的首派模型；旧数据无起始映射才回退全任务首派。
+    const from = sessionFirstModelRef(task, registry.mappings, card.role, card.package ?? null, sessionId)
+      ?? lastDispatchModelRefFor(task, card.role, card.package ?? null)
+      ?? firstDispatchModelRef(task, card.role, card.package ?? null)
+    if (!from || !card.modelRef || modelRefsEqual(from, card.modelRef)) continue
+    const keep = (task.decisions ?? []).filter((decision) => decision.grant === "keep-session" && decision.sessionId === sessionId && decision.role === card.role).at(-1)
+    if (keep?.keptModelRef && keep.rolesDigest === rolesDigest) {
+      card.modelRef = normalizeModelRef(keep.keptModelRef, "keep-session.keptModelRef")
+      continue
+    }
+    const decisionId = "fresh-" + randomBytes(3).toString("hex")
+    // 包波的模型来自 packages[].model（包级优先）；无包波来自 roles[role]。回滚对象随来源而定。
+    const rollbackTarget = card.package != null ? "package" : "roles"
+    const rollbackLabel = rollbackTarget === "package" ? "回滚包模型到旧值" : "回滚 roles 到旧值"
+    const rollbackDesc = rollbackTarget === "package" ? "包 " + card.package + " 的 model 恢复为首派模型并重签确认卡" : "角色模型恢复为首派模型并重签确认卡"
+    const reason = "模型变更确认（已有会话不可热替换模型）：续派会话 " + sessionId + "（" + card.role + (card.package ? " · 包 " + card.package : "") + "）首派模型 " + describeModelRef(from) + "，当前配置 " + describeModelRef(card.modelRef) + "。请选择：保留原会话按旧模型继续 / 作废当前波并重开会话（全新上下文）/ " + rollbackLabel + "。"
+    const choices = [
+      { n: 1, label: "保留原会话", desc: "按首派模型继续，之后不再重复出卡", grant: "keep-session" },
+      { n: 2, label: "作废当前波并重开会话", desc: "写 session-reset，用新模型全新上下文（原会话上下文不延续）", grant: "retire-and-recreate" },
+      { n: 3, label: rollbackLabel, desc: rollbackDesc, grant: "rollback-model" },
+    ]
+    const requiresFreshSession = { role: card.role, package: card.package ?? null, sessionId, fromModelRef: from, toModelRef: card.modelRef, target: rollbackTarget, waveId: card.waveId ?? null, scene: state.stage, rolesDigest }
+    await appendEventsUnlocked(task, [{ type: "decision-issued", detail: { decisionId, gateId: null, reason, choices, requiresFreshSession, freshSessionFingerprint: digestValue({ role: card.role, sessionId, from, to: card.modelRef }) } }])
+    return { card: { ok: true, task: task.name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", code: "REQUIRES_FRESH_SESSION", decisionId, question: reason, choices, requiresFreshSession, note: "已有会话换模型需显式确认：按卡片选项作答后再推进" } }
+  }
+  return {}
+}
+
+// 包模型不可解析 / 角色未解析的统一 blocked 卡（不写 dispatched 事实）。
+function modelResolutionCard({ task, state, error }) {
+  const code = error.code ?? "ROLES_UNRESOLVED"
+  return {
+    ok: true,
+    task: task.name,
+    stage: state.stage,
+    status: "blocked",
+    next: "configure-model",
+    blockers: [{ code, message: error.message, recovery: error.recovery }],
+    note: "未写入派发事实；修复角色/包级模型后可原样重试。",
+  }
 }
 
 // 当前阶段双指纹（B 同源化：runStatusCard / runTransition / cmdDecide 三处共用同一计算——
@@ -437,7 +1020,8 @@ function lastOwnerBlockedSummary(task, pkg) {
   return last && last.payload?.outcome === 'blocked' ? String(last.payload.summary ?? '') : null
 }
 
-function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
+// model = { modelRef, source }（派发期从 pkg.model ?? roles[role] 取出的已固化模型；卡头展示、journal 落盘同源）
+function dispatchCard(task, stageDef, wave, detail, memberRules = "", model = null) {
   const sp = scenePolicy(task.policy, stageDef.teamScene)
   const pkg = detail.package ?? null
   const currentPackage = pkg == null ? null : task.packages?.find((p) => p.id === pkg)
@@ -447,13 +1031,18 @@ function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
   const verdictArg = ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>'
   const reviewCmd = twCommand() + ' review --task ' + task.name + ' --key ' + detail.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (wave.kind === 'verdict' ? verdictArg : '')
   const intro = detail.continuation ? '# 续派（key: ' + detail.key + '）——你在原上下文基础上继续' : '# 派单（key: ' + detail.key + '）'
-  const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '')
+  const headLine = '任务：' + task.name + '；阶段：' + stageDef.id + '（' + stageDef.label + '）；角色：' + wave.role + '；轮次：' + (detail.round ?? wave.round) + (pkg ? '；包：' + pkg : '') + (detail.waveId ? '；波：' + detail.waveId : '') +
+    (model?.modelRef ? '；模型：' + model.modelRef.provider + '/' + model.modelRef.modelName + '（推理强度 ' + (model.modelRef.effort ?? '省略') + '）· 来源 ' + (model.source ?? 'roles') : '')
   // 当前验收基线由同一事实投影，两种正文及在途重建都携带一次。
   const contextParts = [
     '## 本轮验收基线',
     '任务总目标（背景；你的职责以本派单角色、范围和完成标准为准）：' + task.intent.objective,
     task.intent.constraints.length ? '约束：\n' + task.intent.constraints.map((c) => '- ' + c).join('\n') : '',
     task.intent.exclusions.length ? '排除：\n' + task.intent.exclusions.map((c) => '- ' + c).join('\n') : '',
+    task.intent.scope && typeof task.intent.scope === 'object' && Object.keys(task.intent.scope).length
+      ? '范围（intent.scope）：\n' + Object.entries(task.intent.scope).map(([key, value]) => '- ' + key + '：' + (Array.isArray(value) ? value.join('、') : String(value))).join('\n')
+      : '',
+    Array.isArray(task.intent.acceptance) && task.intent.acceptance.length ? '验收（intent.acceptance）：\n' + task.intent.acceptance.map((a) => '- ' + a).join('\n') : '',
     wave.role === 'owner' && Array.isArray(currentPackage?.done) && currentPackage.done.length ? '本包完成标准：\n' + currentPackage.done.map((d) => '- ' + d).join('\n') : '',
     (wave.role === 'challenger' || wave.role === 'expert') && task.packages?.some((p) => Array.isArray(p.done) && p.done.length)
       ? '各包完成标准（仅验收已交付包）：\n' + task.packages.filter((p) => Array.isArray(p.done) && p.done.length).map((p) => p.id + '：\n' + p.done.map((d) => '- ' + d).join('\n')).join('\n')
@@ -514,7 +1103,9 @@ function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
       key: detail.key,
       ...(detail.waveId ? { waveId: detail.waveId } : {}),
       role: wave.role,
-      tier: wave.role === 'owner' ? ownerTierFor(task, sp, pkg) : wave.role === 'challenger' ? sp.challengerTier : 'expert',
+      // tier 仅展示/权重用：角色档位（owner 含 risk 升档），不再读包 tier；实际模型以 modelRef 为准。
+      tier: roleTierFor(task, sp, wave.role),
+      ...(model?.modelRef ? { modelRef: model.modelRef, modelSource: model.source ?? 'roles' } : {}),
       round: detail.round ?? wave.round,
       kind: wave.kind,
       ...(pkg != null ? { package: pkg } : {}),
@@ -526,17 +1117,61 @@ function dispatchCard(task, stageDef, wave, detail, memberRules = "") {
   }
 }
 
-async function cmdOpen({ projectRoot, name, objective, entry, risk }) {
+// 开任务（§3.1/§3.4）：initTask 写 intent → 锁内解析三角色 ModelRef 写 agents.json.roles
+// → journal roles-initialized → 签发意图确认卡（intake-approval）。open 后任务静止等待确认。
+async function cmdOpen({ projectRoot, name, objective, entry, risk, rawRequirement, constraints = [], exclusions = [], scopeNotes = [], acceptance = [], gaps = [] }) {
   if (!name || !objective) throw fail("OPEN_INPUT_REQUIRED", "open 需要 --name 与 --objective")
-  if (risk && !['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical（high→senior Owner、critical→expert Owner，仅升不降）")
-  const { workflow } = await loadDefinitions(projectRoot)
+  if (risk && !['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical（只升 owner 角色档；包级模型由 tw plan 显式指定）")
+  const { workflow, policy } = await loadDefinitions(projectRoot)
   const resolvedEntry = entry ?? "research"
-  if (!workflow.stages.some((s) => s.id === resolvedEntry)) throw fail("ENTRY_UNKNOWN", `未知阶段：${resolvedEntry}`)
+  const entryStage = workflow.stages.find((s) => s.id === resolvedEntry)
+  if (!entryStage) throw fail("ENTRY_UNKNOWN", `未知阶段：${resolvedEntry}`)
   const completion = entry ? { mode: "through-stage", stage: entry } : { mode: "workflow" }
-  await initTask({ projectRoot, name, objective, entry: resolvedEntry, completion, workflowDigest: workflow.version, stages: workflow.stages.map((s) => s.id), risk })
-  const baseNote = entry ? `任务从 ${entry} 介入，将运行到该阶段验收` : "任务将运行完整工作流"
-  const riskNote = risk && risk !== 'normal' ? `；按 ${risk} 档运行：Owner 将升用 ${risk === 'critical' ? 'expert' : 'senior'} 档模型` : ""
-  return { ok: true, task: name, stage: resolvedEntry, status: "working", next: "run", note: baseNote + riskNote }
+  const normalizedGaps = gaps.map((gap, index) => {
+    if (!gap || typeof gap !== "object" || typeof gap.question !== "string" || !gap.question.trim()) throw fail("USAGE", "--gap 需要 JSON 对象且 question 为非空字符串：{question, whyItMatters?, proposedDefault?}")
+    return {
+      id: typeof gap.id === "string" && gap.id.trim() ? gap.id.trim() : "g" + (index + 1),
+      question: gap.question.trim(),
+      whyItMatters: typeof gap.whyItMatters === "string" ? gap.whyItMatters : "",
+      proposedDefault: typeof gap.proposedDefault === "string" ? gap.proposedDefault : "",
+      answer: typeof gap.answer === "string" && gap.answer.trim() ? gap.answer : null,
+    }
+  })
+  const scope = {
+    entry: resolvedEntry,
+    outputs: (entryStage.outputs ?? []).map(String),
+    ...(scopeNotes.length ? { notes: scopeNotes } : {}),
+  }
+  await initTask({
+    projectRoot, name, objective, entry: resolvedEntry, completion, workflowDigest: workflow.version,
+    stages: workflow.stages.map((s) => s.id), risk,
+    intent: {
+      rawRequirement: typeof rawRequirement === "string" ? rawRequirement : "",
+      constraints,
+      exclusions,
+      scope,
+      acceptance,
+      gaps: normalizedGaps,
+    },
+  })
+  const task0 = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
+    const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+    const resolved = await resolveRoleModels({ task, workflow, policy })
+    const unresolved = ROLE_KEYS.filter((role) => !resolved.roles[role])
+    await updateAgents(task, (agents) => { agents.roles = resolved.roles })
+    await appendEventsUnlocked(task, [{ type: "roles-initialized", detail: { roles: resolved.details, source: resolved.source, profile: resolved.profile, entryId: resolved.entryId, ...(unresolved.length ? { unresolved } : {}) } }])
+    const card = await signIntakeApproval({ task, workflow, roles: resolved.roles, details: resolved.details, profile: resolved.profile, source: resolved.source })
+    const baseNote = entry ? `任务从 ${entry} 介入，将运行到该阶段验收` : "任务将运行完整工作流"
+    const riskNote = risk && risk !== 'normal' ? `；按 ${risk} 档运行：owner 角色档解析为 ${risk === 'critical' ? 'expert' : 'senior'}` : ""
+    const unresolvedNote = unresolved.length ? '；角色模型 unresolved（' + unresolved.join('、') + '）：补齐配置后 tw roles --resolve 重建' : ''
+    return {
+      ok: true, task: name, stage: resolvedEntry, status: "awaiting-user", next: "decide", transition: "await-decision",
+      ...card,
+      roles: resolved.roles,
+      note: baseNote + riskNote + '；已签发意图确认卡（确认前不派发）' + unresolvedNote,
+    }
+  })
 }
 
 // 归档后的任务不是"不存在"：返回只读摘要卡（E2E-14 精神 + §5.2 归档只读摘要）
@@ -593,6 +1228,15 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
       return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", blockers, transition: "blocked" }
     }
     const wave = state.next.wave
+    // 只读检查（run 零写入）：确认未完成或配置已变化时只给重签指引，签发归 dispatch 通道。
+    const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+    if (intakeIssued) {
+      const stateInfo = await intakeState(task)
+      const accepted = intakeConfirmation(task)
+      if (!accepted || accepted.intakeFingerprint !== stateInfo.fingerprint) {
+        return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: "意图确认未完成或配置已变化：调 tw-dispatch（或 tw dispatch-plan）重签确认卡并等待用户确认；确认前不派发" }
+      }
+    }
     return {
       ok: true, task: name, stage: state.stage, status: "working", next: "dispatch",
       wave: { kind: wave.kind, role: wave.role, round: wave.round },
@@ -606,7 +1250,7 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
     return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", note: "任务完成条件已满足、待收尾出完成卡。" + DISPATCH_HINT }
   }
   if (state.next.kind === "wait-inflight") {
-    // F3/F4 在途重建（只读）：卡内嵌原派单全文与兜底判定事实（modelHint/expectedAgentId/registered）。
+    // F3/F4 在途重建（只读）：卡内嵌原派单全文与兜底判定事实（modelRef/expectedAgentId/registered）。
     // 恢复入口 = tw-dispatch：按条目 registered/expectedAgentId 逐条自动处置（已登记等待/续派指引/补派）；
     // 无插件终端按 dsh-orchestration 的 wait-inflight 规程手工处置。
     const inflight = await inflightDispatches(projectRoot, task, state.stage) // 惰性：在途重建按需解析规则
@@ -644,9 +1288,22 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
         // 调 tw-dispatch / tw dispatch-plan 推进时由 runTransition 作废旧卡（decided:superseded）并重签。
         return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "该待决卡已失效（签发后制品或评审链又变化，原选项不可再 decide）：调 tw-dispatch（或 tw dispatch-plan）重签最新卡片后重新 decide" }
       }
-      if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
-        // 升档指纹失效（包配置变化）：同款 stale 指引；重签由 dispatch 通道作废旧卡后重新出卡
-        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "该升档待决卡已失效（签发后包配置变化，原选项不可再 decide）：调 tw-dispatch（或 tw dispatch-plan）重签最新卡片后重新 decide" }
+      if (pending.gateId === INTAKE_GATE) {
+        // 意图确认卡：只读渲染；配置已变时提示调 dispatch 重签（run 不作废不重签，写归 dispatch 通道）。
+        const stateInfo = await intakeState(task)
+        if (pending.intakeFingerprint !== stateInfo.fingerprint) {
+          return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "意图、角色模型或包模型已变化：调 tw-dispatch（或 tw dispatch-plan）重签确认卡后重新 decide" }
+        }
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, intakeFingerprint: pending.intakeFingerprint, ...(pending.intake ? { intake: pending.intake } : {}), ...(progressText ? { progress: progressText } : {}) }
+      }
+      if (isLegacyEscalationCard(pending)) {
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "该卡属于已删除的升档审批机制：调 tw-dispatch（或 tw dispatch-plan）推进一次即自动收口（decided:superseded）并重推导" }
+      }
+      if (pending.requiresFreshSession && pending.freshSessionFingerprint !== undefined) {
+        const current = await currentFreshFingerprint(task, pending.requiresFreshSession)
+        if (!current.fingerprint || current.fingerprint !== pending.freshSessionFingerprint) {
+          return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "换模型确认卡已失效（角色/包模型在签发后变化）：调 tw-dispatch（或 tw dispatch-plan）重签后再决定" }
+        }
       }
       return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(progressText ? { progress: progressText } : {}) }
     }
@@ -696,40 +1353,6 @@ async function ensureE2ePackages(task) {
   return true
 }
 
-function dispatchTiers(task, state, workflow, policy) {
-  const wave = state.next.wave
-  const stageDef = workflow.stages.find((stage) => stage.id === state.stage)
-  const scene = scenePolicy(policy, stageDef?.teamScene ?? 'implementation')
-  if (wave.role === 'owner') {
-    const owners = wave.owners?.length ? wave.owners : [{ package: null }]
-    return owners.map((owner) => ownerTierFor(task, scene, owner.package ?? null))
-  }
-  return [wave.role === 'challenger' ? scene.challengerTier : 'expert']
-}
-
-function modelConfigurationCard({ name, state, resolved, missing }) {
-  const summary = [...new Set(missing)].join('、')
-  return {
-    ok: true,
-    task: name,
-    stage: state.stage,
-    status: 'blocked',
-    next: 'configure-models',
-    modelSettings: { source: resolved.source, entryId: resolved.entryId, profile: resolved.profile },
-    blockers: [{
-      code: 'MODEL_CONFIG_UNRESOLVED',
-      message: `DSH 插件模型配置未解析：${summary}（entry ${resolved.entryId}，profile ${resolved.profile}）`,
-      recovery: `在 DSH 当前 profile 的插件配置页补齐 team-work-dsh.tiers 的 junior、senior、expert provider/model 后重试 tw-dispatch；无宿主终端由调用方通过 TW_DSH_CONFIG 提供 {tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} JSON 快照后重试 tw dispatch-plan。`,
-    }],
-    note: '未写入派发事实；修复当前 profile 的配置或调用快照后可原样重试。',
-  }
-}
-
-function withModelHint(dispatch, selectModelHint) {
-  const modelHint = selectModelHint?.(dispatch.tier) ?? null
-  return modelHint ? { ...dispatch, modelHint } : dispatch
-}
-
 // F1/F8 波身份：waveId 与 d 序号两个「全任务递增序号」均以 journal 内 dispatched 事件数为源（任务锁内推导，
 // 不引入平行权威）；迁移后新号从 max(wvN)/max(dN) 接续。waveNum = max(dispatchedCount, maxWvN) + 1，
 // 恒严格大于已赋最大值（B8/R1 断言语义；dispatchedCount >= 波数 >= maxWvN 为正常态，max 为损坏数据防御）。
@@ -756,7 +1379,8 @@ function dispatchedDetail(dispatch, wave, writable) {
     writable,
     ...(dispatch.waveId ? { waveId: dispatch.waveId } : {}),
     ...(wave.causeDecisionId ? { causeDecisionId: wave.causeDecisionId } : {}),  // F5：respond 派发抄写返工决定（runtime 抄写，P4）
-    ...(dispatch.modelHint ? { modelHint: dispatch.modelHint } : {}),
+    // 新派发一律写 modelRef + 来源（package/roles）；历史 modelHint 只在读取时映射，不重写。
+    ...(dispatch.modelRef ? { modelRef: dispatch.modelRef, modelSource: dispatch.modelSource ?? 'roles' } : {}),
   }
 }
 
@@ -802,20 +1426,62 @@ function decisionChoicesFor({ state, human }) {
         : [{ n: 1, label: "追加一轮", desc: "授权追加一轮自主收敛", grant: "extra-round" }, { n: 2, label: "结束任务", desc: "以当前形态终止并归档" }]
 }
 
-async function runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint }) {
+// 派发前统一准备：意图确认门（§3.4）→ 角色初始化/迁移（§3.1/§7.1）→ 旧包 tier 物化（§3.3.1）。
+// 返回 { roles } 或 { card }（已签发的等待/阻塞卡，调用方直接返回）。
+async function prepareDispatch({ task, workflow, policy, state }) {
+  // 顺序：角色初始化/迁移 → 旧包 tier 物化（配置事实先落盘）→ 意图确认门（卡面与指纹包含最终包模型）。
+  // 这样拆包/自动模板只触发一次重签，而不是"确认后模型才物化"导致二次重签。
+  const rolesInfo = await ensureRolesInitialized({ task, workflow, policy })
+  if (rolesInfo.unresolved?.length) {
+    return { card: modelResolutionCard({ task, state, error: {
+      code: "ROLES_UNRESOLVED",
+      message: "角色模型未解析：" + rolesInfo.unresolved.join("、") + "（agents.json.roles 缺失或损坏，派发不猜默认模型）",
+      recovery: "补齐 DSH 当前 profile 的 team-work-dsh.tiers（tw models 查看解析），再 tw roles --resolve 重建角色模型；无宿主终端由调用方通过 TW_DSH_CONFIG 提供快照。",
+    } }) }
+  }
+  const materialized = await materializePackages({ task })
+  if (materialized.error) return { card: modelResolutionCard({ task, state, error: materialized.error }) }
+  const gate = await intakeGateCard({ task, workflow, state })
+  if (gate) return { card: gate }
+  return { roles: rolesInfo.roles }
+}
+
+function dispatchModelFor(task, roles, state, role, pkg) {
+  const model = modelRefForDispatch(task, roles, role, pkg)
+  if (!model.error) return model
+  return {
+    errorCard: modelResolutionCard({ task, state, error: {
+      code: model.error,
+      message: model.error === "PACKAGE_MODEL_UNRESOLVED"
+        ? "包 " + (pkg ?? "(未命名)") + " 未固化 model，且 agents.json.roles.owner 缺失"
+        : "角色 " + role + " 的模型未固化（agents.json.roles 缺失）",
+      recovery: model.error === "PACKAGE_MODEL_UNRESOLVED"
+        ? "tw plan 重新登记包级 model，或先 tw roles --resolve 初始化 roles.owner"
+        : "tw roles --resolve 重建角色模型，或 tw roles --set " + role + "=<provider>/<model>[@<effort>] 显式指定",
+    } }),
+  }
+}
+
+async function runTransition({ projectRoot, name, writable, workflow, policy, task, state }) {
 
   // blocked 静止卡的用户恢复通道（单 owner）：Lead 携新的可写范围经 dispatch 通道重派 = 用户重派指示
   // （规则 6：awaiting-user 只由新的用户输入恢复）。直接派新 produce 波——新 dispatched 晚于 blocked 报告，
   // 波次机的 blocked 判定自然解除；多包恢复走 plan 重拆（re-planned 同样晚于 blocked）后经 dispatch 通道推进。
   if (Array.isArray(state.next?.produceBlocked) && writable.length && writable[0] !== 'none' && !(Array.isArray(task.packages) && task.packages.length)) {
     const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const prepared = await prepareDispatch({ task, workflow, policy, state })
+    if (prepared.card) return prepared.card
     const { waveId, dispatchSeq } = nextWaveIdentity(task)
     const decl = writable.map(parseWritableEntry)
     const round = (projectRounds({ journal: task.journal, reports: task.reports }).get(null) ?? 0) + 1
     const wave = { kind: 'produce', role: 'owner', round, owners: [{ package: null, round, continuation: false }] }
     const d = { key: 'd' + dispatchSeq + '-' + randomBytes(3).toString('hex'), waveId, package: null, round, continuation: false, writable: decl }
+    const model = dispatchModelFor(task, prepared.roles, state, 'owner', null)
+    if (model.errorCard) return model.errorCard
     const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
-    const dispatch = withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint)
+    const dispatch = dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "", model).dispatch
+    const fresh = await freshSessionGate({ task, state, cards: [dispatch] })
+    if (fresh.card) return fresh.card
     await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, decl) }])
     return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch, dispatches: [dispatch], wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '已按传入可写范围重派 produce（机械恢复不代表产品授权）；派单卡保留上一轮 blocked 原因' }
   }
@@ -828,6 +1494,8 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     }
     const wave = state.next.wave
     const stageDef = workflow.stages.find((st) => st.id === state.stage)
+    const prepared = await prepareDispatch({ task, workflow, policy, state })
+    if (prepared.card) return prepared.card
     const pkgItems = Array.isArray(task.packages) && task.packages.length ? task.packages : null
     // F1/F8：波身份与 d 前缀 key（d 消除旧 w 前缀与 wave 的歧义）；同批次共享一个 waveId
     const { waveId, dispatchSeq } = nextWaveIdentity(task)
@@ -850,65 +1518,30 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         const decl = writable.length === 1 && writable[0] === 'none' ? [] : writable.map(parseWritableEntry)
         decls = [{ key: newKey(), waveId, package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
       }
-      // C（pre-phase3 §C）：升档审批——包 tier 高于场景默认的派发批次需用户批准一次（合批）。
-      // 幂等身份 = stage + 波轮次 + 包集；已批准同批不再出卡；拒绝 = 本批按默认档派发（忽略包 tier）。
-      if (wave.kind === 'produce' || wave.kind === 'respond') {
-        const spC = scenePolicy(policy, stageDef.teamScene)
-        const escFp = escalationFingerprint(task)
-        const escPkgs = decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => ({ package: d.package, tier: (task.packages ?? []).find((p) => p.id === d.package)?.tier }))
-        if (escPkgs.length) {
-          const batchRound = Math.max(...decls.map((d) => d.round))
-          const batchKey = JSON.stringify([state.stage, batchRound, [...escPkgs.map((e) => e.package)].sort()])
-          // 幽灵批准失效：批准绑定包配置指纹——re-plan 改包集/档位后，同 batchKey 的旧批准不再授权新批次
-          // （历史批准记录无指纹字段同样视为失效：重新出卡是多问一次，误授权是成本事故，保守方向取前者）。
-          const approved = task.decisions.find((dc) => dc.batchKey === batchKey && dc.escalationFingerprint === escFp && (dc.grant === 'approve-escalation' || dc.choice === '降回默认档继续'))
-          if (!approved) {
-            // 同批旧未决升档卡先作废再重签：包配置已变化，旧卡选项不可再答；不作废会让
-            // pendingDecisionDetail 持续取到旧卡、decide 答旧卡永远不推进（死循环写路径）。
-            const journalPending = pendingDecisionDetail(task.journal)
-            if (journalPending && Array.isArray(journalPending.choices) && journalPending.choices.some((c) => c.grant === 'approve-escalation')) {
-              await appendEventsUnlocked(task, [{ type: 'decided', detail: { decisionId: journalPending.decisionId, choice: 'superseded', reason: '包配置已变化，升档批次重签（旧卡与旧批准一并失效）' } }])
-            }
-            const decisionId = 'esc-' + randomBytes(3).toString('hex')
-            const choices = [
-              { n: 1, label: '批准升档', grant: 'approve-escalation', batchKey },
-              { n: 2, label: '降回默认档继续', batchKey },
-            ]
-            // B 渲染同钉：reason 是唯一文本源（账本与签发返回卡同一字符串——重渲染禁止重算/改写）
-            const escReason = '升档审批：' + escPkgs.map((e) => e.package + '→' + e.tier).join('、') + '（tier 高于场景默认档；权重倍数 junior:senior:expert = 1:10:50）'
-            await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: { decisionId, gateId: null, reason: escReason, choices, escalationFingerprint: escFp, batchKey } }])
-            const escProgress = stageProgress(task, state.stage)
-            return { ok: true, task: name, stage: state.stage, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, question: escReason, escalations: escPkgs, choices, ...(escProgress ? { progress: escProgress } : {}) }
-          }
-        }
-        // 已批准（或降回默认档）：按实际档派发——降级路径由 decisions 中 choice='降回默认档继续' 体现：包 tier 忽略。
-        // 降档决定同样绑定指纹：re-plan 后旧「降回默认档」不吞掉新批次的升档询问。
-        const declinedKey = JSON.stringify([state.stage, Math.max(...decls.map((d) => d.round)), [...decls.filter((d) => isEscalatedTier(task, spC, d.package)).map((d) => d.package)].sort()])
-        const declined = task.decisions.some((dc) => dc.choice === '降回默认档继续' && dc.batchKey === declinedKey && dc.escalationFingerprint === escFp)
-        if (declined) {
-          const tiersBackup = task.packages
-          task.packages = (tiersBackup ?? []).map((p) => ({ ...p, tier: undefined }))
-          // 惰性：降档同样要派发，派发前解析规则
-          const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
-          const cardsD = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint))
-          task.packages = tiersBackup
-          await appendEventsUnlocked(task, cardsD.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
-          return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cardsD[0], dispatches: cardsD, wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: '用户选择降回默认档：本批按场景默认档派发' }
-        }
-      }
       // 惰性：仅到达真正派发点才解析规则
       const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: ['owner'] })
-      const cards = decls.map((d) => withModelHint(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "").dispatch, selectModelHint))
+      const cards = []
+      for (const d of decls) {
+        const model = dispatchModelFor(task, prepared.roles, state, 'owner', d.package)
+        if (model.errorCard) return model.errorCard
+        cards.push(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "", model).dispatch)
+      }
+      // 已有会话换模型门：续派前检测首派与当前配置差异（§3.6），命中则停止并签发换模型卡。
+      const fresh = await freshSessionGate({ task, state, cards })
+      if (fresh.card) return fresh.card
       await appendEventsUnlocked(task, cards.map((card, index) => ({ type: 'dispatched', detail: dispatchedDetail(card, wave, decls[index].writable) })))
       return { ok: true, task: name, stage: state.stage, status: 'working', next: 'dispatch', transition: 'dispatch', dispatch: cards[0], dispatches: cards, wave: { kind: wave.kind, role: wave.role, round: wave.round } }
     }
     const key = newKey()
     // 惰性：非 owner 派发同样只在派发点解析规则
+    const model = dispatchModelFor(task, prepared.roles, state, wave.role, null)
+    if (model.errorCard) return model.errorCard
     const rules = await memberRulesText({ projectRoot, workflow, teamScene: stageDef.teamScene, roles: [wave.role] })
-    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, rules.get(wave.role) ?? "")
-    const dispatch = withModelHint(card.dispatch, selectModelHint)
-    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(dispatch, wave, []) }])
-    return { ...card, dispatch }
+    const card = dispatchCard({ ...task, policy }, stageDef, wave, { key, waveId, round: wave.round, continuation: wave.continuation, writable: [] }, rules.get(wave.role) ?? "", model)
+    const fresh = await freshSessionGate({ task, state, cards: [card.dispatch] })
+    if (fresh.card) return fresh.card
+    await appendEventsUnlocked(task, [{ type: 'dispatched', detail: dispatchedDetail(card.dispatch, wave, []) }])
+    return { ...card, dispatch: card.dispatch }
   }
 
   if (state.next.kind === "advance") {
@@ -944,7 +1577,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       ...(state.next.waveId ? { waveId: state.next.waveId } : {}),
       wave: { kind: state.wave.kind, role: state.wave.role, round: state.wave.round },
       inflight,
-      note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组含 modelHint/expectedAgentId/registered 判定事实，可原样转发补派）：' + inflight.map((d) => d.key).join('、') + '。恢复：调 tw-dispatch（按条目自动等待/续派/补派）',
+      note: '波次 ' + state.wave.kind + '（' + state.wave.role + ' 轮次 ' + state.wave.round + '）已派发；在途派单（inflight 数组含 modelRef/expectedAgentId/registered 判定事实，可原样转发补派）：' + inflight.map((d) => d.key).join('、') + '。恢复：调 tw-dispatch（按条目自动等待/续派/补派）',
     }
   }
 
@@ -995,14 +1628,32 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         // 卡面与 decide 校验同源，防误映射候选索引；优先于任何其他未决卡）
         return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, note: "迁移冲突卡待决：decide 保留版本后任务恢复推进" }
       }
+      if (pending.gateId === INTAKE_GATE) {
+        // 意图确认卡：配置未变 → 同钉渲染；已变（tw intent/roles/plan 改过）→ 作废并重签（§3.4.4）。
+        const stateInfo = await intakeState(task)
+        if (pending.intakeFingerprint === stateInfo.fingerprint) {
+          return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, intakeFingerprint: pending.intakeFingerprint, ...(pending.intake ? { intake: pending.intake } : {}) }
+        }
+        const details = roleDetailsForCard(task, stateInfo.roles, stateInfo.invalid)
+        const card = await signIntakeApproval({ task, workflow, roles: stateInfo.roles, details, profile: profileOf(task), source: "role-registry" })
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", ...card, note: "意图、角色模型或包模型已变化：确认卡已重签" }
+      }
+      if (isLegacyEscalationCard(pending)) {
+        // 升档审批机制已删除：历史未决卡幂等收口（只增 decided:superseded），随后重推导。
+        await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "升档审批机制已删除" } }])
+        return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", transition: "re-sign", note: "历史升档待决卡已收口（decided:superseded），正在按当前配置重新推导" }
+      }
+      if (pending.requiresFreshSession && pending.freshSessionFingerprint !== undefined) {
+        // E2：换模型卡签发后配置变化 → 旧卡作废重签（避免 decide 把 intake/旧 fresh 选项错位）。
+        const current = await currentFreshFingerprint(task, pending.requiresFreshSession)
+        if (!current.fingerprint || current.fingerprint !== pending.freshSessionFingerprint) {
+          await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "角色或包模型在换模型卡签发后变化，按当前配置重签" } }])
+          return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", transition: "re-sign", note: "换模型确认卡因配置变化已作废，正在按当前配置重新下发" }
+        }
+      }
       if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp: currentArtifactFp, reviewFp: currentReviewFp })) {
         // 指纹失效：作废旧卡（不删事实，只增 decided:superseded），落入下方重签
         await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "等待期评审链或制品已变化，卡片自动失效重签" } }])
-      } else if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
-        // 升档指纹失效（包配置变化）：作废旧卡后由 dispatch-plan 循环重推导重新出卡（升档签发在
-        // dispatch 分支内，本函数不在此重签）——返回 re-sign 循环标记，防「静止渲染旧卡 + decide 拒答」死循环。
-        await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "签发后包配置已变化，升档卡自动失效重签" } }])
-        return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", transition: "re-sign-escalation", note: "升档待决卡因包配置变化已作废，正在按当前配置重新出卡" }
       } else {
         // 已签发未失效：同钉渲染账本原卡（卡面=账本=decide 依据；再调 dispatch 返回同一张卡——签发幂等）
         return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(progressText ? { progress: progressText } : {}) }
@@ -1052,10 +1703,38 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
     if (pending.gateId && pending.fingerprints && !humanDecisionFresh({ decided: pending.fingerprints, artifactFp, reviewFp })) {
       throw fail("DECISION_STALE", "该卡片的签发指纹已失效（等待期评审链或制品发生变化）：tw run 查看状态，调 tw-dispatch / tw dispatch-plan 重签最新卡片后重新 decide")
     }
-    // 升档审批卡同构校验：签发时绑定包配置指纹，等待期 re-plan 改动包集/档位后旧卡拒绝直答——
-    // 否则答旧卡写入旧指纹批准，与当前批次指纹永不匹配（答了也白答的空转），且旧语义授权不可见地复活。
-    if (pending.escalationFingerprint !== undefined && pending.escalationFingerprint !== escalationFingerprint(task)) {
-      throw fail("DECISION_STALE", "该升档卡签发后包配置已变化（re-plan 改动了包集或档位），原选项不可再 decide：调 tw-dispatch / tw dispatch-plan 重签最新升档卡后重新 decide")
+    // 升档审批机制已删除：历史未决升档卡保持审计事实，但不再可答（收口由 dispatch 通道完成）。
+    if (isLegacyEscalationCard(pending)) {
+      throw fail("DECISION_STALE", "该卡属于已删除的升档审批机制：调 tw-dispatch（或 tw dispatch-plan）推进一次即自动收口（decided:superseded）并重推导，随后按意图确认卡/模型配置重新推进")
+    }
+    // 意图确认卡：指纹必须与当前稳定投影一致（等待期改意图/roles/packages → 旧卡拒绝直答）；
+    // unresolved 时不允许"确认开始"（确认语义是模型符合预期，不能假确认）。
+    let intakeRoles = null
+    if (pending.gateId === INTAKE_GATE) {
+      const stateInfo = await intakeState(task)
+      if (pending.intakeFingerprint !== stateInfo.fingerprint) {
+        throw fail("DECISION_STALE", "意图、角色模型或包模型在签发后已变化：tw run 查看状态，调 tw-dispatch / tw dispatch-plan 重签确认卡后重新 decide")
+      }
+      intakeRoles = stateInfo.roles
+      if (picked.grant === "accept-intake") {
+        const unresolved = ROLE_KEYS.filter((role) => !intakeRoles[role])
+        if (unresolved.length) throw fail("INTAKE_ROLES_UNRESOLVED", "角色模型仍未解析（" + unresolved.join("、") + "）：补齐 DSH 当前 profile 的 team-work-dsh.tiers（tw models 查看）后 tw roles --resolve 重签确认卡；unresolved 时不能确认开始")
+      }
+      if (picked.grant === "revise-intake") {
+        return { ok: true, task: name, decisionId: pending.decisionId, next: "run", note: "未落盘决定：用 tw intent / tw roles / tw plan 修改后，调 tw-dispatch 会作废旧卡并重签；确认卡未确认前不派发" }
+      }
+    }
+    // 已有会话换模型卡：三个选项分别写 keep-session 绑定 / session-reset 事实 / 回滚 roles。
+    const fresh = pending.requiresFreshSession ?? null
+    if (fresh && !["keep-session", "retire-and-recreate", "rollback-model"].includes(picked.grant)) {
+      throw fail("DECISION_STALE", "换模型确认卡只接受 保留原会话 / 重开会话 / 回滚 roles 三个选项")
+    }
+    // E2：卡面必须与当前配置同钉——签发后 roles/packages 变化（含绕过 roles 命令的外部改动）拒绝直答。
+    if (fresh && pending.freshSessionFingerprint !== undefined) {
+      const current = await currentFreshFingerprint(task, fresh)
+      if (!current.fingerprint || current.fingerprint !== pending.freshSessionFingerprint) {
+        throw fail("DECISION_STALE", "该换模型卡签发后角色/包模型已变化（当前卡片与配置不再一致）：tw run 查看状态，调 tw-dispatch / tw dispatch-plan 重签后再决定")
+      }
     }
     const decision = {
       decisionId: pending.decisionId,
@@ -1063,11 +1742,14 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
       choice: picked.label,
       ...(picked.grant ? { grant: picked.grant } : {}),
       ...(picked.batchKey ? { batchKey: picked.batchKey } : {}),
-      // 升档批准绑定包配置指纹（签发指纹=当前指纹，校验已保证）：幂等查找据此识别幽灵批准
-      ...(pending.escalationFingerprint !== undefined ? { escalationFingerprint: pending.escalationFingerprint } : {}),
+      ...(pending.gateId === INTAKE_GATE ? { intakeFingerprint: pending.intakeFingerprint, modelRefs: intakeRoles } : {}),
+      ...(pending.gateId === INTAKE_GATE && pending.intake ? { intake: pending.intake } : {}),
+      ...(fresh && picked.grant === "keep-session" ? { sessionId: fresh.sessionId, role: fresh.role, keptModelRef: fresh.fromModelRef, rolesDigest: fresh.rolesDigest } : {}),
+      ...(fresh && picked.grant === "retire-and-recreate" ? { sessionId: fresh.sessionId, role: fresh.role } : {}),
+      ...(fresh && picked.grant === "rollback-model" ? { sessionId: fresh.sessionId, role: fresh.role, target: fresh.target ?? "roles", restoredModelRef: fresh.fromModelRef } : {}),
       // F5/F6：决定绑定双指纹——artifactFingerprint（每包「包→指纹」映射）+ reviewFingerprint；
       // fingerprint 旧字段双写（§7 回滚兼容：旧版 runtime 读旧字段仍可判定）
-      ...(pending.gateId ? { fingerprint: artifactsFingerprint(current), artifactFingerprint: artifactFp, reviewFingerprint: reviewFp } : {}),
+      ...(pending.gateId && pending.gateId !== INTAKE_GATE ? { fingerprint: artifactsFingerprint(current), artifactFingerprint: artifactFp, reviewFingerprint: reviewFp } : {}),
       ...(picked.grant === "rework-unfixed" && Array.isArray(pending.reworkStalemate) ? { packages: pending.reworkStalemate } : {}),
       ...(note ? { note } : {}),
       proof: { mode: "caller-reported", at: new Date().toISOString() },
@@ -1078,7 +1760,24 @@ async function cmdDecide({ projectRoot, name, choice, note }) {
     existing.items.push(decision)
     await atomicJson(file, existing)
     const events = [{ type: "decided", detail: { decisionId: decision.decisionId, choice: decision.choice } }]
-    if (picked.label === "结束任务") events.push({ type: "task-completed", detail: { stage: stageId, by: "user", form: "partial" } })
+    if (picked.label === "结束任务" || picked.grant === "stop-task") events.push({ type: "task-completed", detail: { stage: stageId, by: "user", form: "partial" } })
+    if (fresh && picked.grant === "retire-and-recreate") {
+      events.push({ type: "session-reset", detail: { role: fresh.role, package: fresh.package ?? null, scene: fresh.scene ?? stageId, reason: "用户选择作废当前波、重开会话（全新上下文）", decisionId: pending.decisionId, fromModelRef: fresh.fromModelRef, toModelRef: fresh.toModelRef } })
+    }
+    if (fresh && picked.grant === "rollback-model") {
+      if (fresh.target === "package" && fresh.package != null) {
+        // 包级模型变更：回滚 packages[package].model（roles 未被改动，不动角色配置）。
+        const restored = (Array.isArray(task.packages) ? task.packages : []).map((pkg) => pkg.id === fresh.package ? { ...pkg, model: normalizeModelRef(fresh.fromModelRef, "requiresFreshSession.fromModelRef") } : pkg)
+        await atomicJson(path.join(task.root, "packages.json"), { items: restored })
+        events.push({ type: "re-planned", detail: { packages: restored.map((pkg) => pkg.id), source: "fresh-session-rollback", package: fresh.package, modelRef: fresh.fromModelRef, decisionId: pending.decisionId } })
+      } else {
+        await updateAgents(task, (agents) => {
+          const roles = normalizeRoleEntries(agents.roles).roles
+          agents.roles = { ...roles, [fresh.role]: normalizeModelRef(fresh.fromModelRef, "requiresFreshSession.fromModelRef") }
+        })
+        events.push({ type: "role-models-changed", detail: { changes: [{ role: fresh.role, from: fresh.toModelRef, to: fresh.fromModelRef, reason: "用户选择回滚 roles 到首派模型", decisionId: pending.decisionId }] } })
+      }
+    }
     // F9 四类恢复：异 digest 多报告 → 用户选择保留一版，其余波写 dispatch-superseded（未经评审的内容不得混入收敛基线）
     const migrate = pending.migrate
     if (migrate && Array.isArray(migrate.candidates)) {
@@ -1267,7 +1966,9 @@ async function cmdRoute({ projectRoot, name, route, decision, basis }) {
   })
 }
 
-async function cmdIntent({ projectRoot, name, objective, risk, addConstraint = [], addExclusion = [] }) {
+// 意图修订（§3.5）：新增 rawRequirement/scope/acceptance/gaps 与 gap 答复；改值后确认指纹变化，
+// 确认卡在下次 tw-dispatch / tw plan 时作废重签（这里只提示，不抢先签发第二张卡）。
+async function cmdIntent({ projectRoot, name, objective, risk, rawRequirement, addConstraint = [], addExclusion = [], acceptance = [], scopeNotes = [], gaps = [], answerGap = null, answer = null }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task = await loadTask(projectRoot, name, { workflow, policy })
   if (deriveTask(task).status === "completed") {
@@ -1283,13 +1984,79 @@ async function cmdIntent({ projectRoot, name, objective, risk, addConstraint = [
       change.risk = risk
     }
     if (objective) { intent.objective = objective; change.objective = objective }
+    if (typeof rawRequirement === "string" && rawRequirement.trim()) { intent.rawRequirement = rawRequirement; change.rawRequirement = "更新（原文已保留）" }
+    if (!Array.isArray(intent.constraints)) intent.constraints = []
     for (const c of addConstraint) if (!intent.constraints.includes(c)) intent.constraints.push(c)
     if (addConstraint.length) change.addConstraints = addConstraint
+    if (!Array.isArray(intent.exclusions)) intent.exclusions = []
     for (const x of addExclusion) if (!intent.exclusions.includes(x)) intent.exclusions.push(x)
     if (addExclusion.length) change.addExclusions = addExclusion
+    if (acceptance.length) {
+      if (!Array.isArray(intent.acceptance)) intent.acceptance = []
+      for (const a of acceptance) if (!intent.acceptance.includes(a)) intent.acceptance.push(a)
+      change.acceptance = acceptance
+    }
+    if (scopeNotes.length) {
+      const scope = intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {}
+      const notes = Array.isArray(scope.notes) ? scope.notes : []
+      for (const noteText of scopeNotes) if (!notes.includes(noteText)) notes.push(noteText)
+      intent.scope = { ...scope, notes }
+      change.scope = { notes: scopeNotes }
+    }
+    if (gaps.length) {
+      if (!Array.isArray(intent.gaps)) intent.gaps = []
+      for (const gap of gaps) {
+        if (!gap || typeof gap.question !== "string" || !gap.question.trim()) throw fail("USAGE", "--add-gap 需要 JSON 对象且 question 为非空字符串")
+        intent.gaps.push({
+          id: typeof gap.id === "string" && gap.id.trim() ? gap.id.trim() : "g" + (intent.gaps.length + 1),
+          question: gap.question.trim(),
+          whyItMatters: typeof gap.whyItMatters === "string" ? gap.whyItMatters : "",
+          proposedDefault: typeof gap.proposedDefault === "string" ? gap.proposedDefault : "",
+          answer: typeof gap.answer === "string" && gap.answer.trim() ? gap.answer : null,
+        })
+      }
+      change.addGaps = gaps.length
+    }
+    if (answerGap) {
+      if (!Array.isArray(intent.gaps)) intent.gaps = []
+      const target = intent.gaps.find((gap) => gap.id === answerGap)
+      if (!target) throw fail("USAGE", "未知 gap id：" + answerGap + "（可用 tw run / 确认卡查看现有 gap）")
+      if (typeof answer !== "string" || !answer.trim()) throw fail("USAGE", "--answer-gap 需要 --answer <答复文本>")
+      target.answer = answer.trim()
+      change.answeredGaps = [answerGap]
+    }
+    intent.revisions = Array.isArray(intent.revisions) ? intent.revisions : []
     intent.revisions.push({ seq: intent.revisions.length + 1, at: new Date().toISOString(), change })
     await atomicJson(file, intent)
-    return { ok: true, task: name, objective: intent.objective, constraints: intent.constraints, exclusions: intent.exclusions, note: "意图已更新；后续派单将使用新值" }
+    const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+    // 已有确认卡且当前没有其他待决卡 → 直接重签（§3.4.4 触发源）；存在其他待决卡时不叠第二张卡，
+    // 只标记 intakeRestaled，等下次派发时重签。
+    const pending = pendingDecisionDetail(task.journal)
+    const next = deriveTask(task).next
+    // 重签条件：当前待决卡就是意图确认卡（改意图即重签），或没有待决卡且下一步就是派发。
+    // 存在其他待决/未签的收敛问题（人工门/升级/僵局）时不抢先盖卡，只标记 intakeRestaled，等下次派发前重签。
+    const canResignIntake = pending ? pending.gateId === INTAKE_GATE : next.kind === "dispatch"
+    if (intakeIssued && canResignIntake) {
+      // 用写盘后的最新 intent 重算指纹（task.intent 是进入命令时的快照，不能用于确认投影）。
+      const updated = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+      const stateInfo = await intakeState(updated)
+      const details = roleDetailsForCard(updated, stateInfo.roles, stateInfo.invalid)
+      const card = await signIntakeApproval({ task: updated, workflow, roles: stateInfo.roles, details, profile: profileOf(updated), source: "role-registry" })
+      return {
+        ok: true, task: name, status: "awaiting-user", next: "decide", transition: "await-decision",
+        ...card, roles: stateInfo.roles,
+        objective: intent.objective, constraints: intent.constraints, exclusions: intent.exclusions,
+        rawRequirement: intent.rawRequirement ?? "", scope: intent.scope ?? {}, acceptance: intent.acceptance ?? [], gaps: intent.gaps ?? [],
+        intakeRestaled: true,
+        note: "意图已更新；意图确认卡已按新意图重签（确认前不派发）",
+      }
+    }
+    return {
+      ok: true, task: name, objective: intent.objective, constraints: intent.constraints, exclusions: intent.exclusions,
+      rawRequirement: intent.rawRequirement ?? "", scope: intent.scope ?? {}, acceptance: intent.acceptance ?? [], gaps: intent.gaps ?? [],
+      ...(intakeIssued ? { intakeRestaled: true } : {}),
+      note: "意图已更新；后续派单将使用新值" + (intakeIssued ? "；确认卡将在下次 tw-dispatch / tw plan 时作废旧卡并重签（确认前不派发）" : ""),
+    }
   })
 }
 
@@ -1297,9 +2064,18 @@ async function cmdGate({ projectRoot, name }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task = await loadTask(projectRoot, name, { workflow, policy })
   const state = deriveTask(task)
-  if (state.gate) return { ok: true, task: name, stage: state.stage, passed: state.gate.passed, blockers: state.gate.blockers }
+  // 只读提示（§6 批 B）：意图确认状态与当前稳定投影是否一致（不签发、不写盘）。
+  const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+  const stateInfo = await intakeState(task)
+  const accepted = intakeConfirmation(task)
+  const intake = {
+    issued: intakeIssued,
+    confirmed: Boolean(accepted && accepted.intakeFingerprint === stateInfo.fingerprint),
+    ...(intakeIssued ? { fingerprint: stateInfo.fingerprint } : {}),
+  }
+  if (state.gate) return { ok: true, task: name, stage: state.stage, passed: state.gate.passed, blockers: state.gate.blockers, intake }
   const gate = gateCheck({ workflow, policy, stageId: state.stage, scope: task.scope, artifacts: task.artifacts, reports: task.reports.filter((r) => r.stage === state.stage), decisions: task.decisions, journal: task.journal, packages: Array.isArray(task.packages) && task.packages.length ? task.packages : null })
-  return { ok: true, task: name, stage: state.stage, passed: gate.passed, blockers: gate.blockers, wave: state.wave }
+  return { ok: true, task: name, stage: state.stage, passed: gate.passed, blockers: gate.blockers, wave: state.wave, intake }
 }
 
 async function cmdArchive({ projectRoot, name }) {
@@ -1341,8 +2117,9 @@ async function cmdArchive({ projectRoot, name }) {
   return { ok: true, task: name, archivedTo: path.relative(projectRoot, dest), form, kept: ["manifest.json", "artifacts/", "reviews(在 manifest)", "decisions.json", "journal-summary.jsonl"], cleaned: ["reports/", "snapshots/", "runtime 状态"] }
 }
 
-// plan（v3.2）：Lead 拆包登记 + 机械验收（P2 调用内一次查完）。
-// 仅验机械属性（id 唯一/可写互斥/依赖无环/完成标准在场/路径合法）；拆分语义质量归 Lead（skill 指引）。
+// plan（v3.2/§3.3）：Lead 拆包登记 + 机械验收（P2 调用内一次查完）。
+// 仅验机械属性（id 唯一/可写互斥/依赖无环/完成标准在场/路径合法/模型解析）；拆分语义质量归 Lead。
+// 每包在落盘前一律物化为 model:ModelRef（显式 model / tier 语法糖 / 复用 roles.owner），不再持久化 tier。
 async function cmdPlan({ projectRoot, name, packagesJson }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   let items
@@ -1352,7 +2129,7 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
     throw fail('USAGE', '--packages 不是合法 JSON 数组')
   }
   if (!Array.isArray(items) || items.length === 0) {
-    throw fail('USAGE', '--packages 必须是非空 JSON 数组：[{id, writable:["路径:kind"], done:["完成标准"], dependsOn:["包id"]}]')
+    throw fail('USAGE', '--packages 必须是非空 JSON 数组：[{id, model?:{provider,modelName,effort?}, tier?:junior|senior|expert, writable:["路径:kind"], done:["完成标准"], dependsOn:["包id"]}]')
   }
   const reasons = []
   const ids = new Set()
@@ -1368,7 +2145,11 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
       paths.push({ path: rel, pkg: p.id })
     }
     if (!Array.isArray(p.done) || p.done.length === 0 || p.done.some((d) => typeof d !== 'string' || !d.trim())) reasons.push('包 ' + p.id + ' 缺完成标准 done（非空字符串数组）')
-    if (p.tier !== undefined && !['junior', 'senior', 'expert'].includes(p.tier)) reasons.push('包 ' + p.id + ' tier 非法：' + JSON.stringify(p.tier) + '（可选 junior|senior|expert；缺省用场景默认档）')
+    if (p.model !== undefined && p.tier !== undefined) reasons.push('包 ' + p.id + ' 不能同时给 model 与 tier（model 是已解析实例，tier 只是入参语法糖）')
+    if (p.tier !== undefined && !['junior', 'senior', 'expert'].includes(p.tier)) reasons.push('包 ' + p.id + ' tier 非法：' + JSON.stringify(p.tier) + '（可选 junior|senior|expert；缺省复制 roles.owner）')
+    if (p.model !== undefined) {
+      try { normalizeModelRef(p.model, '包 ' + p.id + ' 的 model') } catch (error) { reasons.push('包 ' + p.id + ' 的 model 不合法：' + String(error?.message ?? error)) }
+    }
   }
   for (let i = 0; i < paths.length; i += 1) {
     for (let j = i + 1; j < paths.length; j += 1) {
@@ -1406,31 +2187,186 @@ async function cmdPlan({ projectRoot, name, packagesJson }) {
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
-    // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）
+    // 重拆窗口（F6）：待决卡片或在途派发时禁止重拆（与 intent 修订同款语义）。
+    // 意图确认卡是例外（§3.4.3）：拆包会改变逐包模型，允许先 plan，随后自动重签确认卡。
     const state = deriveTask(task)
-    // blocked 静止卡（produceBlocked）放行重拆：扩权重派正是该卡的恢复通道（re-planned 晚于 blocked 报告，
-    // 波次机据此解除静止）；其余待决卡（人工门/路由/升档审批）仍禁止重拆，先 decide。
-    if (state.status === 'awaiting-user' && !Array.isArray(state.next.produceBlocked)) throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
+    const pendingIntake = state.status === 'awaiting-user' && state.next.pending?.gateId === INTAKE_GATE
+    if (state.status === 'awaiting-user' && !Array.isArray(state.next.produceBlocked) && !pendingIntake) throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
     // F3：在途判定统一走 waves.inflightBatch（与 derive/重建/提示同源；superseded 波不在在途）
     const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
     if (inflight) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.open.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
+    // 模型解析（§3.3.1）：显式 model 直接采用；tier 从本次调用快照解析；都不给复制 roles.owner。
+    // 任一包解析失败 → PLAN_MODEL_UNRESOLVED，不落半成品包（结构错误仍用 PLAN_REJECTED）。
+    const rolesInfo = await ensureRolesInitialized({ task, workflow, policy })
+    const resolvedTiers = await resolveTiers()
+    const planned = []
+    for (const p of items) {
+      let modelRef = null
+      let from = null
+      if (p.model !== undefined) {
+        modelRef = normalizeModelRef(p.model, '包 ' + p.id + ' 的 model')
+        from = 'explicit'
+      } else if (p.tier !== undefined) {
+        const hint = computeModelHint(resolvedTiers.tiers[p.tier], [])
+        modelRef = hint ? modelRefFromHint(hint) : null
+        from = 'tier'
+        if (!modelRef) throw fail('PLAN_MODEL_UNRESOLVED', '包 ' + p.id + ' 的 tier=' + p.tier + ' 在当前调用快照无法解析（tier 未配置或候选池为空）：补齐 team-work-dsh.tiers（tw models 查看）后重试，或直接给 model')
+      } else {
+        if (!rolesInfo.roles.owner) throw fail('PLAN_MODEL_UNRESOLVED', '包 ' + p.id + ' 未给 model/tier，且 agents.json.roles.owner 缺失：先 tw roles --resolve 初始化角色模型，或每包显式给 model')
+        modelRef = normalizeModelRef(rolesInfo.roles.owner, 'roles.owner')
+        from = 'roles.owner'
+      }
+      const { tier: _legacyTier, ...rest } = p
+      planned.push({ ...rest, model: modelRef, modelSource: from })
+    }
     const had = task.packages != null
-    await atomicJson(path.join(task.root, 'packages.json'), { items })
-    await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: items.map((p) => p.id) } }])
-    return { ok: true, task: name, packages: items.map((p) => ({ id: p.id, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'dispatch', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: had ? '包定义已更新（下一波生效）' : '包定义已登记；推进将按波组派发（tw-dispatch / tw dispatch-plan）' }
+    const persisted = planned.map(({ modelSource: _source, ...pkg }) => pkg)
+    await atomicJson(path.join(task.root, 'packages.json'), { items: persisted })
+    task.packages = persisted
+    await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: persisted.map((p) => p.id), models: planned.map((p) => ({ id: p.id, modelRef: p.model, from: p.modelSource })) } }])
+    // 已有确认卡：包模型变化 → 作废旧卡并重签（§3.4.3/§3.4.4）。
+    const intakeIssued = task.journal.some((event) => event.type === 'decision-issued' && event.detail?.gateId === INTAKE_GATE)
+    if (intakeIssued) {
+      const stateInfo = await intakeState(task)
+      const details = roleDetailsForCard(task, stateInfo.roles, stateInfo.invalid)
+      const card = await signIntakeApproval({ task, workflow, roles: stateInfo.roles, details, profile: profileOf(task), source: 'role-registry' })
+      return { ok: true, task: name, packages: persisted.map((p) => ({ id: p.id, model: p.model, dependsOn: p.dependsOn ?? [] })), replanned: had, status: 'awaiting-user', next: 'decide', transition: 'await-decision', ...card, ...(tagWarn ? { warnings: [tagWarn] } : {}), note: '包定义与逐包模型已登记，意图确认卡已按新包模型重签：确认后推进（tw-dispatch / tw dispatch-plan）' }
+    }
+    return { ok: true, task: name, packages: persisted.map((p) => ({ id: p.id, model: p.model, dependsOn: p.dependsOn ?? [] })), replanned: had, next: 'dispatch', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: had ? '包定义已更新（下一波生效）' : '包定义已登记；推进将按波组派发（tw-dispatch / tw dispatch-plan）' }
   })
 }
 
 
+// tw roles（§3.2/§3.1）：任务角色模型的唯一读写入口。
+// 只读：三角色 ModelRef + effort 状态 + 档位溯源 + unresolved 清单；
+// 写：--set <role>=<provider>/<modelName>[@<effort>] 或 <role>=tier:<档位>[@<effort>]、--clear <role>、--resolve。
+// 写后若已签发过意图确认卡 → 作废旧卡并重签；已有会话的角色给出"不可热替换模型"警告（换模型卡在推进时签发）。
+function parseRoleAssignment(spec) {
+  if (typeof spec !== "string" || !spec.includes("=")) throw fail("USAGE", "--set 需要 <role>=<provider>/<modelName>[@<effort>] 或 <role>=tier:<junior|senior|expert>[@<effort>]")
+  const index = spec.indexOf("=")
+  const role = spec.slice(0, index)
+  const value = spec.slice(index + 1)
+  if (!ROLE_KEYS.includes(role)) throw fail("USAGE", "未知角色 " + JSON.stringify(role) + "：只允许 owner/challenger/expert")
+  if (!value.trim()) throw fail("USAGE", "角色 " + role + " 的赋值不能为空")
+  if (value.startsWith("tier:")) {
+    const rest = value.slice("tier:".length)
+    const at = rest.lastIndexOf("@")
+    const tier = at >= 0 ? rest.slice(0, at) : rest
+    const effort = at >= 0 ? rest.slice(at + 1) : undefined
+    if (!TIERS.includes(tier)) throw fail("USAGE", "角色 " + role + " 的档位非法：" + JSON.stringify(tier) + "（junior|senior|expert）")
+    if (at >= 0 && !effort.trim()) throw fail("MODEL_REF_INVALID", "角色 " + role + " 的 effort 不能为空字符串：不设置推理强度时省略 @ 部分")
+    if (at >= 0 && effort.trim() === "none") throw fail("MODEL_REF_INVALID", '角色 ' + role + ' 的 effort 不能为 "none"：不设置推理强度时省略 @ 部分')
+    return { role, tier, ...(at >= 0 ? { effort: effort.trim() } : {}) }
+  }
+  const at = value.lastIndexOf("@")
+  const base = at >= 0 ? value.slice(0, at) : value
+  const effort = at >= 0 ? value.slice(at + 1) : undefined
+  const slash = base.indexOf("/")
+  if (slash <= 0 || slash === base.length - 1) throw fail("USAGE", "角色 " + role + " 的模型写法应为 <provider>/<modelName>，例如 vendor/model（可选 @<effort>）")
+  const ref = { provider: base.slice(0, slash), modelName: base.slice(slash + 1) }
+  if (effort !== undefined) ref.effort = effort
+  let modelRef
+  try { modelRef = normalizeModelRef(ref, "角色 " + role) } catch (error) { throw fail("MODEL_REF_INVALID", String(error?.message ?? error)) }
+  return { role, modelRef }
+}
+
+async function cmdRoles({ projectRoot, name, sets = [], clears = [], resolve = false }) {
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  const task = await loadTask(projectRoot, name, { workflow, policy })
+  const registry = await readRegistry(task)
+  const parsedSets = sets.map(parseRoleAssignment)
+  if (!sets.length && !clears.length && !resolve) {
+    if (registry.corrupt) throw fail("ROLES_CORRUPT", "agents.json 损坏，角色模型不可读：" + registry.corrupt)
+    const normalized = normalizeRoleEntries(registry.roles)
+    const resolved = await resolveTiers()
+    const unresolved = ROLE_KEYS.filter((role) => !normalized.roles[role])
+    const meta = roleMeta(task)
+    return {
+      ok: true, task: name, profile: profileOf(task),
+      roles: normalized.roles,
+      effortState: Object.fromEntries(ROLE_KEYS.map((role) => [role, normalized.roles[role] ? (normalized.roles[role].effort ? "configured" : "omitted") : "unresolved"])),
+      tierProvenance: Object.fromEntries(ROLE_KEYS.map((role) => [role, meta.get(role)?.tierProvenance ?? null])),
+      details: roleDetailsForCard(task, normalized.roles, normalized.invalid),
+      unresolved,
+      ...(normalized.invalid.length ? { warnings: normalized.invalid.map((entry) => "角色 " + (entry.role ?? "(未知)") + " 无效：" + entry.reason) } : {}),
+      ...(resolved.warnings.length ? { configWarnings: resolved.warnings } : {}),
+      history: task.journal.filter((event) => event.type === "role-models-changed").slice(-5).map((event) => ({ at: event.at, changes: event.detail?.changes ?? [] })),
+      note: unresolved.length ? "存在 unresolved 角色：补齐 team-work-dsh.tiers 后 tw roles --resolve 重建；unresolved 时确认卡不提供“确认开始”" : "三角色模型已固化在 agents.json.roles；配置热变不会自动改（要改用 tw roles --resolve）",
+    }
+  }
+  return withOwnerLock(path.join(task.root, "locks", "task.lock"), async () => {
+    const locked = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+    const lockedRegistry = await readRegistry(locked)
+    const roles = { ...normalizeRoleEntries(lockedRegistry.roles).roles }
+    const resolvedTiers = await resolveTiers()
+    const changes = []
+    const warnings = []
+    const state = deriveTask(locked)
+    for (const entry of parsedSets) {
+      let modelRef = entry.modelRef ?? null
+      let tier = entry.tier ?? null
+      let tierProvenance = null
+      if (tier) {
+        const hint = computeModelHint(resolvedTiers.tiers[tier], [])
+        if (!hint) throw fail("ROLES_UNRESOLVED", "角色 " + entry.role + " 的档位 " + tier + " 在当前调用快照未解析：补齐 team-work-dsh.tiers（tw models 查看）后重试，或直接给 <provider>/<modelName>")
+        modelRef = modelRefFromHint({ ...hint, ...(entry.effort ? { effort: entry.effort } : {}) })
+        tierProvenance = "tw roles --set tier:" + tier + (entry.effort ? "@" + entry.effort : "")
+      }
+      if (!modelRef) throw fail("MODEL_REF_INVALID", "角色 " + entry.role + " 没有解析出模型实例")
+      const from = roles[entry.role] ?? null
+      roles[entry.role] = modelRef
+      changes.push({ role: entry.role, from, to: modelRef, ...(tier ? { tier, tierProvenance } : {}) })
+    }
+    for (const role of clears) {
+      if (!ROLE_KEYS.includes(role)) throw fail("USAGE", "未知角色 " + JSON.stringify(role) + "：只允许 owner/challenger/expert")
+      const from = roles[role] ?? null
+      delete roles[role]
+      changes.push({ role, from, to: null, cleared: true })
+    }
+    if (resolve) {
+      const resolvedRoles = await resolveRoleModels({ task: locked, workflow, policy })
+      for (const role of ROLE_KEYS) {
+        const from = roles[role] ?? null
+        const to = resolvedRoles.roles[role] ?? null
+        if (to) roles[role] = to
+        else delete roles[role]
+        changes.push({ role, from, to, tier: resolvedRoles.details.find((detail) => detail.role === role)?.tier ?? null, tierProvenance: resolvedRoles.details.find((detail) => detail.role === role)?.tierProvenance ?? null, resolved: true })
+      }
+    }
+    // 已有会话的角色：提示不可热替换（换模型确认卡由下一轮 tw-dispatch 签发，避免一次动作叠两张卡）。
+    for (const change of changes) {
+      const session = latestSessionForRole(locked, lockedRegistry.mappings, change.role)
+      if (session) warnings.push("角色 " + change.role + " 已有会话（" + session.sessionId + "）：会话模型不可热替换，下一轮续派（tw-dispatch）将出换模型确认卡")
+    }
+    await updateAgents(locked, (agents) => { agents.roles = roles })
+    if (changes.length) await appendEventsUnlocked(locked, [{ type: "role-models-changed", detail: { changes, source: resolve ? "resolve" : "explicit" } }])
+    locked.roles = roles
+    const unresolved = ROLE_KEYS.filter((role) => !roles[role])
+    // 写盘后重载：角色溯源（role-models-changed）与 agents.json.roles 都必须是新事实。
+    const refreshed = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+    const intakeIssued = refreshed.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+    // 同一时刻只允许一张未决卡（E2）：存在其他待决卡（人工门/收敛/迁移）时不抢先签意图确认卡，
+    // 只标记 stale，等用户答完该卡后的下一次推进再重签，避免 choose 序号错位。
+    const pending = pendingDecisionDetail(refreshed.journal)
+    const canSignIntake = !pending || pending.gateId === INTAKE_GATE || Boolean(pending.requiresFreshSession)
+    if (intakeIssued && canSignIntake) {
+      const stateInfo = await intakeState(refreshed)
+      const details = roleDetailsForCard(refreshed, stateInfo.roles, stateInfo.invalid)
+      const card = await signIntakeApproval({ task: refreshed, workflow, roles: stateInfo.roles, details, profile: profileOf(refreshed), source: "role-registry" })
+      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", ...card, roles, changes, unresolved, ...(warnings.length ? { warnings } : {}), note: "角色模型已更新，意图确认卡已重签（确认前不派发）" }
+    }
+    return { ok: true, task: name, roles, changes, unresolved, ...(warnings.length ? { warnings } : {}), ...(intakeIssued && pending ? { intakeRestaled: true } : {}), note: changes.length ? "角色模型已更新；后续派发直接使用 roles（不再查配置）" + (intakeIssued && pending ? "；当前有待决卡（" + String(pending.reason ?? "待用户决定") + "），处理后的下一次推进将重签意图确认卡" : "") : "无变化（幂等）" }
+  })
+}
+
 // agent-map（v3.2/F5；定向委派第二阶段收敛为纯续派登记）：登记 dispatchKey → 平台 subagent id。
-// 任务级注册表 task.root/agents.json 只保存 mappings——模型选择由 tw-dispatch 在创建子代理时直接指定
-// （provider/model 落 agentOptions、effort 走首请求 selection），不经 agents.json 中转；modelHint 快照仍在
-// journal 的 dispatched 事实内（dispatch-plan 导出给 Lead 当 target 用）。
+// 任务级注册表 task.root/agents.json 保存 mappings 与 roles——本命令只写 mappings；模型由 open/tw roles/plan
+// 固化在 roles 与 packages，tw-dispatch 按 dispatch-plan 导出的 modelRef 创建；快照在 journal 的 dispatched 事实内。
 // 续派波经 dispatch-plan 导出 expectedAgentId（同包同角色上一派发的映射）——Lead 据此 send_message 续原会话。
 async function cmdAgentMap({ projectRoot, name, key, agent, modelHint }) {
   if (!key || !agent) throw fail('USAGE', 'agent-map 需要 --key <派单key> 与 --agent <平台subagentId>')
   const { workflow, policy } = await loadDefinitions(projectRoot)
-  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型选择在创建子代理时由 tw-dispatch 采用 dispatch-plan 的 modelHint')
+  if (modelHint !== undefined) throw fail('USAGE', 'agent-map 不接受 --model-hint；模型在 open / tw roles / tw plan 时已固化为 ModelRef，tw-dispatch 按 dispatch-plan 的 modelRef 创建成员')
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, 'locks', 'task.lock'), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
@@ -1512,8 +2448,13 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
     return { ok: true, task: name, stage: earlyState.stage, stop: "completed", waves: [], card }
   }
   return withOwnerLock(path.join(early.root, "locks", "task.lock"), async () => {
-    const resolved = await resolveTiers()
-    const warnings = [...resolved.warnings]
+    // 旧未决升档卡收口（§3.3.3）：删除升档审批后，历史 escalation 卡必须幂等 superseded，否则永久静止。
+    const lockedTask = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+    const settled = await settleLegacyEscalations(lockedTask)
+    // E4：配置快照只服务派发计划展示（modelSettings/warnings）与旧 tier 物化，不在 stop 卡路径无条件读取；
+    // 派发模型本身来自 roles/packages，不依赖本次调用快照。
+    const warnings = []
+    if (settled) warnings.push("已收口 " + settled + " 张历史升档审批卡（decided:superseded，升档审批机制已删除）")
     const planStop = (stop, card, extra = {}) => {
       const plan = { ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra }
       if (!json) plan.human = stopHumanLines(stop, card, extra)
@@ -1521,41 +2462,36 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
     }
     for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
       const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
+      // 账本损坏降级（I5 无死门）：prepareDispatch 会按历史/策略重建 roles；续派映射丢失走 fresh 重建路径。
+      const preRegistry = await readRegistry(task)
+      if (preRegistry.corrupt) warnings.push("agents.json 损坏（" + preRegistry.corrupt + "）：已按角色迁移路径重建 roles；续派映射不可用，续派波按 fresh 重建路径恢复；可用 tw agent-map 重建登记")
       await ensureE2ePackages(task) // B：e2e 场景模板物化（幂等；advance 进入 e2e 后首轮生效）
       const state = deriveTask(task)
-      if (state.next.kind === 'dispatch' && state.next.wave) {
-        const unresolved = TIERS.filter((tier) => !resolved.tiers[tier]?.pool?.length)
-        const unexpected = dispatchTiers(task, state, workflow, policy).filter((tier) => !TIERS.includes(tier))
-        if (unresolved.length || unexpected.length) {
-          return planStop('blocked', modelConfigurationCard({ name, state, resolved, missing: [...unresolved, ...unexpected] }))
-        }
-      }
-      const usedFamilies = []
-      const selectModelHint = (tier) => {
-        const hint = computeModelHint(resolved.tiers[tier], usedFamilies)
-        if (hint?.family) usedFamilies.push(hint.family)
-        return hint
-      }
-      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state, selectModelHint })
+      // 派发链零配置反查（§3.8）：不在此解析 tiers；roles/packages 缺失由 runTransition 返回可恢复卡。
+      const card = await runTransition({ projectRoot, name, writable, workflow, policy, task, state })
       if (card.transition === 'dispatch') {
         const list = card.dispatches ?? (card.dispatch ? [card.dispatch] : [])
-        let agentMaps = {}
-        try {
-          agentMaps = ((await readJson(path.join(task.root, 'agents.json'), { allowMissing: true })) ?? {}).mappings ?? {}
-        } catch (error) {
-          // 账本损坏降级推进（I5 无死门）：续派回溯拿不到映射 → 波次导出走 expectedAgentIdMissing
-          // fresh 重建路径（派单卡自带 resumeNote，恢复边在场）；dispatch-plan 是唯一推进通道，
-          // 不得因派生映射文件损坏而整体抛错（那会让所有恢复路径死门）。
-          warnings.push('agents.json 损坏已降级（' + String(error?.message ?? error) + '）：续派映射不可用，续派波按 fresh 重建路径恢复；可用 tw agent-map 重建登记')
+        const resolved = await resolveTiers()
+        warnings.push(...resolved.warnings)
+        const registry = await readRegistry(task)
+        if (registry.corrupt) {
+          // 账本损坏降级推进（I5 无死门）：续派映射不可用时按 fresh 重建路径恢复（派单卡自带 resumeNote）。
+          warnings.push('agents.json 损坏已降级（' + registry.corrupt + '）：续派映射不可用，续派波按 fresh 重建路径恢复；可用 tw roles --resolve / tw agent-map 重建登记')
         }
+        const agentMaps = registry.mappings
         // F4 续派身份回溯：journal 倒序找同角色同包范围内最近一个有映射的派发 key
-        // （限定细则与排除面见 continuationPrevKey 注释；与 wait-inflight 兜底重建共用同一实现）。
+        // （限定细则、session-reset 边界与排除面见 continuationPrevKey 注释；与 wait-inflight 兜底重建共用同一实现）。
         const excludedKeys = supersededKeys(task.journal)
         const prevKeyOf = (d) => continuationPrevKey({ journal: task.journal, agentMaps, excludedKeys }, d)
         const waves = list.map((d) => {
           const deliver = d.kind === 'produce' || d.kind === 'respond' ? 'deliver' : 'review'
-          const hint = d.modelHint
           const pkgDef = (task.packages ?? []).find((p) => p.id === d.package)
+          const prevKey = d.continuation ? prevKeyOf(d) : null
+          const sessionId = prevKey ? agentMaps[prevKey] : null
+          const firstRef = (sessionId ? sessionFirstModelRef(task, agentMaps, d.role, d.package ?? null, sessionId) : null)
+            ?? lastDispatchModelRefFor(task, d.role, d.package ?? null)
+            ?? firstDispatchModelRef(task, d.role, d.package ?? null)
+          const modelStaleForSession = Boolean(sessionId && d.continuation && firstRef && d.modelRef && !modelRefsEqual(firstRef, d.modelRef))
           const example = deliver === 'deliver'
             ? twCommand() + ' deliver --task ' + name + ' --key ' + d.key + ' --outcome delivered --summary <一句话> --paths <可写路径>'
             : twCommand() + ' review --task ' + name + ' --key ' + d.key + ' --recommendation <accept|rework|escalate> --summary <一句话>' + (d.kind === 'verdict' ? ' --verdict <JSON: outcome|rationale|confidence|recommendedAction>' : '')
@@ -1563,14 +2499,16 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
             dispatchKey: d.key, ...(d.waveId ? { waveId: d.waveId } : {}), kind: d.kind, role: d.role, tier: d.tier, round: d.round,
             ...(d.package != null ? { package: d.package } : {}),
             continuation: Boolean(d.continuation),
+            modelRef: d.modelRef,
+            modelSource: d.modelSource ?? 'roles',
+            ...(modelStaleForSession ? { modelStaleForSession: true } : {}),
             ...(d.continuation && prevKeyOf(d) && agentMaps[prevKeyOf(d)] ? { expectedAgentId: agentMaps[prevKeyOf(d)] } : {}),
-            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话映射：由 tw-dispatch 按本派单 modelHint 新建成员并登记；无宿主编排层须按精确模型创建后 tw agent-map --key <本key> --agent <新childId> 登记。复用原派单 key 时回填新 childId 覆盖旧映射' } : {}),
+            ...(d.continuation && !(prevKeyOf(d) && agentMaps[prevKeyOf(d)]) ? { expectedAgentIdMissing: true, resumeNote: '未找到可续会话映射（含 session-reset 边界后）：由 tw-dispatch 按本派单 modelRef 新建成员并登记；无宿主编排层须按精确模型创建后 tw agent-map --key <本key> --agent <新childId> 登记。复用原派单 key 时回填新 childId 覆盖旧映射' } : {}),
             ...(d.scope ? { scope: d.scope } : {}),
             ...(pkgDef ? { dependsOn: pkgDef.dependsOn ?? [] } : {}),
             prompt: d.prompt,
             ...(d.promptFull ? { promptFull: d.promptFull } : {}),
             deliver,
-            modelHint: { provider: hint.provider, model: hint.model, source: hint.source, ...(hint.effort ? { effort: hint.effort } : {}), ...(hint.family ? { family: hint.family, ...(hint.selectedBy ? { selectedBy: hint.selectedBy } : {}) } : {}) },
             weight: policy.costWeights?.[d.tier] ?? null,
             dispatchExample: example,
           }
@@ -1584,9 +2522,9 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
         }
         if (!json) {
           plan.human = ['任务 ' + name + ' · 阶段 ' + card.stage + ' · ' + waves.length + ' 个派单']
-          plan.human.push('模型配置来源：' + resolved.entryId + ' · profile ' + resolved.profile)
+          plan.human.push('模型来源：任务 roles / 包级 model（配置快照 ' + resolved.entryId + ' · profile ' + resolved.profile + ' 只用于 open/roles --resolve 初始化）')
           for (const w of waves) {
-            plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + (w.modelHint.model ?? '(未解析)') + '（' + w.modelHint.source + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + (w.promptFull ? String.fromCharCode(10) + '断链重建/空壳补发用全量变体（原会话不可用时以此为准）：' + String.fromCharCode(10) + w.promptFull : '') + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
+            plan.human.push('-- ' + w.role + '(' + w.tier + ') ' + w.kind + ' 第 ' + w.round + ' 轮' + (w.package ? ' · 包 ' + w.package : '') + (w.continuation ? ' · 续派' : '') + String.fromCharCode(10) + '模型：' + describeModelRef(w.modelRef) + '（来源 ' + w.modelSource + '）' + String.fromCharCode(10) + '派单全文：' + String.fromCharCode(10) + w.prompt + (w.promptFull ? String.fromCharCode(10) + '断链重建/空壳补发用全量变体（原会话不可用时以此为准）：' + String.fromCharCode(10) + w.promptFull : '') + String.fromCharCode(10) + '交付示例：' + w.dispatchExample)
           }
           plan.human.push('派发后登记映射：tw agent-map --task ' + name + ' --key <派单key> --agent <childId>（DSH 内 tw-dispatch 会自动创建并登记，无需手工）')
         }
@@ -1594,7 +2532,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       }
 
       if (card.transition === "advance") continue // stage-advanced 已写；锁内重推导下一阶段
-      if (card.transition === "re-sign-escalation") continue // 升档旧卡已作废（decided:superseded）；锁内重推导重新出卡
+      if (card.transition === "re-sign") continue // 旧升档卡已收口（decided:superseded）；锁内重推导
       if (card.transition === "complete") return planStop("completed", card)
       if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey, inflight: card.inflight ?? [] })
       if (card.transition === "await-decision" || card.transition === "await-route") return planStop("awaiting-user", card)
@@ -1834,13 +2772,14 @@ function helpCard() {
   return {
     ok: true,
     commands: {
-      plan: "tw plan --task <n> --packages <JSON数组>：登记拆分（机械验收：互斥/无环/完成标准；语义质量归 Lead）",
-      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（tw-dispatch 创建时采用精确模型）",
-            open: "tw open --name <n> --objective <o> [--entry <stage>]：开任务（名字寻址；重名拒绝）",
+      plan: "tw plan --task <n> --packages <JSON数组>：登记拆分并物化逐包 ModelRef（{id, model?} | {id, tier?} | {id}；机械验收：互斥/无环/完成标准；语义质量归 Lead）；已有意图确认卡会按新包模型重签",
+      "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（tw-dispatch 按派单 modelRef 创建）",
+      roles: "tw roles --task <n> [--set <role>=<provider>/<model>[@<effort>] | <role>=tier:<junior|senior|expert>[@<effort>]] [--clear <role>] [--resolve]：任务角色模型的唯一读写入口（agents.json.roles）",
+      open: "tw open --name <n> --objective <o> [--entry <stage>] [--risk normal|high|critical] [--raw-requirement <原文>] [--constraint <文本>]... [--exclusion <文本>]... [--scope-note <文本>]... [--acceptance <文本>]... [--gap <JSON>]...：开任务并签发意图确认卡（intake-approval）",
       run: "tw run --task <n>：只读查状态（当前状态卡 + 下一步指引；不写任务事实。推进用 tw-dispatch / dispatch-plan）",
-      "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable <路径>:<kind> ...]：推进一步——推进到派发点或 stop 卡，输出波次计划（prompt + tier + modelHint）；路径以 / 结尾 = 目录授权；无 --json 输出人读 human 字段",
-      decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片",
-      intent: "tw intent --task <n> [--objective <...>] [--add-constraint <...>] [--add-exclusion <...>]：修订目标/约束",
+      "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable <路径>:<kind> ...]：推进一步——推进到派发点或 stop 卡，输出波次计划（prompt + modelRef + modelSource）；路径以 / 结尾 = 目录授权；无 --json 输出人读 human 字段",
+      decide: "tw decide --task <n> --choice <序号> [--note <...>]：回答当前卡片（意图确认卡 / 换模型卡 / 人工门 / 仲裁）",
+      intent: "tw intent --task <n> [--objective <...>] [--raw-requirement <原文>] [--add-constraint <...>] [--add-exclusion <...>] [--acceptance <...>] [--scope-note <...>] [--add-gap <JSON>] [--answer-gap <id> --answer <文本>]：修订意图，改后确认卡重签",
       route: "tw route --task <n> --route spec|e2e --decision run|skip [--basis <依据>]：SPEC/E2E 显式路由",
       gate: "tw gate --task <n>：只读门禁检查（blockers + 修复建议）",
       models: "tw models：只读调用配置快照的 tier→模型解析结果与 entry/profile 来源",
@@ -1854,7 +2793,10 @@ function helpCard() {
     },
     notes: [
       "卡片即接口：按返回卡片行动，不预判步骤；拒绝输出自带修复指引",
-      'tier→模型来源为当前 profile 的 team-work-dsh.tiers；宿主每次调用提供 TW_DSH_CONFIG JSON={tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} 快照。无宿主终端由调用方显式提供相同输入；缺失、损坏或缺档返回 unresolved，不读取旧配置文件或写缓存',
+      "模型数据链：默认档只来自 team-work/policies/default.json；tw open 把三角色解析成 ModelRef 存 agents.json.roles；tw plan 把每包解析成 packages.json[].model；派发直接读 pkg.model ?? roles[role]，不在派发期查配置",
+      'ModelRef={provider, modelName, effort?, family?}：effort 只在配置了合法枚举时出现，不设置时省略字段（宿主实测 "" 与 "none" 均被拒绝）；宿主字段映射只在绑定层 toHostTarget 一处发生',
+      '配置来源为当前 profile 的 team-work-dsh.tiers；宿主每次调用提供 TW_DSH_CONFIG JSON={tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} 快照。无宿主终端由调用方显式提供相同输入；缺失、损坏或缺档返回 unresolved，不读取旧配置文件或写缓存',
+      "新任务首步会先出意图确认卡（原始需求/目标/约束/排除/范围/角色模型/逐包模型/gap）；确认前不派发。改意图、roles 或包模型后确认卡会失效重签；已有会话换模型会另出换模型确认卡（保留原会话 / 重开会话 / 回滚 roles）",
     ],
   }
 }
@@ -1867,7 +2809,16 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
   const common = { projectRoot }
   try {
     switch (cmd) {
-      case "open": return await cmdOpen({ ...common, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk })
+      case "open": return await cmdOpen({
+        ...common, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk,
+        rawRequirement: args["raw-requirement"],
+        constraints: collectFlags(argv, "constraint"),
+        exclusions: collectFlags(argv, "exclusion"),
+        scopeNotes: collectFlags(argv, "scope-note"),
+        acceptance: collectFlags(argv, "acceptance"),
+        gaps: collectFlags(argv, "gap").map((value) => parseJsonArg(value, "--gap")),
+      })
+      case "roles": return await cmdRoles({ ...common, name: args.task, sets: collectFlags(argv, "set"), clears: collectFlags(argv, "clear"), resolve: argv.includes("--resolve") })
       case "run": {
         // run 只读化（§7.2）：--writable 是旧推进时代的参数，显式拒绝并指路 dispatch 通道（防旧习惯误用）
         const legacyWritable = collectWritable(argv)
@@ -1877,7 +2828,17 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
         return await cmdRun({ ...common, name: args.task, writable: [] })
       }
       case "decide": return await cmdDecide({ ...common, name: args.task, choice: Number(args.choice), note: args.note })
-      case "intent": return await cmdIntent({ ...common, name: args.task, objective: args.objective, risk: args.risk, addConstraint: flag("add-constraint"), addExclusion: flag("add-exclusion") })
+      case "intent": return await cmdIntent({
+        ...common, name: args.task, objective: args.objective, risk: args.risk,
+        rawRequirement: args["raw-requirement"],
+        addConstraint: collectFlags(argv, "add-constraint"),
+        addExclusion: collectFlags(argv, "add-exclusion"),
+        acceptance: collectFlags(argv, "acceptance"),
+        scopeNotes: collectFlags(argv, "scope-note"),
+        gaps: collectFlags(argv, "add-gap").map((value) => parseJsonArg(value, "--add-gap")),
+        answerGap: args["answer-gap"] ?? null,
+        answer: args.answer ?? null,
+      })
       case "route": return await cmdRoute({ ...common, name: args.task, route: args.route, decision: args.decision, basis: args.basis })
       case "restore": return await cmdRestore({ ...common, name: args.task, target: args.path })
       case "retire": return await cmdRetire({ ...common, name: args.task, wave: args.wave, reason: args.reason })
@@ -1902,7 +2863,7 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
         verdict: parseJsonArg(args.verdict, "--verdict"),
       } })
       default:
-        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/dispatch-plan/run 查状态/decide/intent/route/gate/models/init/restore/retire/migrate/archive；成员：deliver/review）")
+        throw fail("USAGE", "用法：tw help 查看全部命令（Lead：open/roles/plan/dispatch-plan/run 查状态/decide/intent/route/gate/models/init/restore/retire/migrate/archive；成员：deliver/review）")
     }
   } catch (error) {
     if (error.card) return error.card

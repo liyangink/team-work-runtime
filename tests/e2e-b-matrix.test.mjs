@@ -9,7 +9,7 @@ import path from "node:path"
 import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
-import { makeProject, autoCaller } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, caller } from "./support/v3-fixtures.mjs"
 
 const BASE_CONFIG = {
   "entryId": "team-work-dsh",
@@ -127,10 +127,10 @@ test("E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → �
   await call(["review", "--task", "f11", "--key", rv.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "s"])
   await call(["route", "--task", "f11", "--route", "e2e", "--decision", "run", "--basis", "适用"])
   // e2eTemplate 在 e2e 阶段首轮派发前物化：确认卡按逐包模型重签一次，确认后真正派发。
-  const adv0 = await call(["dispatch-plan", "--task", "f11"])
+  const adv0 = await caller(root)(["dispatch-plan", "--task", "f11"])
   assert.equal(adv0.stop, "awaiting-user", "自动物化触发确认卡重签（列出逐包模型）")
   assert.equal(adv0.card.intake.packages.length, 2)
-  await call(["decide", "--task", "f11", "--choice", "1"])
+  await call(["decide", "--task", "f11", "--choice", "1", "--decision-id", adv0.card.decisionId])
   const adv = await call(["dispatch-plan", "--task", "f11"])
   assert.equal(adv.stage, "e2e", "D7 run-e2e 边")
   assert.equal(adv.waves.length, 1, "模板物化：首包")

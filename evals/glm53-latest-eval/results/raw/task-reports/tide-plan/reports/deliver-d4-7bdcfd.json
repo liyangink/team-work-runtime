@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d4-7bdcfd",
+  "dispatchKey": "d4-7bdcfd",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 2,
+  "stage": "design",
+  "package": "failure-recovery-analysis",
+  "waveId": "wv4",
+  "ver": 1,
+  "payloadDigest": "7c6bd70080561115894d5c63e2e4b9c16bd33e7233b9419b498d74be12b93e91",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已按 Challenger 四项 blocker 完成 docs/failure-recovery.md 的接缝最小修正（完整方案正文仍在该文件，可直接核对）：缝1 硬件基线统一为 interface-constraints.md §1/§3/§4 的静态环形灯体（§1/§2 声明，机构/霍尔/环境光/备电 SRAM 移入可选扩展，F-04 改为基线内的交互输入失效、F-09 标注可选扩展、§4.5 日志改走 storage 双副本）；缝2 OTA 数值与回滚触发以本文 §4.3/§5 为权威并显式声明（512KB 槽位、60s 确认、连续 2 次回滚进恢复模式）；缝3 状态上报改挂 interface §2.2 已登记的 MQTT state 主题载荷扩展（§4.4/§4.5，删除 GET /device/status）；缝4 过温以本文 F-05 分级策略为唯一权威并重写 §4.1 L0 消除硬件/软件优先级歧义（§4.3/§4.5 同步给出 interface 对齐要求）；已直接验证修改后全文无机构/SRAM/GET 残留依赖，interface-constraints.md 侧同步与 final-plan-merge 不在我的可写范围（由对应包处理），虚构方案第 7 节验证项仍未执行实际测试。",
+    "paths": [
+      "docs/failure-recovery.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:40:58.363Z"
+}

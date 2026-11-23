@@ -10,7 +10,7 @@ import path from "node:path"
 import test, { mock } from "node:test"
 
 import { resolveMemberRules, resolveLeadRules, composeMemberRules, lockedWorkflowContract, requiredClarityText, createClarityGuidanceReader } from "../runtime-v3/rules.mjs"
-import { autoCaller, makeProject, openTask } from "./support/v3-fixtures.mjs"
+import { autoCaller, makeProject, openTask, prepareIntake } from "./support/v3-fixtures.mjs"
 
 async function makeRoot(t) {
   const root = await mkdtemp(path.join(tmpdir(), "tw-rules-"))
@@ -617,7 +617,7 @@ test("成员卡是单块业务正文：无明晰段、无 requiredGuidance；续
   assert.match(reviewer.prompt, /## 工作流职责（TWR 固定契约）/, "评审卡同样带锁定契约")
   assert.match(reviewer.prompt, /Challenger/, "评审卡带 challenger 角色契约")
   assert.match(reviewer.prompt, /review --recommendation escalate/, "范围争议的升级通道随角色契约送达")
-  await call(["review", "--task", "single-block-t", "--key", reviewer.dispatchKey, "--recommendation", "rework", "--summary", "补失败路径证据"])
+  await call(["review", "--task", "single-block-t", "--key", reviewer.dispatchKey, "--recommendation", "rework", "--summary", "补失败路径证据", "--findings", '[{\"severity\":\"risk\",\"statement\":\"补失败路径证据\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const response = (await call(["dispatch-plan", "--task", "single-block-t", "--writable", "src.mjs:source", "--json"])).waves[0]
   assert.equal(response.kind, "respond")
   for (const prompt of [response.prompt, response.promptFull]) {
@@ -650,6 +650,7 @@ test("Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共�
   const call = autoCaller(projectRoot)
   await resetUserRules()
   await openTask(projectRoot, "lead-t", { objective: "实现示例行为", entry: "implementation" })
+  await prepareIntake(projectRoot, "lead-t", ["src.mjs:source"])
 
   // 进展时点（run 的 working + next=dispatch）：lead/progress + 公共必读段，不含审阅段
   const progress = await call(["run", "--task", "lead-t"])
@@ -734,7 +735,7 @@ test("八视角已拆包：Owner 只承担本包、组合评审覆盖全部已�
   assert.match(challenger.prompt, /组合评审\/裁决仍覆盖本轮已交付包/)
   assert.doesNotMatch(challenger.prompt, /仅承担本包/)
   assert.match(challenger.prompt, /重建审查团队/)
-  await call(["review", "--task", "perspective-t", "--key", challenger.dispatchKey, "--recommendation", "rework", "--summary", "补需求证据", "--findings", JSON.stringify([{ package: "perspective-1", severity: "risk", statement: "缺少需求证据" }])])
+  await call(["review", "--task", "perspective-t", "--key", challenger.dispatchKey, "--recommendation", "rework", "--summary", "补需求证据", "--findings", JSON.stringify([{ severity: "risk", statement: "缺少需求证据", disposition: "must-fix", scope: { kind: "packages", ids: ["perspective-1"] } }])])
   const respond = (await call(["dispatch-plan", "--task", "perspective-t", "--json"])).waves[0]
   assert.equal(respond.package, "perspective-1")
   assert.equal(respond.continuation, true)
@@ -843,7 +844,7 @@ test("方案场景：Owner、Challenger、返工和在途重建均带同一份�
   assert.equal(r.waves[0].role, "challenger")
   assert.match(r.waves[0].prompt, /挑战方案的假设与依赖/, "设计场景 Challenger 规则到达")
   assert.match(r.waves[0].prompt, /不另写一份方案/)
-  await call(["review", "--task", "design-t", "--key", r.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "补充取舍依据"])
+  await call(["review", "--task", "design-t", "--key", r.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "补充取舍依据", "--findings", '[{\"severity\":\"risk\",\"statement\":\"补充取舍依据\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const rw = await call(["dispatch-plan", "--task", "design-t", "--writable", "DESIGN.md:design", "--json"])
   assert.equal(rw.waves[0].kind, "respond")
   assert.match(rw.waves[0].prompt, /## 工作流职责（TWR 固定契约）/)

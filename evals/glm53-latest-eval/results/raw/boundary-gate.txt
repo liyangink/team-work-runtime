@@ -1,0 +1,2 @@
+repo-write: ALLOWED (/Users/liyang/Projects/Opensource/team-work-runtime/.boundary-probe.bBnehk)
+guard-boundary: REFUSE: repo is writable by this process; the real model drill cannot be proven safe (no repo protection)

@@ -1,0 +1,2 @@
+22bf19c02405dc6ddc3de93c7d280c9d68fbfd76c05218fbd0bd4017d1d18bae  evals/package-guidance-eval/results/raw/skill-loaded/SKILL.md
+22bf19c02405dc6ddc3de93c7d280c9d68fbfd76c05218fbd0bd4017d1d18bae  skills/team-work-v3/SKILL.md

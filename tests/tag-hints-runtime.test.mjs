@@ -24,11 +24,12 @@ test("写端清理：cli 不再导出 tagLabel/persistTagHints（标签落盘链
 
 test("agents.json 只保留 mappings + roles：派发落盘事实只在 journal（无 tagHints/pendingTags/modelHints 键）", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tw-tag-"))
-  const card = await tw(["open", "--name", "demo-t", "--objective", "o", "--entry", "code-review"], { projectRoot: root })
-  assert.equal(card.ok, true)
-  // 新任务先确认意图，再派发（确认卡是 open 后的正常人工门）。
-  assert.equal((await tw(["decide", "--task", "demo-t", "--choice", "1"], { projectRoot: root })).ok, true)
-  const plan = await tw(["dispatch-plan", "--task", "demo-t", "--writable", "R.md:code-review"], { projectRoot: root })
+  const opened = await tw(["open", "--name", "demo-t", "--objective", "o", "--entry", "code-review", "--raw-requirement", "合成原文"], { projectRoot: root })
+  assert.equal(opened.ok, true)
+  const card = await tw(["dispatch-plan", "--task", "demo-t", "--writable", "R.md:code-review"], { projectRoot: root })
+  assert.equal(card.stop, "awaiting-user")
+  assert.equal((await tw(["decide", "--task", "demo-t", "--choice", "1", "--decision-id", card.card.decisionId], { projectRoot: root })).ok, true)
+  const plan = await tw(["dispatch-plan", "--task", "demo-t"], { projectRoot: root })
   assert.equal(plan.ok, true)
   assert.equal(plan.stop, null)
   assert.ok(plan.waves.length > 0)

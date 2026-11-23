@@ -13,7 +13,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import test, { mock } from "node:test"
 
-import { autoCaller, makeProject, openTask, openTaskRaw } from "./support/v3-fixtures.mjs"
+import { autoCaller, caller, makeProject, openTask, openTaskRaw, prepareIntake } from "./support/v3-fixtures.mjs"
 
 // 用户公共规则隔离：HOME 指向临时目录，派单只读空的 ~/.team-work/rules，不读开发机真实用户规则。
 process.env.HOME = await mkdtemp(path.join(tmpdir(), "tw-lazy-home-"))
@@ -185,14 +185,14 @@ test("awaiting-user 静止路径（意图确认卡）零成员规则 I/O，确�
   const io = () => warns.length
 
   // open 出意图确认卡（awaiting-user 静止 stop，不派发）：静止渲染路径零成员规则 I/O。
-  const r = await call(["dispatch-plan", "--task", "intake-lazy-t"])
+  const r = await caller(projectRoot)(["dispatch-plan", "--task", "intake-lazy-t", "--writable", "src.mjs:source"])
   assert.equal(r.stop, "awaiting-user")
   assert.equal(r.waves.length, 0)
   assert.ok(r.card.decisionId, "决定卡在 card 下（首签归 open/dispatch 通道）")
   assert.equal(io(), 0, "意图确认静止卡零成员规则 I/O")
 
   // 确认后真正派发：恰好 1 次
-  await call(["decide", "--task", "intake-lazy-t", "--choice", "1"])
+  await call(["decide", "--task", "intake-lazy-t", "--choice", "1", "--decision-id", r.card.decisionId])
   const d = await call(["dispatch-plan", "--task", "intake-lazy-t", "--writable", "src.mjs:source"])
   assert.equal(d.stop, null)
   assert.equal(d.waves.length, 1)
@@ -249,6 +249,7 @@ test("Lead 时点选择性读取：progress 只读 lead/progress，dispatch 只�
   await corruptLeadRule(projectRoot, "progress")
   const call = autoCaller(projectRoot)
   await openTask(projectRoot, "lead-io-t", { objective: "实现模块 X", entry: "implementation" })
+  await prepareIntake(projectRoot, "lead-io-t", ["src.mjs:source"])
 
   const warns = []
   mock.method(console, "warn", (...args) => warns.push(args.join(" ")))
@@ -302,7 +303,7 @@ test("热变语义：修改项目规则文件后下一次派发生效（无模�
   await writeFile(path.join(projectRoot, "src.mjs"), "export const x = 1", "utf8")
   await call(["deliver", "--task", "hot-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
   const c = await call(["dispatch-plan", "--task", "hot-t"])
-  await call(["review", "--task", "hot-t", "--key", c.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "返工"])
+  await call(["review", "--task", "hot-t", "--key", c.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "返工", "--findings", '[{\"severity\":\"risk\",\"statement\":\"返工\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   await writeRule(projectRoot, "common/index.md", "## 规范\n\n- 第二版覆盖条目")
   const rw = await call(["dispatch-plan", "--task", "hot-t", "--writable", "src.mjs:source"])
   assert.equal(rw.waves[0].kind, "respond")

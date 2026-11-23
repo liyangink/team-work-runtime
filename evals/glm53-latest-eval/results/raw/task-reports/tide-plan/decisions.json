@@ -1,0 +1,277 @@
+{
+  "items": [
+    {
+      "decisionId": "intake-0b9c70",
+      "gateId": "intake-approval",
+      "choice": "确认开始",
+      "grant": "accept-intake",
+      "intakeFingerprint": "c93e9d7150e352efcdc79a6ce4502cef7fb116adcbea64294d5da16456d6d2e3",
+      "modelRefs": {
+        "owner": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "challenger": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "expert": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        }
+      },
+      "intakeVersion": 2,
+      "intake": {
+        "rawRequirement": "先分别给出接口与约束分析、故障与恢复分析两份独立说明（各写一个文件），最后合并成一份最终方案；全部为虚构内容，写在各文件内即可",
+        "objective": "为虚构产品潮汐灯写一份可评审的两段方案并合并成最终方案",
+        "constraints": [],
+        "exclusions": [],
+        "scope": {
+          "entry": "design",
+          "outputs": [
+            "design"
+          ]
+        },
+        "acceptance": [
+          "三个文件存在且最终方案合并两份分析"
+        ],
+        "gaps": [],
+        "risk": "normal",
+        "roles": [
+          {
+            "role": "owner",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.design.ownerTier=senior"
+          },
+          {
+            "role": "challenger",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.design.challengerTier=senior"
+          },
+          {
+            "role": "expert",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "policy.roles.expert=expert"
+          }
+        ],
+        "packages": [
+          {
+            "id": "interface-analysis",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/interface-constraints.md:design"
+            ],
+            "done": [
+              "完成潮汐灯接口与约束分析说明，写入 docs/interface-constraints.md（虚构内容）"
+            ],
+            "dependsOn": [],
+            "vsRolesOwner": "equal"
+          },
+          {
+            "id": "failure-recovery-analysis",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/failure-recovery.md:design"
+            ],
+            "done": [
+              "完成潮汐灯故障与恢复分析说明，写入 docs/failure-recovery.md（虚构内容）"
+            ],
+            "dependsOn": [],
+            "vsRolesOwner": "equal"
+          },
+          {
+            "id": "final-plan-merge",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/final-plan.md:design"
+            ],
+            "done": [
+              "读取 docs/interface-constraints.md 与 docs/failure-recovery.md，将两份分析合并为最终方案，写入 docs/final-plan.md"
+            ],
+            "dependsOn": [
+              "interface-analysis",
+              "failure-recovery-analysis"
+            ],
+            "vsRolesOwner": "equal"
+          }
+        ],
+        "actualScope": {
+          "entry": "design",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "design"
+          },
+          "outputs": [
+            "design"
+          ]
+        },
+        "profile": "headless",
+        "source": "role-registry"
+      },
+      "intakeSnapshot": {
+        "scope": {
+          "entry": "design",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "design"
+          },
+          "outputs": [
+            "design"
+          ]
+        },
+        "intent": {
+          "objective": "为虚构产品潮汐灯写一份可评审的两段方案并合并成最终方案",
+          "constraints": [],
+          "exclusions": [],
+          "rawRequirement": "先分别给出接口与约束分析、故障与恢复分析两份独立说明（各写一个文件），最后合并成一份最终方案；全部为虚构内容，写在各文件内即可",
+          "scope": {
+            "entry": "design",
+            "outputs": [
+              "design"
+            ]
+          },
+          "acceptance": [
+            "三个文件存在且最终方案合并两份分析"
+          ],
+          "gaps": [],
+          "risk": "normal"
+        },
+        "roles": {
+          "owner": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "challenger": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "expert": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          }
+        },
+        "packages": [
+          {
+            "id": "interface-analysis",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/interface-constraints.md:design"
+            ],
+            "done": [
+              "完成潮汐灯接口与约束分析说明，写入 docs/interface-constraints.md（虚构内容）"
+            ],
+            "dependsOn": []
+          },
+          {
+            "id": "failure-recovery-analysis",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/failure-recovery.md:design"
+            ],
+            "done": [
+              "完成潮汐灯故障与恢复分析说明，写入 docs/failure-recovery.md（虚构内容）"
+            ],
+            "dependsOn": []
+          },
+          {
+            "id": "final-plan-merge",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/final-plan.md:design"
+            ],
+            "done": [
+              "读取 docs/interface-constraints.md 与 docs/failure-recovery.md，将两份分析合并为最终方案，写入 docs/final-plan.md"
+            ],
+            "dependsOn": [
+              "interface-analysis",
+              "failure-recovery-analysis"
+            ]
+          }
+        ]
+      },
+      "proof": {
+        "mode": "caller-reported",
+        "at": "2026-11-17T13:31:23.053Z"
+      },
+      "at": "2026-11-17T13:31:23.053Z"
+    }
+  ]
+}

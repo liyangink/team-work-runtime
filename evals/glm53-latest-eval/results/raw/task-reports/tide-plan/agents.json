@@ -1,0 +1,33 @@
+{
+  "mappings": {
+    "d1-66ed36": "705b9fd0-62df-4162-b7e8-7e1689bbb362",
+    "d1-3d7a2f": "9c62350c-9670-43ad-bac1-454c689b1553",
+    "d3-7053ef": "9d571d68-6c4e-4ce8-90c2-8ea01aa52292",
+    "d4-b9b180": "705b9fd0-62df-4162-b7e8-7e1689bbb362",
+    "d4-7bdcfd": "9c62350c-9670-43ad-bac1-454c689b1553",
+    "d6-7b023c": "9d571d68-6c4e-4ce8-90c2-8ea01aa52292",
+    "d7-b481a3": "705b9fd0-62df-4162-b7e8-7e1689bbb362",
+    "d7-be57ad": "9c62350c-9670-43ad-bac1-454c689b1553",
+    "d9-49f7cb": "9d571d68-6c4e-4ce8-90c2-8ea01aa52292"
+  },
+  "roles": {
+    "owner": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "challenger": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "expert": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    }
+  }
+}

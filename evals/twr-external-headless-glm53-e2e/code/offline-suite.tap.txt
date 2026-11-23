@@ -1,0 +1,2952 @@
+{"type":"snapshot","mode":"suite","node":"v24.15.0","platform":"darwin","arch":"arm64","packageFiles":81,"packageSha256":"ebec38d1a11694765b98062586fd7885bccc12a3595abf426d921d745d644587","keyFiles":{"runtime-v3/intake.mjs":"26aeede8614e058ae84cd205b736c17306927e275bc242f194bb02c9ae731a1b","runtime-v3/store.mjs":"a9629280bf0d7559f42cc1415c4d48e709ecddd07fa4666767e99914fa11a3ae","runtime-v3/waves.mjs":"d9de8e2dedc677d1aa88f5f3b3f2ebebcfb1f2c1c4982e6d0eb0b9bf045a9241"}}
+{"type":"suite","files":["dsh-dispatch.test.mjs","dsh-plugin-e2e.test.mjs","dsh-plugin.test.mjs","dsh-subagent-session.test.mjs","e2e-b-matrix.test.mjs","e2e-root.test.mjs","runtime-v3-cli.test.mjs","runtime-v3-concurrency.test.mjs","runtime-v3-core.test.mjs","runtime-v3-dsh.test.mjs","runtime-v3-intake.test.mjs","runtime-v3-invariants.test.mjs","runtime-v3-rules-lazy.test.mjs","runtime-v3-rules.test.mjs","runtime-v3-topology.test.mjs","runtime-v3-waves-regression.test.mjs","tag-agent-auto-register.test.mjs","tag-hints-runtime.test.mjs"],"excluded":["evals-harness.test.mjs","repository-contract.test.mjs"],"withDshHost":false}
+TAP version 13
+# Subtest: 插件 Config 根 object，空配置启动，热读取保留原始三档形状及 profile
+ok 1 - 插件 Config 根 object，空配置启动，热读取保留原始三档形状及 profile
+  ---
+  duration_ms: 19.14375
+  type: 'test'
+  ...
+# Subtest: 配置表单经宿主去 volatile 后二次 JSON 序列化可在客户端校验
+ok 2 - 配置表单经宿主去 volatile 后二次 JSON 序列化可在客户端校验
+  ---
+  duration_ms: 1.664
+  type: 'test'
+  ...
+# Subtest: tw 与 dispatch 调用只取一次快照，各子进程参数共用该快照且不改进程环境
+ok 3 - tw 与 dispatch 调用只取一次快照，各子进程参数共用该快照且不改进程环境
+  ---
+  duration_ms: 19.584166
+  type: 'test'
+  ...
+# Subtest: 冷续派发送前登记新 key，登记失败不发正文
+ok 4 - 冷续派发送前登记新 key，登记失败不发正文
+  ---
+  duration_ms: 46.071625
+  type: 'test'
+  ...
+# Subtest: 真实 tw 子进程收到宿主调用快照，不读取旧配置
+ok 5 - 真实 tw 子进程收到宿主调用快照，不读取旧配置
+  ---
+  duration_ms: 68.579125
+  type: 'test'
+  ...
+# Subtest: registered 在途冷重试已含同轮正文，仅续行提示
+ok 6 - registered 在途冷重试已含同轮正文，仅续行提示
+  ---
+  duration_ms: 48.205209
+  type: 'test'
+  ...
+# Subtest: 预登记新 key 但本轮正文未送达时，旧上下文不能误选轻提示
+ok 7 - 预登记新 key 但本轮正文未送达时，旧上下文不能误选轻提示
+  ---
+  duration_ms: 44.509041
+  type: 'test'
+  ...
+# Subtest: 新 continuation 冷会话已收本轮全量时，先登记同父映射再轻量续行
+ok 8 - 新 continuation 冷会话已收本轮全量时，先登记同父映射再轻量续行
+  ---
+  duration_ms: 48.09025
+  type: 'test'
+  ...
+# Subtest: 续派 unknown 保留具体存储错误原因，阻止登记与补投
+ok 9 - 续派 unknown 保留具体存储错误原因，阻止登记与补投
+  ---
+  duration_ms: 51.62675
+  type: 'test'
+  ...
+# Subtest: 成员投递为单块业务正文：初派/续派/重建/在途冷提醒都不带规则块，Lead presentation 原样透传
+ok 10 - 成员投递为单块业务正文：初派/续派/重建/在途冷提醒都不带规则块，Lead presentation 原样透传
+  ---
+  duration_ms: 202.022375
+  type: 'test'
+  ...
+# fresh：单块业务正文 28 字符，实际投递 1 条消息；非 token 统计
+# incremental：单块业务正文 41 字符，实际投递 1 条消息；非 token 统计
+# full：单块业务正文 49 字符，实际投递 1 条消息；非 token 统计
+# reminder：单块业务正文 81 字符，实际投递 1 条消息；非 token 统计
+# rebuild：单块业务正文 49 字符，实际投递 1 条消息；非 token 统计
+# inflight-reminder：单块业务正文 81 字符，实际投递 1 条消息；非 token 统计
+# inflight-recreate：单块业务正文 49 字符，实际投递 1 条消息；非 token 统计
+# Subtest: requiredGuidance 缺失或为空时只投业务正文，不注入规则未带入诊断句
+ok 11 - requiredGuidance 缺失或为空时只投业务正文，不注入规则未带入诊断句
+  ---
+  duration_ms: 69.897584
+  type: 'test'
+  ...
+# Subtest: 规则字段变化不改变业务正文收单与冷提醒；live 与 awaiting-user 不投递也不调用技能
+ok 12 - 规则字段变化不改变业务正文收单与冷提醒；live 与 awaiting-user 不投递也不调用技能
+  ---
+  duration_ms: 106.066542
+  type: 'test'
+  ...
+# Subtest: 真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 render 只保留 Lead 呈现
+ok 13 - 真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 render 只保留 Lead 呈现
+  ---
+  duration_ms: 1149.719833
+  type: 'test'
+  ...
+# 真实子进程 → 插件核心 → start 参数：成员单块业务正文 2369 字符；Lead 仅自身呈现，无主动 skill 调用或真实 LLM。
+# Subtest: buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表
+ok 14 - buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表
+  ---
+  duration_ms: 0.204625
+  type: 'test'
+  ...
+# Subtest: buildDispatchLabel：challenger 缩写 chal；review 阶段复用 DESIGN/SPEC；未知阶段回退原 id；note 端到端去空白
+ok 15 - buildDispatchLabel：challenger 缩写 chal；review 阶段复用 DESIGN/SPEC；未知阶段回退原 id；note 端到端去空白
+  ---
+  duration_ms: 0.071416
+  type: 'test'
+  ...
+# Subtest: buildDispatchLabel：简述缺省形态不含 \#（任务段是唯一 \# 定界）
+ok 16 - buildDispatchLabel：简述缺省形态不含 \#（任务段是唯一 \# 定界）
+  ---
+  duration_ms: 0.035166
+  type: 'test'
+  ...
+# Subtest: 参数校验：task 缺失 / writables 形状非法 / cwd 无法解析，均不触发 CLI 调用
+ok 17 - 参数校验：task 缺失 / writables 形状非法 / cwd 无法解析，均不触发 CLI 调用
+  ---
+  duration_ms: 0.097791
+  type: 'test'
+  ...
+# Subtest: 透传：awaiting-user / completed / blocked / archived 卡原样返回，不创建子代理（wait-inflight 不再透传——§7.3 兜底，见下方三分支矩阵）
+ok 18 - 透传：awaiting-user / completed / blocked / archived 卡原样返回，不创建子代理（wait-inflight 不再透传——§7.3 兜底，见下方三分支矩阵）
+  ---
+  duration_ms: 0.111417
+  type: 'test'
+  ...
+# Subtest: 透传：CLI 拒绝卡（ok:false 含 fix 指引）与防御性空波计划均原样返回
+ok 19 - 透传：CLI 拒绝卡（ok:false 含 fix 指引）与防御性空波计划均原样返回
+  ---
+  duration_ms: 0.047375
+  type: 'test'
+  ...
+# Subtest: 三步集成：真实创建核心 + agent-map 登记；先登记后创建，确定性 sessionId；标签/注入选择/登记参数全部对齐
+ok 20 - 三步集成：真实创建核心 + agent-map 登记；先登记后创建，确定性 sessionId；标签/注入选择/登记参数全部对齐
+  ---
+  duration_ms: 27.567333
+  type: 'test'
+  ...
+# Subtest: modelRef 带 effort 时 target 透传 effort，创建核心验证后生效
+ok 21 - modelRef 带 effort 时 target 透传 effort，创建核心验证后生效
+  ---
+  duration_ms: 30.619875
+  type: 'test'
+  ...
+# Subtest: writables 省略时 dispatch-plan 不带 --writable 参数
+ok 22 - writables 省略时 dispatch-plan 不带 --writable 参数
+  ---
+  duration_ms: 28.253166
+  type: 'test'
+  ...
+# Subtest: 多包波：两张派单逐张串行「登记→重验→创建」，结果逐项返回
+ok 23 - 多包波：两张派单逐张串行「登记→重验→创建」，结果逐项返回
+  ---
+  duration_ms: 46.96
+  type: 'test'
+  ...
+# Subtest: 登记失败：尚未创建子会话（先登记后创建），原样重试安全不双发；成功项不回滚
+ok 24 - 登记失败：尚未创建子会话（先登记后创建），原样重试安全不双发；成功项不回滚
+  ---
+  duration_ms: 53.5485
+  type: 'test'
+  ...
+# Subtest: 创建失败：模型验证失败不留子会话（映射已登记，确定性对账使重试幂等）；继续处理后续派单
+ok 25 - 创建失败：模型验证失败不留子会话（映射已登记，确定性对账使重试幂等）；继续处理后续派单
+  ---
+  duration_ms: 53.13
+  type: 'test'
+  ...
+# Subtest: 创建失败：startContinuable 抛错，保留映射与确定性 ID
+ok 26 - 创建失败：startContinuable 抛错，保留映射与确定性 ID
+  ---
+  duration_ms: 34.017625
+  type: 'test'
+  ...
+# Subtest: 创建已接收：flush 未确认保留成员，重试先对账同 ID
+ok 27 - 创建已接收：flush 未确认保留成员，重试先对账同 ID
+  ---
+  duration_ms: 28.831958
+  type: 'test'
+  ...
+# Subtest: continuation 且有 expectedAgentId（会话在场已收本轮）：统一等待不重投（用户终裁②），登记本轮映射，不创建不重投
+ok 28 - continuation 且有 expectedAgentId（会话在场已收本轮）：统一等待不重投（用户终裁②），登记本轮映射，不创建不重投
+  ---
+  duration_ms: 53.059708
+  type: 'test'
+  ...
+# Subtest: continuation 活会话未见本轮正文且无活动证明：不投递不创建，按需人工核对（不再默认等待）
+ok 29 - continuation 活会话未见本轮正文且无活动证明：不投递不创建，按需人工核对（不再默认等待）
+  ---
+  duration_ms: 24.61225
+  type: 'test'
+  ...
+# Subtest: 活会话未见本轮正文但有可靠旧轮活动与通知标记时只等待旧轮（wait-prior-turn）
+ok 30 - 活会话未见本轮正文但有可靠旧轮活动与通知标记时只等待旧轮（wait-prior-turn）
+  ---
+  duration_ms: 27.424958
+  type: 'test'
+  ...
+# Subtest: continuation 冷持久（归属一致）：判收单定增量或全量（用户终裁②冷唤醒语义）
+ok 31 - continuation 冷持久（归属一致）：判收单定增量或全量（用户终裁②冷唤醒语义）
+  ---
+  duration_ms: 60.058542
+  type: 'test'
+  ...
+# Subtest: continuation 活会话异主（接管冲突）：本工具不做接管，不等待不投递不重建
+ok 32 - continuation 活会话异主（接管冲突）：本工具不做接管，不等待不投递不重建
+  ---
+  duration_ms: 22.9225
+  type: 'test'
+  ...
+# Subtest: continuation 且 expectedAgentId 断链：自动 fresh 重建（登记回填 key 映射），不再给幽灵 send_message 指引
+ok 33 - continuation 且 expectedAgentId 断链：自动 fresh 重建（登记回填 key 映射），不再给幽灵 send_message 指引
+  ---
+  duration_ms: 22.723666
+  type: 'test'
+  ...
+# Subtest: continuation 但映射缺失（expectedAgentIdMissing）：拒绝投递并要求核对，不猜补建
+ok 34 - continuation 但映射缺失（expectedAgentIdMissing）：拒绝投递并要求核对，不猜补建
+  ---
+  duration_ms: 31.016334
+  type: 'test'
+  ...
+# Subtest: 兜底·registered 字段非布尔（agents.json 损坏）：拒绝投递并给核对指引
+ok 35 - 兜底·registered 字段非布尔（agents.json 损坏）：拒绝投递并给核对指引
+  ---
+  duration_ms: 23.943417
+  type: 'test'
+  ...
+# Subtest: 兜底·降级透传：registered 字段整体缺失（旧卡降级），提示核对后重试
+ok 36 - 兜底·降级透传：registered 字段整体缺失（旧卡降级），提示核对后重试
+  ---
+  duration_ms: 27.053792
+  type: 'test'
+  ...
+# Subtest: 兜底·优先级：registered=true 且会话在场已收本轮 → 判定链等待，优先于续派分支
+ok 37 - 兜底·优先级：registered=true 且会话在场已收本轮 → 判定链等待，优先于续派分支
+  ---
+  duration_ms: 16.896875
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 但会话不存在（登记与创建间崩溃窗口）→ 同 id 重建，不双发
+ok 38 - 兜底·registered=true 但会话不存在（登记与创建间崩溃窗口）→ 同 id 重建，不双发
+  ---
+  duration_ms: 28.975875
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 且会话在场空壳（未见本轮正文）：不补发不重建，转人工核对
+ok 39 - 兜底·registered=true 且会话在场空壳（未见本轮正文）：不补发不重建，转人工核对
+  ---
+  duration_ms: 58.687958
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 且会话为冷持久（归属一致、曾收单）→ 冷唤醒投本轮增量变体
+ok 40 - 兜底·registered=true 且会话为冷持久（归属一致、曾收单）→ 冷唤醒投本轮增量变体
+  ---
+  duration_ms: 32.918875
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 且会话为冷持久（归属一致、从未收单）→ 冷唤醒投全量变体（无原上下文）
+ok 41 - 兜底·registered=true 且会话为冷持久（归属一致、从未收单）→ 冷唤醒投全量变体（无原上下文）
+  ---
+  duration_ms: 40.770417
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 且冷持久异主（接管冲突）：不 followup 不重建，交由原 Lead 核对
+ok 42 - 兜底·registered=true 且冷持久异主（接管冲突）：不 followup 不重建，交由原 Lead 核对
+  ---
+  duration_ms: 32.671125
+  type: 'test'
+  ...
+# Subtest: 兜底·registered=true 且为未物化崩溃壳（stat 无记录）→ 同 id 重建合法（宿主判重不认崩溃壳）
+ok 43 - 兜底·registered=true 且为未物化崩溃壳（stat 无记录）→ 同 id 重建合法（宿主判重不认崩溃壳）
+  ---
+  duration_ms: 46.527416
+  type: 'test'
+  ...
+# Subtest: 兜底·分支 2 二阶窗口（续派·无记录重建）：registered=true 且 continuation → 同 id 重建投全量变体
+ok 44 - 兜底·分支 2 二阶窗口（续派·无记录重建）：registered=true 且 continuation → 同 id 重建投全量变体
+  ---
+  duration_ms: 27.933042
+  type: 'test'
+  ...
+# Subtest: 兜底·分支 2 二阶窗口（续派·活壳形态）：registered=true 且 continuation → 不可证明活动时转人工
+ok 45 - 兜底·分支 2 二阶窗口（续派·活壳形态）：registered=true 且 continuation → 不可证明活动时转人工
+  ---
+  duration_ms: 35.896958
+  type: 'test'
+  ...
+# Subtest: 兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：已收本轮的等待路径不投任何正文
+ok 46 - 兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：已收本轮的等待路径不投任何正文
+  ---
+  duration_ms: 34.200084
+  type: 'test'
+  ...
+# Subtest: 兜底·续派：registered=false 且 expectedAgentId 在场已收本轮 → 统一等待不重投，登记本轮映射，不创建不重投
+ok 47 - 兜底·续派：registered=false 且 expectedAgentId 在场已收本轮 → 统一等待不重投，登记本轮映射，不创建不重投
+  ---
+  duration_ms: 28.819208
+  type: 'test'
+  ...
+# Subtest: 兜底·自动补派：registered=false 非续派 → 登记确定性 sessionId + 创建并核实收单
+ok 48 - 兜底·自动补派：registered=false 非续派 → 登记确定性 sessionId + 创建并核实收单
+  ---
+  duration_ms: 28.713625
+  type: 'test'
+  ...
+# Subtest: 兜底·登记失败回执：登记失败发生在创建之前 → 未创建子会话，原样重试安全不双发
+ok 49 - 兜底·登记失败回执：登记失败发生在创建之前 → 未创建子会话，原样重试安全不双发
+  ---
+  duration_ms: 29.129875
+  type: 'test'
+  ...
+# Subtest: 兜底·modelRef 不可解析：无会话需重建但无 target → 不登记不创建，修复后重试
+ok 50 - 兜底·modelRef 不可解析：无会话需重建但无 target → 不登记不创建，修复后重试
+  ---
+  duration_ms: 30.000584
+  type: 'test'
+  ...
+# Subtest: 兜底·多条目逐条独立判定：等待/补派混排互不影响，各按自身事实处置
+ok 51 - 兜底·多条目逐条独立判定：等待/补派混排互不影响，各按自身事实处置
+  ---
+  duration_ms: 59.101167
+  type: 'test'
+  ...
+# Subtest: 兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh 重建（登记回填 key 映射），不再指向幽灵会话
+ok 52 - 兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh 重建（登记回填 key 映射），不再指向幽灵会话
+  ---
+  duration_ms: 27.796417
+  type: 'test'
+  ...
+# Subtest: 兜底·续派断链且 modelRef 不可解析：不重建不登记，修复配置后重试
+ok 53 - 兜底·续派断链且 modelRef 不可解析：不重建不登记，修复配置后重试
+  ---
+  duration_ms: 30.996292
+  type: 'test'
+  ...
+# Subtest: 派单 prompt 缺失（runtime 投影缺陷）：拒绝登记与创建，零副作用
+ok 54 - 派单 prompt 缺失（runtime 投影缺陷）：拒绝登记与创建，零副作用
+  ---
+  duration_ms: 28.003375
+  type: 'test'
+  ...
+# Subtest: 兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 → 拒绝任何投递/重建，登记零写
+ok 55 - 兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 → 拒绝任何投递/重建，登记零写
+  ---
+  duration_ms: 45.09625
+  type: 'test'
+  ...
+# Subtest: 分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch
+ok 56 - 分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch
+  ---
+  duration_ms: 0.485
+  type: 'test'
+  ...
+# Subtest: 派发文案与收单口径：工具描述指向宿主收单、旧轮等待与 sleep 确认引导
+ok 57 - 派发文案与收单口径：工具描述指向宿主收单、旧轮等待与 sleep 确认引导
+  ---
+  duration_ms: 0.041708
+  type: 'test'
+  ...
+# Subtest: 工具定义形态：名称/并发安全/参数面只收语义（key、modelRef、标签均不向模型索要）
+ok 58 - 工具定义形态：名称/并发安全/参数面只收语义（key、modelRef、标签均不向模型索要）
+  ---
+  duration_ms: 0.048208
+  type: 'test'
+  ...
+# Subtest: index 装配只注册 tw 和 tw-dispatch，不装配旧注入
+ok 59 - index 装配只注册 tw 和 tw-dispatch，不装配旧注入
+  ---
+  duration_ms: 22.108375
+  type: 'test'
+  ...
+# Subtest: 波次派发不再收束回合：健康派发只记录派发世代，静止卡/部分失败/未确认持久化均保留汇报回合
+ok 60 - 波次派发不再收束回合：健康派发只记录派发世代，静止卡/部分失败/未确认持久化均保留汇报回合
+  ---
+  duration_ms: 170.948583
+  type: 'test'
+  ...
+# Subtest: sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再次执行放行，新回合重新引导，其余工具完全放行
+ok 61 - sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再次执行放行，新回合重新引导，其余工具完全放行
+  ---
+  duration_ms: 73.357375
+  type: 'test'
+  ...
+# Subtest: sleep 检测规则矩阵：R1/R2/R3 命中，白名单与未覆盖形态放行
+ok 62 - sleep 检测规则矩阵：R1/R2/R3 命中，白名单与未覆盖形态放行
+  ---
+  duration_ms: 0.336208
+  type: 'test'
+  ...
+# Subtest: sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，更晚 Step 确认放行且失败不回退
+ok 63 - sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，更晚 Step 确认放行且失败不回退
+  ---
+  duration_ms: 0.297875
+  type: 'test'
+  ...
+# Subtest: 派发世代：新交付与原生委派成功递增并重新引导，纯重入 reused 与 send_message 不重置
+ok 64 - 派发世代：新交付与原生委派成功递增并重新引导，纯重入 reused 与 send_message 不重置
+  ---
+  duration_ms: 0.3485
+  type: 'test'
+  ...
+# Subtest: guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自身异常放行原命令
+ok 65 - guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自身异常放行原命令
+  ---
+  duration_ms: 0.21375
+  type: 'test'
+  ...
+# Subtest: sleep 引导只拦等待：run_in_background、微小等待、workdir 与 cwd、非 bash 工具全部透传
+ok 66 - sleep 引导只拦等待：run_in_background、微小等待、workdir 与 cwd、非 bash 工具全部透传
+  ---
+  duration_ms: 0.137417
+  type: 'test'
+  ...
+# Subtest: TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约
+ok 67 - TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约
+  ---
+  duration_ms: 0.076125
+  type: 'test'
+  ...
+# Subtest: 工具描述与输出字段：按 modelRef 创建、意图确认卡与换模型卡说明在位，不回退 modelHint
+ok 68 - 工具描述与输出字段：按 modelRef 创建、意图确认卡与换模型卡说明在位，不回退 modelHint
+  ---
+  duration_ms: 0.079875
+  type: 'test'
+  ...
+# Subtest: 原生 tw 与 tw-dispatch：完整首卡停止且不创建成员，按展示卡 ID 确认后才派发
+ok 69 - 原生 tw 与 tw-dispatch：完整首卡停止且不创建成员，按展示卡 ID 确认后才派发
+  ---
+  duration_ms: 1249.252125
+  type: 'test'
+  ...
+# Subtest: 首次登记只创建一次并复核收单，wait-children 仅证明宿主收单
+ok 70 - 首次登记只创建一次并复核收单，wait-children 仅证明宿主收单
+  ---
+  duration_ms: 83.935834
+  type: 'test'
+  ...
+# Subtest: 同 key 并发在共享投递锁内对账，不会重复创建
+ok 71 - 同 key 并发在共享投递锁内对账，不会重复创建
+  ---
+  duration_ms: 78.027875
+  type: 'test'
+  ...
+# Subtest: 报告已存在或波已作废时重验状态，不访问宿主或发送
+ok 72 - 报告已存在或波已作废时重验状态，不访问宿主或发送
+  ---
+  duration_ms: 149.79625
+  type: 'test'
+  ...
+# Subtest: 旧写者未停写和续派映射缺失均阻止自动投递
+ok 73 - 旧写者未停写和续派映射缺失均阻止自动投递
+  ---
+  duration_ms: 146.049083
+  type: 'test'
+  ...
+# Subtest: 缺冻结标记、摘要损坏或正文 key 不符均不得登记或创建
+ok 74 - 缺冻结标记、摘要损坏或正文 key 不符均不得登记或创建
+  ---
+  duration_ms: 331.082083
+  type: 'test'
+  ...
+# Subtest: 精确块比对排除继承前缀、宿主前置文本及相似 key，发现同 key 内容冲突
+ok 75 - 精确块比对排除继承前缀、宿主前置文本及相似 key，发现同 key 内容冲突
+  ---
+  duration_ms: 0.369417
+  type: 'test'
+  ...
+# Subtest: 按裁决区分已收活会话、未收活会话、冷续投与当前不可见会话
+ok 76 - 按裁决区分已收活会话、未收活会话、冷续投与当前不可见会话
+  ---
+  duration_ms: 468.7035
+  type: 'test'
+  ...
+# Subtest: 活会话未收本轮且显式给出旧轮活动与通知标记时只等待旧轮
+ok 77 - 活会话未收本轮且显式给出旧轮活动与通知标记时只等待旧轮
+  ---
+  duration_ms: 68.794292
+  type: 'test'
+  ...
+# Subtest: 混合在途项中未确认收单不被健康项掩盖，可靠旧轮信号聚合 wait-prior-turn
+ok 78 - 混合在途项中未确认收单不被健康项掩盖，可靠旧轮信号聚合 wait-prior-turn
+  ---
+  duration_ms: 176.917166
+  type: 'test'
+  ...
+# Subtest: 冷续派按旧上下文选择增量、全量或提醒并核验发送后收单
+ok 79 - 冷续派按旧上下文选择增量、全量或提醒并核验发送后收单
+  ---
+  duration_ms: 187.183625
+  type: 'test'
+  ...
+# Subtest: 续派原 ID 当前不可见时，以新 key 的确定性 ID 重建并发送全量正文
+ok 80 - 续派原 ID 当前不可见时，以新 key 的确定性 ID 重建并发送全量正文
+  ---
+  duration_ms: 71.71075
+  type: 'test'
+  ...
+# Subtest: 冷续投重验期间会话变为活会话时绝不投递正文
+ok 81 - 冷续投重验期间会话变为活会话时绝不投递正文
+  ---
+  duration_ms: 76.340625
+  type: 'test'
+  ...
+# Subtest: 冷续投登记后出现旧写者停写冲突时不得发送
+ok 82 - 冷续投登记后出现旧写者停写冲突时不得发送
+  ---
+  duration_ms: 92.303125
+  type: 'test'
+  ...
+# Subtest: 续投后消息回执、flush 或精确收单无法确认时不得称健康
+ok 83 - 续投后消息回执、flush 或精确收单无法确认时不得称健康
+  ---
+  duration_ms: 261.334667
+  type: 'test'
+  ...
+# Subtest: 人工门保留全部待决、失效和阻塞包，不保留多卡单项别名
+ok 84 - 人工门保留全部待决、失效和阻塞包，不保留多卡单项别名
+  ---
+  duration_ms: 36.899708
+  type: 'test'
+  ...
+# Subtest: 真实 CoreRuntime CLI 与绑定接缝：首卡、用户确认、锁内重验及宿主桩收单
+ok 85 - 真实 CoreRuntime CLI 与绑定接缝：首卡、用户确认、锁内重验及宿主桩收单
+  ---
+  duration_ms: 1132.77575
+  type: 'test'
+  ...
+# Subtest: 波次重验报告账本损坏时保留原始错误而不访问宿主
+ok 86 - 波次重验报告账本损坏时保留原始错误而不访问宿主
+  ---
+  duration_ms: 50.18875
+  type: 'test'
+  ...
+# Subtest: 已报告即使冻结正文损坏也短路，不凭猜测补造 sessionId
+ok 87 - 已报告即使冻结正文损坏也短路，不凭猜测补造 sessionId
+  ---
+  duration_ms: 71.772958
+  type: 'test'
+  ...
+# Subtest: 登记簿损坏或竞争变更时保留原映射且不访问宿主
+ok 88 - 登记簿损坏或竞争变更时保留原映射且不访问宿主
+  ---
+  duration_ms: 150.073791
+  type: 'test'
+  ...
+# Subtest: 首次登记后重验发现已报告或作废时绝不创建
+ok 89 - 首次登记后重验发现已报告或作废时绝不创建
+  ---
+  duration_ms: 120.029875
+  type: 'test'
+  ...
+# Subtest: 日志读取、持久化屏障或关闭失败均保持 recover 且不重投
+ok 90 - 日志读取、持久化屏障或关闭失败均保持 recover 且不重投
+  ---
+  duration_ms: 355.79575
+  type: 'test'
+  ...
+# Subtest: 用户裁决下当前不可见的创建可重试，而持久化未确认的在场会话不重建
+ok 91 - 用户裁决下当前不可见的创建可重试，而持久化未确认的在场会话不重建
+  ---
+  duration_ms: 164.932208
+  type: 'test'
+  ...
+# Subtest: 精确模型缺失或非法时不登记也不创建
+ok 92 - 精确模型缺失或非法时不登记也不创建
+  ---
+  duration_ms: 150.178875
+  type: 'test'
+  ...
+# Subtest: 两个进程同 key 投递锁不允许临界区交叠
+ok 93 - 两个进程同 key 投递锁不允许临界区交叠
+  ---
+  duration_ms: 192.326167
+  type: 'test'
+  ...
+# Subtest: 已有 Owner 先交付时，锁内重验不得创建未投递的下一波
+ok 94 - 已有 Owner 先交付时，锁内重验不得创建未投递的下一波
+  ---
+  duration_ms: 1004.891167
+  type: 'test'
+  ...
+# Subtest: 真实宿主兼容检查：已测两版通过，加载范围边界遵循声明
+ok 95 - 真实宿主兼容检查：已测两版通过，加载范围边界遵循声明 # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.706083
+  type: 'test'
+  ...
+# Subtest: 真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及父级结果投递
+ok 96 - 真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及父级结果投递 # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.134083
+  type: 'test'
+  ...
+# Subtest: 新版真实 Cordis：空 tiers 可启动，只注册 tw/tw-dispatch 和内嵌 skill
+ok 97 - 新版真实 Cordis：空 tiers 可启动，只注册 tw/tw-dispatch 和内嵌 skill # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.066334
+  type: 'test'
+  ...
+# Subtest: 新版真实 skill 工具：随包正文/相邻资源/来源优先级及插件独立释放
+ok 98 - 新版真实 skill 工具：随包正文/相邻资源/来源优先级及插件独立释放 # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.146042
+  type: 'test'
+  ...
+# Subtest: 新版真实 JSONL 后端：单块业务正文冷持久读取保留，业务正文收单判定不变
+ok 99 - 新版真实 JSONL 后端：单块业务正文冷持久读取保留，业务正文收单判定不变 # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.082917
+  type: 'test'
+  ...
+# Subtest: 新版真实 Cordis：客户端只等各功能依赖，服务迟到可注册，dispose 释放所有贡献
+ok 100 - 新版真实 Cordis：客户端只等各功能依赖，服务迟到可注册，dispose 释放所有贡献 # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.075875
+  type: 'test'
+  ...
+# Subtest: 新版真实 Cordis：组件按完整服务名读取 remote，目录加载不触发命名空间 guard
+ok 101 - 新版真实 Cordis：组件按完整服务名读取 remote，目录加载不触发命名空间 guard # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.532875
+  type: 'test'
+  ...
+# Subtest: 新版真实 ConfigForms：宿主 plainSchema 经浏览器重建后，空 tiers 可进入 ready
+ok 102 - 新版真实 ConfigForms：宿主 plainSchema 经浏览器重建后，空 tiers 可进入 ready # SKIP 未指定 DSH_TEST_HOST；新版隔离宿主验证未执行
+  ---
+  duration_ms: 0.170834
+  type: 'test'
+  ...
+# Subtest: 新版客户端：可选服务缺席仍能注册档位输入并随释放注销
+ok 103 - 新版客户端：可选服务缺席仍能注册档位输入并随释放注销
+  ---
+  duration_ms: 7.810875
+  type: 'test'
+  ...
+# Subtest: 新版配置：唯一包页面只有编辑内容，原生字段与按钮随 served 生命周期释放
+ok 104 - 新版配置：唯一包页面只有编辑内容，原生字段与按钮随 served 生命周期释放
+  ---
+  duration_ms: 3.763458
+  type: 'test'
+  ...
+# Subtest: 新版配置：候选增删、整份 tiers 原子保存，宿主读回确认才显示成功
+ok 105 - 新版配置：候选增删、整份 tiers 原子保存，宿主读回确认才显示成功
+  ---
+  duration_ms: 5.540667
+  type: 'test'
+  ...
+# Subtest: 新版配置：外部更新不改草稿与编辑 revision，冲突拒绝后保留草稿
+ok 106 - 新版配置：外部更新不改草稿与编辑 revision，冲突拒绝后保留草稿
+  ---
+  duration_ms: 3.333208
+  type: 'test'
+  ...
+# Subtest: 新版配置：保存拒绝、异常与读回不匹配均不显示成功且不丢草稿
+ok 107 - 新版配置：保存拒绝、异常与读回不匹配均不显示成功且不丢草稿
+  ---
+  duration_ms: 7.938875
+  type: 'test'
+  ...
+# Subtest: 新版配置：未知广告模型只标尚未验证，已保存值保留，缺字段和无效 effort 阻止提交
+ok 108 - 新版配置：未知广告模型只标尚未验证，已保存值保留，缺字段和无效 effort 阻止提交
+  ---
+  duration_ms: 9.773667
+  type: 'test'
+  ...
+# Subtest: 新版配置：Provider/模型目录 RPC 失败不可宣称有效
+ok 109 - 新版配置：Provider/模型目录 RPC 失败不可宣称有效
+  ---
+  duration_ms: 2.302667
+  type: 'test'
+  ...
+# Subtest: 新版配置：保存时重新确认 Provider，停用后不写入旧目录验证结果
+ok 110 - 新版配置：保存时重新确认 Provider，停用后不写入旧目录验证结果
+  ---
+  duration_ms: 2.340292
+  type: 'test'
+  ...
+# Subtest: @ 档位：提交读取当前快照第一候选并转换原生 effort，缺档明确 unresolved
+ok 111 - @ 档位：提交读取当前快照第一候选并转换原生 effort，缺档明确 unresolved
+  ---
+  duration_ms: 1.399
+  type: 'test'
+  ...
+# Subtest: 会话徽标：新版 kit 模型投影显示真实请求，父会话不显示 tiers 意图
+ok 112 - 会话徽标：新版 kit 模型投影显示真实请求，父会话不显示 tiers 意图
+  ---
+  duration_ms: 1.000292
+  type: 'test'
+  ...
+# Subtest: 会话徽标：projections 非激活 RPC 随运行刷新，拒绝不覆盖真实请求
+ok 113 - 会话徽标：projections 非激活 RPC 随运行刷新，拒绝不覆盖真实请求
+  ---
+  duration_ms: 4.831458
+  type: 'test'
+  ...
+# Subtest: Config：普通根 object、volatile tiers 可重建且三档结构保持有效
+ok 114 - Config：普通根 object、volatile tiers 可重建且三档结构保持有效
+  ---
+  duration_ms: 1.952417
+  type: 'test'
+  ...
+# Subtest: Config：去 volatile 后再次序列化的浏览器表单仍可校验空与完整 tiers
+ok 115 - Config：去 volatile 后再次序列化的浏览器表单仍可校验空与完整 tiers
+  ---
+  duration_ms: 0.415542
+  type: 'test'
+  ...
+# Subtest: 宿主快照与动态指引：热更新读当前 tiers，不引入项目覆盖或默认模型
+ok 116 - 宿主快照与动态指引：热更新读当前 tiers，不引入项目覆盖或默认模型
+  ---
+  duration_ms: 0.159125
+  type: 'test'
+  ...
+# Subtest: tw 工具与 skill：根制品寻址、缺 cwd 恢复、render 返回内容块
+ok 117 - tw 工具与 skill：根制品寻址、缺 cwd 恢复、render 返回内容块
+  ---
+  duration_ms: 0.281125
+  type: 'test'
+  ...
+# Subtest: 三个随包技能独立注册与释放：默认根基址、自定义旧基址及失败隔离
+ok 118 - 三个随包技能独立注册与释放：默认根基址、自定义旧基址及失败隔离
+  ---
+  duration_ms: 58.420167
+  type: 'test'
+  ...
+# Subtest: 插件技能一条失败不影响另两条和两工具，禁用收拢真实释放函数
+ok 119 - 插件技能一条失败不影响另两条和两工具，禁用收拢真实释放函数
+  ---
+  duration_ms: 5.945583
+  type: 'test'
+  ...
+# Subtest: 读取持久化失败不能作为不存在创建成员
+ok 120 - 读取持久化失败不能作为不存在创建成员
+  ---
+  duration_ms: 0.638083
+  type: 'test'
+  ...
+# Subtest: 没有持锁对账的创建许可时拒绝直接创建（allowCreate 证明缺失）
+ok 121 - 没有持锁对账的创建许可时拒绝直接创建（allowCreate 证明缺失）
+  ---
+  duration_ms: 0.080208
+  type: 'test'
+  ...
+# Subtest: 新成员采用精确模型与宿主深度，允许宿主填充未指定 effort
+ok 122 - 新成员采用精确模型与宿主深度，允许宿主填充未指定 effort
+  ---
+  duration_ms: 0.363291
+  type: 'test'
+  ...
+# Subtest: 新版创建优先 startActivation 并指定父级投递，保留会话与消息回执
+ok 123 - 新版创建优先 startActivation 并指定父级投递，保留会话与消息回执
+  ---
+  duration_ms: 0.147291
+  type: 'test'
+  ...
+# Subtest: 新版创建拒绝不降级重试旧入口，避免重复创建
+ok 124 - 新版创建拒绝不降级重试旧入口，避免重复创建
+  ---
+  duration_ms: 0.083
+  type: 'test'
+  ...
+# Subtest: 已接收但 flush=false 保留会话 ID，绝不回收已运行成员
+ok 125 - 已接收但 flush=false 保留会话 ID，绝不回收已运行成员
+  ---
+  duration_ms: 0.075167
+  type: 'test'
+  ...
+# Subtest: 同 ID 会话已存在时创建原语只报状态不补投不重建（续投职责在对账链）
+ok 126 - 同 ID 会话已存在时创建原语只报状态不补投不重建（续投职责在对账链）
+  ---
+  duration_ms: 0.059625
+  type: 'test'
+  ...
+# Subtest: 冷收单忽略继承事件并在只读读取后关闭 handle；续投文本由 coldResumePrompt 纯函数选择
+ok 127 - 冷收单忽略继承事件并在只读读取后关闭 handle；续投文本由 coldResumePrompt 纯函数选择
+  ---
+  duration_ms: 0.167834
+  type: 'test'
+  ...
+# Subtest: 冷会话读取异常仍关闭 handle，结果为不可判定的收单失败
+ok 128 - 冷会话读取异常仍关闭 handle，结果为不可判定的收单失败
+  ---
+  duration_ms: 0.075084
+  type: 'test'
+  ...
+# Subtest: 快速结束与 flush 抛错均回执已接收 ID；重试遇同 ID 已存在拒绝再创建
+ok 129 - 快速结束与 flush 抛错均回执已接收 ID；重试遇同 ID 已存在拒绝再创建
+  ---
+  duration_ms: 0.182167
+  type: 'test'
+  ...
+# Subtest: 取消信号传给 stat 与 start，读取链信号与关闭责任由收单原语承担
+ok 130 - 取消信号传给 stat 与 start，读取链信号与关闭责任由收单原语承担
+  ---
+  duration_ms: 1.179542
+  type: 'test'
+  ...
+# Subtest: 同派单冷重试已含本轮正文时 coldResumePrompt 只选轻量续行提醒
+ok 131 - 同派单冷重试已含本轮正文时 coldResumePrompt 只选轻量续行提醒
+  ---
+  duration_ms: 0.574334
+  type: 'test'
+  ...
+# Subtest: 仅上一轮上下文的冷会话 coldResumePrompt 选本轮增量，不误选轻提示
+ok 132 - 仅上一轮上下文的冷会话 coldResumePrompt 选本轮增量，不误选轻提示
+  ---
+  duration_ms: 0.24225
+  type: 'test'
+  ...
+# Subtest: 成员消息单块：历史双块日志仍判本轮收单，规则字段被忽略且不再注入诊断句
+ok 133 - 成员消息单块：历史双块日志仍判本轮收单，规则字段被忽略且不再注入诊断句
+  ---
+  duration_ms: 0.365416
+  type: 'test'
+  ...
+# Subtest: 日志中无法解释的消息内容令收单判定失败，仍释放 handle
+ok 134 - 日志中无法解释的消息内容令收单判定失败，仍释放 handle
+  ---
+  duration_ms: 0.133042
+  type: 'test'
+  ...
+# Subtest: toHostTarget：ModelRef → 宿主 target 的唯一映射（缺 effort 不传字段，禁止空串/none）
+ok 135 - toHostTarget：ModelRef → 宿主 target 的唯一映射（缺 effort 不传字段，禁止空串/none）
+  ---
+  duration_ms: 0.243208
+  type: 'test'
+  ...
+# Subtest: createDirectedSubagent 收 modelRef：省略 effort 时不传 reasoningEffort，startActivation 同时带 request 与顶层参数（0.2.1/0.2.2 双兼容）
+ok 136 - createDirectedSubagent 收 modelRef：省略 effort 时不传 reasoningEffort，startActivation 同时带 request 与顶层参数（0.2.1/0.2.2 双兼容）
+  ---
+  duration_ms: 0.109667
+  type: 'test'
+  ...
+# Subtest: createDirectedSubagent 拒绝无效 modelRef（effort 空串/none、缺字段），不进入创建
+ok 137 - createDirectedSubagent 拒绝无效 modelRef（effort 空串/none、缺字段），不进入创建
+  ---
+  duration_ms: 0.060167
+  type: 'test'
+  ...
+# Subtest: E2E-B F-3：无项目 dsh.json、无插件时，调用快照 tier 配置可完成派发与交付
+ok 138 - E2E-B F-3：无项目 dsh.json、无插件时，调用快照 tier 配置可完成派发与交付
+  ---
+  duration_ms: 999.560333
+  type: 'test'
+  ...
+# Subtest: E2E-B F-9+F-10：八视角形态（tier 升档卡实测）+ 组合评审收敛
+ok 139 - E2E-B F-9+F-10：八视角形态（tier 升档卡实测）+ 组合评审收敛
+  ---
+  duration_ms: 3074.279917
+  type: 'test'
+  ...
+# Subtest: E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → 依赖串行）
+ok 140 - E2E-B F-11：e2eTemplate 物化三包链（run 路由 → e2e 阶段 → 依赖串行）
+  ---
+  duration_ms: 2698.010292
+  type: 'test'
+  ...
+# Subtest: E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 调用快照候选池生效
+ok 141 - E2E-B F-6/F-4：双任务 agent-map 数据隔离 + 调用快照候选池生效
+  ---
+  duration_ms: 1281.148667
+  type: 'test'
+  ...
+# Subtest: 唯一根制品：新版隔离 profile 的 bundle 与 Config schema 可装配
+ok 142 - 唯一根制品：新版隔离 profile 的 bundle 与 Config schema 可装配 # SKIP 未指定 DSH_TEST_HOST；新版隔离装配验证未执行
+  ---
+  duration_ms: 0.90225
+  type: 'test'
+  ...
+# Subtest: 范围争议 blocked：恢复提示先确认授权，保留原 re-scope 非决定接口
+ok 143 - 范围争议 blocked：恢复提示先确认授权，保留原 re-scope 非决定接口
+  ---
+  duration_ms: 880.900625
+  type: 'test'
+  ...
+# Subtest: 返工派单保留原回应轮，提醒授权争议在修补前暂停而非自动扩建
+ok 144 - 返工派单保留原回应轮，提醒授权争议在修补前暂停而非自动扩建
+  ---
+  duration_ms: 1158.995084
+  type: 'test'
+  ...
+# Subtest: 首轮评审升级保持同 key 修订和原卡语义，方向文本不消耗追加轮数卡
+ok 145 - 首轮评审升级保持同 key 修订和原卡语义，方向文本不消耗追加轮数卡
+  ---
+  duration_ms: 4234.828625
+  type: 'test'
+  ...
+# Subtest: code-review 介入全链路（CLI 序列）
+ok 146 - code-review 介入全链路（CLI 序列）
+  ---
+  duration_ms: 2432.74325
+  type: 'test'
+  ...
+# Subtest: partial 归档：未完成任务由用户终止后归档
+ok 147 - partial 归档：未完成任务由用户终止后归档
+  ---
+  duration_ms: 1901.866125
+  type: 'test'
+  ...
+# Subtest: 汇报呈现注入：用户决定点带纪律与素材，回执不注入，幂等稳定
+ok 148 - 汇报呈现注入：用户决定点带纪律与素材，回执不注入，幂等稳定
+  ---
+  duration_ms: 1553.427875
+  type: 'test'
+  ...
+# Subtest: run 普通进展：待派发、过门和待收尾均带公共段，整个项目零写入
+ok 149 - run 普通进展：待派发、过门和待收尾均带公共段，整个项目零写入
+  ---
+  duration_ms: 1867.132959
+  type: 'test'
+  ...
+# Subtest: run 只读：待派发/在途各态出指引卡且零写入；--writable 被拒绝
+ok 150 - run 只读：待派发/在途各态出指引卡且零写入；--writable 被拒绝
+  ---
+  duration_ms: 653.568417
+  type: 'test'
+  ...
+# Subtest: run 只读：指纹失效待决卡出重签指引且不作废不重签（写归 dispatch，封堵死循环）；dispatch-plan 重签后旧卡 decide 被拒
+ok 151 - run 只读：指纹失效待决卡出重签指引且不作废不重签（写归 dispatch，封堵死循环）；dispatch-plan 重签后旧卡 decide 被拒
+  ---
+  duration_ms: 1235.79925
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 人读模式：waves 与全部 stop 卡均带 human 指引（--json 不输出）
+ok 152 - dispatch-plan 人读模式：waves 与全部 stop 卡均带 human 指引（--json 不输出）
+  ---
+  duration_ms: 1416.877708
+  type: 'test'
+  ...
+# Subtest: 删除升档审批反向断言：高于默认档的包直接按包级 ModelRef 派发，不再出 escalation 卡、无权重倍数文案
+ok 153 - 删除升档审批反向断言：高于默认档的包直接按包级 ModelRef 派发，不再出 escalation 卡、无权重倍数文案
+  ---
+  duration_ms: 425.479125
+  type: 'test'
+  ...
+# Subtest: 旧未决升档卡收口：推进一次自动 decided:superseded 并恢复派发，重复推进幂等
+ok 154 - 旧未决升档卡收口：推进一次自动 decided:superseded 并恢复派发，重复推进幂等
+  ---
+  duration_ms: 484.441625
+  type: 'test'
+  ...
+# Subtest: 新版首卡：先准备完整分包，首次推进签一张卡并绑定 ID 与 SHA
+ok 155 - 新版首卡：先准备完整分包，首次推进签一张卡并绑定 ID 与 SHA
+  ---
+  duration_ms: 464.656541
+  type: 'test'
+  ...
+# Subtest: 新版首卡：迟到 ID 拒绝，A→B→A 不复用旧确认或卡号，相同配置不重签
+ok 156 - 新版首卡：迟到 ID 拒绝，A→B→A 不复用旧确认或卡号，相同配置不重签
+  ---
+  duration_ms: 776.565541
+  type: 'test'
+  ...
+# Subtest: 新版首卡：单 Owner 首派范围变化重签，省略范围时沿用已确认值
+ok 157 - 新版首卡：单 Owner 首派范围变化重签，省略范围时沿用已确认值
+  ---
+  duration_ms: 333.57
+  type: 'test'
+  ...
+# Subtest: 新版首卡：缺原文或未解析模型不签发可确认卡
+ok 158 - 新版首卡：缺原文或未解析模型不签发可确认卡
+  ---
+  duration_ms: 519.661208
+  type: 'test'
+  ...
+# Subtest: 包级 ModelRef 物化：显式 model / tier 语法糖 / 复用 roles.owner；tier+model 冲突与缺档拒绝
+ok 159 - 包级 ModelRef 物化：显式 model / tier 语法糖 / 复用 roles.owner；tier+model 冲突与缺档拒绝
+  ---
+  duration_ms: 330.120708
+  type: 'test'
+  ...
+# Subtest: tw roles：只读/--set/--resolve/--clear；已有会话换模型出确认卡，选保留后不再重复出卡
+ok 160 - tw roles：只读/--set/--resolve/--clear；已有会话换模型出确认卡，选保留后不再重复出卡
+  ---
+  duration_ms: 762.948792
+  type: 'test'
+  ...
+# Subtest: 换模型选 2：写 session-reset 作废旧映射、重开会话用新模型（全新上下文）
+ok 161 - 换模型选 2：写 session-reset 作废旧映射、重开会话用新模型（全新上下文）
+  ---
+  duration_ms: 712.815542
+  type: 'test'
+  ...
+# Subtest: run 无锁只读：锁目录只读时照常返回状态卡、盘上零变化（含锁文件）；卡面标注 journal seq
+ok 162 - run 无锁只读：锁目录只读时照常返回状态卡、盘上零变化（含锁文件）；卡面标注 journal seq
+  ---
+  duration_ms: 218.601584
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 导出 promptFull：续派与在途重建的两种正文各含一次当前验收基线
+ok 163 - dispatch-plan 导出 promptFull：续派与在途重建的两种正文各含一次当前验收基线
+  ---
+  duration_ms: 500.732666
+  type: 'test'
+  ...
+# Subtest: 快照损坏不构成死门：rebuildArtifacts 按缺失降级进 degraded（含处置建议），run/gate/deliver 全链照常
+ok 164 - 快照损坏不构成死门：rebuildArtifacts 按缺失降级进 degraded（含处置建议），run/gate/deliver 全链照常
+  ---
+  duration_ms: 452.153333
+  type: 'test'
+  ...
+# Subtest: 快照-报告时间校验：最新快照丢失（旧快照在场）→ 按缺失 degraded，不产出 {digest:旧, reportRef:新} 混搭
+ok 165 - 快照-报告时间校验：最新快照丢失（旧快照在场）→ 按缺失 degraded，不产出 {digest:旧, reportRef:新} 混搭
+  ---
+  duration_ms: 846.560917
+  type: 'test'
+  ...
+# Subtest: artifacts.json 损坏自愈：deliver/review 锁内照常接受（freshState 降级重建），deliver 落盘固化
+ok 166 - artifacts.json 损坏自愈：deliver/review 锁内照常接受（freshState 降级重建），deliver 落盘固化
+  ---
+  duration_ms: 600.095209
+  type: 'test'
+  ...
+# Subtest: init 增量释放用户公共规则：缺失补齐、未改默认静默升版、已改文件保留并写 .default.md 旁路
+ok 167 - init 增量释放用户公共规则：缺失补齐、未改默认静默升版、已改文件保留并写 .default.md 旁路
+  ---
+  duration_ms: 964.608875
+  type: 'test'
+  ...
+# Subtest: init 用户公共规则：测试进程未显式指定目录时不写主目录；出厂模板缺失不阻塞技能装载
+ok 168 - init 用户公共规则：测试进程未显式指定目录时不写主目录；出厂模板缺失不阻塞技能装载
+  ---
+  duration_ms: 332.543792
+  type: 'test'
+  ...
+# Subtest: ModelRef 校验：缺字段/未知字段/effort 空串或 none 拒绝；缺省不补空值
+ok 169 - ModelRef 校验：缺字段/未知字段/effort 空串或 none 拒绝；缺省不补空值
+  ---
+  duration_ms: 181.489125
+  type: 'test'
+  ...
+# Subtest: 旧 packages.json 的 tier 首次推进物化：按当前快照解析成 ModelRef，journal 记 packages-model-materialized
+ok 170 - 旧 packages.json 的 tier 首次推进物化：按当前快照解析成 ModelRef，journal 记 packages-model-materialized
+  ---
+  duration_ms: 269.796083
+  type: 'test'
+  ...
+# Subtest: 换模型选 3：回滚 roles 到首派模型并重签确认卡
+ok 171 - 换模型选 3：回滚 roles 到首派模型并重签确认卡
+  ---
+  duration_ms: 889.465125
+  type: 'test'
+  ...
+# Subtest: intent 扩展字段：范围/验收进入派单基线；gap 答复可结构化落到 intent.json
+ok 172 - intent 扩展字段：范围/验收进入派单基线；gap 答复可结构化落到 intent.json
+  ---
+  duration_ms: 313.324291
+  type: 'test'
+  ...
+# Subtest: tw plan 重拆窗口：意图确认卡期间放行并自动重签；其他 awaiting-user 卡仍拒绝
+ok 173 - tw plan 重拆窗口：意图确认卡期间放行并自动重签；其他 awaiting-user 卡仍拒绝
+  ---
+  duration_ms: 228.815292
+  type: 'test'
+  ...
+# Subtest: tw roles --clear 与 --resolve：清除角色后按当前快照重建
+ok 174 - tw roles --clear 与 --resolve：清除角色后按当前快照重建
+  ---
+  duration_ms: 233.751625
+  type: 'test'
+  ...
+# Subtest: tw gate 只读提示意图确认状态（不改写任务事实）
+ok 175 - tw gate 只读提示意图确认状态（不改写任务事实）
+  ---
+  duration_ms: 157.440375
+  type: 'test'
+  ...
+# Subtest: 包级模型变更：续派出换模型卡（target=package），回滚恢复 packages[].model 后按旧模型续派
+ok 176 - 包级模型变更：续派出换模型卡（target=package），回滚恢复 packages[].model 后按旧模型续派
+  ---
+  duration_ms: 639.121083
+  type: 'test'
+  ...
+# Subtest: F-2：报告持久化重建按提交序而非回拨墙钟返回同 key 修订
+ok 177 - F-2：报告持久化重建按提交序而非回拨墙钟返回同 key 修订
+  ---
+  duration_ms: 74.758625
+  type: 'test'
+  ...
+# Subtest: F-10：包模型回滚的完整计划支持完好与缺失视图，未改包不受影响
+ok 178 - F-10：包模型回滚的完整计划支持完好与缺失视图，未改包不受影响
+  ---
+  duration_ms: 539.906167
+  type: 'test'
+  ...
+# Subtest: F-10：回滚写入 journal.jsonl 失败后可恢复且重试幂等
+ok 179 - F-10：回滚写入 journal.jsonl 失败后可恢复且重试幂等
+  ---
+  duration_ms: 510.241041
+  type: 'test'
+  ...
+# Subtest: F-10：回滚写入 packages.json 失败后可恢复且重试幂等
+ok 180 - F-10：回滚写入 packages.json 失败后可恢复且重试幂等
+  ---
+  duration_ms: 486.753375
+  type: 'test'
+  ...
+# Subtest: F-11：未决 migration 前置卡阻止人工批准且不写入
+ok 181 - F-11：未决 migration 前置卡阻止人工批准且不写入
+  ---
+  duration_ms: 74.584291
+  type: 'test'
+  ...
+# Subtest: F-11：migration 前置卡收口后人工批准可继续
+ok 182 - F-11：migration 前置卡收口后人工批准可继续
+  ---
+  duration_ms: 90.380875
+  type: 'test'
+  ...
+# Subtest: F-11：未决 intent 前置卡阻止人工批准且不写入
+ok 183 - F-11：未决 intent 前置卡阻止人工批准且不写入
+  ---
+  duration_ms: 74.678958
+  type: 'test'
+  ...
+# Subtest: F-11：intent 前置卡收口后人工批准可继续
+ok 184 - F-11：intent 前置卡收口后人工批准可继续
+  ---
+  duration_ms: 121.684875
+  type: 'test'
+  ...
+# Subtest: F-11：迁移前置卡未决时仍可明确选择结束任务
+ok 185 - F-11：迁移前置卡未决时仍可明确选择结束任务
+  ---
+  duration_ms: 105.651959
+  type: 'test'
+  ...
+# Subtest: 换模型选 2（包级）：写 session-reset 后新会话用新包模型
+ok 186 - 换模型选 2（包级）：写 session-reset 后新会话用新包模型
+  ---
+  duration_ms: 525.469125
+  type: 'test'
+  ...
+# Subtest: E1：重开会话 B 后的续派基线是 B 首派模型；B→C 也按 B 比较，不重复出卡
+ok 187 - E1：重开会话 B 后的续派基线是 B 首派模型；B→C 也按 B 比较，不重复出卡
+  ---
+  duration_ms: 1114.240167
+  type: 'test'
+  ...
+# Subtest: E1：跨阶段只比较当前阶段会话首派模型，不回看上一阶段
+ok 188 - E1：跨阶段只比较当前阶段会话首派模型，不回看上一阶段
+  ---
+  duration_ms: 655.763292
+  type: 'test'
+  ...
+# Subtest: E2：换模型卡未决时改 roles：旧卡 superseded 不叠 intake 卡；decide 选项仍是 keep-session
+ok 189 - E2：换模型卡未决时改 roles：旧卡 superseded 不叠 intake 卡；decide 选项仍是 keep-session
+  ---
+  duration_ms: 596.562708
+  type: 'test'
+  ...
+# Subtest: E2：换模型卡签发后外部改 roles → decide 拒绝直答；推进时旧卡自动作废重签
+ok 190 - E2：换模型卡签发后外部改 roles → decide 拒绝直答；推进时旧卡自动作废重签
+  ---
+  duration_ms: 390.622791
+  type: 'test'
+  ...
+# Subtest: E2：存在其他待决卡时 roles 修改不抢先签 intake 卡，只标 stale（避免选项错位）
+ok 191 - E2：存在其他待决卡时 roles 修改不抢先签 intake 卡，只标 stale（避免选项错位）
+  ---
+  duration_ms: 161.799041
+  type: 'test'
+  ...
+# Subtest: 新版初始化中断：缺原文事实或初始日志保留残留并提示换名恢复
+ok 192 - 新版初始化中断：缺原文事实或初始日志保留残留并提示换名恢复
+  ---
+  duration_ms: 214.881458
+  type: 'test'
+  ...
+# Subtest: 新版确认中断：仅决定文件落盘不会派发，原卡 ID 重试可安全恢复
+ok 193 - 新版确认中断：仅决定文件落盘不会派发，原卡 ID 重试可安全恢复
+  ---
+  duration_ms: 125.278125
+  type: 'test'
+  ...
+# Subtest: 新版确认卡版本与入口产出漂移不能降级或沿用旧确认
+ok 194 - 新版确认卡版本与入口产出漂移不能降级或沿用旧确认
+  ---
+  duration_ms: 120.417333
+  type: 'test'
+  ...
+# Subtest: 新版无产物单 Owner：首卡绑定 none 并在确认后保持空范围
+ok 195 - 新版无产物单 Owner：首卡绑定 none 并在确认后保持空范围
+  ---
+  duration_ms: 114.258667
+  type: 'test'
+  ...
+# Subtest: 首卡可写声明严格符合路径:类型，缺冒号不会产生误导确认或派单
+ok 196 - 首卡可写声明严格符合路径:类型，缺冒号不会产生误导确认或派单
+  ---
+  duration_ms: 176.0055
+  type: 'test'
+  ...
+# Subtest: 重签卡相对最近已确认完整快照展示增量，风险字段与完整 SHA 同源
+ok 197 - 重签卡相对最近已确认完整快照展示增量，风险字段与完整 SHA 同源
+  ---
+  duration_ms: 245.168834
+  type: 'test'
+  ...
+# Subtest: 已确认 A 后 B 重签并回到 A 的旧 SHA，仍需确认新卡而不能复用 A
+ok 198 - 已确认 A 后 B 重签并回到 A 的旧 SHA，仍需确认新卡而不能复用 A
+  ---
+  duration_ms: 203.691333
+  type: 'test'
+  ...
+# Subtest: 旧意图卡 ID 遇到人工门不得错答，未传 ID 的人工门仍可答
+ok 199 - 旧意图卡 ID 遇到人工门不得错答，未传 ID 的人工门仍可答
+  ---
+  duration_ms: 310.369459
+  type: 'test'
+  ...
+# Subtest: 历史确认缺完整快照时不猜增量，完整卡确认后恢复增量展示
+ok 200 - 历史确认缺完整快照时不猜增量，完整卡确认后恢复增量展示
+  ---
+  duration_ms: 172.710292
+  type: 'test'
+  ...
+# Subtest: 增量数组删除与新增准确指向变化条目，保留项不误报修改
+ok 201 - 增量数组删除与新增准确指向变化条目，保留项不误报修改
+  ---
+  duration_ms: 148.456667
+  type: 'test'
+  ...
+# Subtest: 确认投影：意图、实际范围、角色和分包五字段变动逐项使旧卡失效
+    # Subtest: intent
+    ok 1 - intent
+      ---
+      duration_ms: 128.340291
+      type: 'test'
+      ...
+    # Subtest: scope.entry
+    ok 2 - scope.entry
+      ---
+      duration_ms: 117.156041
+      type: 'test'
+      ...
+    # Subtest: scope.completion
+    ok 3 - scope.completion
+      ---
+      duration_ms: 126.939292
+      type: 'test'
+      ...
+    # Subtest: scope.outputs
+    ok 4 - scope.outputs
+      ---
+      duration_ms: 117.018541
+      type: 'test'
+      ...
+    # Subtest: role
+    ok 5 - role
+      ---
+      duration_ms: 134.380834
+      type: 'test'
+      ...
+    # Subtest: package.id
+    ok 6 - package.id
+      ---
+      duration_ms: 126.046792
+      type: 'test'
+      ...
+    # Subtest: package.model
+    ok 7 - package.model
+      ---
+      duration_ms: 124.1005
+      type: 'test'
+      ...
+    # Subtest: package.writable
+    ok 8 - package.writable
+      ---
+      duration_ms: 129.63325
+      type: 'test'
+      ...
+    # Subtest: package.done
+    ok 9 - package.done
+      ---
+      duration_ms: 133.770666
+      type: 'test'
+      ...
+    # Subtest: package.dependsOn
+    ok 10 - package.dependsOn
+      ---
+      duration_ms: 136.327875
+      type: 'test'
+      ...
+    # Subtest: array-order
+    ok 11 - array-order
+      ---
+      duration_ms: 137.758125
+      type: 'test'
+      ...
+    1..11
+ok 202 - 确认投影：意图、实际范围、角色和分包五字段变动逐项使旧卡失效
+  ---
+  duration_ms: 1413.886292
+  type: 'test'
+  ...
+# Subtest: 确认投影键序归一：语义相同的重排对象保留原卡与 SHA
+ok 203 - 确认投影键序归一：语义相同的重排对象保留原卡与 SHA
+  ---
+  duration_ms: 104.008042
+  type: 'test'
+  ...
+# Subtest: 确认卡 ID 随机数撞号时重试，绝不复用已签卡身份
+ok 204 - 确认卡 ID 随机数撞号时重试，绝不复用已签卡身份
+  ---
+  duration_ms: 110.441625
+  type: 'test'
+  ...
+# Subtest: Windows 路径语义：越界及盘符相对声明在首卡和计划前同步拒绝
+ok 205 - Windows 路径语义：越界及盘符相对声明在首卡和计划前同步拒绝
+  ---
+  duration_ms: 372.06575
+  type: 'test'
+  ...
+# Subtest: Windows 升级前已签的盘符相对首卡不能被旧 ID 确认或直接派发
+ok 206 - Windows 升级前已签的盘符相对首卡不能被旧 ID 确认或直接派发
+  ---
+  duration_ms: 230.672458
+  type: 'test'
+  ...
+# Subtest: Lead 授权刷新：准备卡列完整清单与候选 SHA，用户确认后产生 Lead 来源待审基线并重开评审链
+ok 207 - Lead 授权刷新：准备卡列完整清单与候选 SHA，用户确认后产生 Lead 来源待审基线并重开评审链
+  ---
+  duration_ms: 384.896125
+  type: 'test'
+  ...
+# Subtest: 刷新授权边界：缺 reason 拒绝；确认前磁盘再变 → 旧卡不可确认并要求重签；未确认不产生新基线
+ok 208 - 刷新授权边界：缺 reason 拒绝；确认前磁盘再变 → 旧卡不可确认并要求重签；未确认不产生新基线
+  ---
+  duration_ms: 252.231458
+  type: 'test'
+  ...
+# Subtest: 历史快照恢复：默认恢复当前有效基线；--list 列版本；--source 显式选历史；恢复不改有效清单
+ok 209 - 历史快照恢复：默认恢复当前有效基线；--list 列版本；--source 显式选历史；恢复不改有效清单
+  ---
+  duration_ms: 238.160833
+  type: 'test'
+  ...
+# Subtest: 多卡并存按 decisionId 交叉：人工门 C1 与刷新卡 C2 并存，确认 C2 收口 C1 为 superseded 而非 accept
+ok 210 - 多卡并存按 decisionId 交叉：人工门 C1 与刷新卡 C2 并存，确认 C2 收口 C1 为 superseded 而非 accept
+  ---
+  duration_ms: 355.242042
+  type: 'test'
+  ...
+# Subtest: 恢复 C1 与取消 C2：磁盘恢复 H1 后 C1 按原 ID 批准且不自动取消 C2；取消 C2 只落自身决定
+ok 211 - 恢复 C1 与取消 C2：磁盘恢复 H1 后 C1 按原 ID 批准且不自动取消 C2；取消 C2 只落自身决定
+  ---
+  duration_ms: 341.833458
+  type: 'test'
+  ...
+# Subtest: 多包刷新卡交叉：A/B 各自绑定自身包基线，确认 A 不使 B 过期；B 仍可按原 ID 确认
+ok 212 - 多包刷新卡交叉：A/B 各自绑定自身包基线，确认 A 不使 B 过期；B 仍可按原 ID 确认
+  ---
+  duration_ms: 338.850791
+  type: 'test'
+  ...
+# Subtest: 刷新原子性故障注入：快照写失败与 journal 提交失败均无半提交（决定/新基线/旧门收口全有或全无）
+ok 213 - 刷新原子性故障注入：快照写失败与 journal 提交失败均无半提交（决定/新基线/旧门收口全有或全无）
+  ---
+  duration_ms: 703.467459
+  type: 'test'
+  ...
+# Subtest: 刷新提交后回执/索引丢失：同 decisionId 幂等重显原结果，journal 为权威可重建视图
+ok 214 - 刷新提交后回执/索引丢失：同 decisionId 幂等重显原结果，journal 为权威可重建视图
+  ---
+  duration_ms: 360.176625
+  type: 'test'
+  ...
+# Subtest: 旧摘要协议转换：digestValue 无损迁移为 sha256-bytes-v1，protocol-migrated 为唯一权威且重跑幂等
+ok 215 - 旧摘要协议转换：digestValue 无损迁移为 sha256-bytes-v1，protocol-migrated 为唯一权威且重跑幂等
+  ---
+  duration_ms: 120.35175
+  type: 'test'
+  ...
+# Subtest: 旧增量歧义与证据缺失：三源不一致的历史任务保留原件不自动转换，引导授权刷新
+ok 216 - 旧增量歧义与证据缺失：三源不一致的历史任务保留原件不自动转换，引导授权刷新
+  ---
+  duration_ms: 201.056125
+  type: 'test'
+  ...
+# Subtest: 非 UTF-8 原始字节：NUL 与无效字节的 SHA-256、bytes-v1 快照与 restore 逐字节无损
+ok 217 - 非 UTF-8 原始字节：NUL 与无效字节的 SHA-256、bytes-v1 快照与 restore 逐字节无损
+  ---
+  duration_ms: 164.744583
+  type: 'test'
+  ...
+# Subtest: 归档：新版二进制快照按原始字节归档，重复归档幂等
+ok 218 - 归档：新版二进制快照按原始字节归档，重复归档幂等
+  ---
+  duration_ms: 211.313292
+  type: 'test'
+  ...
+# Subtest: 归档：旧快照不同目录同名文件独立归档且不能相互覆盖
+ok 219 - 归档：旧快照不同目录同名文件独立归档且不能相互覆盖
+  ---
+  duration_ms: 262.650625
+  type: 'test'
+  ...
+# Subtest: 归档：新版不同目录同名文件保持各自完整字节
+ok 220 - 归档：新版不同目录同名文件保持各自完整字节
+  ---
+  duration_ms: 271.249833
+  type: 'test'
+  ...
+# Subtest: 归档：两包同名二进制文件保持各自原始字节且项目文件不删除
+ok 221 - 归档：两包同名二进制文件保持各自原始字节且项目文件不删除
+  ---
+  duration_ms: 282.548709
+  type: 'test'
+  ...
+# Subtest: 归档：空字节快照可归档且与原始空内容一致
+ok 222 - 归档：空字节快照可归档且与原始空内容一致
+  ---
+  duration_ms: 200.210291
+  type: 'test'
+  ...
+# Subtest: 归档：旧快照的算法元数据冲突时拒绝归档（STATE_CORRUPT，原任务与归档目录保留）
+ok 223 - 归档：旧快照的算法元数据冲突时拒绝归档（STATE_CORRUPT，原任务与归档目录保留）
+  ---
+  duration_ms: 226.827459
+  type: 'test'
+  ...
+# Subtest: 归档：文件与目录路径冲突时不能清理原任务（ARCHIVE_PATH_CONFLICT）
+ok 224 - 归档：文件与目录路径冲突时不能清理原任务（ARCHIVE_PATH_CONFLICT）
+  ---
+  duration_ms: 227.001333
+  type: 'test'
+  ...
+# Subtest: 归档：无效相对路径和异常快照引用被同步拒绝（防逃逸）
+ok 225 - 归档：无效相对路径和异常快照引用被同步拒绝（防逃逸）
+  ---
+  duration_ms: 322.4575
+  type: 'test'
+  ...
+# Subtest: 归档：目标存在不完整内容时不能覆盖或删除原任务（ARCHIVE_INCOMPLETE）
+ok 226 - 归档：目标存在不完整内容时不能覆盖或删除原任务（ARCHIVE_INCOMPLETE）
+  ---
+  duration_ms: 173.563042
+  type: 'test'
+  ...
+# Subtest: 归档：发布前重命名故障保留原任务，恢复后重试成功
+ok 227 - 归档：发布前重命名故障保留原任务，恢复后重试成功
+  ---
+  duration_ms: 238.774417
+  type: 'test'
+  ...
+# Subtest: 归档：发布后异常保留任务和归档，不伪称幂等完成
+ok 228 - 归档：发布后异常保留任务和归档，不伪称幂等完成
+  ---
+  duration_ms: 196.322291
+  type: 'test'
+  ...
+# Subtest: 归档：损坏快照同步拒绝，原任务和快照仍在（STATE_CORRUPT）
+ok 229 - 归档：损坏快照同步拒绝，原任务和快照仍在（STATE_CORRUPT）
+  ---
+  duration_ms: 172.862167
+  type: 'test'
+  ...
+# Subtest: 归档：最新报告仍有产物但索引静默丢项时不得清理原任务
+ok 230 - 归档：最新报告仍有产物但索引静默丢项时不得清理原任务
+  ---
+  duration_ms: 162.825875
+  type: 'test'
+  ...
+# Subtest: 候选恢复取消隔离：恢复意图获批后取消恢复卡，B 原刷新卡仍可确认；A 可按原计划重试恢复
+ok 231 - 候选恢复取消隔离：恢复意图获批后取消恢复卡，B 原刷新卡仍可确认；A 可按原计划重试恢复
+  ---
+  duration_ms: 498.715042
+  type: 'test'
+  ...
+# Subtest: 候选恢复生效使旧刷新卡失效：恢复卡确认（计划落盘）后 B 卡按其绑定前提过期并须重签
+ok 232 - 候选恢复生效使旧刷新卡失效：恢复卡确认（计划落盘）后 B 卡按其绑定前提过期并须重签
+  ---
+  duration_ms: 512.015458
+  type: 'test'
+  ...
+# Subtest: 普通 deliver 事务故障注入：journal 读取失败不清空原账，恢复后同 key 重交成功
+ok 233 - 普通 deliver 事务故障注入：journal 读取失败不清空原账，恢复后同 key 重交成功
+  ---
+  duration_ms: 151.019625
+  type: 'test'
+  ...
+# Subtest: 普通 deliver 事务故障注入：快照写失败与 journal 提交前失败均零半提交
+ok 234 - 普通 deliver 事务故障注入：快照写失败与 journal 提交前失败均零半提交
+  ---
+  duration_ms: 332.009458
+  type: 'test'
+  ...
+# Subtest: 普通 deliver 提交后视图/回执丢失：同 key 同字节重交幂等，journal 为权威重建视图
+ok 235 - 普通 deliver 提交后视图/回执丢失：同 key 同字节重交幂等，journal 为权威重建视图
+  ---
+  duration_ms: 174.498916
+  type: 'test'
+  ...
+# Subtest: 跨阶段归档取最新版本：同路径先 implementation 后 test 交付，归档为 test 阶段版本
+ok 236 - 跨阶段归档取最新版本：同路径先 implementation 后 test 交付，归档为 test 阶段版本
+  ---
+  duration_ms: 461.093625
+  type: 'test'
+  ...
+# Subtest: journal 故障：deliver 提交前读取报错不得覆盖既有日志
+ok 237 - journal 故障：deliver 提交前读取报错不得覆盖既有日志
+  ---
+  duration_ms: 138.336166
+  type: 'test'
+  ...
+# Subtest: journal 故障：锁内重读失败时 deliver 不得伪装空日志
+ok 238 - journal 故障：锁内重读失败时 deliver 不得伪装空日志
+  ---
+  duration_ms: 122.083167
+  type: 'test'
+  ...
+# Subtest: journal 故障：首次派发前读取失败不得变成唯一派单事件
+ok 239 - journal 故障：首次派发前读取失败不得变成唯一派单事件
+  ---
+  duration_ms: 120.6675
+  type: 'test'
+  ...
+# Subtest: journal 故障：提交前读到空日志或破损日志时不得覆盖正常日志
+ok 240 - journal 故障：提交前读到空日志或破损日志时不得覆盖正常日志
+  ---
+  duration_ms: 234.166959
+  type: 'test'
+  ...
+# Subtest: journal 故障：旧任务读取失败不得被视为无历史；新任务初始化读错不冒充未建账
+ok 241 - journal 故障：旧任务读取失败不得被视为无历史；新任务初始化读错不冒充未建账
+  ---
+  duration_ms: 113.69425
+  type: 'test'
+  ...
+# Subtest: journal 故障：decide 读错不落决定，refresh 确认读错不提交决定或新报告且可重试
+ok 242 - journal 故障：decide 读错不落决定，refresh 确认读错不提交决定或新报告且可重试
+  ---
+  duration_ms: 347.053875
+  type: 'test'
+  ...
+# Subtest: journal 故障：deliver/review 追加日志遇 EACCES/ENOENT 明确失败且可重试；确认读错不改既有决定文件
+ok 243 - journal 故障：deliver/review 追加日志遇 EACCES/ENOENT 明确失败且可重试；确认读错不改既有决定文件
+  ---
+  duration_ms: 647.404791
+  type: 'test'
+  ...
+# Subtest: journal 故障：多成员派发读错不提交半波且原样可重试；旧任务日志确实缺失时停止不重建
+ok 244 - journal 故障：多成员派发读错不提交半波且原样可重试；旧任务日志确实缺失时停止不重建
+  ---
+  duration_ms: 202.437375
+  type: 'test'
+  ...
+# Subtest: journal 边界：无末尾换行的日志仍可原子追加决定与交付事件
+ok 245 - journal 边界：无末尾换行的日志仍可原子追加决定与交付事件
+  ---
+  duration_ms: 260.995916
+  type: 'test'
+  ...
+# Subtest: 跨阶段回退归档：索引重建按提交序取最新字节（实施最新），单旧报告可归档
+ok 246 - 跨阶段回退归档：索引重建按提交序取最新字节（实施最新），单旧报告可归档
+  ---
+  duration_ms: 303.460375
+  type: 'test'
+  ...
+# Subtest: 归档排序保护：跨阶段候选提交序缺失/重复/倒退时保留原任务（ARCHIVE_ORDER_UNVERIFIED）
+ok 247 - 归档排序保护：跨阶段候选提交序缺失/重复/倒退时保留原任务（ARCHIVE_ORDER_UNVERIFIED）
+  ---
+  duration_ms: 177.588
+  type: 'test'
+  ...
+# Subtest: 归档排序保护：阶段内候选提交序异常与历史报告缺提交锚点不按墙钟猜新旧
+ok 248 - 归档排序保护：阶段内候选提交序异常与历史报告缺提交锚点不按墙钟猜新旧
+  ---
+  duration_ms: 244.99725
+  type: 'test'
+  ...
+# Subtest: 候选恢复取消后完整重试（新任务（已确认意图））：B 原卡确认生效，A 重试卡真确认解阻并可交付
+ok 249 - 候选恢复取消后完整重试（新任务（已确认意图））：B 原卡确认生效，A 重试卡真确认解阻并可交付
+  ---
+  duration_ms: 692.3405
+  type: 'test'
+  ...
+# Subtest: 候选恢复取消后完整重试（旧任务（legacy-range））：B 原卡确认生效，A 重试卡真确认解阻并可交付
+ok 250 - 候选恢复取消后完整重试（旧任务（legacy-range））：B 原卡确认生效，A 重试卡真确认解阻并可交付
+  ---
+  duration_ms: 664.162083
+  type: 'test'
+  ...
+# Subtest: 并发 deliver：两个不同 key 同时交付，登记互不丢失
+ok 251 - 并发 deliver：两个不同 key 同时交付，登记互不丢失
+  ---
+  duration_ms: 768.26975
+  type: 'test'
+  ...
+# Subtest: 并发 dispatch-plan：同波次只派发一次（一个 dispatch key）
+ok 252 - 并发 dispatch-plan：同波次只派发一次（一个 dispatch key）
+  ---
+  duration_ms: 656.330375
+  type: 'test'
+  ...
+# Subtest: 多路径部分失败不留孤儿快照（I10 补强：断言 snapshots）
+ok 253 - 多路径部分失败不留孤儿快照（I10 补强：断言 snapshots）
+  ---
+  duration_ms: 211.749958
+  type: 'test'
+  ...
+# Subtest: 损坏锁回收（评审 B F1）：超龄损坏锁自动回收，不永久卡死
+ok 254 - 损坏锁回收（评审 B F1）：超龄损坏锁自动回收，不永久卡死
+  ---
+  duration_ms: 71.041375
+  type: 'test'
+  ...
+# Subtest: 新版并发 open：同名独占创建最多一个成功，完整任务不可覆盖
+ok 255 - 新版并发 open：同名独占创建最多一个成功，完整任务不可覆盖
+  ---
+  duration_ms: 263.020667
+  type: 'test'
+  ...
+# Subtest: 新版并发首卡：相同准备只签一次且不派发
+ok 256 - 新版并发首卡：相同准备只签一次且不派发
+  ---
+  duration_ms: 420.872916
+  type: 'test'
+  ...
+# Subtest: 并发屏障：B 先签发后迟到 A 答复，不能消费 B 或写派单
+ok 257 - 并发屏障：B 先签发后迟到 A 答复，不能消费 B 或写派单
+  ---
+  duration_ms: 760.773458
+  type: 'test'
+  ...
+# Subtest: 并发重拆与返工评审按锁内当前计划串行，旧包名不可伪成功
+ok 258 - 并发重拆与返工评审按锁内当前计划串行，旧包名不可伪成功
+  ---
+  duration_ms: 1422.156208
+  type: 'test'
+  ...
+# Subtest: 首轮争议沿原升级出口，单包 blocked 静止但不机械冻结其他可派包
+ok 259 - 首轮争议沿原升级出口，单包 blocked 静止但不机械冻结其他可派包
+  ---
+  duration_ms: 1.775792
+  type: 'test'
+  ...
+# Subtest: 波次推进：produce → review → verdict（核心场景）→ gate（单 owner 兼容：匿名包 [null]）
+ok 260 - 波次推进：produce → review → verdict（核心场景）→ gate（单 owner 兼容：匿名包 [null]）
+  ---
+  duration_ms: 0.319
+  type: 'test'
+  ...
+# Subtest: 波次推进：非核心场景 challenger accept 后直接过门（无需 Expert）
+ok 261 - 波次推进：非核心场景 challenger accept 后直接过门（无需 Expert）
+  ---
+  duration_ms: 0.094625
+  type: 'test'
+  ...
+# Subtest: I6/三轮收敛：rework 循环与轮次耗尽升级用户
+ok 262 - I6/三轮收敛：rework 循环与轮次耗尽升级用户
+  ---
+  duration_ms: 0.341667
+  type: 'test'
+  ...
+# Subtest: 波组：DAG 分层派发（F1）——依赖未满足的包不在首波，依赖交付后解锁
+ok 263 - 波组：DAG 分层派发（F1）——依赖未满足的包不在首波，依赖交付后解锁
+  ---
+  duration_ms: 0.317166
+  type: 'test'
+  ...
+# Subtest: 波组：findings 包归属选择性重派（F3）——未被点名包视同本轮通过
+ok 264 - 波组：findings 包归属选择性重派（F3）——未被点名包视同本轮通过
+  ---
+  duration_ms: 0.141458
+  type: 'test'
+  ...
+# Subtest: 波组：按包计轮（F2）——单包轮耗尽只出该包，不牵连他包
+ok 265 - 波组：按包计轮（F2）——单包轮耗尽只出该包，不牵连他包
+  ---
+  duration_ms: 0.236792
+  type: 'test'
+  ...
+# Subtest: F-9：Expert 点名包先返工，其他包尚未覆盖评审也不能抢占目标包
+ok 266 - F-9：Expert 点名包先返工，其他包尚未覆盖评审也不能抢占目标包
+  ---
+  duration_ms: 0.575167
+  type: 'test'
+  ...
+# Subtest: 波组：聚合裁决新鲜度（F8）——任一包新交付使旧裁决失效
+ok 267 - 波组：聚合裁决新鲜度（F8）——任一包新交付使旧裁决失效
+  ---
+  duration_ms: 0.162791
+  type: 'test'
+  ...
+# Subtest: 可写重叠判定：同名文件/目录与祖先路径组件均重叠，兄弟前缀不重叠
+ok 268 - 可写重叠判定：同名文件/目录与祖先路径组件均重叠，兄弟前缀不重叠
+  ---
+  duration_ms: 0.155458
+  type: 'test'
+  ...
+# Subtest: artifactFingerprints：目录条目（尾斜杠）归属其下制品，精确条目不扩张
+ok 269 - artifactFingerprints：目录条目（尾斜杠）归属其下制品，精确条目不扩张
+  ---
+  duration_ms: 5.563167
+  type: 'test'
+  ...
+# Subtest: 门：through-stage 的 scoped final-acceptance 未决 → awaiting-user（I7 静止）
+ok 270 - 门：through-stage 的 scoped final-acceptance 未决 → awaiting-user（I7 静止）
+  ---
+  duration_ms: 0.435416
+  type: 'test'
+  ...
+# Subtest: 门：人工批准绑定制品指纹，制品变化即失效（I7）
+ok 271 - 门：人工批准绑定制品指纹，制品变化即失效（I7）
+  ---
+  duration_ms: 0.655292
+  type: 'test'
+  ...
+# Subtest: F-2：同一报告版本比较相等，不因数组排序改变选取
+ok 272 - F-2：同一报告版本比较相等，不因数组排序改变选取
+  ---
+  duration_ms: 0.054583
+  type: 'test'
+  ...
+# Subtest: F-2：challenger 同 key 时间回拨改判后，旧批准和旧 accept 均失效
+ok 273 - F-2：challenger 同 key 时间回拨改判后，旧批准和旧 accept 均失效
+  ---
+  duration_ms: 0.279958
+  type: 'test'
+  ...
+# Subtest: F-2：challenger 旧新协议不同报告 ID 混用时，新协议修订使旧批准失效
+ok 274 - F-2：challenger 旧新协议不同报告 ID 混用时，新协议修订使旧批准失效
+  ---
+  duration_ms: 0.208708
+  type: 'test'
+  ...
+# Subtest: F-2：expert 同 key 时间回拨改判后，旧批准和旧 accept 均失效
+ok 275 - F-2：expert 同 key 时间回拨改判后，旧批准和旧 accept 均失效
+  ---
+  duration_ms: 0.148542
+  type: 'test'
+  ...
+# Subtest: F-2：expert 旧新协议不同报告 ID 混用时，新协议修订使旧批准失效
+ok 276 - F-2：expert 旧新协议不同报告 ID 混用时，新协议修订使旧批准失效
+  ---
+  duration_ms: 0.108875
+  type: 'test'
+  ...
+# Subtest: AGENTS 规则 5：code-review 介入不检查历史阶段制品（制品两分法）
+ok 277 - AGENTS 规则 5：code-review 介入不检查历史阶段制品（制品两分法）
+  ---
+  duration_ms: 0.156209
+  type: 'test'
+  ...
+# Subtest: 门：Owner 报告的 fail 检查阻塞（I6 验收不信声称）
+ok 278 - 门：Owner 报告的 fail 检查阻塞（I6 验收不信声称）
+  ---
+  duration_ms: 0.118875
+  type: 'test'
+  ...
+# Subtest: F5 消费规则 2（derive 纯函数）：绑定波 blocked 后扩权重派已交付 → 旧 blocked 不二次触发仲裁
+ok 279 - F5 消费规则 2（derive 纯函数）：绑定波 blocked 后扩权重派已交付 → 旧 blocked 不二次触发仲裁
+  ---
+  duration_ms: 0.808292
+  type: 'test'
+  ...
+# Subtest: E2E-14 根：task-completed 事件使 derive 幂等返回 completed
+ok 280 - E2E-14 根：task-completed 事件使 derive 幂等返回 completed
+  ---
+  duration_ms: 0.048
+  type: 'test'
+  ...
+# Subtest: derive：journal 的 stage-advanced 推导当前阶段
+ok 281 - derive：journal 的 stage-advanced 推导当前阶段
+  ---
+  duration_ms: 0.221375
+  type: 'test'
+  ...
+# Subtest: derive：门通过且到 completion → next=complete
+ok 282 - derive：门通过且到 completion → next=complete
+  ---
+  duration_ms: 0.275125
+  type: 'test'
+  ...
+# Subtest: 裁决新鲜度：返工后的旧 accept 裁决不放行（重新裁决）
+ok 283 - 裁决新鲜度：返工后的旧 accept 裁决不放行（重新裁决）
+  ---
+  duration_ms: 0.180875
+  type: 'test'
+  ...
+# Subtest: 调用快照：完整三档从插件配置解析并携带 entry/profile 来源
+ok 284 - 调用快照：完整三档从插件配置解析并携带 entry/profile 来源
+  ---
+  duration_ms: 1.552041
+  type: 'test'
+  ...
+# Subtest: 调用快照：环境 JSON 生效，缺失或损坏只返回 unresolved
+ok 285 - 调用快照：环境 JSON 生效，缺失或损坏只返回 unresolved
+  ---
+  duration_ms: 1.103458
+  type: 'test'
+  ...
+# Subtest: 调用快照：未知封套字段和继承来源不当成可信输入
+ok 286 - 调用快照：未知封套字段和继承来源不当成可信输入
+  ---
+  duration_ms: 0.092625
+  type: 'test'
+  ...
+# Subtest: 调用快照：特殊未知档位在 open 期标 unresolved 且不污染原型；已固化 roles 的派发零配置反查
+ok 287 - 调用快照：特殊未知档位在 open 期标 unresolved 且不污染原型；已固化 roles 的派发零配置反查
+  ---
+  duration_ms: 2087.747917
+  type: 'test'
+  ...
+# Subtest: 调用快照：继承档位或 provider/model 不能通过完整性
+ok 288 - 调用快照：继承档位或 provider/model 不能通过完整性
+  ---
+  duration_ms: 0.215167
+  type: 'test'
+  ...
+# Subtest: 调用快照：缺档与无效候选明确 unresolved，不猜测默认
+ok 289 - 调用快照：缺档与无效候选明确 unresolved，不猜测默认
+  ---
+  duration_ms: 0.1895
+  type: 'test'
+  ...
+# Subtest: 调用快照：旧 settings 文件与显式旧参数均不读取，环境隔离后恢复
+ok 290 - 调用快照：旧 settings 文件与显式旧参数均不读取，环境隔离后恢复
+  ---
+  duration_ms: 718.21425
+  type: 'test'
+  ...
+# Subtest: dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全忽略
+ok 291 - dispatch-plan：调用快照映射生效，遗留项目 dsh.json 被完全忽略
+  ---
+  duration_ms: 761.34675
+  type: 'test'
+  ...
+# Subtest: 派发人读卡：显示实际 entry/profile 来源
+ok 292 - 派发人读卡：显示实际 entry/profile 来源
+  ---
+  duration_ms: 750.472583
+  type: 'test'
+  ...
+# Subtest: 调用快照热变不再自动换模型：已有任务沿用 roles；tw roles --resolve 显式重解析后新波变化
+ok 293 - 调用快照热变不再自动换模型：已有任务沿用 roles；tw roles --resolve 显式重解析后新波变化
+  ---
+  duration_ms: 1261.729416
+  type: 'test'
+  ...
+# Subtest: 旧 journal modelHint：读取时映射为 ModelRef，配置变化或快照缺失都不重选已记录的精确模型
+ok 294 - 旧 journal modelHint：读取时映射为 ModelRef，配置变化或快照缺失都不重选已记录的精确模型
+  ---
+  duration_ms: 701.104708
+  type: 'test'
+  ...
+# Subtest: 平台无关操作：缺配置快照仍可开任务、查状态、交付和评审
+ok 295 - 平台无关操作：缺配置快照仍可开任务、查状态、交付和评审
+  ---
+  duration_ms: 2138.538375
+  type: 'test'
+  ...
+# Subtest: 派发波次固化精确 ModelRef 快照
+ok 296 - 派发波次固化精确 ModelRef 快照
+  ---
+  duration_ms: 543.422417
+  type: 'test'
+  ...
+# Subtest: open 期无调用快照模型配置 → 角色 unresolved；派发返回可恢复 ROLES_UNRESOLVED，不写 dispatched 事实
+ok 297 - open 期无调用快照模型配置 → 角色 unresolved；派发返回可恢复 ROLES_UNRESOLVED，不写 dispatched 事实
+  ---
+  duration_ms: 664.31925
+  type: 'test'
+  ...
+# Subtest: dispatch-plan：人工门 stop + 决定后推进到 completed
+ok 298 - dispatch-plan：人工门 stop + 决定后推进到 completed
+  ---
+  duration_ms: 835.354667
+  type: 'test'
+  ...
+# Subtest: dispatch-plan：门过即跨阶段推进并派发下一阶段首波
+ok 299 - dispatch-plan：门过即跨阶段推进并派发下一阶段首波
+  ---
+  duration_ms: 538.632667
+  type: 'test'
+  ...
+# Subtest: models 只读调用快照来源；init 只安装 skill，不创建项目 dsh.json
+ok 300 - models 只读调用快照来源；init 只安装 skill，不创建项目 dsh.json
+  ---
+  duration_ms: 344.908833
+  type: 'test'
+  ...
+# Subtest: init 四目标：混合副本逐项保留，force 不触碰公共目录其他文件
+ok 301 - init 四目标：混合副本逐项保留，force 不触碰公共目录其他文件
+  ---
+  duration_ms: 452.395875
+  type: 'test'
+  ...
+# Subtest: init 符号链接逃逸：父路径和目标都逐项拒绝，外部内容保持
+ok 302 - init 符号链接逃逸：父路径和目标都逐项拒绝，外部内容保持
+  ---
+  duration_ms: 287.750958
+  type: 'test'
+  ...
+# Subtest: init 隔离坏源和暂存失败：不先删除已有目标，其他项独立完成
+ok 303 - init 隔离坏源和暂存失败：不先删除已有目标，其他项独立完成
+  ---
+  duration_ms: 688.138833
+  type: 'test'
+  ...
+# Subtest: init 新技能已知依赖：缺件、目录假冒与暂存丢失均保留旧有效入口
+ok 304 - init 新技能已知依赖：缺件、目录假冒与暂存丢失均保留旧有效入口
+  ---
+  duration_ms: 2745.402541
+  type: 'test'
+  ...
+# Subtest: 可选 effort：调用快照候选条目透传
+ok 305 - 可选 effort：调用快照候选条目透传
+  ---
+  duration_ms: 0.192834
+  type: 'test'
+  ...
+# Subtest: verdict 派单必须内嵌工具调用指令
+ok 306 - verdict 派单必须内嵌工具调用指令
+  ---
+  duration_ms: 855.622834
+  type: 'test'
+  ...
+# Subtest: dispatch-plan stop:blocked 的 blockers 保持对象数组
+ok 307 - dispatch-plan stop:blocked 的 blockers 保持对象数组
+  ---
+  duration_ms: 742.994333
+  type: 'test'
+  ...
+# Subtest: agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 --model-hint
+ok 308 - agent-map 只登记续派映射：agents.json 收敛纯 mappings、拒绝 --model-hint
+  ---
+  duration_ms: 467.891875
+  type: 'test'
+  ...
+# Subtest: TW_CMD 覆盖派单内的成员工具调用指令
+ok 309 - TW_CMD 覆盖派单内的成员工具调用指令
+  ---
+  duration_ms: 393.033167
+  type: 'test'
+  ...
+# Subtest: 幂等重交：同 key 同 payload 不追加第二条 report-accepted
+ok 310 - 幂等重交：同 key 同 payload 不追加第二条 report-accepted
+  ---
+  duration_ms: 533.61225
+  type: 'test'
+  ...
+# Subtest: help：调用快照模型来源与全部命令在场
+ok 311 - help：调用快照模型来源与全部命令在场
+  ---
+  duration_ms: 1.1455
+  type: 'test'
+  ...
+# Subtest: policy.roles.expert 缺失 → expert unresolved（不再硬编码 expert 字面量），补配置后 tw roles --resolve 恢复
+ok 312 - policy.roles.expert 缺失 → expert unresolved（不再硬编码 expert 字面量），补配置后 tw roles --resolve 恢复
+  ---
+  duration_ms: 457.158208
+  type: 'test'
+  ...
+# Subtest: 派发零配置反查：open 后调用快照损坏/变化都不影响已固化 roles 的派发
+ok 313 - 派发零配置反查：open 后调用快照损坏/变化都不影响已固化 roles 的派发
+  ---
+  duration_ms: 349.824625
+  type: 'test'
+  ...
+# Subtest: 旧任务 roles 迁移：owner 取历史实际派发模型（不随新配置换），无历史角色才按 policy 解析
+ok 314 - 旧任务 roles 迁移：owner 取历史实际派发模型（不随新配置换），无历史角色才按 policy 解析
+  ---
+  duration_ms: 611.742958
+  type: 'test'
+  ...
+# Subtest: E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved，档位溯源不伪报来源
+ok 315 - E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved，档位溯源不伪报来源
+  ---
+  duration_ms: 379.479875
+  type: 'test'
+  ...
+# Subtest: E4：stop 卡路径不读取配置快照；配置快照只在派发计划展示时按需读取
+ok 316 - E4：stop 卡路径不读取配置快照；配置快照只在派发计划展示时按需读取
+  ---
+  duration_ms: 185.933042
+  type: 'test'
+  ...
+# Subtest: I1：任务名校验与目录唯一（open 重名拒绝）
+ok 317 - I1：任务名校验与目录唯一（open 重名拒绝）
+  ---
+  duration_ms: 111.492958
+  type: 'test'
+  ...
+# Subtest: initTask 目录骨架：只创建运行时实际使用的目录（无 decisions/、gates/ 残留）
+ok 318 - initTask 目录骨架：只创建运行时实际使用的目录（无 decisions/、gates/ 残留）
+  ---
+  duration_ms: 232.298334
+  type: 'test'
+  ...
+# Subtest: deliver 目录授权：尾斜杠条目覆盖其下路径且 kind 继承条目声明
+ok 319 - deliver 目录授权：尾斜杠条目覆盖其下路径且 kind 继承条目声明
+  ---
+  duration_ms: 463.6725
+  type: 'test'
+  ...
+# Subtest: deliver 目录授权边界：前缀不误匹配（review/ 不覆盖 review-x/）；范围外拒绝文案含 blocked 恢复引导
+ok 320 - deliver 目录授权边界：前缀不误匹配（review/ 不覆盖 review-x/）；范围外拒绝文案含 blocked 恢复引导
+  ---
+  duration_ms: 240.844042
+  type: 'test'
+  ...
+# Subtest: deliver 精确条目不扩张：无尾斜杠条目仅匹配自身
+ok 321 - deliver 精确条目不扩张：无尾斜杠条目仅匹配自身
+  ---
+  duration_ms: 244.936625
+  type: 'test'
+  ...
+# Subtest: deliver：登记产出物 + 快照 + journal（E2E-16：路径即身份）
+ok 322 - deliver：登记产出物 + 快照 + journal（E2E-16：路径即身份）
+  ---
+  duration_ms: 600.117417
+  type: 'test'
+  ...
+# Subtest: 交付回执：评审返工换 key 后按同包上一份完整清单计算增删
+ok 323 - 交付回执：评审返工换 key 后按同包上一份完整清单计算增删
+  ---
+  duration_ms: 810.239583
+  type: 'test'
+  ...
+# Subtest: 交付回执：同 key 幂等保留清单，换 key 或只改内容不报告路径增删
+ok 324 - 交付回执：同 key 幂等保留清单，换 key 或只改内容不报告路径增删
+  ---
+  duration_ms: 1087.605292
+  type: 'test'
+  ...
+# Subtest: 交付回执：blocked 不移除有效清单，同 key 解除阻塞后仍比较前置 delivered
+ok 325 - 交付回执：blocked 不移除有效清单，同 key 解除阻塞后仍比较前置 delivered
+  ---
+  duration_ms: 1036.068625
+  type: 'test'
+  ...
+# Subtest: 交付回执：迟到旧 key 变更按最新有效基线计算，不改变幂等身份
+ok 326 - 交付回执：迟到旧 key 变更按最新有效基线计算，不改变幂等身份
+  ---
+  duration_ms: 1045.086917
+  type: 'test'
+  ...
+# Subtest: 交付回执：不同阶段或不同包的交付不能污染当前包前置基线
+ok 327 - 交付回执：不同阶段或不同包的交付不能污染当前包前置基线
+  ---
+  duration_ms: 1182.102292
+  type: 'test'
+  ...
+# Subtest: 交付回执：同包并发交付分别比较各自在锁内看到的前置清单
+ok 328 - 交付回执：同包并发交付分别比较各自在锁内看到的前置清单
+  ---
+  duration_ms: 945.278166
+  type: 'test'
+  ...
+# Subtest: blocked 回执说明保留有效清单，不使用 delivered 的移出提示
+ok 329 - blocked 回执说明保留有效清单，不使用 delivered 的移出提示
+  ---
+  duration_ms: 320.357917
+  type: 'test'
+  ...
+# Subtest: 旧单报告同 key blocked 保留有效基线，同 key交付 X
+ok 330 - 旧单报告同 key blocked 保留有效基线，同 key交付 X
+  ---
+  duration_ms: 623.218959
+  type: 'test'
+  ...
+# Subtest: 旧单报告同 key blocked 保留有效基线，新 key交付 X
+ok 331 - 旧单报告同 key blocked 保留有效基线，新 key交付 X
+  ---
+  duration_ms: 589.553458
+  type: 'test'
+  ...
+# Subtest: 旧多包索引缺 package：新 key blocked 后保留各包与阶段，报告有包归属
+ok 332 - 旧多包索引缺 package：新 key blocked 后保留各包与阶段，报告有包归属
+  ---
+  duration_ms: 653.815125
+  type: 'test'
+  ...
+# Subtest: 旧多包索引缺 package：新 key blocked 后保留各包与阶段，报告缺包归属
+ok 333 - 旧多包索引缺 package：新 key blocked 后保留各包与阶段，报告缺包归属
+  ---
+  duration_ms: 653.3785
+  type: 'test'
+  ...
+# Subtest: 旧增量跨报告：legacy-a 同 key blocked 保留报告顺序和有效清单
+ok 334 - 旧增量跨报告：legacy-a 同 key blocked 保留报告顺序和有效清单
+  ---
+  duration_ms: 505.632917
+  type: 'test'
+  ...
+# Subtest: 旧增量跨报告：legacy-b 同 key blocked 保留报告顺序和有效清单
+ok 335 - 旧增量跨报告：legacy-b 同 key blocked 保留报告顺序和有效清单
+  ---
+  duration_ms: 419.867958
+  type: 'test'
+  ...
+# Subtest: 旧增量经新协议评审后再 blocked，索引仍保留 X/Y
+ok 336 - 旧增量经新协议评审后再 blocked，索引仍保留 X/Y
+  ---
+  duration_ms: 570.102
+  type: 'test'
+  ...
+# Subtest: 旧增量 blocked 提交后视图未更新也能恢复原清单和幂等重试
+ok 337 - 旧增量 blocked 提交后视图未更新也能恢复原清单和幂等重试
+  ---
+  duration_ms: 565.651292
+  type: 'test'
+  ...
+# Subtest: 交付回执：旧增量跨报告索引后的完整清单 X.md
+ok 338 - 交付回执：旧增量跨报告索引后的完整清单 X.md
+  ---
+  duration_ms: 353.49875
+  type: 'test'
+  ...
+# Subtest: 交付回执：旧增量跨报告索引后的完整清单 Y.md
+ok 339 - 交付回执：旧增量跨报告索引后的完整清单 Y.md
+  ---
+  duration_ms: 347.815083
+  type: 'test'
+  ...
+# Subtest: 交付回执：旧增量跨报告索引后的完整清单 X.md、Y.md
+ok 340 - 交付回执：旧增量跨报告索引后的完整清单 X.md、Y.md
+  ---
+  duration_ms: 381.706292
+  type: 'test'
+  ...
+# Subtest: 交付回执：旧索引仅计入同阶段同包的有效报告，并从派单恢复缺失包归属
+ok 341 - 交付回执：旧索引仅计入同阶段同包的有效报告，并从派单恢复缺失包归属
+  ---
+  duration_ms: 450.993
+  type: 'test'
+  ...
+# Subtest: 交付回执：新协议的空清单不继承旧索引中的路径
+ok 342 - 交付回执：新协议的空清单不继承旧索引中的路径
+  ---
+  duration_ms: 698.05
+  type: 'test'
+  ...
+# Subtest: 交付回执：用户确认的 Lead 刷新是旧 key 迟到重交的前置基线
+ok 343 - 交付回执：用户确认的 Lead 刷新是旧 key 迟到重交的前置基线
+  ---
+  duration_ms: 1133.073125
+  type: 'test'
+  ...
+# Subtest: deliver：越权路径同步拒绝并给修复指引（E2E-17 语义 + I5）
+ok 344 - deliver：越权路径同步拒绝并给修复指引（E2E-17 语义 + I5）
+  ---
+  duration_ms: 145.64275
+  type: 'test'
+  ...
+# Subtest: deliver：同 key 重交幂等覆盖（E2E-10：重试不烧 key、不产生第二身份）
+ok 345 - deliver：同 key 重交幂等覆盖（E2E-10：重试不烧 key、不产生第二身份）
+  ---
+  duration_ms: 372.948167
+  type: 'test'
+  ...
+# Subtest: review：无 paths 参数、Challenger 不得填 verdict、Expert 必填 verdict（E2E-05/09）
+ok 346 - review：无 paths 参数、Challenger 不得填 verdict、Expert 必填 verdict（E2E-05/09）
+  ---
+  duration_ms: 199.941625
+  type: 'test'
+  ...
+# Subtest: I1：deliver 路径含符号链接逃逸 → 同步拒绝（防御性稳定读取）
+ok 347 - I1：deliver 路径含符号链接逃逸 → 同步拒绝（防御性稳定读取）
+  ---
+  duration_ms: 116.827542
+  type: 'test'
+  ...
+# Subtest: review：Expert 裁决形状同步校验
+ok 348 - review：Expert 裁决形状同步校验
+  ---
+  duration_ms: 181.97425
+  type: 'test'
+  ...
+# Subtest: 返工 finding scope 须锁内精确匹配计划，拒绝不落报告并可用原 key 修正
+ok 349 - 返工 finding scope 须锁内精确匹配计划，拒绝不落报告并可用原 key 修正
+  ---
+  duration_ms: 621.885708
+  type: 'test'
+  ...
+# Subtest: 返工 scope 校验覆盖专家裁决、匿名任务和损坏计划，不扩大 accept 语义
+ok 350 - 返工 scope 校验覆盖专家裁决、匿名任务和损坏计划，不扩大 accept 语义
+  ---
+  duration_ms: 394.970125
+  type: 'test'
+  ...
+# Subtest: I2：名字寻址——重名拒绝并提示、未知任务拒绝并给修复方向（不猜测）
+ok 351 - I2：名字寻址——重名拒绝并提示、未知任务拒绝并给修复方向（不猜测）
+  ---
+  duration_ms: 359.977
+  type: 'test'
+  ...
+# Subtest: I4：门禁判定是任务目录的纯函数——两次加载推导一致，快照不变
+ok 352 - I4：门禁判定是任务目录的纯函数——两次加载推导一致，快照不变
+  ---
+  duration_ms: 946.769166
+  type: 'test'
+  ...
+# Subtest: I1：deliver 路径逃逸与绝对路径拒绝
+ok 353 - I1：deliver 路径逃逸与绝对路径拒绝
+  ---
+  duration_ms: 289.794292
+  type: 'test'
+  ...
+# Subtest: I6 契约：deliver 不接受自评 recommendation（作者不自审）
+ok 354 - I6 契约：deliver 不接受自评 recommendation（作者不自审）
+  ---
+  duration_ms: 322.968292
+  type: 'test'
+  ...
+# Subtest: I3：artifacts.json 删除后从 reports+snapshots 自动重建
+ok 355 - I3：artifacts.json 删除后从 reports+snapshots 自动重建
+  ---
+  duration_ms: 947.070542
+  type: 'test'
+  ...
+# Subtest: E 等价矩阵：多轮 ver 同 path / 跨 key 重交 / 同 digest 重交——重建与损坏前登记逐字段等价；kind 目录继承；degraded 可测
+ok 356 - E 等价矩阵：多轮 ver 同 path / 跨 key 重交 / 同 digest 重交——重建与损坏前登记逐字段等价；kind 目录继承；degraded 可测
+  ---
+  duration_ms: 1582.947541
+  type: 'test'
+  ...
+# Subtest: agent-map 合法空账本正常登记（不假成功、不误报损坏）；agents.json 空映射数组合法
+ok 357 - agent-map 合法空账本正常登记（不假成功、不误报损坏）；agents.json 空映射数组合法
+  ---
+  duration_ms: 723.163667
+  type: 'test'
+  ...
+# Subtest: I9：E2E 路由门——未判定阻塞带恢复边；skip 必须给依据
+ok 358 - I9：E2E 路由门——未判定阻塞带恢复边；skip 必须给依据
+  ---
+  duration_ms: 428.248916
+  type: 'test'
+  ...
+# Subtest: E2E-01：人工门签发后 journal 零状态事件（静止）
+ok 359 - E2E-01：人工门签发后 journal 零状态事件（静止）
+  ---
+  duration_ms: 1214.177042
+  type: 'test'
+  ...
+# Subtest: E2E-02：用户约束与排除项进入派单文本
+ok 360 - E2E-02：用户约束与排除项进入派单文本
+  ---
+  duration_ms: 808.638584
+  type: 'test'
+  ...
+# Subtest: E2E-20：intent 任何时候可修订（固化死局非法）
+ok 361 - E2E-20：intent 任何时候可修订（固化死局非法）
+  ---
+  duration_ms: 452.373458
+  type: 'test'
+  ...
+# Subtest: E2E-15 契约：open 无 mode/create-resume 分支参数（仓库真实 workflow 兜底）
+ok 362 - E2E-15 契约：open 无 mode/create-resume 分支参数（仓库真实 workflow 兜底）
+  ---
+  duration_ms: 284.464959
+  type: 'test'
+  ...
+# Subtest: E2E-19：v1 遗留 .team-work 上显式 open 自愈且旧文件原样
+ok 363 - E2E-19：v1 遗留 .team-work 上显式 open 自愈且旧文件原样
+  ---
+  duration_ms: 320.873083
+  type: 'test'
+  ...
+# Subtest: I10：deliver 部分失败零半态
+ok 364 - I10：deliver 部分失败零半态
+  ---
+  duration_ms: 220.465375
+  type: 'test'
+  ...
+# Subtest: 人工门 rework → 回 Owner 回应波次（回归：该分支曾静默丢失）
+ok 365 - 人工门 rework → 回 Owner 回应波次（回归：该分支曾静默丢失）
+  ---
+  duration_ms: 1026.345584
+  type: 'test'
+  ...
+# Subtest: I8：tw restore 从最后注册快照恢复被污染制品
+ok 366 - I8：tw restore 从最后注册快照恢复被污染制品
+  ---
+  duration_ms: 628.574708
+  type: 'test'
+  ...
+# Subtest: run/gate 零写：artifacts.json 损坏时只读重建呈现、文件字节不动；dispatch 推进锁内自愈写回（I3 + run 只读承诺）
+ok 367 - run/gate 零写：artifacts.json 损坏时只读重建呈现、文件字节不动；dispatch 推进锁内自愈写回（I3 + run 只读承诺）
+  ---
+  duration_ms: 829.371292
+  type: 'test'
+  ...
+# Subtest: agent-map 遇损坏账本拒绝静默重建：返回 AGENTS_STATE_CORRUPT 与修复指引，人工恢复后登记可用
+ok 368 - agent-map 遇损坏账本拒绝静默重建：返回 AGENTS_STATE_CORRUPT 与修复指引，人工恢复后登记可用
+  ---
+  duration_ms: 445.821916
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 遇损坏 agents.json 降级推进：不抛错、warnings 在场（I5：推进通道不得死门）
+ok 369 - dispatch-plan 遇损坏 agents.json 降级推进：不抛错、warnings 在场（I5：推进通道不得死门）
+  ---
+  duration_ms: 217.422583
+  type: 'test'
+  ...
+# Subtest: retire 遇损坏账本不挡死：作废成功并重建账本（retire 是兜底恢复工具）
+ok 370 - retire 遇损坏账本不挡死：作废成功并重建账本（retire 是兜底恢复工具）
+  ---
+  duration_ms: 651.922166
+  type: 'test'
+  ...
+# Subtest: E2E-07 v3：respond 派单注入返工原因（意见随派单到达 Owner）
+ok 371 - E2E-07 v3：respond 派单注入返工原因（意见随派单到达 Owner）
+  ---
+  duration_ms: 862.351583
+  type: 'test'
+  ...
+# Subtest: E2E-07b v3：单包 review 与 verdict 派单内嵌被审制品清单、Owner 交付摘要与 Challenger 评审结论
+ok 372 - E2E-07b v3：单包 review 与 verdict 派单内嵌被审制品清单、Owner 交付摘要与 Challenger 评审结论
+  ---
+  duration_ms: 810.812916
+  type: 'test'
+  ...
+# Subtest: E2E-07c v3：NLART 过滤已 retire 作废波次的产物，且 reviewVerdictContext 非 accept 空 findings 不输出已接受文案
+ok 373 - E2E-07c v3：NLART 过滤已 retire 作废波次的产物，且 reviewVerdictContext 非 accept 空 findings 不输出已接受文案
+  ---
+  duration_ms: 1944.735958
+  type: 'test'
+  ...
+# Subtest: run 路径惰性化：非派发路径零成员规则 I/O，派发与在途重建恰好一次
+ok 374 - run 路径惰性化：非派发路径零成员规则 I/O，派发与在途重建恰好一次
+  ---
+  duration_ms: 2355.927709
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 路径惰性化：推进到派发点恰好一次成员规则 I/O，stop 路径零
+ok 375 - dispatch-plan 路径惰性化：推进到派发点恰好一次成员规则 I/O，stop 路径零
+  ---
+  duration_ms: 742.538083
+  type: 'test'
+  ...
+# Subtest: awaiting-user 静止路径（意图确认卡）零成员规则 I/O，确认后派发恰好一次
+ok 376 - awaiting-user 静止路径（意图确认卡）零成员规则 I/O，确认后派发恰好一次
+  ---
+  duration_ms: 696.031916
+  type: 'test'
+  ...
+# Subtest: blocked 卡路径（门失败且非人工阻塞）零成员规则 I/O
+ok 377 - blocked 卡路径（门失败且非人工阻塞）零成员规则 I/O
+  ---
+  duration_ms: 1706.461542
+  type: 'test'
+  ...
+# Subtest: Lead 时点选择性读取：progress 只读 lead/progress，dispatch 只读 lead/dispatch
+ok 378 - Lead 时点选择性读取：progress 只读 lead/progress，dispatch 只读 lead/dispatch
+  ---
+  duration_ms: 1806.743
+  type: 'test'
+  ...
+# Subtest: 热变语义：修改项目规则文件后下一次派发生效（无模块级缓存）
+ok 379 - 热变语义：修改项目规则文件后下一次派发生效（无模块级缓存）
+  ---
+  duration_ms: 1164.638708
+  type: 'test'
+  ...
+# Subtest: 成员规则只取 \#\# 规范/\#\# 红线/\#\# 建议 标题下的正文，其他内容不注入
+ok 380 - 成员规则只取 \#\# 规范/\#\# 红线/\#\# 建议 标题下的正文，其他内容不注入
+  ---
+  duration_ms: 89.265292
+  type: 'test'
+  ...
+# Subtest: 成员规则来源顺序为 角色 → 角色×场景 → 场景公共 → 公共通用，类内按文件名排序
+ok 381 - 成员规则来源顺序为 角色 → 角色×场景 → 场景公共 → 公共通用，类内按文件名排序
+  ---
+  duration_ms: 400.575791
+  type: 'test'
+  ...
+# Subtest: 场景隔离：场景文只进同名场景且只注入一次，其他场景文件完全不注入
+ok 382 - 场景隔离：场景文只进同名场景且只注入一次，其他场景文件完全不注入
+  ---
+  duration_ms: 267.812416
+  type: 'test'
+  ...
+# Subtest: 完整 teamScene 集合缺省时取自工作流定义：项目优先、包内回退；两层都缺时警告并按空集判定
+ok 383 - 完整 teamScene 集合缺省时取自工作流定义：项目优先、包内回退；两层都缺时警告并按空集判定
+  ---
+  duration_ms: 308.880125
+  type: 'test'
+  ...
+# Subtest: 同路径追加：基线层正文在前、项目同标题内容在后；项目只能增补不能删除基线默认
+ok 384 - 同路径追加：基线层正文在前、项目同标题内容在后；项目只能增补不能删除基线默认
+  ---
+  duration_ms: 252.720584
+  type: 'test'
+  ...
+# Subtest: 没有三标题的文件不注入：标题外正文与旧式条目前缀都不算规则（项目追加同理）
+ok 385 - 没有三标题的文件不注入：标题外正文与旧式条目前缀都不算规则（项目追加同理）
+  ---
+  duration_ms: 174.209958
+  type: 'test'
+  ...
+# Subtest: 卡上只输出非空段：顺序固定 规范 → 红线 → 建议，空段连标题一起省略
+ok 386 - 卡上只输出非空段：顺序固定 规范 → 红线 → 建议，空段连标题一起省略
+  ---
+  duration_ms: 82.6375
+  type: 'test'
+  ...
+# Subtest: 读失败：包内条目静默跳过，项目追加失败警告一次且基线默认完整在场
+ok 387 - 读失败：包内条目静默跳过，项目追加失败警告一次且基线默认完整在场
+  ---
+  duration_ms: 147.173625
+  type: 'test'
+  ...
+# Subtest: 无模块级缓存：每次调用重读，内容修改、新增与删除立即生效
+ok 388 - 无模块级缓存：每次调用重读，内容修改、新增与删除立即生效
+  ---
+  duration_ms: 196.787
+  type: 'test'
+  ...
+# Subtest: Lead 规则：按呈现时点整文件读取，不套三标题；同路径追加、库根说明不参与
+ok 389 - Lead 规则：按呈现时点整文件读取，不套三标题；同路径追加、库根说明不参与
+  ---
+  duration_ms: 276.917542
+  type: 'test'
+  ...
+# Subtest: 空库返回空数组与空文本；角色、场景、时点键必须是单段标识
+ok 390 - 空库返回空数组与空文本；角色、场景、时点键必须是单段标识
+  ---
+  duration_ms: 22.101167
+  type: 'test'
+  ...
+# Subtest: 包内锁定工作流契约按角色固定输出，覆盖身份、争议停手、工具合同与只读助手边界
+ok 391 - 包内锁定工作流契约按角色固定输出，覆盖身份、争议停手、工具合同与只读助手边界
+  ---
+  duration_ms: 0.3165
+  type: 'test'
+  ...
+# Subtest: 用户公共层优先于包内默认，项目追加在基线层之后；缺省回退与禁用手法符合约定
+ok 392 - 用户公共层优先于包内默认，项目追加在基线层之后；缺省回退与禁用手法符合约定
+  ---
+  duration_ms: 369.702333
+  type: 'test'
+  ...
+# Subtest: 三层目录扫描取并集，忽略 *.default.md 与 *.new.md 旁路副本
+ok 393 - 三层目录扫描取并集，忽略 *.default.md 与 *.new.md 旁路副本
+  ---
+  duration_ms: 387.842125
+  type: 'test'
+  ...
+# Subtest: 用户公共层读失败警告并回退包内默认；项目层读失败警告并跳过追加；包内层静默
+ok 394 - 用户公共层读失败警告并回退包内默认；项目层读失败警告并跳过追加；包内层静默
+  ---
+  duration_ms: 278.810208
+  type: 'test'
+  ...
+# Subtest: userRulesRoot 缺省读取 ~/.team-work/rules（用 HOME 夹具验证，不触碰真实主目录）
+ok 395 - userRulesRoot 缺省读取 ~/.team-work/rules（用 HOME 夹具验证，不触碰真实主目录）
+  ---
+  duration_ms: 98.817709
+  type: 'test'
+  ...
+# Subtest: Lead 通道同样走三层：用户公共层优先、项目追加、旁路副本忽略
+ok 396 - Lead 通道同样走三层：用户公共层优先、项目追加、旁路副本忽略
+  ---
+  duration_ms: 189.273
+  type: 'test'
+  ...
+# Subtest: 明晰提取器随模块迁入：只取唯一必读标记正文，缺资源时诊断可见
+ok 397 - 明晰提取器随模块迁入：只取唯一必读标记正文，缺资源时诊断可见
+  ---
+  duration_ms: 64.942416
+  type: 'test'
+  ...
+# Subtest: 派单卡段序固定：卡头 → 验收基线 → 锁定契约 → 规范/红线/建议 → 行动与交付
+ok 398 - 派单卡段序固定：卡头 → 验收基线 → 锁定契约 → 规范/红线/建议 → 行动与交付
+  ---
+  duration_ms: 749.093334
+  type: 'test'
+  ...
+# Subtest: 规则来源顺序 角色 → 角色×场景 → 场景公共 → 公共通用；场景文与角色规则零串入
+ok 399 - 规则来源顺序 角色 → 角色×场景 → 场景公共 → 公共通用；场景文与角色规则零串入
+  ---
+  duration_ms: 779.281333
+  type: 'test'
+  ...
+# Subtest: 用户公共层整份取代包内默认、项目层追加；锁定契约不被任何规则目录覆盖
+ok 400 - 用户公共层整份取代包内默认、项目层追加；锁定契约不被任何规则目录覆盖
+  ---
+  duration_ms: 730.577584
+  type: 'test'
+  ...
+# Subtest: 成员卡是单块业务正文：无明晰段、无 requiredGuidance；续派与在途重建同源
+ok 401 - 成员卡是单块业务正文：无明晰段、无 requiredGuidance；续派与在途重建同源
+  ---
+  duration_ms: 1334.731042
+  type: 'test'
+  ...
+# Subtest: Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共段，决定点另带审阅段；机械回执不命中
+ok 402 - Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共段，决定点另带审阅段；机械回执不命中
+  ---
+  duration_ms: 903.383125
+  type: 'test'
+  ...
+# Subtest: 八视角已拆包：Owner 只承担本包、组合评审覆盖全部已交付包、裁决带 verdict 语义
+ok 403 - 八视角已拆包：Owner 只承担本包、组合评审覆盖全部已交付包、裁决带 verdict 语义
+  ---
+  duration_ms: 2861.509416
+  type: 'test'
+  ...
+# Subtest: 审查类派单：角色×场景规则按场景区分，仍交付并经过 Challenger 与核心 Expert
+ok 404 - 审查类派单：角色×场景规则按场景区分，仍交付并经过 Challenger 与核心 Expert
+  ---
+  duration_ms: 1648.069041
+  type: 'test'
+  ...
+# Subtest: 场景规则内容：设计、审查、实施与测试各自按约定交付分流范围外发现
+ok 405 - 场景规则内容：设计、审查、实施与测试各自按约定交付分流范围外发现
+  ---
+  duration_ms: 2236.8595
+  type: 'test'
+  ...
+# Subtest: 方案场景：Owner、Challenger、返工和在途重建均带同一份锁定契约与设计规则
+ok 406 - 方案场景：Owner、Challenger、返工和在途重建均带同一份锁定契约与设计规则
+  ---
+  duration_ms: 911.635334
+  type: 'test'
+  ...
+# Subtest: clarity 同源短段：按需读取、操作内共享，下一操作更新且不加载详细正文
+ok 407 - clarity 同源短段：按需读取、操作内共享，下一操作更新且不加载详细正文
+  ---
+  duration_ms: 82.39975
+  type: 'test'
+  ...
+# Subtest: clarity 坏资源可见恢复：缺文件、目录、重复/倒置/空标记均不伪造备用规则
+ok 408 - clarity 坏资源可见恢复：缺文件、目录、重复/倒置/空标记均不伪造备用规则
+  ---
+  duration_ms: 125.087667
+  type: 'test'
+  ...
+# Subtest: tw plan：机械验收通过登记 packages.json + journal；重叠/成环/缺标准拒绝
+ok 409 - tw plan：机械验收通过登记 packages.json + journal；重叠/成环/缺标准拒绝
+  ---
+  duration_ms: 895.841333
+  type: 'test'
+  ...
+# Subtest: produce blocked 静止卡与扩权重派（单 owner）：不再无限重派；新范围重派卡内嵌 blocked 原因
+ok 410 - produce blocked 静止卡与扩权重派（单 owner）：不再无限重派；新范围重派卡内嵌 blocked 原因
+  ---
+  duration_ms: 1536.405791
+  type: 'test'
+  ...
+# Subtest: 多包 blocked：评审优先消化已交付包；blocked 卡放行 plan 重拆扩权，重拆后派新波并带 blocked 原因
+ok 411 - 多包 blocked：评审优先消化已交付包；blocked 卡放行 plan 重拆扩权，重拆后派新波并带 blocked 原因
+  ---
+  duration_ms: 2266.047958
+  type: 'test'
+  ...
+# Subtest: respond blocked（返工波）：owner 无法返工时出静止卡，不再无限重派 respond；扩权重派恢复
+ok 412 - respond blocked（返工波）：owner 无法返工时出静止卡，不再无限重派 respond；扩权重派恢复
+  ---
+  duration_ms: 1585.802417
+  type: 'test'
+  ...
+# Subtest: tw plan 重拆窗口：在途派发时拒绝
+ok 413 - tw plan 重拆窗口：在途派发时拒绝
+  ---
+  duration_ms: 836.540791
+  type: 'test'
+  ...
+# Subtest: 多包全链路：并行派发 → 批次在途 → 组合评审 → 选择性重派(continuation) → 依赖解锁 → 人工门
+ok 414 - 多包全链路：并行派发 → 批次在途 → 组合评审 → 选择性重派(continuation) → 依赖解锁 → 人工门
+  ---
+  duration_ms: 2872.275125
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 波组导出：package/continuation/dependsOn/weight 字段
+ok 415 - dispatch-plan 波组导出：package/continuation/dependsOn/weight 字段
+  ---
+  duration_ms: 501.949333
+  type: 'test'
+  ...
+# Subtest: challenger 返工派单按结构化范围传递必修项，跨包隔离并支持在途重建
+ok 416 - challenger 返工派单按结构化范围传递必修项，跨包隔离并支持在途重建
+  ---
+  duration_ms: 1170.224041
+  type: 'test'
+  ...
+# Subtest: challenger 定点必修项只重派命中的 Owner
+ok 417 - challenger 定点必修项只重派命中的 Owner
+  ---
+  duration_ms: 1167.529667
+  type: 'test'
+  ...
+# Subtest: expert 返工派单按结构化范围传递必修项，跨包隔离并支持在途重建
+ok 418 - expert 返工派单按结构化范围传递必修项，跨包隔离并支持在途重建
+  ---
+  duration_ms: 1315.547333
+  type: 'test'
+  ...
+# Subtest: expert 定点必修项只重派命中的 Owner
+ok 419 - expert 定点必修项只重派命中的 Owner
+  ---
+  duration_ms: 1375.654667
+  type: 'test'
+  ...
+# Subtest: 专家整组意见仅覆盖当次已评审包，后续其他包返工不能继承
+ok 420 - 专家整组意见仅覆盖当次已评审包，后续其他包返工不能继承
+  ---
+  duration_ms: 1790.367041
+  type: 'test'
+  ...
+# Subtest: expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不按包过滤裁决）
+ok 421 - expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不按包过滤裁决）
+  ---
+  duration_ms: 1540.462167
+  type: 'test'
+  ...
+# Subtest: 路由 blocker 优先于人工门卡（E2E 实测缺陷：人工门提前签发死循环）
+ok 422 - 路由 blocker 优先于人工门卡（E2E 实测缺陷：人工门提前签发死循环）
+  ---
+  duration_ms: 896.889292
+  type: 'test'
+  ...
+# Subtest: D7：advance 按 e2e 路由决定选边（run→e2e 阶段 / skip→finish），无路由阶段不回归
+ok 423 - D7：advance 按 e2e 路由决定选边（run→e2e 阶段 / skip→finish），无路由阶段不回归
+  ---
+  duration_ms: 1562.55525
+  type: 'test'
+  ...
+# Subtest: D1：索引重建从派发事件还原 kind（gate 按 kind 匹配通过）；无事件兜底 misc
+ok 424 - D1：索引重建从派发事件还原 kind（gate 按 kind 匹配通过）；无事件兜底 misc
+  ---
+  duration_ms: 335.66625
+  type: 'test'
+  ...
+# Subtest: D2：拒绝文案带派单身份（key 错配提示在途清单；路径越界附角色/包/轮次）
+ok 425 - D2：拒绝文案带派单身份（key 错配提示在途清单；路径越界附角色/包/轮次）
+  ---
+  duration_ms: 278.508042
+  type: 'test'
+  ...
+# Subtest: D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatchKey
+ok 426 - D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatchKey
+  ---
+  duration_ms: 1192.715084
+  type: 'test'
+  ...
+# Subtest: D6：多包任务的评审/裁决派单内嵌包计划（未交付包不构成 rework 依据）
+ok 427 - D6：多包任务的评审/裁决派单内嵌包计划（未交付包不构成 rework 依据）
+  ---
+  duration_ms: 602.189167
+  type: 'test'
+  ...
+# Subtest: A：包级模型——tier 非法拒绝；显式 model 优先；risk 只升 owner 角色档；缺省复用 roles.owner（不再出升档卡）
+ok 428 - A：包级模型——tier 非法拒绝；显式 model 优先；risk 只升 owner 角色档；缺省复用 roles.owner（不再出升档卡）
+  ---
+  duration_ms: 680.038958
+  type: 'test'
+  ...
+# Subtest: B：e2eTemplate 物化——entry e2e 直达自动三包（形状映射+依赖锁+已 plan 不覆盖）
+ok 429 - B：e2eTemplate 物化——entry e2e 直达自动三包（形状映射+依赖锁+已 plan 不覆盖）
+  ---
+  duration_ms: 554.756583
+  type: 'test'
+  ...
+# Subtest: dispatch-plan 不再有升档卡：包级模型差异直接体现为 modelRef，成本把关由初期确认卡承担
+ok 430 - dispatch-plan 不再有升档卡：包级模型差异直接体现为 modelRef，成本把关由初期确认卡承担
+  ---
+  duration_ms: 318.746125
+  type: 'test'
+  ...
+# Subtest: 写边界声明：owner 派单内嵌越界后果（deliver 拒绝 + 快照恢复）
+ok 431 - 写边界声明：owner 派单内嵌越界后果（deliver 拒绝 + 快照恢复）
+  ---
+  duration_ms: 251.372958
+  type: 'test'
+  ...
+# Subtest: 单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）
+ok 432 - 单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）
+  ---
+  duration_ms: 199.805417
+  type: 'test'
+  ...
+# Subtest: risk 升档：critical → expert Owner（只升 owner 档，challenger 不变）
+ok 433 - risk 升档：critical → expert Owner（只升 owner 档，challenger 不变）
+  ---
+  duration_ms: 307.878208
+  type: 'test'
+  ...
+# Subtest: 候选池家族去重只作用于 roles 初始化：同任务多包统一复用 roles.owner；要不同模型须 plan 显式给 model
+ok 434 - 候选池家族去重只作用于 roles 初始化：同任务多包统一复用 roles.owner；要不同模型须 plan 显式给 model
+  ---
+  duration_ms: 399.64225
+  type: 'test'
+  ...
+# Subtest: plan：非数组可写范围只报告类型错误，不制造逐字符重叠或掩盖其他错误
+ok 435 - plan：非数组可写范围只报告类型错误，不制造逐字符重叠或掩盖其他错误
+  ---
+  duration_ms: 6.112375
+  type: 'test'
+  ...
+# Subtest: Windows 分隔符别名的计划互斥拒绝且保留原计划，POSIX 不改变路径含义
+ok 436 - Windows 分隔符别名的计划互斥拒绝且保留原计划，POSIX 不改变路径含义
+  ---
+  duration_ms: 377.529834
+  type: 'test'
+  ...
+# Subtest: 旧版已存 Windows 重叠计划不能确认或派发，可重新登记互斥计划恢复
+ok 437 - 旧版已存 Windows 重叠计划不能确认或派发，可重新登记互斥计划恢复
+  ---
+  duration_ms: 806.162166
+  type: 'test'
+  ...
+# Subtest: F1/F8：派发 key 为 d<序号>-<hex>、同批共享 waveId、waveId 全任务递增、dispatched 落盘 waveId
+ok 438 - F1/F8：派发 key 为 d<序号>-<hex>、同批共享 waveId、waveId 全任务递增、dispatched 落盘 waveId
+  ---
+  duration_ms: 1378.120375
+  type: 'test'
+  ...
+# Subtest: F1/F3：wait-inflight 卡与 dispatch-plan 输出补 waveId；run 只读在途卡带 waveId 字段
+ok 439 - F1/F3：wait-inflight 卡与 dispatch-plan 输出补 waveId；run 只读在途卡带 waveId 字段
+  ---
+  duration_ms: 1006.401375
+  type: 'test'
+  ...
+# Subtest: V3-E2E-01：人工门 rework 后 run×2 / dispatch-plan / 混用 / Promise.all 并发均返回同一 wait-inflight，journal 不增长
+ok 440 - V3-E2E-01：人工门 rework 后 run×2 / dispatch-plan / 混用 / Promise.all 并发均返回同一 wait-inflight，journal 不增长
+  ---
+  duration_ms: 1584.229167
+  type: 'test'
+  ...
+# Subtest: V3-E2E-01 重启：派发落盘后重新加载推导/重放原 key 不扩大波次
+ok 441 - V3-E2E-01 重启：派发落盘后重新加载推导/重放原 key 不扩大波次
+  ---
+  duration_ms: 1296.011833
+  type: 'test'
+  ...
+# Subtest: 门槛 2：多包部分交付后重复推进返回原在途卡、只等未交付包、不提前派 review、不重派已交付包
+ok 442 - 门槛 2：多包部分交付后重复推进返回原在途卡、只等未交付包、不提前派 review、不重派已交付包
+  ---
+  duration_ms: 1303.740667
+  type: 'test'
+  ...
+# Subtest: V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序回溯，非紧邻 key）
+ok 443 - V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序回溯，非紧邻 key）
+  ---
+  duration_ms: 1833.91775
+  type: 'test'
+  ...
+# Subtest: F4：replace-owner 后解析新成员（最新映射自然胜出）
+ok 444 - F4：replace-owner 后解析新成员（最新映射自然胜出）
+  ---
+  duration_ms: 1454.612166
+  type: 'test'
+  ...
+# Subtest: F4：Challenger 复审 expectedAgentId 可解析（无包波按同角色回溯）
+ok 445 - F4：Challenger 复审 expectedAgentId 可解析（无包波按同角色回溯）
+  ---
+  duration_ms: 1063.31125
+  type: 'test'
+  ...
+# Subtest: F4：同名角色/包不跨阶段串线（stage-advanced 边界停止回溯）
+ok 446 - F4：同名角色/包不跨阶段串线（stage-advanced 边界停止回溯）
+  ---
+  duration_ms: 1159.23475
+  type: 'test'
+  ...
+# Subtest: F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh、重裁 continuation 并解析原 Expert（台账门槛 3 Expert 侧，D3 同角色回溯）
+ok 447 - F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh、重裁 continuation 并解析原 Expert（台账门槛 3 Expert 侧，D3 同角色回溯）
+  ---
+  duration_ms: 2253.809083
+  type: 'test'
+  ...
+# Subtest: V3-E2E-03/F2：同轮重复报告投影轮不虚增；blocked 不入投影；superseded 波排除（纯函数）
+ok 448 - V3-E2E-03/F2：同轮重复报告投影轮不虚增；blocked 不入投影；superseded 波排除（纯函数）
+  ---
+  duration_ms: 0.328958
+  type: 'test'
+  ...
+# Subtest: V3-E2E-03 全链路：同轮重复 key 迁移后 review 轮次不抬高、accept 后不再重复派 review、快照与判定同源（F2）
+ok 449 - V3-E2E-03 全链路：同轮重复 key 迁移后 review 轮次不抬高、accept 后不再重复派 review、快照与判定同源（F2）
+  ---
+  duration_ms: 1033.46625
+  type: 'test'
+  ...
+# Subtest: V3-E2E-04/F5：决定前旧 key 同/异内容重交均不能完成返工；只认绑定 respond 波报告
+ok 450 - V3-E2E-04/F5：决定前旧 key 同/异内容重交均不能完成返工；只认绑定 respond 波报告
+  ---
+  duration_ms: 1757.471958
+  type: 'test'
+  ...
+# Subtest: F5：blocked → converge-user 不无限重派；重派 respond 绑定同一返工决定；再 blocked 仍回仲裁卡
+ok 451 - F5：blocked → converge-user 不无限重派；重派 respond 绑定同一返工决定；再 blocked 仍回仲裁卡
+  ---
+  duration_ms: 1261.361375
+  type: 'test'
+  ...
+# Subtest: 有效 blocked（seq 因果纯函数）：同毫秒不误判、墙钟回拨不误静止；锚后新派发/重拆解除
+ok 452 - 有效 blocked（seq 因果纯函数）：同毫秒不误判、墙钟回拨不误静止；锚后新派发/重拆解除
+  ---
+  duration_ms: 0.478375
+  type: 'test'
+  ...
+# Subtest: F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 blocked → 出 F5 仲裁卡（不被 produceBlocked 遮蔽）；重派交付后不再触发 blocked 仲裁
+ok 453 - F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 blocked → 出 F5 仲裁卡（不被 produceBlocked 遮蔽）；重派交付后不再触发 blocked 仲裁
+  ---
+  duration_ms: 2264.171875
+  type: 'test'
+  ...
+# Subtest: F-9：定点 blocked 先按包恢复，轮次耗尽需授权，再仅重派目标包
+ok 454 - F-9：定点 blocked 先按包恢复，轮次耗尽需授权，再仅重派目标包
+  ---
+  duration_ms: 2038.988333
+  type: 'test'
+  ...
+# Subtest: F5：僵局检测——delivered 但制品指纹未变 → 仲裁卡含未修包清单；仅重派未修包 → 修复 → 完成
+ok 455 - F5：僵局检测——delivered 但制品指纹未变 → 仲裁卡含未修包清单；仅重派未修包 → 修复 → 完成
+  ---
+  duration_ms: 1339.274875
+  type: 'test'
+  ...
+# Subtest: F5：第二次 rework 不能被第一次绑定波报告消费
+ok 456 - F5：第二次 rework 不能被第一次绑定波报告消费
+  ---
+  duration_ms: 1042.623042
+  type: 'test'
+  ...
+# Subtest: F5 多包混合：已改包交付进入评审链、未修包僵局卡列清单、仅重派未修包
+ok 457 - F5 多包混合：已改包交付进入评审链、未修包僵局卡列清单、仅重派未修包
+  ---
+  duration_ms: 1696.058625
+  type: 'test'
+  ...
+# Subtest: F6-2：等待期改写 Challenger 报告 → 旧卡自动作废、重签新卡且只呈一次；旧卡直答被拒
+ok 458 - F6-2：等待期改写 Challenger 报告 → 旧卡自动作废、重签新卡且只呈一次；旧卡直答被拒
+  ---
+  duration_ms: 617.41375
+  type: 'test'
+  ...
+# Subtest: F6-1：同门多次决定 → 二次 accept 后门通过、不再成环；批准后制品变化 → 旧批准失效重签
+ok 459 - F6-1：同门多次决定 → 二次 accept 后门通过、不再成环；批准后制品变化 → 旧批准失效重签
+  ---
+  duration_ms: 516.387791
+  type: 'test'
+  ...
+# Subtest: F6/R2：旧决定缺 reviewFingerprint 降级仅制品指纹（纯函数；新决定启用双指纹）
+ok 460 - F6/R2：旧决定缺 reviewFingerprint 降级仅制品指纹（纯函数；新决定启用双指纹）
+  ---
+  duration_ms: 0.206292
+  type: 'test'
+  ...
+# Subtest: F7：同 key 同 payload 幂等 ver 不变；变 payload ver+1；report-accepted 带 ver+payloadDigest；旧报告视为 ver 1
+ok 461 - F7：同 key 同 payload 幂等 ver 不变；变 payload ver+1；report-accepted 带 ver+payloadDigest；旧报告视为 ver 1
+  ---
+  duration_ms: 409.620208
+  type: 'test'
+  ...
+# Subtest: F7：v1 fail + v2 pass → 门按最新 ver 判定（同 key 修订覆盖单文件）
+ok 462 - F7：v1 fail + v2 pass → 门按最新 ver 判定（同 key 修订覆盖单文件）
+  ---
+  duration_ms: 512.144084
+  type: 'test'
+  ...
+# Subtest: F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d 混存回溯不断链
+ok 463 - F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d 混存回溯不断链
+  ---
+  duration_ms: 277.083792
+  type: 'test'
+  ...
+# Subtest: F9：合并规则——同(kind,role,round)不同包合并一波、同包重复各自成波、package=null 各自成波；迁移前后投影等价；重跑幂等
+ok 464 - F9：合并规则——同(kind,role,round)不同包合并一波、同包重复各自成波、package=null 各自成波；迁移前后投影等价；重跑幂等
+  ---
+  duration_ms: 527.957875
+  type: 'test'
+  ...
+# Subtest: F9：中断重跑等价——半迁移 journal（部分已赋号）可续跑至完整、不重复赋号
+ok 465 - F9：中断重跑等价——半迁移 journal（部分已赋号）可续跑至完整、不重复赋号
+  ---
+  duration_ms: 136.939416
+  type: 'test'
+  ...
+# Subtest: F9：跨阶段不误并——以最近 stage-advanced 事件为界，前段派发不参与赋号
+ok 466 - F9：跨阶段不误并——以最近 stage-advanced 事件为界，前段派发不参与赋号
+  ---
+  duration_ms: 105.940667
+  type: 'test'
+  ...
+# Subtest: F9 四类恢复矩阵：零/单报告与同 digest 多报告机械收敛；异 digest 多报告出用户选择卡、其余写 dispatch-superseded
+ok 467 - F9 四类恢复矩阵：零/单报告与同 digest 多报告机械收敛；异 digest 多报告出用户选择卡、其余写 dispatch-superseded
+  ---
+  duration_ms: 295.709625
+  type: 'test'
+  ...
+# Subtest: F9 加固：migrate 冲突卡 pending 期间 run 静止（migratePending）、intake 照常接受交付；decide 后恢复推进
+ok 468 - F9 加固：migrate 冲突卡 pending 期间 run 静止（migratePending）、intake 照常接受交付；decide 后恢复推进
+  ---
+  duration_ms: 238.81675
+  type: 'test'
+  ...
+# Subtest: F3 retire 幂等矩阵：缺 reason/未知波/已结波拒绝附指引；合法作废未结波；旧 key 交付被拒；重跑取新卡
+ok 469 - F3 retire 幂等矩阵：缺 reason/未知波/已结波拒绝附指引；合法作废未结波；旧 key 交付被拒；重跑取新卡
+  ---
+  duration_ms: 365.226584
+  type: 'test'
+  ...
+# Subtest: F3 retire：部分交付后 retire——已交付报告保留审计、投影排除（重新派发该包）、回溯跳过 superseded
+ok 470 - F3 retire：部分交付后 retire——已交付报告保留审计、投影排除（重新派发该包）、回溯跳过 superseded
+  ---
+  duration_ms: 758.977208
+  type: 'test'
+  ...
+# Subtest: B8：无 waveId 派发按 key 兜底各自成波，守卫回退尾部连续批次、不重复派发
+ok 471 - B8：无 waveId 派发按 key 兜底各自成波，守卫回退尾部连续批次、不重复派发
+  ---
+  duration_ms: 188.875125
+  type: 'test'
+  ...
+# Subtest: 损坏输入与重复决定：损坏 journal 抛错不静默；重复 decide 拒绝 DECISION_STALE
+ok 472 - 损坏输入与重复决定：损坏 journal 抛错不静默；重复 decide 拒绝 DECISION_STALE
+  ---
+  duration_ms: 383.037584
+  type: 'test'
+  ...
+# Subtest: F-9：定点返工 blocked 不解锁依赖也不冻结无关包，确认重试后须先回应目标包
+ok 473 - F-9：定点返工 blocked 不解锁依赖也不冻结无关包，确认重试后须先回应目标包
+  ---
+  duration_ms: 1176.475333
+  type: 'test'
+  ...
+# Subtest: 并发：retire×run 与 迁移×交付 并发后状态一致（任务锁串行化，任意顺序均收敛）
+ok 474 - 并发：retire×run 与 迁移×交付 并发后状态一致（任务锁串行化，任意顺序均收敛）
+  ---
+  duration_ms: 455.504625
+  type: 'test'
+  ...
+# Subtest: 标签只影响展示，不改变派单身份或跨任务寻址
+ok 475 - 标签只影响展示，不改变派单身份或跨任务寻址
+  ---
+  duration_ms: 0.522083
+  type: 'test'
+  ...
+# Subtest: 写端清理：cli 不再导出 tagLabel/persistTagHints（标签落盘链已删）
+ok 476 - 写端清理：cli 不再导出 tagLabel/persistTagHints（标签落盘链已删）
+  ---
+  duration_ms: 0.600334
+  type: 'test'
+  ...
+# Subtest: agents.json 只保留 mappings + roles：派发落盘事实只在 journal（无 tagHints/pendingTags/modelHints 键）
+ok 477 - agents.json 只保留 mappings + roles：派发落盘事实只在 journal（无 tagHints/pendingTags/modelHints 键）
+  ---
+  duration_ms: 784.322959
+  type: 'test'
+  ...
+1..477
+# tests 488
+# suites 0
+# pass 479
+# fail 0
+# cancelled 0
+# skipped 9
+# todo 0
+# duration_ms 51452.561083
+{"type":"suite-exit","status":0}
+{"type":"source-recheck","sourceUnchanged":true,"snapshotUnchanged":true,"modelRequests":0}
+{"type":"cleanup","removedOwnScratch":true}

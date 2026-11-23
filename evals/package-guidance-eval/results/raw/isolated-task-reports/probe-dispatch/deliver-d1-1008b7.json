@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-1008b7",
+  "dispatchKey": "d1-1008b7",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "implementation",
+  "package": "pkg-beta",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "0af80eb324cf1c6cac136b33086fd5b79d5b53b7589183badf4051f18c9b272a",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已按本包完成标准交付：在 docs/tagline-beta.md（唯一可写路径）写入第二段虚构说明的一行自拟标语雾屿灯塔——再远的航线，也有人守着一盏不灭的光。，回读验证文件恰为一行且内容完整；本包为纯虚构文档无代码用例可写，pkg-alpha 等其他包不在本派单范围内。",
+    "paths": [
+      "docs/tagline-beta.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T09:59:27.543Z"
+}

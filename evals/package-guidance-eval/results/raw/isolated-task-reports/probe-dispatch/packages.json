@@ -1,0 +1,36 @@
+{
+  "items": [
+    {
+      "id": "pkg-alpha",
+      "writable": [
+        "docs/tagline-alpha.md:doc"
+      ],
+      "done": [
+        "在 docs/tagline-alpha.md 写入第一段虚构说明的一行标语（虚构内容自拟，一行即可验收）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "pkg-beta",
+      "writable": [
+        "docs/tagline-beta.md:doc"
+      ],
+      "done": [
+        "在 docs/tagline-beta.md 写入第二段虚构说明的一行标语（虚构内容自拟，一行即可验收）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

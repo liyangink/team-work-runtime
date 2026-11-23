@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d4-b9b180",
+  "dispatchKey": "d4-b9b180",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 2,
+  "stage": "design",
+  "package": "interface-analysis",
+  "waveId": "wv4",
+  "ver": 1,
+  "payloadDigest": "b52c29404f6bbaf646278cc09f9cc78530e16099aafd978c82a14a7e61266980",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "四条接缝 blocker 已全部修复并重新交付 docs/interface-constraints.md（完整方案正文即该文件）：§1/§3/§4 补登摆动机构/霍尔反馈/环境光/双点NTC/2KB备电SRAM 统一硬件基线与接口资源行，OTA 分区与回滚全文改为 slotA/slotB 各 512KB、新固件 60s 未确认回滚+连续两次回滚进恢复模式（显式以 failure-recovery §4.3/§5 为权威），§2.2 MQTT state payload 补入 err_mask/degraded 并明确重连经 MQTT 通道全量上报、§2.3 补登 GET /device/status、§2.4 补 App 引导恢复，§6 过流/过温拆分且过温改为先降亮度 30% 再停灯效的分级策略（以 F-05/§4.1 为权威）；已核验每条意见引用的 failure-recovery 行号属实、修改后全文无残留旧数值，非阻塞项（§0 四层计数笔误、断网本地曲线表述）按裁决本轮未动，遗留一件不在本包可写范围：failure-recovery §4.4「调用状态同步接口上报」措辞需其 Owner 同步改为经 MQTT state 通道上报。",
+    "paths": [
+      "docs/interface-constraints.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:39:09.258Z"
+}

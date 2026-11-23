@@ -1,0 +1,403 @@
+{
+  "items": [
+    {
+      "decisionId": "intake-7e8132",
+      "gateId": "intake-approval",
+      "choice": "确认开始",
+      "grant": "accept-intake",
+      "intakeFingerprint": "d69bf13499b792f0e7e13b03bcfe3c7afd4332e70473246fb6f9e9a5505b1196",
+      "modelRefs": {
+        "owner": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "challenger": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "expert": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        }
+      },
+      "intakeVersion": 2,
+      "intake": {
+        "rawRequirement": "在 docs/one-note.md 写一行虚构的产品说明，内容自拟",
+        "objective": "只在 docs/one-note.md 写一行虚构说明",
+        "constraints": [],
+        "exclusions": [],
+        "scope": {
+          "entry": "implementation",
+          "outputs": [
+            "source"
+          ]
+        },
+        "acceptance": [
+          "docs/one-note.md 包含一行说明"
+        ],
+        "gaps": [],
+        "risk": "normal",
+        "roles": [
+          {
+            "role": "owner",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.implementation.ownerTier=junior"
+          },
+          {
+            "role": "challenger",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.implementation.challengerTier=senior"
+          },
+          {
+            "role": "expert",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "policy.roles.expert=expert"
+          }
+        ],
+        "packages": [
+          {
+            "id": "one-note",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/one-note.md:doc"
+            ],
+            "done": [
+              "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，满足验收：docs/one-note.md 包含一行说明"
+            ],
+            "dependsOn": [],
+            "vsRolesOwner": "equal"
+          }
+        ],
+        "actualScope": {
+          "entry": "implementation",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "implementation"
+          },
+          "outputs": [
+            "source"
+          ]
+        },
+        "profile": "headless",
+        "source": "role-registry"
+      },
+      "intakeSnapshot": {
+        "scope": {
+          "entry": "implementation",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "implementation"
+          },
+          "outputs": [
+            "source"
+          ]
+        },
+        "intent": {
+          "objective": "只在 docs/one-note.md 写一行虚构说明",
+          "constraints": [],
+          "exclusions": [],
+          "rawRequirement": "在 docs/one-note.md 写一行虚构的产品说明，内容自拟",
+          "scope": {
+            "entry": "implementation",
+            "outputs": [
+              "source"
+            ]
+          },
+          "acceptance": [
+            "docs/one-note.md 包含一行说明"
+          ],
+          "gaps": [],
+          "risk": "normal"
+        },
+        "roles": {
+          "owner": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "challenger": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "expert": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          }
+        },
+        "packages": [
+          {
+            "id": "one-note",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/one-note.md:doc"
+            ],
+            "done": [
+              "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，满足验收：docs/one-note.md 包含一行说明"
+            ],
+            "dependsOn": []
+          }
+        ]
+      },
+      "proof": {
+        "mode": "caller-reported",
+        "at": "2026-11-17T13:28:45.546Z"
+      },
+      "at": "2026-11-17T13:28:45.546Z"
+    },
+    {
+      "decisionId": "intake-cdd1dd",
+      "gateId": "intake-approval",
+      "choice": "确认开始",
+      "grant": "accept-intake",
+      "intakeFingerprint": "ce283172d1e924068bb31f9649c8bf5067caa0129bb59cb3b59c5d0a76aa0135",
+      "modelRefs": {
+        "owner": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "challenger": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        },
+        "expert": {
+          "provider": "zai-coding-cn",
+          "modelName": "glm-5.3",
+          "effort": "max",
+          "family": "glm"
+        }
+      },
+      "intakeVersion": 2,
+      "intake": {
+        "rawRequirement": "在 docs/one-note.md 写一行虚构的产品说明，内容自拟",
+        "objective": "只在 docs/one-note.md 写一行虚构说明",
+        "constraints": [],
+        "exclusions": [],
+        "scope": {
+          "entry": "implementation",
+          "outputs": [
+            "source"
+          ]
+        },
+        "acceptance": [
+          "docs/one-note.md 包含一行说明",
+          "在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+        ],
+        "gaps": [],
+        "risk": "normal",
+        "roles": [
+          {
+            "role": "owner",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.implementation.ownerTier=junior"
+          },
+          {
+            "role": "challenger",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "scene.implementation.challengerTier=senior"
+          },
+          {
+            "role": "expert",
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "effortState": "configured",
+            "tierProvenance": "policy.roles.expert=expert"
+          }
+        ],
+        "packages": [
+          {
+            "id": "one-note",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "modelRef": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/one-note.md:doc"
+            ],
+            "done": [
+              "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，且该行注明「虚构」，满足完成标准：在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+            ],
+            "dependsOn": [],
+            "vsRolesOwner": "equal"
+          }
+        ],
+        "actualScope": {
+          "entry": "implementation",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "implementation"
+          },
+          "outputs": [
+            "source"
+          ]
+        },
+        "diff": {
+          "baseDecisionId": "intake-7e8132",
+          "baseFingerprint": "d69bf13499b792f0e7e13b03bcfe3c7afd4332e70473246fb6f9e9a5505b1196",
+          "changes": [
+            {
+              "path": "intent.acceptance[1]",
+              "kind": "added",
+              "after": "在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+            },
+            {
+              "path": "packages[one-note].done[0]",
+              "kind": "modified",
+              "before": "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，满足验收：docs/one-note.md 包含一行说明",
+              "after": "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，且该行注明「虚构」，满足完成标准：在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+            }
+          ],
+          "unchangedFolded": true,
+          "unchangedCount": 32
+        },
+        "profile": "headless",
+        "source": "role-registry"
+      },
+      "intakeSnapshot": {
+        "scope": {
+          "entry": "implementation",
+          "completion": {
+            "mode": "through-stage",
+            "stage": "implementation"
+          },
+          "outputs": [
+            "source"
+          ]
+        },
+        "intent": {
+          "objective": "只在 docs/one-note.md 写一行虚构说明",
+          "constraints": [],
+          "exclusions": [],
+          "rawRequirement": "在 docs/one-note.md 写一行虚构的产品说明，内容自拟",
+          "scope": {
+            "entry": "implementation",
+            "outputs": [
+              "source"
+            ]
+          },
+          "acceptance": [
+            "docs/one-note.md 包含一行说明",
+            "在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+          ],
+          "gaps": [],
+          "risk": "normal"
+        },
+        "roles": {
+          "owner": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "challenger": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "expert": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          }
+        },
+        "packages": [
+          {
+            "id": "one-note",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "writable": [
+              "docs/one-note.md:doc"
+            ],
+            "done": [
+              "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，且该行注明「虚构」，满足完成标准：在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+            ],
+            "dependsOn": []
+          }
+        ]
+      },
+      "proof": {
+        "mode": "caller-reported",
+        "at": "2026-11-17T13:29:38.348Z"
+      },
+      "at": "2026-11-17T13:29:38.348Z"
+    }
+  ]
+}

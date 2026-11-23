@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-f6ff16",
+  "dispatchKey": "d1-f6ff16",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "implementation",
+  "package": "pkg-alpha",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "76b487a0fab0cd71271f3ce0b7e0a2db671bf279d3e930b82be00ce1abff6210",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "pkg-alpha 已完成：在 docs/tagline-alpha.md 写入第一段虚构说明的一行自拟标语“星屿灯塔：在数据的潮汐里，为每一次远航点亮归途的坐标。”，经 cat 与 wc -l 复核为单行且内容完整，满足本包“一行即可验收”的完成标准。",
+    "paths": [
+      "docs/tagline-alpha.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T09:59:24.048Z"
+}

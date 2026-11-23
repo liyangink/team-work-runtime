@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d5-3c807c",
+  "dispatchKey": "d5-3c807c",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "design",
+  "package": "merge-final",
+  "waveId": "wv5",
+  "ver": 1,
+  "payloadDigest": "205a4ba77ac14edddcc887611b1c0bf2e350a0f12f5be8ffba05eb071e6833c3",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已交付：合并稿完整写入 docs/design/final-plan.md（470 行），完整保留 14 接口契约与全部功能/非功能约束（§2）和 21 项 FMEA 检测及 L0–L4 降级恢复设计（§3），新增接口↔恢复衔接映射（§4.1）与 16 项两文冲突的统一取舍（§4.2）、实现顺序与代价汇总（§5，可靠性侧 8.5 人周、功能侧上游未估算已如实标注），上游两文件未改动；BLE 首发与精确模式等 6 项开放项仍待 Lead/用户裁决（§4.3），§6 验证项为设计阶段计划、本轮未运行任何测试。",
+    "paths": [
+      "docs/design/final-plan.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T10:27:06.410Z"
+}

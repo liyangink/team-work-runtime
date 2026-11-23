@@ -7,7 +7,7 @@ import test from "node:test"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
-import { makeProject, autoCaller, openTask, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, caller, openTask, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
 const PKGS = JSON.stringify([
   { id: "store", writable: ["S.md:code-review"], done: ["store 结论"], dependsOn: [] },
@@ -106,10 +106,16 @@ test("produce blocked 静止卡与扩权重派（单 owner）：不再无限重�
   assert.equal(card.card.next, "re-scope")
   assert.match(card.card.question, /blocked/)
   assert.match(card.card.question, /src\/config\.ts/)
-  assert.match(card.card.note, /dispatch-plan --writable/)
+  assert.match(card.card.note, /resolve-blocked/, "新契约：恢复指引指向按包恢复卡（用户明确方向）")
+  const blockedRef = (card.blockedPackages ?? card.card.blockedPackages)[0].ref
   const card2 = await call(["dispatch-plan", "--task", "blk-t"])
   assert.equal(card2.stop, "awaiting-user", "静止卡幂等：重复推进不重派同形状派单")
-  // 扩权重派：Lead 携新可写范围重跑 dispatch-plan = 用户重派指示
+  // 新契约 §6.3：扩权恢复必须绑定用户方向（package-recovery 卡），单纯重跑 dispatch-plan 不解除 blocked
+  const noHeal = await call(["dispatch-plan", "--task", "blk-t", "--writable", "R.md:code-review", "--writable", "src/:code"])
+  assert.equal(noHeal.stop, "awaiting-user", "未确认恢复前扩权重跑不解除 blocked")
+  const rec = await call(["plan", "--task", "blk-t", "--resolve-blocked", JSON.stringify({ action: "retry", reason: "用户授权扩权重派" }), "--blocked-ref", blockedRef])
+  assert.ok(rec.decisionId, "签发 package-recovery 卡")
+  await call(["decide", "--task", "blk-t", "--choice", "1", "--decision-id", rec.decisionId])
   const d2 = await call(["dispatch-plan", "--task", "blk-t", "--writable", "R.md:code-review", "--writable", "src/:code"])
   assert.equal(d2.stop, null)
   assert.ok(d2.waves.length > 0, "扩权重派产出新 produce 波")
@@ -149,12 +155,18 @@ test("多包 blocked：评审优先消化已交付包；blocked 卡放行 plan �
   assert.equal(card.card.next, "re-scope")
   assert.match(card.card.question, /包 b/)
   assert.match(card.card.question, /C\.md/)
-  // blocked 静止卡放行重拆（扩权恢复通道），重拆后 run 派 b 新波并内嵌 blocked 原因
+  // 新契约 F-N3：重拆扩权不自动解除 blocked；按包恢复卡经用户确认后 b 才重派
+  const mpBlockedRef = (card.blockedPackages ?? card.card.blockedPackages).find((x) => x.package === "b").ref
   const replan = await call(["plan", "--task", "mpblk-t", "--packages", JSON.stringify([
     { id: "a", writable: ["A.md:code-review"], done: ["a 标准"], dependsOn: [] },
     { id: "b", writable: ["B.md:code-review", "C.md:code-review"], done: ["b 标准"], dependsOn: [] },
   ])])
-  assert.equal(replan.ok, true, "blocked 静止卡允许重拆扩权")
+  assert.equal(replan.ok, true, "重拆被接受（计划可变更）")
+  const stillBlocked = await call(["dispatch-plan", "--task", "mpblk-t"])
+  assert.equal(stillBlocked.stop, "awaiting-user", "计划变更本身不解除 b 的 blocked（F-N3）")
+  const rec = await call(["plan", "--task", "mpblk-t", "--resolve-blocked", JSON.stringify({ package: "b", action: "retry", reason: "用户授权 b 扩权" }), "--blocked-ref", mpBlockedRef])
+  assert.ok(rec.decisionId, "签发 b 的 package-recovery 卡")
+  await call(["decide", "--task", "mpblk-t", "--choice", "1", "--decision-id", rec.decisionId])
   const d = await call(["dispatch-plan", "--task", "mpblk-t"])
   assert.equal(d.stop, null)
   assert.equal(d.waves[0].package, "b")
@@ -170,7 +182,7 @@ test("respond blocked（返工波）：owner 无法返工时出静止卡，不�
   await call(["deliver", "--task", "rblk-t", "--key", d1.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "初版", "--paths", "R.md"])
   const rv = await call(["dispatch-plan", "--task", "rblk-t"])
   assert.equal(rv.waves[0].role, "challenger")
-  await call(["review", "--task", "rblk-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "要求补充"])
+  await call(["review", "--task", "rblk-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "要求补充", "--findings", '[{\"severity\":\"risk\",\"statement\":\"要求补充\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const d2 = await call(["dispatch-plan", "--task", "rblk-t", "--writable", "R.md:code-review"])
   assert.equal(d2.stop, null)
   assert.equal(d2.waves[0].kind, "respond")
@@ -179,10 +191,13 @@ test("respond blocked（返工波）：owner 无法返工时出静止卡，不�
   assert.equal(card.stop, "awaiting-user", "respond blocked 同样静止出卡（不再无限重派返工波）")
   assert.equal(card.card.next, "re-scope")
   assert.match(card.card.question, /T\.md/)
-  // 扩权重派：新范围含 T.md，重派派单内嵌 blocked 原因（投影轮 1 → 新 produce 轮 2）
+  // 新契约：扩权重跑不解除 respond blocked；按包恢复卡确认后重派（轮次 +1）
+  const rBlockedRef = (card.blockedPackages ?? card.card.blockedPackages)[0].ref
+  const rec = await call(["plan", "--task", "rblk-t", "--resolve-blocked", JSON.stringify({ action: "retry", reason: "用户授权纳入 T.md" }), "--blocked-ref", rBlockedRef])
+  assert.ok(rec.decisionId)
+  await call(["decide", "--task", "rblk-t", "--choice", "1", "--decision-id", rec.decisionId])
   const d3 = await call(["dispatch-plan", "--task", "rblk-t", "--writable", "R.md:code-review", "--writable", "T.md:code"])
   assert.equal(d3.stop, null)
-  assert.equal(d3.waves[0].round, 2)
   assert.match(d3.waves[0].prompt, /上一轮 blocked 原因/)
 })
 
@@ -234,7 +249,7 @@ test("多包全链路：并行派发 → 批次在途 → 组合评审 → 选�
 
   // 4) store 本轮阻塞放 findings，intake 范围外发现留摘要，不扩大修复包集合。
   const outside = "intake 的独立历史缺陷已记录；与本轮无直接必需关系，不属本轮修复清单"
-  const reworkReview = await call(["review", "--task", "multi-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "store 需补约定证据。" + outside, "--findings", JSON.stringify([{ severity: "blocker", statement: "store 论据不足", package: "store" }])])
+  const reworkReview = await call(["review", "--task", "multi-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "store 需补约定证据。" + outside, "--findings", JSON.stringify([{ severity: "blocker", statement: "store 论据不足", disposition: "must-fix", scope: { kind: "packages", ids: ["store"] } }])])
   assert.equal(reworkReview.accepted, true)
   const d3 = await call(["dispatch-plan", "--task", "multi-t"])
   assert.equal(d3.waves.length, 1, "只重派 store")
@@ -251,7 +266,7 @@ test("多包全链路：并行派发 → 批次在途 → 组合评审 → 选�
   await call(["deliver", "--task", "multi-t", "--key", d3.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s3", "--paths", "S.md"])
   const d4 = await call(["dispatch-plan", "--task", "multi-t"])
   assert.equal(d4.waves[0].role, "challenger")
-  const accepted = await call(["review", "--task", "multi-t", "--key", d4.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "约定证据已关闭；intake 历史风险不影响本轮验收，保留记录", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 独立历史风险，不影响本轮验收", package: "intake" }])])
+  const accepted = await call(["review", "--task", "multi-t", "--key", d4.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "约定证据已关闭；intake 历史风险不影响本轮验收，保留记录", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 独立历史风险，不影响本轮验收" }])])
   assert.equal(accepted.accepted, true, "accept 可以保留 risk，不要求零意见")
   const after = await loadTask(root, "multi-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const lastReview = after.reports.filter((r) => r.role === "challenger").at(-1)
@@ -302,6 +317,170 @@ test("dispatch-plan 波组导出：package/continuation/dependsOn/weight 字段"
   assert.equal(plan.waves.every((x) => x.modelSource === "package"), true, "包级模型优先（plan 时物化）")
 })
 
+// 通过公开评审接口登记不同归属的现成意见，再检查真正重派到各 Owner 的正文。
+async function scopedReworkDispatch(name, reviewer, findings) {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  await openTask(root, name)
+  const packages = [
+    { id: "alpha", writable: ["A.md:code-review"], done: ["完成甲包"], dependsOn: [] },
+    { id: "beta", writable: ["B.md:code-review"], done: ["完成乙包"], dependsOn: [] },
+  ]
+  const plan = await call(["plan", "--task", name, "--packages", JSON.stringify(packages)])
+  assert.equal(plan.ok, true, JSON.stringify(plan))
+  const first = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(first.waves.map((wave) => wave.package).sort(), ["alpha", "beta"])
+  for (const wave of first.waves) {
+    assert.equal(wave.role, "owner")
+    assert.equal((await call(["agent-map", "--task", name, "--key", wave.dispatchKey, "--agent", "owner-" + wave.package])).ok, true)
+    const file = wave.package === "alpha" ? "A.md" : "B.md"
+    await writeFile(path.join(root, file), "初版", "utf8")
+    const delivered = await call(["deliver", "--task", name, "--key", wave.dispatchKey, "--outcome", "delivered", "--summary", "初版交付", "--paths", file])
+    assert.equal(delivered.accepted, true, JSON.stringify(delivered))
+  }
+  let reviewWave = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(reviewWave.role, "challenger")
+  if (reviewer === "expert") {
+    const accepted = await call(["review", "--task", name, "--key", reviewWave.dispatchKey, "--recommendation", "accept", "--summary", "挑战评审通过"])
+    assert.equal(accepted.accepted, true, JSON.stringify(accepted))
+    reviewWave = (await call(["dispatch-plan", "--task", name])).waves[0]
+    assert.equal(reviewWave.role, "expert")
+  }
+  const review = await call([
+    "review", "--task", name, "--key", reviewWave.dispatchKey,
+    "--recommendation", reviewer === "expert" ? "accept" : "rework",
+    "--summary", "请按结构化意见返工", "--findings", JSON.stringify(findings),
+    ...(reviewer === "expert" ? ["--verdict", JSON.stringify({ outcome: "rework", rationale: "需针对评审结论返工", confidence: "high", recommendedAction: "按结构化意见处理" })] : []),
+  ])
+  assert.equal(review.accepted, true, JSON.stringify(review))
+  const dispatched = await call(["dispatch-plan", "--task", name])
+  return { call, dispatched }
+}
+
+function assertScopedPrompt(wave, present, absent) {
+  assert.equal(wave.role, "owner")
+  assert.equal(wave.kind, "respond")
+  assert.equal(wave.continuation, true)
+  assert.equal(wave.expectedAgentId, "owner-" + wave.package, "返工须交给对应的原 Owner")
+  for (const prompt of [wave.prompt, wave.promptFull]) {
+    assert.equal(typeof prompt, "string", "普通与全量正文均存在")
+    for (const statement of absent) assert.ok(!prompt.includes(statement), wave.package + " 不应收到别包必修项：" + statement)
+    for (const [statement, scope] of present) {
+      assert.ok(prompt.includes(statement), wave.package + " 缺少必修原文：" + statement)
+      const line = prompt.split("\n").find((item) => item.includes(statement.split("\n")[0]))
+      assert.ok(line, wave.package + " 缺少必修项首行：" + statement)
+      assert.match(line, scope, "必修原文须标明其适用范围：" + statement)
+      assert.match(line, /must-fix/, "必修原文须与非阻塞上下文区分：" + statement)
+    }
+  }
+}
+
+for (const reviewer of ["challenger", "expert"]) {
+  test(reviewer + " 返工派单按结构化范围传递必修项，跨包隔离并支持在途重建", async () => {
+    const onlyAlpha = "仅甲包需要补充边界证据"
+    const onlyBeta = "仅乙包需要补充错误断言"
+    const shared = "两个包都要核验共享约束\n保留换行后的具体触发条件"
+    const allCovered = "所有受评包都要检查交付一致性"
+    const betaContext = "仅乙包相关的非阻塞背景"
+    const generalContext = "对所有包均可见的非阻塞背景"
+    const finding = (statement, scope) => ({ severity: "blocker", statement, disposition: "must-fix", scope })
+    const { call, dispatched } = await scopedReworkDispatch("scope-" + reviewer, reviewer, [
+      finding(onlyAlpha, { kind: "packages", ids: ["alpha"] }),
+      finding(onlyBeta, { kind: "packages", ids: ["beta"] }),
+      finding(shared, { kind: "packages", ids: ["alpha", "beta"] }),
+      finding(allCovered, { kind: "all-covered" }),
+      { severity: "info", statement: betaContext, disposition: "context", scope: { kind: "packages", ids: ["beta"] } },
+      { severity: "info", statement: generalContext, disposition: "context" },
+    ])
+    assert.deepEqual(dispatched.waves.map((wave) => wave.package).sort(), ["alpha", "beta"], "确实重派两个目标包")
+    const inflight = await call(["dispatch-plan", "--task", "scope-" + reviewer])
+    assert.equal(inflight.stop, "wait-inflight")
+    assert.deepEqual(inflight.inflight.map((wave) => wave.package).sort(), ["alpha", "beta"])
+    for (const wave of [...dispatched.waves, ...inflight.inflight]) {
+      const own = wave.package === "alpha" ? onlyAlpha : onlyBeta
+      const other = wave.package === "alpha" ? onlyBeta : onlyAlpha
+      assertScopedPrompt(wave, [[own, new RegExp(wave.package)], [shared, /alpha.*beta|beta.*alpha/], [allCovered, /all-covered|全部已评审包|所有已评审包/]], [other])
+      for (const prompt of [wave.prompt, wave.promptFull]) {
+        if (reviewer === "challenger") {
+          assert.ok(prompt.includes("请按结构化意见返工"), "保留评审摘要作为背景")
+          assert.ok(prompt.includes(generalContext), "无指定包的非阻塞背景仍可见")
+          assert.equal(prompt.includes(betaContext), wave.package === "beta", "带范围的背景也不能混入别包")
+          if (wave.package === "beta") assert.match(prompt.split("\n").find((line) => line.includes(betaContext)), /context/, "背景不得冒充必修项")
+        } else {
+          assert.ok(prompt.includes("需针对评审结论返工"), "保留 Expert 裁决理由")
+          assert.ok(prompt.includes("按结构化意见处理"), "保留 Expert 建议")
+        }
+      }
+    }
+  })
+
+  test(reviewer + " 定点必修项只重派命中的 Owner", async () => {
+    const statement = "只补充命中包的恢复证据"
+    const { dispatched } = await scopedReworkDispatch("target-" + reviewer, reviewer, [
+      { severity: "blocker", statement, disposition: "must-fix", scope: { kind: "packages", ids: ["alpha"] } },
+    ])
+    assert.deepEqual(dispatched.waves.map((wave) => wave.package), ["alpha"], "未命中的包不得重派")
+    assertScopedPrompt(dispatched.waves[0], [[statement, /alpha/]], [])
+  })
+}
+
+test("专家整组意见仅覆盖当次已评审包，后续其他包返工不能继承", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  const name = "covered-snapshot"
+  await openTask(root, name)
+  const plan = await call(["plan", "--task", name, "--packages", JSON.stringify([
+    { id: "alpha", writable: ["A.md:code-review"], done: ["完成甲包"], dependsOn: [] },
+    { id: "beta", writable: ["B.md:code-review"], done: ["完成乙包"], dependsOn: [] },
+  ])])
+  assert.equal(plan.ok, true)
+  const first = await call(["dispatch-plan", "--task", name])
+  const alpha = first.waves.find((wave) => wave.package === "alpha")
+  const beta = first.waves.find((wave) => wave.package === "beta")
+  await writeFile(path.join(root, "A.md"), "甲包初版", "utf8")
+  assert.equal((await call(["deliver", "--task", name, "--key", alpha.dispatchKey, "--outcome", "delivered", "--summary", "甲包完成", "--paths", "A.md"])).accepted, true)
+  assert.equal((await call(["deliver", "--task", name, "--key", beta.dispatchKey, "--outcome", "blocked", "--summary", "乙包等待明确方向"])).accepted, true)
+  const challenger = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(challenger.role, "challenger")
+  assert.equal((await call(["review", "--task", name, "--key", challenger.dispatchKey, "--recommendation", "accept", "--summary", "已交付包通过"])).accepted, true)
+  const expert = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(expert.role, "expert")
+  const alphaFinding = "当次已评审甲包必须补充技术证据"
+  const expertReview = await call(["review", "--task", name, "--key", expert.dispatchKey, "--recommendation", "accept", "--summary", "裁决需要返工", "--findings", JSON.stringify([
+    { severity: "blocker", statement: alphaFinding, disposition: "must-fix", scope: { kind: "all-covered" } },
+  ]), "--verdict", JSON.stringify({ outcome: "rework", rationale: "已评审范围需要返工", confidence: "high", recommendedAction: "核对结构化意见" })])
+  assert.equal(expertReview.accepted, true, JSON.stringify(expertReview))
+  const alphaRetry = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(alphaRetry.package, "alpha")
+  for (const prompt of [alphaRetry.prompt, alphaRetry.promptFull]) assert.ok(prompt.includes(alphaFinding), "整组意见送达当次被审甲包")
+  assert.equal((await call(["deliver", "--task", name, "--key", alphaRetry.dispatchKey, "--outcome", "blocked", "--summary", "甲包等待明确方向"])).accepted, true)
+
+  const blocked = await call(["dispatch-plan", "--task", name])
+  assert.equal(blocked.stop, "awaiting-user", JSON.stringify(blocked))
+  const betaRef = (blocked.blockedPackages ?? blocked.card.blockedPackages).find((item) => item.package === "beta").ref
+  const recovery = await call(["plan", "--task", name, "--resolve-blocked", JSON.stringify({ package: "beta", action: "retry", reason: "用户明确继续乙包" }), "--blocked-ref", betaRef])
+  assert.ok(recovery.decisionId, JSON.stringify(recovery))
+  assert.equal((await call(["decide", "--task", name, "--choice", "1", "--decision-id", recovery.decisionId])).ok, true)
+  const betaProduce = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(betaProduce.package, "beta")
+  await writeFile(path.join(root, "B.md"), "乙包初版", "utf8")
+  assert.equal((await call(["deliver", "--task", name, "--key", betaProduce.dispatchKey, "--outcome", "delivered", "--summary", "乙包完成", "--paths", "B.md"])).accepted, true)
+  const betaReview = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(betaReview.role, "challenger")
+  const betaFinding = "新交付乙包需要补充断言"
+  const result = await call(["review", "--task", name, "--key", betaReview.dispatchKey, "--recommendation", "rework", "--summary", "乙包需要返工", "--findings", JSON.stringify([
+    { severity: "blocker", statement: betaFinding, disposition: "must-fix", scope: { kind: "packages", ids: ["beta"] } },
+  ])])
+  assert.equal(result.accepted, true, JSON.stringify(result))
+  const betaRetry = (await call(["dispatch-plan", "--task", name])).waves[0]
+  assert.equal(betaRetry.package, "beta")
+  assert.equal(betaRetry.kind, "respond")
+  for (const prompt of [betaRetry.prompt, betaRetry.promptFull]) {
+    assert.ok(prompt.includes(betaFinding), "乙包收到自己的返工意见")
+    assert.ok(!prompt.includes(alphaFinding), "乙包未被先前专家评审覆盖，不继承当次整组必修项")
+  }
+})
+
 test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不按包过滤裁决）", async () => {
   const root = await makeProject()
   const call = autoCaller(root)
@@ -319,7 +498,7 @@ test("expert rework 后的 respond 派单内嵌裁决原因（reworkContext 不�
   await call(["review", "--task", "erwd-t", "--key", d2.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "ok"])
   const d3 = await call(["dispatch-plan", "--task", "erwd-t"])
   await call(["agent-map", "--task", "erwd-t", "--key", d3.waves[0].dispatchKey, "--agent", "fixture-expert"])
-  await call(["review", "--task", "erwd-t", "--key", d3.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "rework", rationale: "总览交付物缺失，模块文档本身可接受", confidence: "high", recommendedAction: "补齐缺失交付物" })])
+  await call(["review", "--task", "erwd-t", "--key", d3.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "v", "--findings", '[{"severity":"risk","statement":"总览交付物缺失","disposition":"must-fix","scope":{"kind":"all-covered"}}]', "--verdict", JSON.stringify({ outcome: "rework", rationale: "总览交付物缺失，模块文档本身可接受", confidence: "high", recommendedAction: "补齐缺失交付物" })])
   const d4 = await call(["dispatch-plan", "--task", "erwd-t"])
   assert.equal(d4.waves.length, 2, "verdict rework 无归属 → 全组 respond")
   for (const card of d4.waves) {
@@ -484,8 +663,12 @@ test("D3/D4：verdict 波续派带 expectedAgentId；inflight 输出带 dispatch
   // 首裁：登记 Expert 映射并给 rework 裁决 → 构造同角色二次续派（重裁）
   const ve = await call(["dispatch-plan", "--task", "d34-t"])
   await call(["agent-map", "--task", "d34-t", "--key", ve.waves[0].dispatchKey, "--agent", "agent-exp-1"])
-  await call(["review", "--task", "d34-t", "--key", ve.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", JSON.stringify({ outcome: "rework", rationale: "r", confidence: "high", recommendedAction: "a" })])
+  await call(["review", "--task", "d34-t", "--key", ve.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "v", "--findings", '[{"severity":"risk","statement":"需修订","disposition":"must-fix","scope":{"kind":"all-covered"}}]', "--verdict", JSON.stringify({ outcome: "rework", rationale: "r", confidence: "high", recommendedAction: "a" })])
   const k2 = (await call(["dispatch-plan", "--task", "d34-t", "--json", "--writable", "R.md:code-review"])).waves[0]
+  for (const prompt of [k2.prompt, k2.promptFull]) {
+    assert.match(prompt, /需修订/, "无包 Owner 必须收到只写在 Expert finding 中的必修原文")
+    assert.match(prompt.split("\n").find((line) => line.includes("需修订")), /all-covered|全部已评审包|所有已评审包/, "无包必修项仍须标明范围")
+  }
   await writeFile(path.join(root, "R.md"), "v2", "utf8")
   await call(["deliver", "--task", "d34-t", "--key", k2.dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   const rv2 = await call(["dispatch-plan", "--task", "d34-t"])
@@ -595,11 +778,11 @@ test("B：e2eTemplate 物化——entry e2e 直达自动三包（形状映射+�
   const call = autoCaller(root)
   await openTask(root, "b-t", { entry: "e2e" })
   // e2eTemplate 在派发前物化三包（带 roles.owner 模型），意图确认卡按逐包模型重签一次。
-  const first = await call(["dispatch-plan", "--task", "b-t"])
+  const first = await caller(root)(["dispatch-plan", "--task", "b-t"])
   assert.equal(first.stop, "awaiting-user", "自动拆包后确认卡重签并列出逐包模型")
   assert.equal(first.card.intake.packages.length, 3)
   assert.equal(first.card.intake.packages.every((pkg) => pkg.modelRef?.modelName === "topology-junior"), true, "e2e 模板包在确认前已物化逐包模型")
-  assert.equal((await call(["decide", "--task", "b-t", "--choice", "1"])).ok, true)
+  assert.equal((await call(["decide", "--task", "b-t", "--choice", "1", "--decision-id", first.card.decisionId])).ok, true)
   const d = await call(["dispatch-plan", "--task", "b-t"])
   assert.equal(d.waves.length, 1, "只派 path-design（后两包依赖锁）")
   assert.equal(d.waves[0].package, "path-design")
@@ -705,5 +888,116 @@ test("候选池家族去重只作用于 roles 初始化：同任务多包统一�
     assert.equal(agents.modelHints, undefined, "agents.json 只保留 mappings + roles")
   } finally {
     process.env.TW_DSH_CONFIG = saved
+  }
+})
+
+test("plan：非数组可写范围只报告类型错误，不制造逐字符重叠或掩盖其他错误", async () => {
+  const root = await makeProject()
+  const call = (args) => tw(args, { projectRoot: root })
+  for (const value of ["docs/repeated.md:code", {}, 3, null, undefined, []]) {
+    const pkg = { id: "one", done: [], dependsOn: [] }
+    if (value !== undefined) pkg.writable = value
+    const result = await call(["plan", "--task", "unused", "--packages", JSON.stringify([pkg])])
+    assert.equal(result.code, "PLAN_REJECTED", JSON.stringify(value))
+    assert.match(result.message, /writable/)
+    assert.match(result.message, /完成标准/, "同包其他错误仍聚合")
+    assert.doesNotMatch(result.message, /可写范围重叠/, "不能把字符串的重复字符当路径")
+  }
+})
+
+test("Windows 分隔符别名的计划互斥拒绝且保留原计划，POSIX 不改变路径含义", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  await call(["open", "--name", "windows-overlap", "--objective", "目标", "--entry", "code-review", "--raw-requirement", "合成原文"])
+  await call(["open", "--name", "posix-names", "--objective", "目标", "--entry", "code-review", "--raw-requirement", "合成原文"])
+  const plan = (name, items) => call(["plan", "--task", name, "--packages", JSON.stringify(items)])
+  const packageOf = (id, writable) => ({ id, writable: [writable + ":code-review"], done: ["完成"], dependsOn: [] })
+  const existing = [packageOf("old", "keep.md")]
+  assert.equal((await plan("windows-overlap", existing)).ok, true)
+  const planFile = path.join(root, ".team-work", "tasks", "windows-overlap", "packages.json")
+  const journalFile = path.join(root, ".team-work", "tasks", "windows-overlap", "journal.jsonl")
+  const oldPlan = await readFile(planFile, "utf8"), oldJournal = await readFile(journalFile, "utf8")
+  const pairs = [
+    ["docs/", "docs\\shared.js"],
+    ["docs/shared.js", "docs\\shared.js"],
+    ["docs\\sub/", "docs/sub\\child.js"],
+    ["docs\\", "docs/file.js"],
+  ]
+  const nativeSep = path.sep, nativeIsAbsolute = path.isAbsolute
+  const posixIsAbsolute = path.posix.isAbsolute, windowsIsAbsolute = path.win32.isAbsolute
+  try {
+    path.sep = "\\"
+    path.isAbsolute = windowsIsAbsolute
+    for (const [a, b] of pairs) {
+      const physicalA = path.win32.resolve("C:\\workspace\\project", a)
+      const physicalB = path.win32.resolve("C:\\workspace\\project", b)
+      assert.ok(path.win32.relative(physicalA, physicalB) === "" || !path.win32.relative(physicalA, physicalB).startsWith(".."), "Windows 路径应为同一文件或子路径")
+      const rejected = await plan("windows-overlap", [packageOf("a", a), packageOf("b", b)])
+      assert.equal(rejected.code, "PLAN_REJECTED", JSON.stringify(rejected))
+      assert.match(rejected.message, /可写范围重叠/)
+      assert.equal(await readFile(planFile, "utf8"), oldPlan, "拒绝不覆盖既有计划")
+      assert.equal(await readFile(journalFile, "utf8"), oldJournal, "拒绝不追加计划或派单事件")
+    }
+    const safe = [packageOf("a", "docs/"), packageOf("b", "docs-archive\\shared.js")]
+    assert.equal((await plan("windows-overlap", safe)).ok, true, "兄弟前缀与合法反斜杠路径不受影响")
+    const card = (await call(["dispatch-plan", "--task", "windows-overlap"])).card
+    assert.deepEqual(card.intake.packages.map((pkg) => pkg.writable), safe.map((pkg) => pkg.writable), "签卡与存盘保留原始声明")
+    path.sep = "/"
+    path.isAbsolute = posixIsAbsolute
+    const posix = [packageOf("a", "docs/"), packageOf("b", "docs\\shared.js"), packageOf("c", "C:relative.md")]
+    assert.equal((await plan("posix-names", posix)).ok, true, "POSIX 中反斜杠和冒号是文件名字符，不合并成路径别名")
+    const posixCard = (await call(["dispatch-plan", "--task", "posix-names"])).card
+    assert.deepEqual(posixCard.intake.packages.map((pkg) => pkg.writable), posix.map((pkg) => pkg.writable))
+  } finally {
+    path.sep = nativeSep
+    path.isAbsolute = nativeIsAbsolute
+  }
+})
+
+test("旧版已存 Windows 重叠计划不能确认或派发，可重新登记互斥计划恢复", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  for (const name of ["old-overlap-pending", "old-overlap-accepted"]) {
+    await call(["open", "--name", name, "--objective", "目标", "--entry", "code-review", "--raw-requirement", "合成原文"])
+  }
+  const plan = (name, items) => call(["plan", "--task", name, "--packages", JSON.stringify(items)])
+  const old = [
+    { id: "a", writable: ["docs/:code-review"], done: ["完成 A"], dependsOn: [] },
+    { id: "b", writable: ["docs\\shared.js:code-review"], done: ["完成 B"], dependsOn: [] },
+  ]
+  const corrected = [old[0], { ...old[1], writable: ["docs-archive\\shared.js:code-review"] }]
+  const nativeSep = path.sep, nativeIsAbsolute = path.isAbsolute
+  const posixIsAbsolute = path.posix.isAbsolute, windowsIsAbsolute = path.win32.isAbsolute
+  try {
+    // 用 POSIX 规则构造与修复前 Windows 可持久化内容相同的事实，模拟升级前留下的计划。
+    path.sep = "/"
+    path.isAbsolute = posixIsAbsolute
+    for (const name of ["old-overlap-pending", "old-overlap-accepted"]) assert.equal((await plan(name, old)).ok, true)
+    const pending = (await call(["dispatch-plan", "--task", "old-overlap-pending"])).card
+    const accepted = (await call(["dispatch-plan", "--task", "old-overlap-accepted"])).card
+    assert.equal((await call(["decide", "--task", "old-overlap-accepted", "--choice", "1", "--decision-id", accepted.decisionId])).ok, true)
+    path.sep = "\\"
+    path.isAbsolute = windowsIsAbsolute
+    for (const [name, action] of [["old-overlap-pending", ["decide", "--task", "old-overlap-pending", "--choice", "1", "--decision-id", pending.decisionId]], ["old-overlap-accepted", ["dispatch-plan", "--task", "old-overlap-accepted"]]]) {
+      const before = await loadTask(root, name, { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+      const refused = await call(action)
+      assert.equal(refused.code, "STATE_CORRUPT", JSON.stringify(refused))
+      assert.match(refused.message, /可写范围重叠/)
+      const after = await loadTask(root, name, { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+      assert.deepEqual(after.decisions, before.decisions, "拒绝不写接受决定")
+      assert.deepEqual(after.journal, before.journal, "拒绝不追加事件或派单")
+      assert.equal(after.journal.some((event) => event.type === "dispatched"), false)
+      const repaired = await plan(name, corrected)
+      assert.equal(repaired.status, "awaiting-user", "可重新计划安全路径并重新确认")
+      assert.notEqual(repaired.decisionId, name === "old-overlap-pending" ? pending.decisionId : accepted.decisionId)
+      assert.deepEqual(repaired.intake.packages[1].writable, corrected[1].writable)
+      assert.equal((await call(["decide", "--task", name, "--choice", "1", "--decision-id", repaired.decisionId])).ok, true)
+      const dispatch = await call(["dispatch-plan", "--task", name])
+      assert.equal(dispatch.stop, null, "互斥重拆经新卡确认后可继续")
+      assert.equal(dispatch.waves.length, 2)
+    }
+  } finally {
+    path.sep = nativeSep
+    path.isAbsolute = nativeIsAbsolute
   }
 })

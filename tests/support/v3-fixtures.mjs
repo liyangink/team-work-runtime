@@ -53,40 +53,65 @@ export function caller(projectRoot) {
   return (argv) => tw(argv, { projectRoot })
 }
 
-// 既有用例的便捷通道：配置变更类命令（open/plan/intent/roles）返回意图确认卡时按"用户确认"继续，
-// 返回原卡不影响调用方对结果的断言；意图确认门本身由新用例用 caller/tw 原生路径验证。
-const CONFIG_CHANGING_COMMANDS = new Set(["open", "plan", "intent", "roles"])
+// 既有业务流程用例显式模拟用户看到意图卡后按卡号确认；确认门专项仍使用 caller 原始接口。
+// 首卡在第一次 dispatch 才出现，重签卡仍可能由 plan/intent/roles 返回。
 export function autoCaller(projectRoot) {
   const call = caller(projectRoot)
   return async (argv) => {
-    const result = await call(argv)
-    if (result && result.ok !== false && result.status === "awaiting-user" && result.next === "decide" && result.intakeFingerprint && CONFIG_CHANGING_COMMANDS.has(argv[0])) {
-      const confirmed = await call(["decide", "--task", result.task, "--choice", "1"])
-      if (confirmed.ok === false && confirmed.code !== "DECISION_STALE") throw new Error("auto confirm failed: " + JSON.stringify(confirmed))
+    const args = argv[0] === "open" && !argv.includes("--raw-requirement")
+      ? [...argv, "--raw-requirement", "测试用户的完整合成需求"] : argv
+    const result = await call(args)
+    const card = args[0] === "dispatch-plan" ? result?.card : result
+    const isIntake = card?.intakeFingerprint && card?.choices?.some((choice) => choice.grant === "accept-intake")
+    if (isIntake && card?.status === "awaiting-user") {
+      const option = card.choices.find((choice) => choice.grant === "accept-intake")
+      const confirmed = await call(["decide", "--task", result.task, "--choice", String(option.n), "--decision-id", card.decisionId])
+      // 并发推进时另一测试调用可能已经确认同一张卡；重推导由 Runtime 保证。
+      if (confirmed.ok === false && confirmed.code !== "DECISION_STALE") throw new Error("模拟确认失败：" + JSON.stringify(confirmed))
+      if (args[0] === "dispatch-plan") {
+        const next = await call(args)
+        if (result.warnings?.length) next.warnings = [...new Set([...(result.warnings ?? []), ...(next.warnings ?? [])])]
+        return next
+      }
     }
     return result
   }
 }
 
-// 开任务但不确认意图（用例需要检查确认卡本身时使用）。
+// 开任务但不确认意图（确认门用例可通过 extra 显式提供原文）。
 export async function openTaskRaw(projectRoot, name, { objective = "o", entry = "code-review", extra = [] } = {}) {
   const call = caller(projectRoot)
-  const r = await call(["open", "--name", name, "--objective", objective, ...(entry ? ["--entry", entry] : []), ...extra])
+  const r = await call(["open", "--name", name, "--objective", objective, ...(entry ? ["--entry", entry] : []), ...(!extra.includes("--raw-requirement") ? ["--raw-requirement", "测试用户的完整合成需求"] : []), ...extra])
   if (r.ok === false) throw new Error("openTask failed: " + JSON.stringify(r))
   return r
 }
 
-// 确认意图卡（旧任务无卡时 decide 返回 DECISION_STALE，视为已确认）。
-export async function confirmIntake(projectRoot, name) {
-  const r = await caller(projectRoot)(["decide", "--task", name, "--choice", "1"])
-  if (r.ok === false && r.code !== "DECISION_STALE") throw new Error("confirmIntake failed: " + JSON.stringify(r))
-  return r
+// 测试调用方必须从实际收到的卡传入 ID，不能根据当前待决状态猜测。
+export async function confirmIntake(projectRoot, name, decisionId) {
+  return caller(projectRoot)(["decide", "--task", name, "--choice", "1", "--decision-id", decisionId])
 }
 
 export async function openTask(projectRoot, name, options = {}) {
-  const opened = await openTaskRaw(projectRoot, name, options)
-  if (opened.status === "awaiting-user" && opened.next === "decide") await confirmIntake(projectRoot, name)
-  return opened
+  return openTaskRaw(projectRoot, name, options)
+}
+
+// 某些状态测试需要确认首卡但不实际派发：以原始接口模拟一次明确的用户确认。
+export async function prepareIntake(projectRoot, name, writable = []) {
+  const call = caller(projectRoot)
+  const result = await call(["dispatch-plan", "--task", name, ...writable.flatMap((item) => ["--writable", item])])
+  if (result.stop !== "awaiting-user" || !result.card?.intakeFingerprint) throw new Error("未得到意图确认卡：" + JSON.stringify(result))
+  const choice = result.card.choices.find((item) => item.grant === "accept-intake")
+  const confirmed = await call(["decide", "--task", name, "--choice", String(choice.n), "--decision-id", result.card.decisionId])
+  if (!confirmed.ok) throw new Error("确认意图卡失败：" + JSON.stringify(confirmed))
+  return result.card
+}
+
+// 仅供历史迁移用例模拟无确认协议标记的旧任务；不用于新版确认门用例。
+export async function asLegacyTask(projectRoot, name) {
+  const file = path.join(projectRoot, ".team-work", "tasks", name, "scope.json")
+  const scope = JSON.parse(await readFile(file, "utf8"))
+  delete scope.intakeVersion
+  await writeFile(file, JSON.stringify(scope))
 }
 
 export async function seedDispatch(projectRoot, name, detail) {
@@ -112,7 +137,7 @@ export async function seedReviewReport(projectRoot, name, { role, recommendation
 // 收敛链夹具：open → Owner 交付 → Challenger accept + Expert accept 裁决 → E2E 路由 skip
 // （E2E-01 静止测试与人工门 rework 测试共用）
 export async function seedConvergedStage(projectRoot, name) {
-  const call = caller(projectRoot)
+  const call = autoCaller(projectRoot)
   await openTask(projectRoot, name)
   const plan = await call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review"])
   if (!plan.waves?.length) throw new Error("seedConvergedStage: dispatch-plan 未产出派单：" + JSON.stringify(plan))
@@ -134,7 +159,7 @@ const t = (n) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`
 export const ownerDeliver = (round, extra = {}) => ({ reportId: `o${round}`, role: "owner", kind: "deliver", round, stage: "code-review", payload: { outcome: "delivered", summary: "s", paths: ["CODE_REVIEW.md"], checks: [], ...extra }, at: t((round - 1) * 10 + 1) })
 export const challengerReview = (round, recommendation) => ({ reportId: `c${round}`, role: "challenger", kind: "review", round, stage: "code-review", reviewedPackages: [{ package: null, round }], payload: { summary: "s", findings: [], recommendation }, at: t((round - 1) * 10 + 2) })
 export const expertVerdict = (outcome) => ({ reportId: "e1", role: "expert", kind: "review", round: 1, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome, rationale: "r", confidence: "high", risks: [], recommendedAction: "a" } }, at: t(3) })
-export const registeredArtifacts = { items: [{ path: "CODE_REVIEW.md", digest: "d1", kind: "code-review", stage: "code-review", reportRef: "o1", snapshotRef: "snap1" }] }
+export const registeredArtifacts = { items: [{ path: "CODE_REVIEW.md", digest: "a".repeat(64), digestAlgorithm: "sha256-bytes-v1", kind: "code-review", stage: "code-review", reportRef: "o1", snapshotRef: "snap1" }] }
 export const throughStageScope = { entry: "code-review", completion: { mode: "through-stage", stage: "code-review" }, workflowDigest: "wd" }
 export const e2eSkipped = [{ route: "e2e", choice: "skip", basis: "测试夹具：跳过" }]
 export const acceptedChain = () => [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("accept")]

@@ -1,0 +1,15 @@
+# 外层文件沙箱写入拒绝探针（mktemp 独占随机名；不触碰既有文件；诊断用途）
+repo=/Users/liyang/Projects/Opensource/team-work-runtime
+real_home=/Users/liyang
+repo-write: ALLOWED (/Users/liyang/Projects/Opensource/team-work-runtime/.eval-probe.L08cQs)
+home-write: DENIED
+## 子进程继承（预期同父进程）
+child-home-write: DENIED
+child-home-exit=1
+eval-root-write: ALLOWED (/private/tmp/glm53-latest-eval-rework-20261117/evidence/.eval-probe.SmN6af)
+## 网络可达性（真实模型调用前提）
+http_status=200
+## 嵌套 sandbox-exec 可用性（内层 DSH 无法再套沙箱）
+sandbox-exec: sandbox_apply: Operation not permitted
+sandbox-exit=71
+## 诊断结论（不作为放行依据）：若 repo-write 为 ALLOWED，则既有项目在沙箱层可写，真实演练入口必须保持禁用。

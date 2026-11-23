@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "id": "one-note",
+      "writable": [
+        "docs/one-note.md:source"
+      ],
+      "done": [
+        "docs/one-note.md 中恰好新增一行虚构的产品说明（内容自拟）",
+        "文件内其余内容与其他路径零改动"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

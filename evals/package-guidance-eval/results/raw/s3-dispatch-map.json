@@ -1,0 +1,49 @@
+{
+  "dispatches": 7,
+  "uniqueSessions": 5,
+  "map": {
+    "d1-5f8019": {
+      "sessionId": "037e4ee7-cfdb-44ca-b5ce-33b3396e0ada",
+      "label": "DESIGN·owner@interface-analysis · 波次1 两分析并行 #tide-plan",
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "effort": "max"
+    },
+    "d1-43abb6": {
+      "sessionId": "3213ec79-812f-428d-ac4d-421e1a96ec36",
+      "label": "DESIGN·owner@failure-analysis · 波次1 两分析并行 #tide-plan",
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "effort": "max"
+    },
+    "d3-8383ef": {
+      "sessionId": "4723ba67-8e81-41c0-bc5f-d100452815ce",
+      "label": "DESIGN·chal · 波次1交付齐 推交叉审查 #tide-plan",
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "effort": "max"
+    },
+    "d4-acf388": {
+      "sessionId": "075fbc8a-b4d4-41fe-ae9c-4388e54b3e29",
+      "label": "DESIGN·expert · 审查通过 推合并波次 #tide-plan",
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "effort": "max"
+    },
+    "d5-3c807c": {
+      "sessionId": "6941867d-bb1f-4a27-b043-63da3467708d",
+      "label": "DESIGN·owner@merge-final · 裁决通过 推合并包 #tide-plan",
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "effort": "max"
+    },
+    "d6-178e49": {
+      "sessionId": "4723ba67-8e81-41c0-bc5f-d100452815ce",
+      "label": "DESIGN·chal · 合并稿交付 推覆盖审 #tide-plan"
+    },
+    "d7-62672b": {
+      "sessionId": "075fbc8a-b4d4-41fe-ae9c-4388e54b3e29",
+      "label": "DESIGN·expert · 覆盖审通过 推下一步 #tide-plan"
+    }
+  }
+}

@@ -8,7 +8,7 @@ export async function coldSessionStatus({ persistence, parentSessionId, signal }
   try {
     const found = await persistence.stat(childId, { signal })
     if (found === undefined) return { status: "none" }
-    if (!found?.header || found.header.id !== childId) return { status: "unknown", message: "持久化元数据无法判定" }
+    if (!found?.header || found.header.id !== childId || typeof found.header.parentSession !== "string" || !found.header.parentSession) return { status: "unknown", message: "持久化元数据或父级无法判定" }
     return { status: found.header.parentSession === parentSessionId ? "ours" : "foreign", header: found.header }
   } catch (error) {
     return { status: "unknown", message: describe(error) }
@@ -16,50 +16,81 @@ export async function coldSessionStatus({ persistence, parentSessionId, signal }
 }
 
 export async function reconcileSession({ sessions, persistence, parentSessionId, signal }, childId) {
+  if (typeof parentSessionId !== "string" || !parentSessionId.trim()) return { status: "unknown", message: "父会话 ID 不可用" }
   if (typeof sessions?.get !== "function") return { status: "unknown", message: "sessions.get 不可用" }
   try {
     const live = sessions.get(childId)
-    if (live != null) return { status: live?.header?.parentSession === parentSessionId ? "live" : "foreign" }
+    if (live != null) {
+      if (typeof live?.header?.parentSession !== "string" || !live.header.parentSession || (live.header.id !== undefined && live.header.id !== childId)) return { status: "unknown", message: "在场会话 ID 或父级无法判定" }
+      return { status: live.header.parentSession === parentSessionId ? "live" : "foreign", session: live }
+    }
   } catch (error) { return { status: "unknown", message: describe(error) } }
   return coldSessionStatus({ persistence, parentSessionId, signal }, childId)
 }
 
-// 不确定读取必须阻止补投；finally 始终释放只读 handle。
-export async function coldSessionReceived(persistence, childId, signal, expectedPrompts = []) {
+// 只识别派单首行完整 key，不把普通文字、前缀或继承历史当成本轮收单。
+export function dispatchKeyFromPrompt(text) {
+  if (typeof text !== "string") return null
+  const first = text.split("\n", 1)[0].replace(/\r$/, "")
+  return /^# (?:派单|续派|续派全量变体)（key: ([^）\r\n]+)）(?:——[^\r\n]*)?$/.exec(first)?.[1] ?? null
+}
+
+// 宿主可能前置通知或追加引导，逐个正文块精确比对；未读到不代表未收单。
+export async function coldSessionReceived(persistence, childId, signal, expectedPrompts = [], dispatchKey = null) {
   let handle
+  let result
   try {
     if (typeof persistence?.open !== "function") throw new Error("sessionPersistence.open 不可用")
     handle = await persistence.open(childId, "read", { signal })
     const read = await handle.read(undefined, undefined, { signal })
     const inherited = handle.inheritedEventCount
-    if (!Array.isArray(read?.events) || !Number.isSafeInteger(inherited) || inherited < 0 || inherited > read.events.length) throw new Error("会话事件或继承前缀无法判定")
+    if (!Array.isArray(read?.events) || !Number.isSafeInteger(inherited) || inherited < 0 || inherited > read.events.length || read.truncated === true || read.hasMore === true) throw new Error("会话事件、完整性或继承前缀无法判定")
     const expected = expectedPrompts.filter((text) => typeof text === "string" && text.trim())
     let received = false
     let currentReceived = false
+    let conflict = false
     for (const event of read.events.slice(inherited)) {
       if (typeof event?.type !== "string") throw new Error("会话事件无法判定")
       if (event.type !== "agent/inbox/spliced") continue
       if (!Array.isArray(event.data?.inserted)) throw new Error("收单日志 inserted 无法判定")
       for (const message of event.data.inserted) {
         if (!Array.isArray(message?.content)) throw new Error("收单消息 content 无法判定")
-        received = true
+        if (dispatchKey === null) received = true
         for (const block of message.content) {
           if (typeof block?.type !== "string") throw new Error("收单内容块无法判定")
-          if (block?.type === "text") {
-            if (typeof block.text !== "string") throw new Error("收单文本无法判定")
-            if (expected.includes(block.text)) currentReceived = true
-          }
+          if (block.type !== "text") continue
+          if (typeof block.text !== "string") throw new Error("收单文本无法判定")
+          const seenKey = dispatchKeyFromPrompt(block.text)
+          if (dispatchKey !== null && seenKey !== null) received = true
+          if ((dispatchKey === null || seenKey === dispatchKey) && expected.includes(block.text)) currentReceived = true
+          else if (dispatchKey !== null && seenKey === dispatchKey) conflict = true
         }
       }
     }
-    return { ok: true, received, currentReceived }
+    result = { ok: true, received, currentReceived, ...(conflict ? { conflict: true } : {}) }
   } catch (error) {
-    return failure("TW_SUB_SESSION_UNKNOWN", "冷会话读取不确定：" + describe(error) + "；请检查同 ID 会话后重试，未补投正文", childId)
+    result = failure("TW_SUB_SESSION_UNKNOWN", "收单日志读取不确定：" + describe(error) + "；保留原 ID 并核对宿主，未补投正文", childId)
   } finally {
-    if (handle) await handle.close()
+    if (handle) {
+      try { await handle.close() } catch (error) { result = failure("TW_SUB_SESSION_UNKNOWN", "关闭会话读取句柄失败：" + describe(error) + "；保留原 ID 并核对宿主", childId) }
+    }
   }
+  return result
 }
 
+// 在场 Session 的日志可能仍在缓冲，先用公开持久化屏障，再读取自身事件。
+// 这只证明看见的收单，不证明 turn 活动、通知可达或缺失消息绝不会迟到。
+export async function sessionReceived({ sessions, persistence, signal }, childId, observation, expectedPrompts, dispatchKey) {
+  if (observation.status === "live") {
+    if (typeof sessions?.flush !== "function") return failure("TW_SUB_PERSISTENCE_UNAVAILABLE", "无法刷新在场会话日志；收单无法核验", childId)
+    try {
+      if (await sessions.flush(observation.session) !== true) return failure("TW_SUB_NOT_PERSISTED", "会话 flush 未确认；收单无法核验", childId)
+    } catch (error) { return failure("TW_SUB_FLUSH_FAILED", "会话 flush 失败：" + describe(error), childId) }
+  }
+  return coldSessionReceived(persistence, childId, signal, expectedPrompts, dispatchKey)
+}
+
+// 冷续派保留历史行为：已收正文只发轻提醒，否则按是否有旧上下文选增量或全量。
 export function coldResumePrompt(read, prompt, promptFull = prompt) {
   if (read.currentReceived) return { resume: "reminder", text: "会话日志确认你已收到本轮派单正文。请继续按已有派单完成工作，并通过 tw deliver/review 交付；如果已经交付，请汇报现有结果，不要重复执行整轮工作。" }
   return read.received ? { resume: "incremental", text: prompt } : { resume: "full", text: promptFull }
@@ -92,10 +123,11 @@ export async function followupChild({ subagents, parent, signal }, childId, text
   if (typeof subagents?.sendMessage !== "function") return failure("TW_SUB_FOLLOWUP_UNAVAILABLE", "subagents.sendMessage 不可用，请检查宿主", childId)
   try {
     const messageId = await subagents.sendMessage(parent, childId, memberMessage(text), { signal: signal ?? new AbortController().signal })
+    if (typeof messageId !== "string" || !messageId.trim()) return failure("TW_SUB_FOLLOWUP_UNCONFIRMED", "续投没有可确认的消息 ID；可能已经接收，请核对原会话", childId)
     return { ok: true, sessionId: childId, messageId }
   } catch (error) {
     const code = error?.code === "UNAUTHORIZED" ? "TW_SUB_TAKEOVER_CONFLICT" : error?.code === "NOT_RESUMABLE" ? "TW_SUB_NOT_RESUMABLE" : "TW_SUB_FOLLOWUP_FAILED"
-    return failure(code, "续投失败：" + describe(error) + "；保留现有会话 ID，由原父会话继续或作废该波重新派发；未确认回执时不要另建成员", childId)
+    return failure(code, "续投回执未确认：" + describe(error) + "；保留原会话并核对收单，异常本身不证明消息未接收", childId)
   }
 }
 
@@ -110,17 +142,11 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
   const state = await reconcileSession({ sessions, persistence, parentSessionId: input.exec?.agent?.id, signal: input.exec?.signal }, id)
   if (state.status === "unknown") return failure("TW_SUB_SESSION_UNKNOWN", "会话现状无法确认：" + state.message + "；保留映射，请检查宿主后查询同一会话 ID，勿另建成员", id)
   if (state.status === "foreign") return failure("TW_SUB_TAKEOVER_CONFLICT", "会话归属其他父会话（接管冲突）；由原 Lead 继续，或作废该波再派发", id)
-  if (state.status === "live") return { ok: true, sessionId: id, reused: true, source: "reconciled" }
-  if (state.status === "ours") {
-    let read
-    try { read = await coldSessionReceived(persistence, id, input.exec?.signal, [input.prompt, input.promptFull]) } catch (error) { return failure("TW_SUB_SESSION_UNKNOWN", "关闭会话读取 handle 失败：" + describe(error) + "；保留映射，请检查同 ID 会话后重试，未补投正文", id) }
-    if (!read.ok) return read
-    let subagents
-    try { subagents = get("subagents") } catch (error) { return failure("TW_SUB_FOLLOWUP_UNAVAILABLE", describe(error), id) }
-    const followup = coldResumePrompt(read, input.prompt, input.promptFull?.trim() ? input.promptFull : input.prompt)
-    const sent = await followupChild({ subagents, parent: input.exec?.agent, signal: input.exec?.signal }, id, followup.text)
-    return sent.ok ? { ...sent, refollowed: true, resume: followup.resume, source: "reconciled" } : sent
-  }
+  // 只允许调用方在投递锁内完成映射及波次重验后明确许可；已有会话由外层对账。
+  // stat 未命中仅是当前观察，不能排除旧调用迟到。
+  if (state.status !== "none") return failure("TW_SUB_SESSION_EXISTS", "同 ID 会话已存在，未创建或补投；请核对原会话活动及收单", id)
+  if (input.allowCreate !== true) return failure("TW_SUB_CREATE_UNPROVEN", "没有本次持锁对账后的创建许可；未创建成员，请核对原 ID", id)
+
   // 绑定层只收 runtime 的 ModelRef（内部映射为宿主 target）；historical 精确 target 仍接受以兼容旧调用方。
   let target
   if (input.modelRef !== undefined) {
@@ -161,7 +187,8 @@ export async function createDirectedSubagent(ctx, deps = {}, input = {}) {
       ...(activation ? { parent: request.parent, prompt: request.prompt, agentOptions: request.agentOptions, maxDepth: request.maxDepth, delivery: "parent" } : {}),
       signal: input.exec.signal ?? new AbortController().signal })
   } catch (error) { return failure("TW_SUB_START_FAILED", "成员创建失败：" + describe(error) + "；保留映射，先核对同 ID 会话后重试", id) }
-  const childId = start?.childId ?? id
+  if (start?.childId !== undefined && start.childId !== id) return { ...failure("TW_SUB_ID_MISMATCH", "宿主返回不同子会话 ID；保留原映射并核对回执，禁止自动换 ID", id), returnedSessionId: start.childId, accepted: true, persistenceConfirmed: false }
+  const childId = id
   const unconfirmed = (code, message) => ({ ...failure(code, message + "；初始消息已接收但持久化尚未确认，保留映射，请检查同 ID 的现状；勿另建成员或自动重投正文", childId), accepted: true, persistenceConfirmed: false, messageId: start?.messageId })
   try {
     const childSession = sessions.get(childId)

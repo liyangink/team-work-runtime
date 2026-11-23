@@ -1,0 +1,18 @@
+{
+  "rawRequirement": "先分别给出接口与约束分析、故障与恢复分析两份独立说明（各写一个文件），最后合并成一份最终方案；全部为虚构内容，写在各文件内即可",
+  "objective": "为虚构产品潮汐灯写一份可评审的两段方案并合并成最终方案",
+  "constraints": [],
+  "exclusions": [],
+  "scope": {
+    "entry": "design",
+    "outputs": [
+      "design"
+    ]
+  },
+  "acceptance": [
+    "三个文件存在且最终方案合并两份分析"
+  ],
+  "gaps": [],
+  "revisions": [],
+  "risk": "normal"
+}

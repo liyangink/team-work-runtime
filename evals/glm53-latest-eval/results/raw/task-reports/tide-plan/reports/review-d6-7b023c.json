@@ -1,0 +1,37 @@
+{
+  "reportId": "review-d6-7b023c",
+  "dispatchKey": "d6-7b023c",
+  "role": "challenger",
+  "kind": "review",
+  "round": 2,
+  "stage": "design",
+  "taskSha": "89e87d2de862eebdaf3d25b01ee370ce6416f8c7228a8fab4f05f4183442be8d",
+  "reviewedPackages": [
+    {
+      "package": "failure-recovery-analysis",
+      "round": 2
+    },
+    {
+      "package": "interface-analysis",
+      "round": 2
+    }
+  ],
+  "waveId": "wv6",
+  "ver": 1,
+  "payloadDigest": "95bec7f8d6fae8065313cb27783b119c339cfb5ed2b99e2eb340d5097266a2f0",
+  "payload": {
+    "summary": "复审两包组合制品：轮次1四条 blocker 中三条已真关闭（OTA 分区与回滚对齐为 512KB×2+60s 未确认回滚+两次回滚进恢复模式且以 failure §4.3/§5 为权威、错误码状态接口已登记入 interface §2.2/§2.3 且上报通道统一为 MQTT state、过温分级策略对齐 F-05/§4.1 权威并拆分过流行），但缝1 硬件基线经相反方向修复后重新分歧——interface-constraints.md §1/§3/§4/§5 将机构/霍尔/环境光/NTC/备电SRAM 列入基线，而 failure-recovery.md §1/§2/F-04/F-09/§4.5 声明静态无运动机构基线并将它们移入可选扩展——且双方交叉引用互为虚假陈述（详见 finding 所列行号），final-plan-merge 直接合并仍会产出基线自相矛盾且含失效引用的最终方案，故建议 rework：按 finding 选定一个基线方向收敛并刷新交叉引用后复审；非阻塞项（failure §4.5 不新增独立端点与 interface §2.3 GET /device/status 的措辞张力、BLE status 特征承载数据语义扩展、§0 四层计数笔误）不列入本轮修复清单。",
+    "recommendation": "rework",
+    "findings": [
+      {
+        "severity": "blocker",
+        "packages": [
+          "interface-analysis",
+          "failure-recovery-analysis"
+        ],
+        "statement": "[包归属：interface-analysis 与 failure-recovery-analysis 接缝] 轮次1缝1（硬件基线）未关闭，两包相反方向修复形成倒置矛盾：docs/interface-constraints.md §1（L12）把摆动机构/霍尔/环境光/双点NTC/2KB备电SRAM 列入硬件基线并称与 failure §2 统一，§3 新增 motion_driver/sensors/logbuf 模块行（L54/L55/L59），§4 机构与传感约束行（L69）、§5 步骤1含 motion_driver（L79）；而 docs/failure-recovery.md §1（L10）与 §2（L15/L17）声明共同基线为静态环形导光灯体、产品无运动机构，将机构/霍尔/环境光/备电SRAM 移入可选扩展（本轮基线未含），F-04 改为交互输入失效（L26）、F-09 标可选（L31）、§4.5 日志改为 RAM 环形缓冲+storage 双副本即时落盘（L67，弃备电SRAM）。双方交叉引用均为对对方现状的虚假陈述：failure §1/§2 引 interface §1/§3/§4 为静态无运动机构（与该文现状相反）、interface §1 称与 failure §2 统一（与该文现状相反）、interface §3 motion_driver 引 F-04 为机构卡死（现 F-04 为交互输入失效）、logbuf 仍依赖 2KB 备电SRAM（failure 已移除）、interface §7（L103）仍称 failure §4.4 调用状态同步接口上报待改为 MQTT（现 §4.4 L61 已经 MQTT state 上报，说明已过期）。触发链：final-plan-merge 完成标准是直接合并两份分析，合并后最终方案同时断言基线含与不含运动机构、F-04 存在两种含义、日志持久化两套设计，并携带多条已知失效交叉引用，无法评审，直接妨碍可评审最终方案这一任务总目标。最小修正：Lead 指定单一基线方向后收敛——方向A保留运动机构于基线：failure 包改 §1/§2 声明、F-04 恢复机构卡死（或增行）、解除可选扩展标注、恢复 §4.5 备电SRAM 日志路径或同步改 interface logbuf；方向B静态基线：interface 包将 §1/§3/§4/§5 的机构与传感行移除或标注为可选扩展；随后逐条刷新上述失效交叉引用（含删除 interface §7 过期遗留说明）；改动仅限所列行与声明。"
+      }
+    ]
+  },
+  "at": "2026-11-17T13:43:40.616Z"
+}

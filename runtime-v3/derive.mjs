@@ -4,9 +4,10 @@
 // v3.4 重排（F3/F5）：先算波（含人工门 rework 的 respond 覆盖波，结构因果绑定）→ converge-user →
 // gate 判定（不再内含派发）→ 所有派发路径统一经过 waveId 批次守卫（在途语义见 waves.mjs inflightBatch）。
 
-import { nextWave, scenePolicy, projectRounds, inflightBatch, supersededKeys, waveIdOf, effectiveBlockedSet } from "./waves.mjs"
+import { nextWave, scenePolicy, projectRounds, inflightBatch, supersededKeys, waveIdOf, effectiveBlockedSet, reportOrderComparator } from "./waves.mjs"
 import { gateCheck, artifactFingerprints } from "./gate.mjs"
 
+export const INTAKE_GATE = "intake-approval"
 const state2Packages = (packages) => (Array.isArray(packages) ? packages : null)
 
 // 当前阶段推导（唯一实现：intake 等消费点共用，消除原两处重复）
@@ -56,7 +57,73 @@ function stalematePackages({ decision, bound, artifacts, stageId, packages }) {
   return out
 }
 
-export function deriveTask({ scope, intent, artifacts, reports, decisions, journal, workflow, policy, packages = null }) {
+// —— §6.2.2 多卡投影（derive/run/dispatch-plan/decide 共用同一纯投影）——
+// 从 decision-issued 减去该 ID 的 decided 事实，派生当前所有结构有效的待决卡；
+// 按签发 seq 稳定排序仅用于展示，不赋予第 0 张审批优先权。
+// 同一 ID 多条正文（异常账本）取最后一条并列 duplicateIssued 提示，不静默靠顺序猜。
+// 机器输出格式（§6.2.2 pendingDecisions 列表项）：decisionId/kind/question/choices + 绑定摘要
+export const cardOf = (c) => ({
+  decisionId: c.detail.decisionId,
+  kind: c.kind ?? cardKindOf(c.detail),
+  gateId: c.detail.gateId ?? null,
+  question: c.detail.reason ?? "",
+  choices: c.detail.choices ?? [],
+  ...(c.detail.stage != null ? { stage: c.detail.stage } : {}),
+  ...(c.detail.package != null ? { package: c.detail.package } : {}),
+  ...(c.detail.recovery ? { blockedRef: (c.detail.recovery.dispatchKey ?? "") + "#v" + (c.detail.recovery.reportVersion ?? 1), recovery: c.detail.recovery } : {}),
+  ...(c.detail.refresh ? { refresh: c.detail.refresh, proposed: { files: c.detail.refresh.files ?? [], ...(c.detail.refresh.added ? { added: c.detail.refresh.added } : {}), ...(c.detail.refresh.removed ? { removed: c.detail.refresh.removed } : {}) } } : {}),
+  binding: { ...(c.detail.fingerprints ? { fingerprints: c.detail.fingerprints } : {}), ...(c.detail.intakeFingerprint ? { intakeFingerprint: c.detail.intakeFingerprint } : {}), ...(c.detail.refresh ? { refresh: c.detail.refresh } : {}), ...(c.detail.recovery ? { recovery: c.detail.recovery } : {}) },
+  readiness: "待核验",
+  blockers: [],
+  seq: c.seq,
+})
+
+// 卡类型判定（展示与 decide 分支路由共用；旧卡无显式 kind 按字段推断）
+function cardKindOf(detail) {
+  if (detail.kind) return detail.kind
+  if (detail.migrate) return "migrate"
+  if (detail.requiresFreshSession) return "model-change"
+  if (detail.gateId === INTAKE_GATE) return "intent"
+  if (Array.isArray(detail.reworkStalemate)) return "stalemate"
+  if (detail.reworkBlocked) return "rework-blocked"
+  if (detail.gateId) return "human-gate"
+  return "converge"
+}
+
+// 返回 {open, duplicateIssued}：open = [{seq, detail, kind}] 按签发 seq 升序；duplicateIssued =
+// 存在多条不同正文的 decisionId（账本损坏信号：同 ID 重复签发，不能靠顺序猜）。
+export function duplicateIssuedIds(journal = []) {
+  const seen = new Map()
+  const dup = []
+  for (const e of journal) {
+    if (e.type !== "decision-issued" || !e.detail?.decisionId) continue
+    const prev = seen.get(e.detail.decisionId)
+    if (prev !== undefined && prev !== e.detail) dup.push(e.detail.decisionId)
+    else if (prev === undefined) seen.set(e.detail.decisionId, e.detail)
+  }
+  return [...new Set(dup)]
+}
+export function pendingDecisionsOf({ journal = [] }) {
+  const settledDecisions = new Set(journal.filter((e) => e.type === "decided").map((e) => e.detail?.decisionId).filter(Boolean))
+  const seen = new Map()
+  const duplicateIssued = []
+  for (const e of journal) {
+    if (e.type !== "decision-issued" || !e.detail?.decisionId) continue
+    if (seen.has(e.detail.decisionId)) duplicateIssued.push(e.detail.decisionId)
+    seen.set(e.detail.decisionId, e.detail)
+  }
+  const openCards = []
+  journal.forEach((e, index) => {
+    if (e.type !== "decision-issued" || !e.detail?.decisionId) return
+    if (settledDecisions.has(e.detail.decisionId)) return
+    if (seen.get(e.detail.decisionId) !== e.detail) return
+    openCards.push({ seq: e.seq ?? index + 1, detail: e.detail, kind: cardKindOf(e.detail) })
+  })
+  openCards.sort((a, b) => a.seq - b.seq)
+  return { open: openCards, duplicateIssued: [...new Set(duplicateIssued)] }
+}
+
+export function deriveTask({ scope, intent, artifacts, reports, decisions, journal, workflow, policy, packages = null, artifactVerification = null }) {
   const completedEvent = journal.find((e) => e.type === "task-completed")
   if (completedEvent) {
     return { stage: completedEvent.detail.stage, status: "completed", wave: { kind: "done" }, gate: null, next: { kind: "none" } }
@@ -68,25 +135,28 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
     return { stage: stageId, status: "blocked", wave: null, gate: null, next: { kind: "blocked", reason: `scope.entry ${stageId} 不在 workflow 定义中` } }
   }
   const sp = scenePolicy(policy, stageDef.teamScene)
-  const stageReports = reports.filter((r) => r.stage === stageId)
-  // B（返工终版 §二·B）：所有未决决定卡统一静止——意图确认/换模型/人工门/migrate 任一未决时任务静止
-  //（不推进、不派发、不重算派发阻塞判定：pending 卡优先于 produceBlocked/routeBlocker——修复
-  //「待决卡期间 run/dispatch 仍走 dispatch 分支重签」的渲染与执行错位）。next.pending 带账本原卡
-  //（decision-issued 的 detail）；渲染层一律用 pending.choices 与 pending.reason 同钉渲染（禁止重算，
-  // 防「渲染重算 choices、decide 用账本」两源错位）；指纹失效的作废/重签归 dispatch 通道（写侧）。
-  // migrate 冲突卡优先级保持最高（F9：未决冲突内容不得继续参与推导/派发）。
-  const settledDecisions = new Set(journal.filter((e) => e.type === "decided").map((e) => e.detail.decisionId))
-  const openDecisions = journal.filter((e) => e.type === "decision-issued" && e.detail && !settledDecisions.has(e.detail.decisionId))
-  const pendingMigrate = openDecisions.find((e) => e.detail?.migrate)
-  if (pendingMigrate) {
-    return { stage: stageId, status: "awaiting-user", wave: { kind: "converge-user", reason: pendingMigrate.detail.reason }, gate: null, next: { kind: "await-decision", reason: pendingMigrate.detail.reason, pending: pendingMigrate.detail, migratePending: true } }
+  const stageReports = reports.filter((r) => r.stage === stageId).sort(reportOrderComparator(journal))
+  // B（返工终版 §二·B）+ §6.2.2 多卡：所有未决决定卡统一静止——意图确认/换模型/人工门/
+  // migrate/刷新/包恢复卡任一未决时任务静止（不推进、不派发）。
+  // 单卡时保留旧 next.pending 兼容字段；多卡时省略单卡别名、返回 needsDecisionId:true，
+  // 不把第一张当主卡。migrate 冲突卡优先级保持最高（F9）。
+  const { open: openCards, duplicateIssued } = pendingDecisionsOf({ journal })
+  // B9/§6.2.2-1：同 ID 不同正文（异常账本）→ 报告状态损坏并停止——不靠顺序猜测、不派发不推进；
+  // 修复路径是人工核对 journal 的 decision-issued 事件后重签（安全取消也需先修复账本）。
+  if (duplicateIssued.length > 0) {
+    return {
+      stage: stageId, status: "blocked", wave: null, gate: null,
+      next: { kind: "blocked", reason: "决定卡账本损坏：decisionId " + duplicateIssued.join("、") + " 存在多条不同正文（重复签发）。请人工核对 journal 的 decision-issued 事件，修复或作废重复卡后重新推进；不能靠签发顺序猜测答复。" },
+    }
   }
-  const pendingAny = openDecisions[0]
-  if (pendingAny) {
-    // 透传账本卡的上下文标记（gateId/reworkStalemate/reworkBlocked）：静止态的消费者（runStatusCard
-    // 渲染、runTransition 指纹失效重签——重签需按卡类型生成正确选项：僵局 3 选项 / blocked 2 选项 /
-    // 人工门 accept·rework）不重查 gate；migrate 卡经上方专属分支（migratePending）。
-    const d = pendingAny.detail
+  const pendingMigrate = openCards.find((c) => c.detail?.migrate)
+  if (pendingMigrate && openCards.length === 1) {
+    return { stage: stageId, status: "awaiting-user", wave: { kind: "converge-user", reason: pendingMigrate.detail.reason }, gate: null, next: { kind: "await-decision", reason: pendingMigrate.detail.reason, pending: pendingMigrate.detail, migratePending: true, ...(openCards.length > 1 || duplicateIssued.length ? { pendingDecisions: openCards.map(cardOf), needsDecisionId: true } : {}) } }
+  }
+  if (openCards.length > 0) {
+    const only = openCards.length === 1 ? openCards[0].detail : null
+    const d = openCards[0].detail
+    // 渲染层透传全列表（机器消费 pendingDecisions；单卡别名 pending 仅一张时保留）
     return {
       stage: stageId,
       status: "awaiting-user",
@@ -95,7 +165,10 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
       next: {
         kind: "await-decision",
         reason: d.reason,
-        pending: d,
+        pendingDecisions: openCards.map(cardOf),
+        needsDecisionId: openCards.length > 1,
+        ...(duplicateIssued.length ? { duplicateIssued } : {}),
+        ...(only ? { pending: only } : {}),
         ...(d.gateId ? { gateId: d.gateId } : {}),
         ...(Array.isArray(d.reworkStalemate) ? { reworkStalemate: d.reworkStalemate } : {}),
         ...(d.reworkBlocked ? { reworkBlocked: true } : {}),
@@ -117,7 +190,8 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
   // 其余 converge-user（无绑定或绑定波无有效 blocked 的普通轮次耗尽/escalate/produceBlocked 卡）不受影响。
   if (wave.kind === "converge-user") {
     const binding = reworkBinding({ journal, decisions })
-    if (binding && binding.boundEntries.length > 0) {
+    // Expert 定点返工命中 blocked 包时保留按包恢复入口，不能借旧 F5 仲裁卡整波重派绕过 §6.3。
+    if (!wave.packageRecoveryRequired && binding && binding.boundEntries.length > 0) {
       const boundReports = binding.boundEntries.map((e) => stageReports.filter((r) => r.dispatchKey === e.detail.key).at(-1) ?? null)
       if (boundReports.every((r) => r != null) && boundReports.some((r) => r.payload?.outcome === "blocked" && blockedSet.has(r.package ?? null))) {
         wave = { kind: "gate" } // 让位：落入下方 gate 分支的 F5 处理（出 reworkBlocked 卡或 rework-rerun 续派）
@@ -183,7 +257,7 @@ export function deriveTask({ scope, intent, artifacts, reports, decisions, journ
       }
     }
     if (wave.kind === "gate") {
-      const gate = gateCheck({ workflow, policy, stageId, scope, artifacts, reports: stageReports, decisions, journal, packages: state2Packages(packages) })
+      const gate = gateCheck({ workflow, policy, stageId, scope, artifacts, reports: stageReports, decisions, journal, packages: state2Packages(packages), artifactVerification })
       if (gate.passed) {
         const isCompletion = scope.completion?.mode === "through-stage"
           ? scope.completion.stage === stageId

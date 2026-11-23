@@ -1,0 +1,29 @@
+{
+  "rawRequirement": "在 docs/one-note.md 写一行虚构的产品说明，内容自拟",
+  "objective": "只在 docs/one-note.md 写一行虚构说明",
+  "constraints": [],
+  "exclusions": [],
+  "scope": {
+    "entry": "implementation",
+    "outputs": [
+      "source"
+    ]
+  },
+  "acceptance": [
+    "docs/one-note.md 包含一行说明",
+    "在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+  ],
+  "gaps": [],
+  "revisions": [
+    {
+      "seq": 1,
+      "at": "2026-11-17T13:28:49.390Z",
+      "change": {
+        "acceptance": [
+          "在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+        ]
+      }
+    }
+  ],
+  "risk": "normal"
+}

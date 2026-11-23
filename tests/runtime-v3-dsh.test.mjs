@@ -100,12 +100,13 @@ test("调用快照：特殊未知档位在 open 期标 unresolved 且不污染�
     await withEnvironment({ TW_DSH_CONFIG: JSON.stringify({ ...BASE_CONFIG, tiers }) }, async () => {
       const models = await call(["models"])
       assert.match(models.warnings.join("\n"), /MAP_INVALID/)
-      // open 期解析档位失败 → 角色标记 unresolved（不猜默认），确认卡不提供“确认开始”。
+      // open 期解析失败仅返回准备回执；未解析时不签发不完整卡。
       const opened = await call(["open", "--name", "unknown-tier", "--objective", "o", "--entry", "code-review"])
-      assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
-      assert.equal(opened.choices.some((choice) => choice.grant === "accept-intake"), false)
+      assert.equal(opened.status, "preparing")
+      assert.deepEqual(opened.unresolved, ["owner", "challenger", "expert"])
       const plan = await call(["dispatch-plan", "--task", "unknown-tier", "--writable", "R.md:code-review", "--json"])
-      assert.equal(plan.stop, "awaiting-user", "未确认不派发")
+      assert.equal(plan.stop, "blocked", "未解析不签卡、不派发")
+      assert.equal(plan.card.blockers[0].code, "ROLES_UNRESOLVED")
       // 派发前没有 roles 也没有确认 → 不会写 dispatched 事实
       const task = await loadTask(root, "unknown-tier", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
       assert.equal(task.journal.some((event) => event.type === "dispatched"), false)
@@ -310,10 +311,12 @@ test("open 期无调用快照模型配置 → 角色 unresolved；派发返回�
   await setConfig({ ...BASE_CONFIG, tiers: {} })
   try {
     const opened = await call(["open", "--name", "no-models", "--objective", "o", "--entry", "code-review"])
-    assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+    assert.equal(opened.status, "preparing")
+    assert.ok(opened.unresolved.length)
     const plan = await call(["dispatch-plan", "--task", "no-models", "--writable", "R.md:code-review", "--json"])
     assert.equal(plan.ok, true)
-    assert.equal(plan.stop, "awaiting-user", "意图确认卡未确认（角色 unresolved 时不提供确认开始）")
+    assert.equal(plan.stop, "blocked", "模型未解析时不签不完整卡")
+    assert.equal(plan.card.blockers[0].code, "ROLES_UNRESOLVED")
     // 模拟旧任务直接进入派发（无确认卡）：用 initTask 构造的角色缺失状态验证可恢复阻塞。
     const bare = await makeProject()
     const { initTask } = await import("../runtime-v3/store.mjs")
@@ -654,7 +657,7 @@ test("幂等重交：同 key 同 payload 不追加第二条 report-accepted", as
   const again = await call(["deliver", "--task", "idem-t", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   assert.equal(again.idempotent, true)
   const task = await loadTask(root, "idem-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  assert.equal(task.journal.filter((event) => event.type === "report-accepted").length, 1)
+  assert.equal(task.journal.filter((event) => event.type === "report-committed").length, 1, "幂等重交不追加第二条提交事实")
 })
 
 test("help：调用快照模型来源与全部命令在场", async () => {
@@ -684,11 +687,11 @@ test("policy.roles.expert 缺失 → expert unresolved（不再硬编码 expert 
   const root = await makeProject({ policy })
   const call = autoCaller(root)
   const opened = await call(["open", "--name", "no-expert", "--objective", "o", "--entry", "code-review"])
-  assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+  assert.equal(opened.status, "preparing")
   assert.deepEqual(opened.unresolved, ["expert"], "roles.expert 缺失即 unresolved")
-  assert.equal(opened.choices.some((choice) => choice.grant === "accept-intake"), false, "unresolved 不提供确认开始")
   const waiting = await call(["dispatch-plan", "--task", "no-expert", "--writable", "R.md:code-review"])
-  assert.equal(waiting.stop, "awaiting-user")
+  assert.equal(waiting.stop, "blocked")
+  assert.equal(waiting.card.blockers[0].code, "ROLES_UNRESOLVED")
 
   // 补齐 policy.roles.expert → --resolve 重建（autoCaller 按用户确认继续）
   const policyFile = path.join(root, "team-work/policies/default.json")
@@ -733,7 +736,7 @@ test("旧任务 roles 迁移：owner 取历史实际派发模型（不随新配�
   } }
   await withEnvironment({ TW_DSH_CONFIG: JSON.stringify(changed) }, async () => {
     // 迁移先于确认门：roles 已按历史/新配置重建，确认卡因 roles 变化重签。
-    const gated = await call(["dispatch-plan", "--task", "migrate-roles", "--json"])
+    const gated = await caller(root)(["dispatch-plan", "--task", "migrate-roles", "--json"])
     assert.equal(gated.stop, "awaiting-user")
     const migrated = JSON.parse(await readFile(agentsFile, "utf8"))
     assert.equal(migrated.roles.owner.modelName, oldOwner.modelName, "owner 取历史实际派发模型，不随新配置换")
@@ -742,7 +745,7 @@ test("旧任务 roles 迁移：owner 取历史实际派发模型（不随新配�
     const task = await loadTask(root, "migrate-roles", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
     const initialized = task.journal.filter((event) => event.type === "roles-initialized").at(-1)
     assert.equal(initialized.detail.source, "migrated")
-    await call(["decide", "--task", "migrate-roles", "--choice", "1"])
+    await call(["decide", "--task", "migrate-roles", "--choice", "1", "--decision-id", gated.card.decisionId])
     const next = await call(["dispatch-plan", "--task", "migrate-roles", "--json"])
     assert.equal(next.stop, null)
     assert.equal(next.waves[0].modelRef.modelName, "new-senior")
@@ -754,7 +757,7 @@ test("E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved
   const root = await makeProject({ policy })
   const call = autoCaller(root)
   const opened = await call(["open", "--name", "no-tiers", "--objective", "o", "--entry", "code-review"])
-  assert.equal(opened.code, "INTAKE_ROLES_UNRESOLVED")
+  assert.equal(opened.status, "preparing")
   assert.deepEqual(opened.unresolved, ["owner", "challenger", "expert"], "缺角色默认档不再用 junior/senior/expert 字面量补齐")
   const roles = await call(["roles", "--task", "no-tiers"])
   assert.deepEqual(roles.unresolved, ["owner", "challenger", "expert"])
@@ -762,8 +765,8 @@ test("E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved
     assert.match(detail.tierProvenance ?? "", /^unresolved：/, "档位溯源必须如实标 unresolved：" + detail.role)
   }
   const plan = await call(["dispatch-plan", "--task", "no-tiers", "--writable", "R.md:code-review"])
-  assert.equal(plan.stop, "awaiting-user", "未确认的意图卡先静止（角色 unresolved 不提供确认开始）")
-  assert.equal(plan.card.choices.some((choice) => choice.grant === "accept-intake"), false)
+  assert.equal(plan.stop, "blocked", "未解析角色不签发确认卡")
+  assert.equal(plan.card.blockers[0].code, "ROLES_UNRESOLVED")
 
   // 旧任务（无 intake 卡）直接派发：缺角色档位返回可恢复 blocked，不猜默认模型。
   const bare = await makeProject({ policy })
@@ -779,7 +782,7 @@ test("E3：场景档与 policy.roles 默认档都缺失 → 三角色 unresolved
 test("E4：stop 卡路径不读取配置快照；配置快照只在派发计划展示时按需读取", async () => {
   const root = await makeProject()
   const raw = caller(root)
-  await raw(["open", "--name", "lazy-config-t", "--objective", "o", "--entry", "code-review"])
+  await raw(["open", "--name", "lazy-config-t", "--objective", "o", "--entry", "code-review", "--raw-requirement", "合成原文"])
   const before = await withEnvironment({ TW_DSH_CONFIG: "{invalid" }, async () => raw(["dispatch-plan", "--task", "lazy-config-t", "--writable", "R.md:code-review"]))
   assert.equal(before.stop, "awaiting-user", "未确认意图卡先静止")
   assert.equal(before.warnings, undefined, "stop 路径不依赖 resolveTiers（无配置警告）")

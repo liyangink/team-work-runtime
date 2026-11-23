@@ -1,0 +1,58 @@
+{
+  "items": [
+    {
+      "id": "desc-a",
+      "writable": [
+        "docs/parts/desc-a.md:doc"
+      ],
+      "done": [
+        "为虚构产品撰写第一条功能说明：以 Markdown 小节（一个二级标题+正文）写入 docs/parts/desc-a.md，功能主题自拟",
+        "不创建或修改其他任何文件，交付路径仅 docs/parts/desc-a.md"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "desc-b",
+      "writable": [
+        "docs/parts/desc-b.md:doc"
+      ],
+      "done": [
+        "为虚构产品撰写第二条功能说明：以 Markdown 小节（一个二级标题+正文）写入 docs/parts/desc-b.md，功能主题自拟且与第一条不同",
+        "不创建或修改其他任何文件，交付路径仅 docs/parts/desc-b.md"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "assemble",
+      "writable": [
+        "docs/notes.md:doc"
+      ],
+      "dependsOn": [
+        "desc-a",
+        "desc-b"
+      ],
+      "done": [
+        "读取 docs/parts/desc-a.md 与 docs/parts/desc-b.md，将两条功能说明按 a 在前、b 在后的顺序合入 docs/notes.md",
+        "可添加统一的一级文件标题与分隔线，但不得改动两段正文的措辞",
+        "完成后 docs/notes.md 必须同时完整包含两条说明",
+        "不改动 docs/parts/ 下任何文件"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

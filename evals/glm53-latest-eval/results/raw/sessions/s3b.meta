@@ -1,0 +1,10 @@
+tag=s3b
+started_at=2026-11-17T21:31:19+08:00
+session_arg=session-203a5cd1-026a-4b00-8bee-845790e76d98
+task_file=/Users/liyang/Projects/Opensource/team-work-runtime/evals/glm53-latest-eval/code/tasks/s3b.md
+task_sha256=a708b29b33fe4239fcec46b33e67d9806305af6d6ddb4847ded83516cd19e244
+permission_mode=danger-full-access
+home=/private/tmp/glm53-latest-eval-20261117b/home
+dsh_home=/private/tmp/glm53-latest-eval-20261117b/home/.dsh
+project=/private/tmp/glm53-latest-eval-20261117b/project
+finished_at=2026-11-17T21:50:16+08:00

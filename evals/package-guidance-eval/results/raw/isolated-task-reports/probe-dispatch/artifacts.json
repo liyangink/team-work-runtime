@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "path": "docs/tagline-alpha.md",
+      "digest": "33208f1a0b401ee4156c9c452be99870e78254d3fbbb055c269af9e2bb32debc",
+      "kind": "doc",
+      "stage": "implementation",
+      "reportRef": "deliver-d1-f6ff16",
+      "snapshotRef": "snapshots/33208f1a0b401ee4156c9c452be99870e78254d3fbbb055c269af9e2bb32debc.json"
+    },
+    {
+      "path": "docs/tagline-beta.md",
+      "digest": "14c7703f0bd31a9d46c694ad7a1060227b5cab56adccf8a42d94405fb122253f",
+      "kind": "doc",
+      "stage": "implementation",
+      "reportRef": "deliver-d1-1008b7",
+      "snapshotRef": "snapshots/14c7703f0bd31a9d46c694ad7a1060227b5cab56adccf8a42d94405fb122253f.json"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "items": [
+    {
+      "id": "one-note",
+      "writable": [
+        "docs/one-note.md:doc"
+      ],
+      "done": [
+        "创建 docs/one-note.md 并写入一行自拟的虚构产品说明，且该行注明「虚构」，满足完成标准：在 docs/one-note.md 写一行虚构说明并注明「虚构」"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

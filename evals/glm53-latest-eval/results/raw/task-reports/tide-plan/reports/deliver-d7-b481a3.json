@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d7-b481a3",
+  "dispatchKey": "d7-b481a3",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 3,
+  "stage": "design",
+  "package": "interface-analysis",
+  "waveId": "wv7",
+  "ver": 1,
+  "payloadDigest": "e97bb83068a1f99a1273854eb34eb2c3963f982fc578b5efb1e2ac73b4ff13c9",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "缝1（硬件基线）已按方向B收敛并重新交付 docs/interface-constraints.md（完整方案正文即该文件）：§1 改为静态基线权威声明（RGBW 环形导光、无运动机构，与 failure-recovery 现行 §1/§2 一致）并将机构/霍尔/环境光/备电SRAM 列为可选扩展，§3 主表移除 motion_driver/sensors 行、新增 board_temp 行、logbuf 同步为 RAM 环形缓冲+storage 即时落盘并在表后登记可选扩展模块，§4 温度检测改灯板测温点基线、RAM 预算去 SRAM 映射，§5 步骤1去 motion_driver，§2.4 引导恢复与 §6 过温行按对方现行文本刷新（回差≥5℃自动解除、唯一权威声明），§7 过期遗留说明替换为第3轮接缝记录；选择方向B的依据是已核验 failure-recovery 现行 L10/L15/L17 已声明以本文件 §1/§3/§4 为静态共同基线且方向A不在本包可写范围；已逐行核验两文件修改后引用互为真值、基线正文无机构/SRAM/环境光残留，非阻塞项（GET /device/status 与对方「不新增独立端点」措辞张力、BLE status 语义扩展、§0 四层计数笔误）按裁决本轮未动。",
+    "paths": [
+      "docs/interface-constraints.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:46:34.848Z"
+}

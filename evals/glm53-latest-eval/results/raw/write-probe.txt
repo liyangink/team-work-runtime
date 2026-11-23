@@ -1,0 +1,16 @@
+# 外层文件沙箱写入拒绝探针（command -v touch / curl / sandbox-exec；本机 macOS）
+## 1) 仓库内写入（外层工作区，DSH file policy 允许）
+ALLOWED
+## 2) 用户 HOME 写入（预期拒绝）
+touch: /Users/liyang/.dsh-eval-write-probe: Operation not permitted
+exit=1
+## 3) 子进程继承（预期同样拒绝）
+touch: /Users/liyang/.dsh-eval-write-probe-child: Operation not permitted
+exit=1
+## 4) 隔离根写入（/tmp，预期允许）
+ALLOWED
+## 5) 网络可达性（真实模型调用前提）
+http_status=200
+## 6) 嵌套 sandbox-exec 可用性（内层 DSH 无法再套沙箱）
+sandbox-exec: sandbox_apply: Operation not permitted
+exit=71

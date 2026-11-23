@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-66ed36",
+  "dispatchKey": "d1-66ed36",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "design",
+  "package": "interface-analysis",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "21564b1720af97b925e5b6993fffd27534b2c088cc9561cbeffb7ff3eebc1e4e",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已按包完成标准交付：潮汐灯（虚构）接口与约束分析说明已写入 docs/interface-constraints.md，覆盖物理/BLE-WiFi/云端API/App/固件HAL五层接口契约、硬件电气实时性合规等约束、实现顺序与失败恢复表，自检文件存在且内容完整，未覆盖项（潮汐数据源授权、旋钮滑条合并）已在正文开放问题节标明。",
+    "paths": [
+      "docs/interface-constraints.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:32:40.116Z"
+}

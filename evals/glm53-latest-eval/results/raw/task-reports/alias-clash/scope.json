@@ -1,0 +1,22 @@
+{
+  "entry": "implementation",
+  "completion": {
+    "mode": "through-stage",
+    "stage": "implementation"
+  },
+  "stages": [
+    "research",
+    "design",
+    "design-review",
+    "spec",
+    "spec-review",
+    "implementation",
+    "test",
+    "code-review",
+    "e2e",
+    "finish"
+  ],
+  "workflowDigest": "2026-08-18",
+  "createdAt": "2026-11-17T13:32:02.540Z",
+  "intakeVersion": 2
+}

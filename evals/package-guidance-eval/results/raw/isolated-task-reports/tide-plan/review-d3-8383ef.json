@@ -1,0 +1,83 @@
+{
+  "reportId": "review-d3-8383ef",
+  "dispatchKey": "d3-8383ef",
+  "role": "challenger",
+  "kind": "review",
+  "round": 1,
+  "stage": "design",
+  "taskSha": "db519b3065c43175a1079c7facdbd79abd3e1738d870d2122f0997e93c49c4a1",
+  "reviewedPackages": [
+    {
+      "package": "failure-analysis",
+      "round": 1
+    },
+    {
+      "package": "interface-analysis",
+      "round": 1
+    }
+  ],
+  "waveId": "wv3",
+  "ver": 1,
+  "payloadDigest": "03ff0cf076ed0b953aad0a8af6d3f66590eb5c81f899e8092a333fd11cbbc608",
+  "payload": {
+    "summary": "accept：两包均满足各自完成标准——interface-analysis 的 14 个虚构接口（HW/FW/CL/AP）逐个给出输入/输出/错误约定且 §9 功能与非功能约束及边界条件齐全，failure-analysis 的 §2 21 项故障+S1–S4、§3 检测、§4 L0–L4 恢复降级、§5 一致性四项全覆盖，均为虚构且诚实声明未运行任何验证（FR §6.3）；实测发现的主要问题是两文 9 项接缝冲突（BLE 首发与否、命令重发契约相反、重连退避、硬件基线不同、潮汐表接口缺位、证书可更换性等，见 findings 并标包归属），因两文均已声明以合并结论为准（IC §12、FR §7）故不构成本轮阻塞，但 merge-final 必须逐项裁决取舍，否则最终稿会出现同一契约两套参数的自相矛盾。",
+    "recommendation": "accept",
+    "findings": [
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC §2/§11-A2 vs FR §1.2/§4.2/§4.3",
+        "statement": "BLE 是否进首发两文直接冲突，而 FR 的降级与恢复链硬依赖 BLE 存在：IC §2 假设 App 不与设备直连（仅可选 BLE 绑定）、§11 A2 列为未决开放问题；FR §1.2 将 BLE 定为配网/近控/L4 安全模式唯一控制通道，L2、L4、B4/A1 人工恢复与 C3 均依赖 BLE，且 FR §7 四项对齐点未包含此条。修正：merge-final 显式裁决 BLE 是否首发；若不进首发须给出 L2/L4/B4 替代恢复通道，否则 A1/B4 兜底路径失效"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC CL-2/AP-2 vs FR §3.2",
+        "statement": "命令确认契约相反：IC 为指令 10s 无 ack 云端仅标记 pending、不自动重发、App 仅手动重试（防重复执行）；FR 为超时 3s 自动重试、退避 1/2/4/8s 上限 3 次。修正：merge 择一为准并改另一侧引用；若保留自动重试需说明其与防重复执行目标共存的幂等依据（cmdId 去重）"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC CL-1 vs FR §4.3 C1/C2",
+        "statement": "MQTT 重连退避参数冲突：IC 指数退避 1s→60s 含抖动无限重试，FR 15s 起上限 10min。修正：merge 统一为一组参数并同步两处引用"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC §2/FW-2/HW-4 vs FR §1.2/F1",
+        "statement": "设备硬件基线冲突：IC 为 MCU TL-MC200+Wi-Fi 模组双处理器（FW-2 UART JSONL RPC 互联）且 USB+内置电池；FR §1.2 仅单 MCU + CR2032 维持 RTC、无主电池，F1 市电断电即停机走快照恢复。且 FR 的 21 项 FMEA 未覆盖 IC FW-2 的 UART 链路故障（IC 已定义连续 10 次失败模组自复位 TL-2011）。修正：merge 统一架构基线；若采用双处理器架构，FR 需补 UART 链路故障项及恢复路径"
+      },
+      {
+        "severity": "risk",
+        "package": "failure-analysis（interface-analysis 缺位）",
+        "location": "FR D1/§5.5/§7-3 vs IC §2/§3",
+        "statement": "潮汐数据服务无接口承接：FR 精确模式依赖云下发真实港口潮汐表（30 天缓存、expiresAt，§7-3 列为对齐点），但 IC 的 14 个接口与云端四组件中均无该服务。修正：merge 裁决新增潮汐表下发接口定义，或砍掉精确模式并在取舍说明中记录代价"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC CL-1 边界 vs FR C2/§3.2/§7-4",
+        "statement": "设备证书可更换性假设冲突：IC 明示证书不可吊销更换、密钥不出安全元件；FR C2 证书过期需 App 引导更新且 §3.2 要求剩余 <30 天告警。若按 IC 假设，C2 恢复路径不成立。修正：merge 裁决可更换性；若维持不可更换，C2 恢复行为须改为明示的永久 L1 降级承诺"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis+failure-analysis",
+        "location": "IC/FR 多处",
+        "statement": "次级参数与判据不一致，merge 需出统一参数表：校时（IC 云指令校时、漂移>90s vs FR NTP 首选、±120s 挂起定时）；过温降额（IC TL-1002 降流 50% vs FR A2 降额 30%）；cmdId 去重（IC 24h 时间窗 vs FR 最近 64 条）；OTA 稳定判据（IC 同版本累计失败 3 次放弃 vs FR 24h 内 3 次启动确认）；TLS（IC 1.3 vs FR 1.2+，兼容但应统一表述）；安全默认光档位（IC 故障钳制 5%/2700K、FR 断电安全默认 30%、FR L4 5%）。另 IC §2 与 AP-1 两处「见 §9」交叉引用实际指向 §11 开放问题。修正：merge-final 汇总统一参数/判据表并逐项标注取舍来源、修正交叉引用"
+      },
+      {
+        "severity": "info",
+        "package": "failure-analysis",
+        "location": "FR §4.2 L1 退出条件 vs §3.2",
+        "statement": "L1 退出的健康检查主体不明：§3.2 云健康检查定义为 App 首页聚合探测，而 L1 是设备端阶梯状态，设备如何独立判定连续 3 次健康检查通过未写。修正：§4.2 注明设备侧探测目标与计数口径（如网关连通探测连续 3 次成功）"
+      },
+      {
+        "severity": "risk",
+        "package": "interface-analysis（failure-analysis 依赖）",
+        "location": "FR §3.3 vs IC §3/NF-04",
+        "statement": "遥测上报通道无接口定义：FR 定义 10 类遥测事件、离线环形缓冲 128 条补传、BLE 兜底导出，但 IC 14 个接口无遥测通道，NF-04 诊断数据默认关闭的开关也未落在任何接口上。修正：merge 将遥测归入 CL-2 topic 或新增接口，并定义诊断开关的接口归属"
+      }
+    ]
+  },
+  "at": "2026-11-16T10:16:23.069Z"
+}

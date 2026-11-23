@@ -286,6 +286,22 @@ export function composeMemberRules(rules) {
   return parts.join("\n\n")
 }
 
+// F-N2（架构方案 §6.3）：Lead 通用 README 解析——lead/ 根级 README.md 三层合并
+// （用户公共 ~/.team-work/rules/lead/README.md 优先、包内出厂默认回退、项目根 team-work/rules/lead/README.md 追加）。
+// 供 tw help 在 Lead 指引中返回通用规则：不再指示模型根据不确定的技能 Base directory 猜包根相对路径，
+// 具体时点规则仍由 resolveLeadRules 按时点解析。缺失/不可读沿用现有警告与回退语义（规则是增强不是门禁）。
+export async function resolveLeadGeneralRules({ projectRoot = null, packageRoot = PACKAGE_ROOT, userRulesRoot = DEFAULT_USER_RULES_ROOT() } = {}) {
+  const { packageRulesDirPath, userRulesDir, projectRulesDir } = await resolveLayerDirs({ packageRoot, projectRoot, userRulesRoot })
+  const segments = ["lead", "README.md"]
+  const baseline = await readBaseline(userRulesDir, packageRulesDirPath, segments)
+  const projectFile = await readRuleFile(projectRulesDir, segments, { layer: "project" })
+  const text = [baseline, projectFile.state === "ok" ? projectFile.text : ""].filter(Boolean).join("\n\n")
+  const sources = []
+  if (baseline) sources.push(baseline === (await readRuleFile(packageRulesDirPath, segments)).text ? "package" : "user")
+  if (projectFile.state === "ok" && projectFile.text) sources.push("project")
+  return { text, sources }
+}
+
 // Lead 规则解析：按呈现时点读 lead/<kind>/ 下 .md（kind = dispatch|decision|progress，见方案第二节 4）。
 // Lead 通道整文件读取、不套三标题：lead/ 下文件是成篇的操作要求，不是可分段拼接的成员条目。
 // 三层口径与成员通道一致（用户公共层优先、包内默认回退、项目追加，忽略旁路副本），

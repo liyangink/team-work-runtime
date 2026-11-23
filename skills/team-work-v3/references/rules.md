@@ -75,7 +75,7 @@ team-work/rules/
 
 Lead 不进成员派单，规则走两条互补通道：
 
-1. **skill 指路**：开工读 `team-work/rules/lead/README.md`（职责边界、推进、判断升级与汇报纪律）；按当前时点读对应文件——决定点读 `lead/decision/index.md`，派发与在途读 `lead/dispatch/index.md`，进展与轮次结束读 `lead/progress/index.md`。
+1. **help 通道**：开工先调 `tw help`，返回的 `leadGeneralRules` 即 Lead 通用 README 正文（职责边界、推进、判断升级与汇报纪律；运行时按 用户公共 `~/.team-work/rules/` → 包内出厂默认 → 项目 `team-work/rules/` 三层合并解析，不从技能目录猜包根相对路径，也不依赖 cwd）；其他时点需要主动读时按 help 的 `leadGeneralRulesSources` 来源线索定位对应层文件，具体时点以返回卡反吐为准。
 2. **工具反吐**：`tw` 与 `tw-dispatch` 在固定时点把对应 `lead/<时点>/` 目录下文件正文（按文件名排序）与明晰必读段附到返回卡片的 `presentation` 上；决定点额外附审阅段。时点判定沿用现有呈现判定，本机制不改变时点行为：决定点为 awaiting-user / blocked；派发为 transition 为 dispatch（含在途）；进展为 advance / complete / wait-inflight，以及 status/stop 为 completed / archived / wait-inflight 的终态卡，run 的 working + next=dispatch 同样命中。机械回执不命中；重复查询终态卡每次都附，没有跨调用的已读标记。
 3. 反吐不依赖 Lead 主动读取，但只在上述三个时点触发；主动读 md 覆盖其他时点。两者都是判断指引，不是门禁。改提示措辞改 `lead/` 下的 md，不改代码；新增时点才需要改渲染器。
 

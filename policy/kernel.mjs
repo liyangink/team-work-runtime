@@ -13,6 +13,19 @@ export function digestValue(value) {
   return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
+// sha256-bytes-v1：对磁盘原始字节（Buffer）直接计算 SHA-256，输出 64 位十六进制小写。
+// 与 digestValue（先 canonical JSON 序列化再哈希的文本摘要）是两种不同算法，不可混用：
+// 制品快照/实时核验一律用本函数；digestValue 仅用于 payload 幂等等结构化文本口径。
+// 旧任务遗留的 digestValue 摘要不与本算法判等（架构方案 §6.2：不声称旧摘要可直接与新版摘要相等）。
+export const BYTES_DIGEST_ALGORITHM = "sha256-bytes-v1"
+
+export function digestBytes(bytes) {
+  if (!Buffer.isBuffer(bytes)) {
+    throw new TypeError("digestBytes 只接受 Buffer（磁盘原始字节）")
+  }
+  return createHash("sha256").update(bytes).digest("hex")
+}
+
 // 能力快照 digest 只覆盖派发身份（Agent、成本档、模型、能力）；
 // role 是编译期选人元数据，参与 plan 种子而不进入该 digest，
 // 以保证目录引入 role 字段前后对同一批 Agent 的快照 digest 稳定。

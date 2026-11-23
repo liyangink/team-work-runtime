@@ -1,0 +1,268 @@
+[
+  {
+    "id": "037e4ee7-cfdb-44ca-b5ce-33b3396e0ada",
+    "origin": "subagent",
+    "parent": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 7,
+    "start": "2026-11-16T10:07:12.585Z",
+    "end": "2026-11-16T10:10:21.208Z"
+  },
+  {
+    "id": "075fbc8a-b4d4-41fe-ae9c-4388e54b3e29",
+    "origin": "subagent",
+    "parent": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 10,
+    "start": "2026-11-16T10:16:40.070Z",
+    "end": "2026-11-16T10:33:45.573Z"
+  },
+  {
+    "id": "3213ec79-812f-428d-ac4d-421e1a96ec36",
+    "origin": "subagent",
+    "parent": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 9,
+    "start": "2026-11-16T10:07:12.686Z",
+    "end": "2026-11-16T10:11:48.124Z"
+  },
+  {
+    "id": "448d641e-4efb-45f3-9482-12ac171af142",
+    "origin": "subagent",
+    "parent": "session-0a0233ca-fab1-4b3a-829b-1c5b5e638374",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 4,
+    "start": "2026-11-16T09:58:53.795Z",
+    "end": "2026-11-16T09:59:30.001Z"
+  },
+  {
+    "id": "4723ba67-8e81-41c0-bc5f-d100452815ce",
+    "origin": "subagent",
+    "parent": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 11,
+    "start": "2026-11-16T10:11:58.572Z",
+    "end": "2026-11-16T10:29:47.363Z"
+  },
+  {
+    "id": "4ef955e5-775f-48fa-a6aa-ffc9856fda57",
+    "origin": "subagent",
+    "parent": "session-250a26da-c213-4971-af94-835263ec54ba",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 5,
+    "start": "2026-11-16T10:05:54.737Z",
+    "end": "2026-11-16T10:06:41.311Z"
+  },
+  {
+    "id": "6941867d-bb1f-4a27-b043-63da3467708d",
+    "origin": "subagent",
+    "parent": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 9,
+    "start": "2026-11-16T10:21:21.002Z",
+    "end": "2026-11-16T10:27:17.710Z"
+  },
+  {
+    "id": "89990ea1-0cfe-4593-85bd-4696314e5f72",
+    "origin": "subagent",
+    "parent": "session-250a26da-c213-4971-af94-835263ec54ba",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 6,
+    "start": "2026-11-16T10:05:07.933Z",
+    "end": "2026-11-16T10:05:37.252Z"
+  },
+  {
+    "id": "ae0042c8-e7ac-4da4-97b7-08fe9b9360eb",
+    "origin": "subagent",
+    "parent": "session-0a0233ca-fab1-4b3a-829b-1c5b5e638374",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 4,
+    "start": "2026-11-16T09:58:53.905Z",
+    "end": "2026-11-16T09:59:34.559Z"
+  },
+  {
+    "id": "c286797f-2aa6-4ef2-a5e7-2799b5e90c79",
+    "origin": "subagent",
+    "parent": "session-0a0233ca-fab1-4b3a-829b-1c5b5e638374",
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 6,
+    "start": "2026-11-16T09:59:57.334Z",
+    "end": "2026-11-16T10:01:00.809Z"
+  },
+  {
+    "id": "session-0a0233ca-fab1-4b3a-829b-1c5b5e638374",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 13,
+    "start": "2026-11-16T09:56:02.642Z",
+    "end": "2026-11-16T10:01:33.269Z"
+  },
+  {
+    "id": "session-1f5f069e-35c5-4f14-a213-160ccc8ad7b1",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 5,
+    "start": "2026-11-16T09:51:44.166Z",
+    "end": "2026-11-16T09:52:56.690Z"
+  },
+  {
+    "id": "session-250a26da-c213-4971-af94-835263ec54ba",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 16,
+    "start": "2026-11-16T10:01:56.183Z",
+    "end": "2026-11-16T10:07:03.277Z"
+  },
+  {
+    "id": "session-3d75023c-7ecb-433a-ad33-bcb898744f41",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 3,
+    "start": "2026-11-16T09:50:40.349Z",
+    "end": "2026-11-16T09:51:29.826Z"
+  },
+  {
+    "id": "session-3db963a7-ba43-4557-893c-7548692a5fca",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 0,
+    "start": "2026-11-16T09:49:22.559Z",
+    "end": "2026-11-16T09:49:22.600Z"
+  },
+  {
+    "id": "session-76d4951b-94a2-491b-b474-8240175b526b",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 0,
+    "start": "2026-11-16T09:49:47.619Z",
+    "end": "2026-11-16T09:49:51.550Z"
+  },
+  {
+    "id": "session-79a7bfe1-c132-4031-ba9b-3a091f7d57c2",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 16,
+    "start": "2026-11-16T10:34:25.374Z",
+    "end": "2026-11-16T10:38:06.473Z"
+  },
+  {
+    "id": "session-a05a245e-e163-47e5-8abd-45ec4c96b40e",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 35,
+    "start": "2026-11-16T10:03:05.190Z",
+    "end": "2026-11-16T10:34:11.141Z"
+  },
+  {
+    "id": "session-aa688993-b394-4c1a-9bdd-720cf590d265",
+    "origin": "top",
+    "parent": null,
+    "cwd": "/private/tmp/twr-glm53-eval/project",
+    "model": {
+      "provider": "zai-coding-cn",
+      "model": "glm-5.3",
+      "reasoningEffort": "max"
+    },
+    "toolCalls": 0,
+    "start": "2026-11-16T09:53:16.206Z",
+    "end": "2026-11-16T09:55:15.749Z"
+  }
+]

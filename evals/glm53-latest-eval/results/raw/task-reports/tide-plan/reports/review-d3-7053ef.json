@@ -1,0 +1,61 @@
+{
+  "reportId": "review-d3-7053ef",
+  "dispatchKey": "d3-7053ef",
+  "role": "challenger",
+  "kind": "review",
+  "round": 1,
+  "stage": "design",
+  "taskSha": "9d31e01d56e10c05d3c0df534b99c7b69c050fb1ce9216926734d2852fc4eca6",
+  "reviewedPackages": [
+    {
+      "package": "failure-recovery-analysis",
+      "round": 1
+    },
+    {
+      "package": "interface-analysis",
+      "round": 1
+    }
+  ],
+  "waveId": "wv3",
+  "ver": 1,
+  "payloadDigest": "8d4875864ce625ae925d38100f8d3ec371a787e21d19dc891a7bff079ab43c9b",
+  "payload": {
+    "summary": "两包分析均已写入指定文件且内容完整（已直接核验文件与全文），但组合存在4处接缝矛盾——硬件基线（机构/传感/备电SRAM仅在 failure-recovery.md §2/§4.5）、OTA 分区与回滚数值（interface-constraints.md §4/§6 各1.5MB+3次失败回滚 vs failure-recovery.md §4.3/§5 各512KB+60s未确认回滚）、错误码状态接口未登记（§4.5/§5 vs §2.2/§2.3）、过温策略（§6 vs F-05）——final-plan-merge 直接合并会产出产品形态与核心契约自相矛盾的最终方案，故建议 rework 按各 finding 最小修正后复审；非阻塞项（§0 四层与正文五类计数笔误、断网本地曲线两种表述）与非交付包 final-plan-merge 不列入本轮修复清单。",
+    "recommendation": "rework",
+    "findings": [
+      {
+        "severity": "blocker",
+        "packages": [
+          "interface-analysis",
+          "failure-recovery-analysis"
+        ],
+        "statement": "[包归属：interface-analysis 与 failure-recovery-analysis 接缝] 硬件基线冲突：docs/failure-recovery.md §2（L14）分析对象含步进电机摆动机构、霍尔位置反馈、环境光/温度传感，F-04（L25）依赖霍尔反馈，§4.5（L65）使用 2KB 备电SRAM；而 docs/interface-constraints.md §1（L11）为静态环形导光灯体，§3 模块表（L49-56）与 §4 硬件约束（L62-65）中上述子系统无一登记，§0 却宣称接口全部收敛。触发链：final-plan-merge 完成标准是直接合并两份分析，合并后最终方案对产品是否含运动机构、有哪些传感器自相矛盾，直接妨碍可评审最终方案这一任务目标。最小修正：两文统一硬件基线——interface 包在 §3/§4 补登机构驱动、霍尔反馈、环境光/NTC、备电SRAM 接口与资源行，或 failure 包将机构等标注为可选/范围外；只改基线声明与相应行。"
+      },
+      {
+        "severity": "blocker",
+        "packages": [
+          "interface-analysis",
+          "failure-recovery-analysis"
+        ],
+        "statement": "[包归属：interface-analysis 与 failure-recovery-analysis 接缝] OTA 分区预算与回滚策略冲突：docs/interface-constraints.md §4（L62）写固件 A/B 各 1.5MB，§6（L85）写新分区 3 次启动看门狗失败才回滚；docs/failure-recovery.md §4.3（L52）写 slotA/slotB 各 512KB、L53-54 写 60s 未确认即回滚且连续两次回滚进恢复模式，§5（L69）写 Flash ≥1.25MB——每槽尺寸相差 3 倍、总预算与回滚触发条件互斥。OTA 双分区不变砖是两文共同核心承诺，合并后同一机制两套数字，评审无法判定以何为准。最小修正：指定一侧为权威（建议以 failure-recovery §4.3/§5 为恢复机制权威），另一侧同步数值或改为引用，只统一这几处数字与触发条件。"
+      },
+      {
+        "severity": "blocker",
+        "packages": [
+          "interface-analysis",
+          "failure-recovery-analysis"
+        ],
+        "statement": "[包归属：interface-analysis 为主、failure-recovery-analysis 接缝] 错误码/状态接口未进入接口契约：docs/failure-recovery.md §4.5（L64）定义 GET /device/status、err_mask、degraded，§5（L72）声明错误码表一经发布即为 App 与云端共同契约，§4.4（L59）称重连后调用状态同步接口上报；但 docs/interface-constraints.md §2.3（L35-39）云端 API 表仅 3 端点无 /device/status，§2.2（L31）MQTT state payload 未含 err_mask，且上报动作指向 GET 端点与接口文档定义的 MQTT 上报通道不一致。合并后对外接口清单与错误码契约脱节，兼容承诺（位只增不改语义）失去载体。最小修正：interface 包在 §2.2/§2.3 补登该状态接口或把 err_mask/degraded 并入 MQTT state payload，failure §4.4 措辞同步指向同一通道，两处各改一行即可。"
+      },
+      {
+        "severity": "blocker",
+        "packages": [
+          "interface-analysis",
+          "failure-recovery-analysis"
+        ],
+        "statement": "[包归属：interface-analysis 与 failure-recovery-analysis 接缝] 过温恢复行为矛盾：docs/interface-constraints.md §6（L87）写过流/过温保护性熄灯并 MQTT 上报、冷却后长按旋钮复位；docs/failure-recovery.md F-05（L26）写先降亮度 30% 持续超限才停灯效，§4.1 L0（L37）要求安全类故障硬件优先——同一故障两套用户可见行为与恢复动作。App 引导恢复（L3）与故障注入验收判据 V-05（期望降亮度 30%）依赖唯一行为定义，两表并存则合并方案无法验收。最小修正：统一过温处置策略（建议以 failure 文档分级策略为准），interface §6 该行改为一致表述或显式引用 failure 文档为权威。"
+      }
+    ]
+  },
+  "at": "2026-11-17T13:36:12.832Z"
+}

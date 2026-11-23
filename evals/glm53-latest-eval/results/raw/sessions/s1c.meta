@@ -1,0 +1,10 @@
+tag=s1c
+started_at=2026-11-17T21:29:32+08:00
+session_arg=session-11ed6ef8-3dc3-4f70-b8e3-64a00c349a21
+task_file=/Users/liyang/Projects/Opensource/team-work-runtime/evals/glm53-latest-eval/code/tasks/s1c.md
+task_sha256=10a4728c252e633801d4f8984f2a4859ef793d7e4c5d468fbd2c7d20f0d63cfd
+permission_mode=danger-full-access
+home=/private/tmp/glm53-latest-eval-20261117b/home
+dsh_home=/private/tmp/glm53-latest-eval-20261117b/home/.dsh
+project=/private/tmp/glm53-latest-eval-20261117b/project
+finished_at=2026-11-17T21:31:06+08:00

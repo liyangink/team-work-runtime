@@ -1,0 +1,56 @@
+{
+  "items": [
+    {
+      "id": "interface-analysis",
+      "writable": [
+        "docs/design/interface-constraints.md:doc"
+      ],
+      "done": [
+        "独立写出虚构产品「潮汐灯」的接口与约束分析说明：产品虚构接口清单（硬件/固件/云端/客户端任选）、每个接口的输入输出与错误约定、以及功能/非功能约束与边界条件",
+        "全部内容为虚构并完整写入 docs/design/interface-constraints.md"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "failure-analysis",
+      "writable": [
+        "docs/design/failure-recovery.md:doc"
+      ],
+      "done": [
+        "独立写出虚构产品「潮汐灯」的故障与恢复分析说明：故障模式分类与影响、检测手段、恢复策略与降级行为、数据与状态一致性保障",
+        "全部内容为虚构并完整写入 docs/design/failure-recovery.md"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "merge-final",
+      "writable": [
+        "docs/design/final-plan.md:doc"
+      ],
+      "dependsOn": [
+        "interface-analysis",
+        "failure-analysis"
+      ],
+      "done": [
+        "读取 docs/design/interface-constraints.md 与 docs/design/failure-recovery.md 两份分析，合并成一份结构完整、可评审的「潮汐灯」最终方案（含两部分内容及其衔接与取舍说明）",
+        "写入 docs/design/final-plan.md，不改动上游两个文件"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

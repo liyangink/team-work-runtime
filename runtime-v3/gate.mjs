@@ -8,6 +8,44 @@
 
 import { digestValue } from "./domain/digests.mjs"
 import { writableMatch } from "./domain/writable.mjs"
+import { deliverBaselines, reportOrderComparator } from "./waves.mjs"
+
+// B8/§6.2.1-4：人工门批准/签发必须晚于当前全部基线报告的 journal 提交序——刷新（reportId 变化
+// 而字节可能不变）或迟到重交形成新基线身份后，旧批准/旧卡即使指纹相同也失效，须重新确认。
+export function baselineCommitFloor({ journal, reports }) {
+  let floor = -1
+  const baselines = deliverBaselines({ journal, reports })
+  for (const [, base] of baselines) {
+    const reportId = base.report?.reportId
+    if (!reportId) continue
+    for (const e of journal) {
+      if ((e.type === "report-accepted" || e.type === "report-committed") && e.detail?.reportId === reportId) {
+        floor = Math.max(floor, e.seq ?? -1)
+      }
+    }
+  }
+  return floor
+}
+
+function decisionSeqOf(journal, decisionId) {
+  let seq = -1
+  for (const e of journal) {
+    if (e.type === "decided" && e.detail?.decisionId === decisionId && String(e.detail.choice) !== "superseded") {
+      seq = Math.max(seq, e.seq ?? -1)
+    }
+  }
+  return seq
+}
+
+function issuedSeqOf(journal, decisionId) {
+  let seq = -1
+  for (const e of journal) {
+    if (e.type === "decision-issued" && e.detail?.decisionId === decisionId) {
+      seq = Math.max(seq, e.seq ?? -1)
+    }
+  }
+  return seq
+}
 
 export function artifactsFingerprint(items) {
   return digestValue(items.map(({ path, digest }) => ({ path, digest })).sort((a, b) => a.path.localeCompare(b.path)))
@@ -37,25 +75,15 @@ export function artifactFingerprints(stageItems, packages = null) {
 }
 
 // F6 评审链指纹：最新 Challenger 报告（reportId+ver+payload digest）与核心场景最新 Expert 报告的复合 digest。
-// 「最新」以 journal seq（report-accepted 事件序）为第一全序、at 次级破平（store 比较器同毫秒不可靠）；
+// 「最新」与波次机共用报告提交序比较器，按 (reportId, ver) 锚定新旧协议的 journal 事件；
 // 指纹选取加当前阶段过滤（reports 由调用方按阶段过滤）。
 export function reviewChainFingerprint({ reports = [], journal = [], core = false }) {
-  const seqOf = new Map()
-  for (const e of journal) {
-    if (e.type === "report-accepted" && e.detail?.reportId) seqOf.set(e.detail.reportId, e.seq)
-  }
-  const later = (a, b) => {
-    const sa = seqOf.get(a.reportId) ?? -1
-    const sb = seqOf.get(b.reportId) ?? -1
-    if (sa !== sb) return sa > sb
-    if ((a.at ?? "") !== (b.at ?? "")) return (a.at ?? "") > (b.at ?? "")
-    return (a.ver ?? 1) > (b.ver ?? 1)
-  }
+  const compareReports = reportOrderComparator(journal)
   const pick = (role) => {
     let best = null
     for (const r of reports) {
       if (r.kind !== "review" || r.role !== role) continue
-      if (!best || later(r, best)) best = r
+      if (!best || compareReports(r, best) > 0) best = r
     }
     return best
   }
@@ -90,13 +118,25 @@ function stageArtifacts(artifacts, stageId) {
   return artifacts.items.filter((item) => item.stage === stageId)
 }
 
-export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports, decisions, journal, packages = null }) {
+export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports, decisions, journal, packages = null, artifactVerification = null }) {
   const stageDef = workflow.stages.find((s) => s.id === stageId)
   if (!stageDef) {
     return { passed: false, blockers: [{ requirement: `workflow 没有阶段 ${stageId}`, evidence: [], recovery: "检查 scope.json 的 entry 与 workflow 定义" }] }
   }
   const blockers = []
   const current = stageArtifacts(artifacts, stageId)
+
+  // 0. §6.2 实时字节核验（调用方稳定读取磁盘后传入结果；run/gate 只读、写入口在锁内重算）：
+  //    磁盘原始字节 SHA-256 与各包有效清单快照不一致 → 普通阻塞（非人工等待），列路径与恢复指引。
+  if (artifactVerification && !artifactVerification.ok) {
+    for (const m of artifactVerification.mismatches ?? []) {
+      blockers.push({
+        requirement: `磁盘内容与登记摘要不一致：${m.path}（${m.reason}）`,
+        evidence: [m.expected ?? "—", m.actual ?? "未知"],
+        recovery: "成员按报告清单恢复文件后重新交付（tw restore --path 可从有效快照恢复原始字节），或 Lead 在用户明确确认后用 tw refresh-artifacts 刷新待审基线",
+      })
+    }
+  }
 
   // 1. 产出物在场：阶段合同 outputs 的每个 kind 至少一个登记产出物
   for (const kind of stageDef.outputs ?? []) {
@@ -109,8 +149,16 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
     }
   }
 
-  // 2. 检查通过：Owner 报告里的 checks 不得有 fail（声称不算数，平台观察对账在 DSH 绑定层）
-  const ownerReports = reports.filter((r) => r.role === "owner" && r.kind === "deliver")
+  // 2. 检查通过：Owner 报告里的 checks 不得有 fail（声称不算数，平台观察对账在 DSH 绑定层）。
+  // B2 修订：事件流保留同 key 全部 ver，checks 只看每 key 最新 ver（v1 fail 被 v2 pass 修订后不阻塞）。
+  const ownerReportsAll = reports.filter((r) => r.role === "owner" && r.kind === "deliver")
+  const latestVerByKey = new Map()
+  for (const r of ownerReportsAll) {
+    const key = r.dispatchKey ?? r.reportId
+    const prev = latestVerByKey.get(key)
+    if (!prev || (r.ver ?? 1) > (prev.ver ?? 1)) latestVerByKey.set(key, r)
+  }
+  const ownerReports = [...latestVerByKey.values()]
   const failed = ownerReports.flatMap((r) => (r.payload?.checks ?? []).filter((c) => c.result === "fail").map((c) => ({ report: r.reportId, check: c })))
   for (const f of failed) {
     blockers.push({
@@ -122,7 +170,8 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
 
   // 3. 非作者评审在场：最新 challenger review 为 accept（能走到门=波次机已判收敛，多包下
   // 轮次按包计，不再用 ownerReports 数当全局轮；rework/escalate 不会走到门，此处防御）
-  const challenger = reports.filter((r) => r.role === "challenger").at(-1)
+  const compareReports = reportOrderComparator(journal)
+  const challenger = reports.filter((r) => r.role === "challenger" && r.kind === "review").sort(compareReports).at(-1)
   if (!challenger || challenger.payload?.recommendation !== "accept") {
     blockers.push({
       requirement: "非作者评审未接受当前交付",
@@ -134,7 +183,7 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
   // 4. 核心场景 Expert 裁决在场
   const sp = { core: policy.scenes[stageDef.teamScene]?.core }
   if (sp.core) {
-    const expert = reports.filter((r) => r.role === "expert").at(-1)
+    const expert = reports.filter((r) => r.role === "expert" && r.kind === "review").sort(compareReports).at(-1)
     if (!expert || expert.payload?.verdict?.outcome !== "accept") {
       blockers.push({
         requirement: "核心场景缺少非作者 Expert 接受裁决",
@@ -177,15 +226,29 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
       : null)
   if (humanRequired) {
     const issued = journal.filter((e) => e.type === "decision-issued" && e.detail?.gateId === humanRequired.gateId).at(-1)
-    // F6-1 已决分支：按 gateId 倒序取最新 accept（decisions 追加序即时间序），杜绝恒比对旧决定成环
-    const decided = decisions.filter((d) => d.gateId === humanRequired.gateId && d.choice === "accept").at(-1)
+    // §6.2.2-7 同 ID 匹配：accept 决定必须对应其实际签发卡（decisionId → issued 卡 gateId 一致），
+    // 且该卡未被 superseded——刷新决定、跨卡消费、伪造 gateId 的行都不满足本门。
+    const issuedById = new Map()
+    const supersededIds = new Set()
+    for (const e of journal) {
+      if (e.type === "decision-issued" && e.detail?.decisionId) issuedById.set(e.detail.decisionId, e.detail)
+      else if (e.type === "decided" && e.detail?.decisionId && String(e.detail.choice) === "superseded") supersededIds.add(e.detail.decisionId)
+    }
+    const decided = decisions
+      .filter((d) => d.gateId === humanRequired.gateId && d.choice === "accept"
+        && issuedById.get(d.decisionId)?.gateId === humanRequired.gateId
+        && !supersededIds.has(d.decisionId))
+      .at(-1)
     // F5 每包制品指纹（统一公式，不兜底全量）+ F6 评审链指纹
     const artifactFp = artifactFingerprints(current, packages)
     const reviewFp = reviewChainFingerprint({ reports, journal, core: Boolean(sp.core) })
     if (!decided) {
       // F6-2 未决分支：签发指纹 vs 当前指纹，变化 → 卡片失效（runTransition 作废旧卡重签新卡）
       const issuedFp = issued?.detail?.fingerprints
-      const stale = issuedFp ? !humanDecisionFresh({ decided: issuedFp, artifactFp, reviewFp }) : false
+      // B8：基线提交序条件——卡签发后出现新基线（刷新/迟到重交，字节可能未变）同样失效
+      const baselineFloor = baselineCommitFloor({ journal, reports })
+      const issuedLate = issued ? issuedSeqOf(journal, issued.detail.decisionId) >= baselineFloor : true
+      const stale = issuedFp ? (!humanDecisionFresh({ decided: issuedFp, artifactFp, reviewFp }) || !issuedLate) : false
       blockers.push({
         requirement: `人工门 ${humanRequired.gateId} 等待用户决定`,
         evidence: issued ? [issued.detail.decisionId] : [],
@@ -193,9 +256,9 @@ export function gateCheck({ workflow, policy, stageId, scope, artifacts, reports
         awaitingUser: true,
         ...(stale ? { staleFingerprint: true, note: "等待期评审链或制品已变化，旧卡已失效，将重新签发" } : {}),
       })
-    } else if (!humanDecisionFresh({ decided, artifactFp, reviewFp })) {
+    } else if (!humanDecisionFresh({ decided, artifactFp, reviewFp }) || decisionSeqOf(journal, decided.decisionId) < baselineCommitFloor({ journal, reports })) {
       blockers.push({
-        requirement: `人工门 ${humanRequired.gateId} 的批准指纹已过期（制品或评审链在批准后发生变化）`,
+        requirement: `人工门 ${humanRequired.gateId} 的批准指纹已过期（制品或评审链在批准后发生变化，或基线报告身份已更新）`,
         evidence: [decided.decisionId],
         recovery: "重新呈现卡片请求用户确认",
         awaitingUser: true,

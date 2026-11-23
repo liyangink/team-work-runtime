@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-570117",
+  "dispatchKey": "d1-570117",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "implementation",
+  "package": "one-note",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "dba52a60bd6fa41bf689abfb32ea9591de907856816f7b436a47bd7d701b7aa7",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已交付：新建 docs/one-note.md 并恰好写入一行虚构产品说明“云屿信标：把散落的思绪系成一盏灯，漂多远都能被一眼认出。”，经 wc -l 验证该文件为 1 行，且 docs/tagline-alpha.md、tagline-beta.md 及其他路径时间戳与内容零改动；本包无需测试用例（纯单行文档新增，无代码行为可测）。",
+    "paths": [
+      "docs/one-note.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T10:05:28.405Z"
+}

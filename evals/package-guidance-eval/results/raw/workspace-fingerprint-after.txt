@@ -1,0 +1,12 @@
+22bf19c02405dc6ddc3de93c7d280c9d68fbfd76c05218fbd0bd4017d1d18bae  skills/team-work-v3/SKILL.md
+8a3b3a8e7c30892ebf1929ff43c35d27875666daccf2880813631907a86333cd  tests/repository-contract.test.mjs
+95f3db220e027d0ac5c60496b7e8ce40aca6ff93f341ced43f70ee0e7f5c4563  docs/lead-reporting-alignment-plan.md
+526917847e8689df85e9e8d70d4de640533bae2ba5a04ae663940f5a9b1a5c34  docs/parallel-package-guidance-plan.md
+git_status:
+ M skills/team-work-v3/SKILL.md
+ M tests/repository-contract.test.mjs
+?? docs/lead-reporting-alignment-plan.md
+?? docs/parallel-package-guidance-plan.md
+?? evals/package-guidance-eval/
+teamwork_files=620
+teamwork_meta_sha256=fc26ce0cb5b749ee55afdcb7611d42565ca19fe28d12e01b8616caf864c5fd2a

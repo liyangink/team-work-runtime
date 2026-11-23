@@ -1,0 +1,462 @@
+{
+  "evidenceRoot": "/private/tmp/twr-headless-e2e-bqvVoG",
+  "isolationVerified": true,
+  "modelExecuted": true,
+  "approvalSource": "test-driver",
+  "packageSha256": "ebec38d1a11694765b98062586fd7885bccc12a3595abf426d921d745d644587",
+  "model": [
+    "zai-coding-cn",
+    "glm-5.3",
+    "max"
+  ],
+  "mappings": [
+    {
+      "key": "d1-6d3394",
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "wave": "wv1",
+      "action": "wait",
+      "leadCallSeq": 57,
+      "receivedSeq": 4,
+      "reportSeq": 65,
+      "reportId": "deliver-d1-6d3394",
+      "promptSha256": "e74d8b5d121cac0ecad79047872e824d4cb49295f8a204c683c6227f6d895963"
+    },
+    {
+      "key": "d1-5da7a9",
+      "session": "86696f88-b968-462d-a448-6455b3b89c17",
+      "wave": "wv1",
+      "action": "wait",
+      "leadCallSeq": 57,
+      "receivedSeq": 4,
+      "reportSeq": 59,
+      "reportId": "deliver-d1-5da7a9",
+      "promptSha256": "4478f23d4b1580ca4797814bfc2e09da70d56c1d0a1a48040bd764ba393d2c16"
+    },
+    {
+      "key": "d3-181c30",
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "wave": "wv3",
+      "action": "wait",
+      "leadCallSeq": 78,
+      "receivedSeq": 4,
+      "reportSeq": 33,
+      "reportId": "review-d3-181c30",
+      "promptSha256": "51acae7e0e6c072c8279375f3452e29691b687fd0be146cf7516915c73ddb065"
+    },
+    {
+      "key": "d4-74b589",
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "wave": "wv4",
+      "action": "followup",
+      "leadCallSeq": 92,
+      "receivedSeq": 72,
+      "reportSeq": 103,
+      "reportId": "deliver-d4-74b589",
+      "promptSha256": "0cb0df161165ae62ba72b99d33ff59ece1151ee988366a640a9a5ae92b3a3a69"
+    },
+    {
+      "key": "d5-0597a3",
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "wave": "wv5",
+      "action": "followup",
+      "leadCallSeq": 108,
+      "receivedSeq": 40,
+      "reportSeq": 57,
+      "reportId": "review-d5-0597a3",
+      "promptSha256": "0a758ec94ca0ae42f5b73cc56f3a1f9331d5b05eae091570bebccd732141ffc9"
+    },
+    {
+      "key": "d6-b42150",
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "wave": "wv6",
+      "action": "wait",
+      "leadCallSeq": 121,
+      "receivedSeq": 4,
+      "reportSeq": 40,
+      "reportId": "review-d6-b42150",
+      "promptSha256": "b245959b7fb21d8a24312a59265b495e15ccc225d55612d9f9daf84730a3ca5b"
+    },
+    {
+      "key": "d7-1730be",
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "wave": "wv7",
+      "action": "followup",
+      "leadCallSeq": 138,
+      "receivedSeq": 110,
+      "reportSeq": 141,
+      "reportId": "deliver-d7-1730be",
+      "promptSha256": "42ca0951bbf792d478e4f008a26a6999d59e0ae181761ec198099ad8c1344706"
+    },
+    {
+      "key": "d8-572e7d",
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "wave": "wv8",
+      "action": "followup",
+      "leadCallSeq": 151,
+      "receivedSeq": 64,
+      "reportSeq": 81,
+      "reportId": "review-d8-572e7d",
+      "promptSha256": "ba1ca0a4c8d72df4d056a40871781ef16dcc495102d0385dc3fa623f03684db2"
+    },
+    {
+      "key": "d9-327243",
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "wave": "wv9",
+      "action": "followup",
+      "leadCallSeq": 164,
+      "receivedSeq": 47,
+      "reportSeq": 66,
+      "reportId": "review-d9-327243",
+      "promptSha256": "cf934a5715a8e1bde501a23385d407c6562ea92b4d699232a5b12a673fdd6aa4"
+    }
+  ],
+  "fileTrail": [
+    {
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "key": "d1-6d3394",
+      "path": "artifacts/alpha/main.md",
+      "kind": "write",
+      "operation": "create",
+      "callSeq": 47,
+      "resultSeq": 48,
+      "sha256": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    {
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "key": "d1-6d3394",
+      "path": "artifacts/alpha/legacy.md",
+      "kind": "write",
+      "operation": "create",
+      "callSeq": 52,
+      "resultSeq": 53,
+      "sha256": "974c6347d8ed74c7a59ab276462199999501c44a06412d0cfa08ada81086416a"
+    },
+    {
+      "session": "86696f88-b968-462d-a448-6455b3b89c17",
+      "key": "d1-5da7a9",
+      "path": "artifacts/beta/main.md",
+      "kind": "write",
+      "operation": "create",
+      "callSeq": 48,
+      "resultSeq": 49,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    {
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "key": "d4-74b589",
+      "path": "artifacts/alpha/index.md",
+      "kind": "write",
+      "operation": "create",
+      "callSeq": 88,
+      "resultSeq": 89,
+      "sha256": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61"
+    },
+    {
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "key": "d7-1730be",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 117,
+      "resultSeq": 120,
+      "sha256": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    {
+      "session": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "key": "d7-1730be",
+      "path": "artifacts/alpha/main.md",
+      "kind": "write",
+      "operation": "update",
+      "callSeq": 126,
+      "resultSeq": 127,
+      "sha256": "2a0e35c7d0dd24a5e75a89a4594ce1d255785bd91dc4c1d0127ba4e857e4f13a"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d3-181c30",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 18,
+      "resultSeq": 22,
+      "sha256": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d3-181c30",
+      "path": "artifacts/alpha/legacy.md",
+      "kind": "read",
+      "callSeq": 17,
+      "resultSeq": 21,
+      "sha256": "974c6347d8ed74c7a59ab276462199999501c44a06412d0cfa08ada81086416a"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d3-181c30",
+      "path": "artifacts/beta/main.md",
+      "kind": "read",
+      "callSeq": 19,
+      "resultSeq": 23,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d5-0597a3",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 47,
+      "resultSeq": 50,
+      "sha256": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d5-0597a3",
+      "path": "artifacts/alpha/index.md",
+      "kind": "read",
+      "callSeq": 48,
+      "resultSeq": 51,
+      "sha256": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d5-0597a3",
+      "path": "artifacts/beta/main.md",
+      "kind": "read",
+      "callSeq": 49,
+      "resultSeq": 52,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d6-b42150",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 23,
+      "resultSeq": 27,
+      "sha256": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d6-b42150",
+      "path": "artifacts/alpha/index.md",
+      "kind": "read",
+      "callSeq": 24,
+      "resultSeq": 28,
+      "sha256": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d6-b42150",
+      "path": "artifacts/beta/main.md",
+      "kind": "read",
+      "callSeq": 25,
+      "resultSeq": 29,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d8-572e7d",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 71,
+      "resultSeq": 74,
+      "sha256": "2a0e35c7d0dd24a5e75a89a4594ce1d255785bd91dc4c1d0127ba4e857e4f13a"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d8-572e7d",
+      "path": "artifacts/alpha/index.md",
+      "kind": "read",
+      "callSeq": 72,
+      "resultSeq": 75,
+      "sha256": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61"
+    },
+    {
+      "session": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "key": "d8-572e7d",
+      "path": "artifacts/beta/main.md",
+      "kind": "read",
+      "callSeq": 73,
+      "resultSeq": 76,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d9-327243",
+      "path": "artifacts/alpha/main.md",
+      "kind": "read",
+      "callSeq": 54,
+      "resultSeq": 58,
+      "sha256": "2a0e35c7d0dd24a5e75a89a4594ce1d255785bd91dc4c1d0127ba4e857e4f13a"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d9-327243",
+      "path": "artifacts/alpha/index.md",
+      "kind": "read",
+      "callSeq": 55,
+      "resultSeq": 59,
+      "sha256": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61"
+    },
+    {
+      "session": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "key": "d9-327243",
+      "path": "artifacts/beta/main.md",
+      "kind": "read",
+      "callSeq": 56,
+      "resultSeq": 60,
+      "sha256": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    }
+  ],
+  "finalDecisionId": "dec-f55f4b",
+  "sessions": [
+    {
+      "id": "2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e",
+      "parent": "session-0d39781e-daeb-46c4-8992-3cfe8563c15e",
+      "role": "CR·chal · sample-register-chal-r1 #sample-register",
+      "requests": [
+        {
+          "seq": 12,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 45,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 69,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        }
+      ],
+      "providerResponses": 10,
+      "file": "sessions/--private-tmp-twr-headless-e2e-bqvVoG-project--/2352a8a2-c4e3-4590-9a8f-35ba3c7bb12e/session.v4.jsonl.zstd",
+      "fileSha256": "c4f0744a96552b1ffb9dcea17aeb699db3156c2971367cac17758fa49dd378c6"
+    },
+    {
+      "id": "86696f88-b968-462d-a448-6455b3b89c17",
+      "parent": "session-0d39781e-daeb-46c4-8992-3cfe8563c15e",
+      "role": "CR·owner@beta · sample-register-owner-r1 #sample-register",
+      "requests": [
+        {
+          "seq": 12,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        }
+      ],
+      "providerResponses": 10,
+      "file": "sessions/--private-tmp-twr-headless-e2e-bqvVoG-project--/86696f88-b968-462d-a448-6455b3b89c17/session.v4.jsonl.zstd",
+      "fileSha256": "7b4008fdc149a0af7c27eee70a4d46fc7fa2099b2a2eef512fa474118e4774d3"
+    },
+    {
+      "id": "963dd163-0d19-454f-88ff-2d9a7a553875",
+      "parent": "session-0d39781e-daeb-46c4-8992-3cfe8563c15e",
+      "role": "CR·expert · sample-register-expert-r2 #sample-register",
+      "requests": [
+        {
+          "seq": 12,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 52,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        }
+      ],
+      "providerResponses": 8,
+      "file": "sessions/--private-tmp-twr-headless-e2e-bqvVoG-project--/963dd163-0d19-454f-88ff-2d9a7a553875/session.v4.jsonl.zstd",
+      "fileSha256": "57a0d41602fc3238243e82eddbc294123747f3ac1b09ee510fafffb80d1dd9fa"
+    },
+    {
+      "id": "e9162283-2b70-4d57-8ad3-5037a8252f42",
+      "parent": "session-0d39781e-daeb-46c4-8992-3cfe8563c15e",
+      "role": "CR·owner@alpha · sample-register-owner-r1 #sample-register",
+      "requests": [
+        {
+          "seq": 12,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 77,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 115,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        }
+      ],
+      "providerResponses": 20,
+      "file": "sessions/--private-tmp-twr-headless-e2e-bqvVoG-project--/e9162283-2b70-4d57-8ad3-5037a8252f42/session.v4.jsonl.zstd",
+      "fileSha256": "f3e57747e24a8aac0c905c715d373c781af431635e8a0d07a0ae89d132312799"
+    },
+    {
+      "id": "session-0d39781e-daeb-46c4-8992-3cfe8563c15e",
+      "parent": null,
+      "role": "Lead",
+      "requests": [
+        {
+          "seq": 11,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 50,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        },
+        {
+          "seq": 198,
+          "provider": "zai-coding-cn",
+          "model": "glm-5.3",
+          "effort": "max"
+        }
+      ],
+      "providerResponses": 30,
+      "file": "sessions/--private-tmp-twr-headless-e2e-bqvVoG-project--/session-0d39781e-daeb-46c4-8992-3cfe8563c15e/session.v4.jsonl.zstd",
+      "fileSha256": "a528151132d42775be482baad33e71b866545a77359e221462a8e84c825e12e5"
+    }
+  ],
+  "handoff": {
+    "challenger": "甲包交付清单仍登记旧版交接页 artifacts/alpha/legacy.md，缺少场景要求的新增索引页：请返工新增 artifacts/alpha/index.md，并把完整交付清单改为 main.md 与 index.md，将旧版交接页从登记中替换为该索引，同时磁盘上保留 legacy.md 原文件不得删除或改写；本条以标记 CH-ALPHA-INDEX 追踪。",
+    "expert": "EX-ALPHA-READY 甲包裁决定点尚未完成：本角色已 read 实读 artifacts/alpha/main.md，全文仍为「状态：待复核」，未达到场景约定的归档前置状态；请甲包仅用 write 将该文件全文改为「状态：归档就绪」加一个 LF，交付清单保持 main.md 与 index.md 两件不变，不改索引内容、不动 legacy.md 磁盘字节。",
+    "alphaContext": "甲包上轮必改已按约定关闭：新增索引页在位、登记清单改为 main.md 与 index.md、旧页移出登记但磁盘文件保留，本条以 CTX-ALPHA 标记为非必改上下文：后续轮次如涉及该旧页，应继续保持其磁盘字节不变、仅通过登记清单管理其进出。",
+    "excludedBetaContext": "乙包首次完整清单内容与场景约定一致，本轮无返工要求，本条以 CTX-BETA 标记为非必改上下文：乙包按场景只首交一次，后续组合核验以现有制品参与即可，无需重复交付或改动。"
+  },
+  "artifacts": {
+    "firstAlpha": {
+      "artifacts/alpha/legacy.md": "974c6347d8ed74c7a59ab276462199999501c44a06412d0cfa08ada81086416a",
+      "artifacts/alpha/main.md": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    "secondAlpha": {
+      "artifacts/alpha/index.md": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61",
+      "artifacts/alpha/main.md": "9bd5b7d634279d4ea1f9ea108256b7f5d4bed12f1fc5fff9cfbdaabb238853d3"
+    },
+    "thirdAlpha": {
+      "artifacts/alpha/index.md": "131844575a174fd87d58ec17674ad4e53c6d396b9a8fb95119238d1727752b61",
+      "artifacts/alpha/main.md": "2a0e35c7d0dd24a5e75a89a4594ce1d255785bd91dc4c1d0127ba4e857e4f13a"
+    },
+    "beta": {
+      "artifacts/beta/main.md": "eedcc005da93e2cf20161c96e7a3a839cf314dc924ab9d5df30422f4f3fd5939"
+    },
+    "omittedLegacyKept": true
+  },
+  "completed": true,
+  "finalHumanChoice": 1,
+  "finalDecisionSeq": 200,
+  "finalLeadReceiptSeq": 206
+}

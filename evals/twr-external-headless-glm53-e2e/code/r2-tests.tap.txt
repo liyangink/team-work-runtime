@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: 原生规则不被替换，runner、约束或分隔形状缺证拒绝
+ok 1 - 原生规则不被替换，runner、约束或分隔形状缺证拒绝
+  ---
+  duration_ms: 2.524
+  type: 'test'
+  ...
+# Subtest: 原版 CLI 两种入口都走固定单层包装，拒绝变更目标并隔离环境
+ok 2 - 原版 CLI 两种入口都走固定单层包装，拒绝变更目标并隔离环境
+  ---
+  duration_ms: 0.338
+  type: 'test'
+  ...
+# Subtest: 测试工具的白名单、文件正例与 CLI 根覆盖拒绝
+ok 3 - 测试工具的白名单、文件正例与 CLI 根覆盖拒绝
+  ---
+  duration_ms: 1.595292
+  type: 'test'
+  ...
+# Subtest: 保留原 CLI 的 help 和不存在任务的公开回执，不载入模型
+ok 4 - 保留原 CLI 的 help 和不存在任务的公开回执，不载入模型
+  ---
+  duration_ms: 65.310625
+  type: 'test'
+  ...
+# Subtest: 原 CLI 同进程的探针走专用 FD，而非污染公开回执或把未受限进程判为通过
+ok 5 - 原 CLI 同进程的探针走专用 FD，而非污染公开回执或把未受限进程判为通过
+  ---
+  duration_ms: 51.520875
+  type: 'test'
+  ...
+# Subtest: 原生预检必须同时证明本轮、原生写限制、正例、拒写与后代继承
+ok 6 - 原生预检必须同时证明本轮、原生写限制、正例、拒写与后代继承
+  ---
+  duration_ms: 1.820875
+  type: 'test'
+  ...
+# Subtest: 实际请求头不能由描述符、缺省强度或未收到提供方的输出代替
+ok 7 - 实际请求头不能由描述符、缺省强度或未收到提供方的输出代替
+  ---
+  duration_ms: 0.311334
+  type: 'test'
+  ...
+# Subtest: 使用真实 CLI 输出构造合成轨迹，验证九个派单键、角色、清单、原文和两道人门的严格判定
+ok 8 - 使用真实 CLI 输出构造合成轨迹，验证九个派单键、角色、清单、原文和两道人门的严格判定
+  ---
+  duration_ms: 13.366166
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 154.357667

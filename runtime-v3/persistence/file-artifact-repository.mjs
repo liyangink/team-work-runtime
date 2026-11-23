@@ -115,6 +115,38 @@ export async function readStableArtifact(projectRoot, relativePath) {
   return readStable(root, relativePath)
 }
 
+// 稳定读取原始字节（架构方案 §6.2 sha256-bytes-v1）：同一套防逃逸/防符号链接/读中变化检测，
+// 但返回 Buffer 而非 UTF-8 文本——快照与实时核验都以磁盘原始字节为准，不先经文本转换损失字节。
+// 读中变化（handle 前后元数据不一致）由 readStable 内部抛 ARTIFACT_UNSTABLE。
+export async function readStableArtifactBytes(projectRoot, relativePath) {
+  const root = await realpath(path.resolve(projectRoot))
+  const candidate = path.resolve(root, validateRelativePath(relativePath))
+  if (!inside(root, candidate)) throw failure("ARTIFACT_PATH_ESCAPE", `artifact path escapes project root: ${relativePath}`)
+  let handle
+  try {
+    await rejectSymlinkSegments(root, candidate, relativePath)
+    handle = await open(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile()) throw failure("ARTIFACT_NOT_FILE", `artifact is not a regular file: ${relativePath}`)
+    const bytes = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    if (!sameSnapshot(before, after)) throw failure("ARTIFACT_UNSTABLE", `artifact changed while being read: ${relativePath}`)
+    const resolved = await realpath(candidate)
+    if (!inside(root, resolved)) throw failure("ARTIFACT_PATH_ESCAPE", `artifact resolves outside project root: ${relativePath}`)
+    const linked = await lstat(candidate, { bigint: true })
+    if (linked.isSymbolicLink() || !linked.isFile() || !sameFile(before, linked)) {
+      throw failure("ARTIFACT_UNSTABLE", `artifact path changed while being read: ${relativePath}`)
+    }
+    return bytes
+  } catch (error) {
+    if (error.code === "ENOENT") throw failure("ARTIFACT_MISSING", `artifact does not exist: ${relativePath}`)
+    if (["ELOOP", "EMLINK"].includes(error.code)) throw failure("ARTIFACT_PATH_ESCAPE", `artifact path is a symbolic link: ${relativePath}`)
+    throw error
+  } finally {
+    await handle?.close()
+  }
+}
+
 export function createFileArtifactRepository({ projectRoot } = {}) {
   if (typeof projectRoot !== "string" || projectRoot === "") throw new TypeError("projectRoot is required")
   let rootPromise

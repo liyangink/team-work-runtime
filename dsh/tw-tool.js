@@ -52,7 +52,7 @@ export function twToolDefinition(deps = {}) {
   return {
     name: "tw",
     timeoutMs: TW_TIMEOUT_MS,
-    description: 'team-work CLI：任务目录读写（open/plan/run/deliver/review/decide/...）。args 即 CLI 参数面，如 ["gate","--task","demo"]；输出为 JSON 卡片（拒绝自带 fix 指引）。运行 tw help 查看全部命令。',
+    description: 'team-work CLI：任务目录读写（open/plan/run/deliver/review/decide/refresh-artifacts/...）。args 原样透传 CLI，输出为 JSON 卡片；多张待决卡按实际 decisionId 独立答复，Lead 刷新制品须绑定用户实际授权，不能代替评审。运行 tw help 查看完整命令与恢复指引。',
     parameters: {
       type: "object",
       properties: {

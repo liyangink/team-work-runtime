@@ -1,0 +1,29 @@
+## 提交只点名 a 的 rework finding（错误字段名 packages）
+{
+  "reportId": "review-d3-e70791",
+  "accepted": true,
+  "ver": 1,
+  "reviewedDigest": "6c0fed8369ed08a0b85124d13ed3e9f146624b88e82312a802c59e233b275d83",
+  "hint": "意见已登记，将驱动下一波次或门禁。"
+}
+
+## 下一次推进的实际返工波次
+{
+  "stop": null,
+  "waves": [
+    {
+      "role": "owner",
+      "package": "a",
+      "key": "d4-f32b2c",
+      "round": 2
+    },
+    {
+      "role": "owner",
+      "package": "b",
+      "key": "d4-ac1ea5",
+      "round": 2
+    }
+  ]
+}
+
+## 本脚本创建的项目（保留供审计，不删除）：/private/tmp/glm53-latest-eval-rework-20261117/cli-repro-finding-field

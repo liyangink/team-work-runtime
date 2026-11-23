@@ -1,0 +1,10 @@
+eval_root=/private/tmp/glm53-latest-eval-20261117b
+project_root=/private/tmp/glm53-latest-eval-20261117b/project
+home=/private/tmp/glm53-latest-eval-20261117b/home
+dsh_home=/private/tmp/glm53-latest-eval-20261117b/home/.dsh
+source_tree_sha256=10f00b96386a5922b8e72336d66ca3e689f97b383a94448ad72c4152a1287008
+loaded_tree_sha256=10f00b96386a5922b8e72336d66ca3e689f97b383a94448ad72c4152a1287008
+skill_sha256=477a48083bbc44a59e40494b5be29cc2b54df7cc2f28e1080c5fa6799fb04002
+repo_skill_sha256=477a48083bbc44a59e40494b5be29cc2b54df7cc2f28e1080c5fa6799fb04002
+repo_commit=adc94e183f3501d26a2cfd4eb40d255506a35f3c
+repo_dirty=26

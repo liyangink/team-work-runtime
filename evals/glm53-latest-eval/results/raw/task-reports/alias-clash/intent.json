@@ -1,0 +1,18 @@
+{
+  "rawRequirement": "两条说明都必须写进同一个文件 docs/notes.md，希望两个人分别写各自那条",
+  "objective": "为虚构产品写两条功能说明",
+  "constraints": [],
+  "exclusions": [],
+  "scope": {
+    "entry": "implementation",
+    "outputs": [
+      "source"
+    ]
+  },
+  "acceptance": [
+    "docs/notes.md 包含两条说明"
+  ],
+  "gaps": [],
+  "revisions": [],
+  "risk": "normal"
+}

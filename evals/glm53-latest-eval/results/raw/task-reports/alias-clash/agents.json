@@ -1,0 +1,23 @@
+{
+  "mappings": {},
+  "roles": {
+    "owner": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "challenger": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "expert": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "path": "docs/design/interface-constraints.md",
+      "digest": "976259aa25bde64e78eae8f43ec08f7279f30124dbc7e8a4357f17bf547d87a8",
+      "kind": "doc",
+      "stage": "design",
+      "reportRef": "deliver-d1-5f8019",
+      "snapshotRef": "snapshots/976259aa25bde64e78eae8f43ec08f7279f30124dbc7e8a4357f17bf547d87a8.json"
+    },
+    {
+      "path": "docs/design/failure-recovery.md",
+      "digest": "2fce026925aa3e4e948bb3b53005ec4ffbe2bedcec088538c88d08529b95eb4c",
+      "kind": "doc",
+      "stage": "design",
+      "reportRef": "deliver-d1-43abb6",
+      "snapshotRef": "snapshots/2fce026925aa3e4e948bb3b53005ec4ffbe2bedcec088538c88d08529b95eb4c.json"
+    },
+    {
+      "path": "docs/design/final-plan.md",
+      "digest": "37fd47d23e58eae626c812596b61ae79a4132eb261702c593502f388e6f361b5",
+      "kind": "doc",
+      "stage": "design",
+      "reportRef": "deliver-d5-3c807c",
+      "snapshotRef": "snapshots/37fd47d23e58eae626c812596b61ae79a4132eb261702c593502f388e6f361b5.json"
+    }
+  ]
+}

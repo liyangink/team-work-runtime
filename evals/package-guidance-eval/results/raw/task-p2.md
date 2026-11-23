@@ -1,0 +1,2 @@
+测试用户答复（预定义剧本 A，仅确认）：我选择选项 1「确认开始」，按确认卡所述意图、角色模型和逐包模型进入执行。
+请继续推进本任务：如果拆包判断需要计划，先调用 tw plan 或按 skill 指引处理，然后调用 tw-dispatch 推进当前波次。派发后请报告 tw-dispatch 返回的 JSON（含 dispatched 列表、nextAction、stop、failures），并报告每个成员会话的 modelRef 与 writable 范围。不要执行成员自己的工作。

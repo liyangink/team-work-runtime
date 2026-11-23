@@ -1,0 +1,3 @@
+repo-write: ALLOWED (/Users/liyang/Projects/Opensource/team-work-runtime/.boundary-probe.Xo8sjO)
+guard-boundary: REFUSE: repo is writable by this process; the real model drill cannot be proven safe (no repo protection)
+run-headless: refuse: 安全前置未满足：repo 或真实 HOME 可写，拒绝启动真实模型演练（见上方 guard-boundary 输出）

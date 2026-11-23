@@ -1,0 +1,293 @@
+{
+  "generatedAt": "2026-11-17T13:32:06.757Z",
+  "evalRoot": "/tmp/glm53-latest-eval-20261117b",
+  "twPath": "/tmp/glm53-latest-eval-20261117b/home/.dsh/profiles/headless/node_modules/team-work-runtime/bin/tw.mjs",
+  "checks": [
+    {
+      "name": "open 只返回准备回执（无 decisionId、无卡）",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "task": "preflight-card",
+        "stage": "implementation",
+        "status": "preparing",
+        "next": "dispatch",
+        "roles": {
+          "owner": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "challenger": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "expert": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          }
+        },
+        "note": "任务从 implementation 介入，将运行到该阶段验收；准备角色与分包后首次推进签发完整确认卡，确认前不派发"
+      }
+    },
+    {
+      "name": "plan 只返回准备回执（无 decisionId、无卡）",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "task": "preflight-card",
+        "packages": [
+          {
+            "id": "note",
+            "model": {
+              "provider": "zai-coding-cn",
+              "modelName": "glm-5.3",
+              "effort": "max",
+              "family": "glm"
+            },
+            "dependsOn": []
+          }
+        ],
+        "replanned": false,
+        "next": "dispatch",
+        "note": "包定义已登记；推进将按波组派发（tw-dispatch / tw dispatch-plan）"
+      }
+    },
+    {
+      "name": "首次推进签发一张 awaiting-user 卡且未派发",
+      "ok": true,
+      "detail": {
+        "stop": "awaiting-user",
+        "decisionId": "intake-39bf0f",
+        "waves": []
+      }
+    },
+    {
+      "name": "首卡人读文本覆盖原文/目标/约束/排除/入口/验收",
+      "ok": true,
+      "detail": {
+        "missing": []
+      }
+    },
+    {
+      "name": "首卡结构化含三角色实际模型与逐包五字段",
+      "ok": true,
+      "detail": {
+        "roles": [
+          "owner",
+          "challenger",
+          "expert"
+        ],
+        "pkg": {
+          "id": "note",
+          "model": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "modelRef": {
+            "provider": "zai-coding-cn",
+            "modelName": "glm-5.3",
+            "effort": "max",
+            "family": "glm"
+          },
+          "writable": [
+            "docs/note.md:doc"
+          ],
+          "done": [
+            "写一行虚构说明"
+          ],
+          "dependsOn": [],
+          "vsRolesOwner": "equal"
+        }
+      }
+    },
+    {
+      "name": "首卡指纹为非空 SHA-256",
+      "ok": true,
+      "detail": "fa60367d61228a513d82c6d581745fa3d213e1253d469b1f1ac6565619b7bae2"
+    },
+    {
+      "name": "相同计划重复登记不重签（等待中的 decisionId 不变）",
+      "ok": true,
+      "detail": {
+        "planReplanned": true,
+        "pending": "intake-39bf0f",
+        "card": "intake-39bf0f"
+      }
+    },
+    {
+      "name": "缺 decision-id 的答复被拒（DECISION_STALE）",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "DECISION_STALE",
+        "message": "答复对应的卡片已失效或缺少标识；请完整查看最新卡片并明确选择；新版意图卡须携带实际展示且被答复的卡片 ID。",
+        "fix": "答复对应的卡已失效或身份不明；请完整查看最新确认卡并明确选择，使用实际展示且被答复的卡片 ID；不能确定时先请用户澄清"
+      }
+    },
+    {
+      "name": "错误 decision-id 被拒（DECISION_STALE）",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "DECISION_STALE",
+        "message": "答复对应的卡片已失效或缺少标识；请完整查看最新卡片并明确选择；新版意图卡须携带实际展示且被答复的卡片 ID。",
+        "fix": "答复对应的卡已失效或身份不明；请完整查看最新确认卡并明确选择，使用实际展示且被答复的卡片 ID；不能确定时先请用户澄清"
+      }
+    },
+    {
+      "name": "正确 decision-id 接受首卡",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "task": "preflight-card",
+        "decisionId": "intake-39bf0f",
+        "choice": "确认开始",
+        "next": "run"
+      }
+    },
+    {
+      "name": "确认后计划变化触发重签增量卡（diff 基线与变更项）",
+      "ok": true,
+      "detail": {
+        "decisionId": "intake-0e03b3",
+        "diff": {
+          "baseDecisionId": "intake-39bf0f",
+          "baseFingerprint": "fa60367d61228a513d82c6d581745fa3d213e1253d469b1f1ac6565619b7bae2",
+          "changes": [
+            {
+              "path": "packages[note].done[0]",
+              "kind": "modified",
+              "before": "写一行虚构说明",
+              "after": "写一行虚构说明并注明虚构"
+            }
+          ],
+          "unchangedFolded": true,
+          "unchangedCount": 33
+        }
+      }
+    },
+    {
+      "name": "增量卡人读文本突出变更且折叠未变项",
+      "ok": true,
+      "detail": {
+        "questionHead": "# 任务意图变更确认\n\n卡片标识：intake-0e03b3\n相对最近已确认卡 intake-39bf0f 的增量如下；与已确认快照一致（33 项未变），已折叠引用该卡；完整快照仍受 SHA 与卡片 ID 双重校验。\n\n- 修改 packages[note].done[0]：\"写一行虚构说明\" → \"写一行虚构说明并注明虚构\"\n\n## 选项\n1. 确认开始——按以上意图、角色模型与逐包模型进入执行\n2. 我先修改——用 tw intent / tw roles / tw plan 修改后重出确认卡\n3. 终止任务——以当前形态终止并归档"
+      }
+    },
+    {
+      "name": "旧卡 ID 答复重签卡被拒（DECISION_STALE）",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "DECISION_STALE",
+        "message": "答复对应的卡片已失效或缺少标识；请完整查看最新卡片并明确选择；新版意图卡须携带实际展示且被答复的卡片 ID。",
+        "fix": "答复对应的卡已失效或身份不明；请完整查看最新确认卡并明确选择，使用实际展示且被答复的卡片 ID；不能确定时先请用户澄清"
+      }
+    },
+    {
+      "name": "重签卡携带新 ID 被接受",
+      "ok": true,
+      "detail": {
+        "ok": true,
+        "task": "preflight-card",
+        "decisionId": "intake-0e03b3",
+        "choice": "确认开始",
+        "next": "run"
+      }
+    },
+    {
+      "name": "确认后推进得到 owner 派单",
+      "ok": true,
+      "detail": {
+        "waves": [
+          {
+            "role": "owner",
+            "key": "d1-62325f"
+          }
+        ]
+      }
+    },
+    {
+      "name": "字符串 writable 返回 PLAN_REJECTED 且提示缺 writable 数组",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "PLAN_REJECTED",
+        "message": "包定义未通过机械验收：\n- 包 a 缺 writable（[\"路径:产出物kind\"]）",
+        "fix": "修正 --packages 后重试；验收只保机械属性（互斥/无环/标准在场），拆分语义质量由 Lead 把关"
+      }
+    },
+    {
+      "name": "非数组错误不含逐字符重叠噪声",
+      "ok": true,
+      "detail": "包定义未通过机械验收：\n- 包 a 缺 writable（[\"路径:产出物kind\"]）"
+    },
+    {
+      "name": "对象 writable 同样被拒（无裸异常）",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "PLAN_REJECTED",
+        "message": "包定义未通过机械验收：\n- 包 a 缺 writable（[\"路径:产出物kind\"]）",
+        "fix": "修正 --packages 后重试；验收只保机械属性（互斥/无环/标准在场），拆分语义质量由 Lead 把关"
+      }
+    },
+    {
+      "name": "合法数组 writable 仍被接受",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "未知包名 finding 被拒且列出可用 ID",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "INTAKE_REJECTED",
+        "message": "finding 第 1 项的 package 必须精确等于当前任务的单个包 ID；可用 ID：a、b。多个包请分别填写 finding；不指定包请省略 package；修正后用原 key 重新 review。",
+        "reasons": [
+          "finding 第 1 项的 package 必须精确等于当前任务的单个包 ID；可用 ID：a、b。多个包请分别填写 finding；不指定包请省略 package；修正后用原 key 重新 review。"
+        ],
+        "fix": "运行 tw help 查看全部命令与参数"
+      }
+    },
+    {
+      "name": "拼接包名 finding 被拒",
+      "ok": true,
+      "detail": {
+        "ok": false,
+        "code": "INTAKE_REJECTED",
+        "message": "finding 第 1 项的 package 必须精确等于当前任务的单个包 ID；可用 ID：a、b。多个包请分别填写 finding；不指定包请省略 package；修正后用原 key 重新 review。",
+        "reasons": [
+          "finding 第 1 项的 package 必须精确等于当前任务的单个包 ID；可用 ID：a、b。多个包请分别填写 finding；不指定包请省略 package；修正后用原 key 重新 review。"
+        ],
+        "fix": "运行 tw help 查看全部命令与参数"
+      }
+    },
+    {
+      "name": "合法包名 finding 被接受",
+      "ok": true,
+      "detail": {
+        "reportId": "review-d3-e2c86d",
+        "ver": 1
+      }
+    },
+    {
+      "name": "空字符串包名规范化为未点名并可接收",
+      "ok": true,
+      "detail": {
+        "ver": 2
+      }
+    }
+  ],
+  "passed": 23,
+  "failed": 0
+}

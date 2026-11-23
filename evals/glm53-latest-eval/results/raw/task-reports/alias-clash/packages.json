@@ -1,0 +1,55 @@
+{
+  "items": [
+    {
+      "id": "note-a",
+      "writable": [
+        "docs/notes-a.md:doc"
+      ],
+      "done": [
+        "独立写出第一条虚构产品功能说明，完整保存到 docs/notes-a.md（不写 docs/notes.md）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "note-b",
+      "writable": [
+        "docs/notes-b.md:doc"
+      ],
+      "done": [
+        "独立写出第二条虚构产品功能说明，完整保存到 docs/notes-b.md（不写 docs/notes.md）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "merge",
+      "writable": [
+        "docs/notes.md:doc"
+      ],
+      "done": [
+        "读取 docs/notes-a.md 与 docs/notes-b.md，把两条说明合并写入 docs/notes.md，确保该文件包含且仅包含这两条说明"
+      ],
+      "dependsOn": [
+        "note-a",
+        "note-b"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

@@ -7,8 +7,8 @@ import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { nextWave, scenePolicy } from "../runtime-v3/waves.mjs"
-import { gateCheck, artifactsFingerprint, artifactFingerprints } from "../runtime-v3/gate.mjs"
+import { nextWave, reportOrderComparator, scenePolicy } from "../runtime-v3/waves.mjs"
+import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFingerprint } from "../runtime-v3/gate.mjs"
 import { writablePathsOverlap } from "../runtime-v3/domain/writable.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
 import { ownerDeliver, challengerReview, expertVerdict, registeredArtifacts, throughStageScope, e2eSkipped, pkgDeliver, pkgReview, pkgVerdict, PACKAGES, snap } from "./support/v3-fixtures.mjs"
@@ -60,11 +60,15 @@ test("波次推进：非核心场景 challenger accept 后直接过门（无需 
 })
 
 test("I6/三轮收敛：rework 循环与轮次耗尽升级用户", () => {
+  // 新契约（§9 返工语义）：核心场景 challenger rework → 先派 expert 裁决 → verdict rework 后 respond
   const r1 = [ownerDeliver(1), challengerReview(1, "rework")]
-  assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: r1 }), { kind: "respond", role: "owner", round: 2, owners: [{ package: null, round: 2, continuation: true }] })
-  const r2 = [...r1, ownerDeliver(2), challengerReview(2, "rework")]
-  assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: r2 }), { kind: "respond", role: "owner", round: 3, owners: [{ package: null, round: 3, continuation: true }] })
-  const r3 = [...r2, ownerDeliver(3), challengerReview(3, "rework")]
+  assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: r1 }), { kind: "verdict", role: "expert", round: 1 })
+  const afterV1 = [...r1, expertVerdict("rework")]
+  assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: afterV1 }), { kind: "respond", role: "owner", round: 2, owners: [{ package: null, round: 2, continuation: true }] })
+  const r2 = [...afterV1, ownerDeliver(2), challengerReview(2, "rework")]
+  assert.deepEqual(nextWave({ scenePolicy: codeReviewScene, reports: r2 }), { kind: "verdict", role: "expert", round: 2, continuation: true }, "重裁为续派（D3 同角色回溯）")
+  const verdictAt = (round, id, at) => ({ reportId: id, role: "expert", kind: "review", round, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome: "rework", rationale: "r", confidence: "high", risks: [], recommendedAction: "a" } }, at })
+  const r3 = [...r2, ownerDeliver(3), challengerReview(3, "rework"), verdictAt(3, "e3", "2026-01-01T00:00:31Z")]
   const exhausted = nextWave({ scenePolicy: codeReviewScene, reports: r3 })
   assert.equal(exhausted.kind, "converge-user")
   assert.match(exhausted.reason, /自主轮次上限/)
@@ -102,6 +106,32 @@ test("波组：按包计轮（F2）——单包轮耗尽只出该包，不牵连
   const exhausted = nextWave({ scenePolicy: codeReviewScene, reports: r3, packages: PACKAGES })
   assert.equal(exhausted.kind, "converge-user")
   assert.match(exhausted.reason, /store/, "理由点名耗尽的包")
+})
+
+test("F-9：Expert 点名包先返工，其他包尚未覆盖评审也不能抢占目标包", () => {
+  const a = { ...pkgDeliver("a", 1), ver: 1 }
+  const b = { ...pkgDeliver("b", 1), ver: 1 }
+  const challenger = { ...challengerReview(1, "accept"), ver: 1, reviewedPackages: [{ package: "a", round: 1 }] }
+  const expertBase = expertVerdict("rework")
+  const expert = { ...expertBase, ver: 1, payload: { ...expertBase.payload, findings: [{ disposition: "must-fix", scope: { kind: "packages", ids: ["a"] } }] } }
+  const packages = [{ id: "a" }, { id: "b" }]
+  const reports = [a, b, challenger, expert]
+  const journal = reports.map((report, index) => ({ seq: index + 1, type: "report-committed", detail: { reportId: report.reportId, ver: report.ver } }))
+  const result = nextWave({ scenePolicy: codeReviewScene, reports, journal, packages })
+  assert.equal(result.kind, "respond")
+  assert.deepEqual(result.owners.map((owner) => owner.package), ["a"], "未评审的 b 不得抢先触发组合复审")
+  const repaired = { ...pkgDeliver("a", 2), ver: 1 }
+  reports.push(repaired)
+  journal.push({ seq: 5, type: "report-committed", detail: { reportId: repaired.reportId, ver: repaired.ver } })
+  assert.equal(nextWave({ scenePolicy: codeReviewScene, reports, journal, packages }).kind, "review", "目标包回应后重新组合评审")
+  const review = { ...challengerReview(2, "accept"), ver: 1, reviewedPackages: [{ package: "a", round: 2 }, { package: "b", round: 1 }] }
+  reports.push(review)
+  journal.push({ seq: 6, type: "report-committed", detail: { reportId: review.reportId, ver: review.ver } })
+  assert.equal(nextWave({ scenePolicy: codeReviewScene, reports, journal, packages }).kind, "verdict", "新评审后须重新裁决")
+  const accepted = { ...expertVerdict("accept"), reportId: "e2", round: 2, ver: 1 }
+  reports.push(accepted)
+  journal.push({ seq: 7, type: "report-committed", detail: { reportId: accepted.reportId, ver: accepted.ver } })
+  assert.equal(nextWave({ scenePolicy: codeReviewScene, reports, journal, packages }).kind, "gate", "新裁决通过后不再重复返工或复审")
 })
 
 test("波组：聚合裁决新鲜度（F8）——任一包新交付使旧裁决失效", () => {
@@ -160,8 +190,14 @@ test("门：through-stage 的 scoped final-acceptance 未决 → awaiting-user�
 
 test("门：人工批准绑定制品指纹，制品变化即失效（I7）", () => {
   const reports = [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("accept")]
-  const base = { workflow, policy, stageId: "code-review", scope: throughStageScope, reports, journal: [], decisions: e2eSkipped }
   const fingerprint = artifactsFingerprint(registeredArtifacts.items)
+  // §6.2.2-7 同 ID 匹配：accept 决定必须对应其签发卡 + decided 事实；指纹用每包公式
+  const pkgFp = artifactFingerprints(registeredArtifacts.items, null)
+  const journal = [
+    { seq: 1, at: "t", type: "decision-issued", detail: { decisionId: "d1", gateId: "scoped-final-code-review", fingerprints: { artifactFingerprint: pkgFp } } },
+    { seq: 2, at: "t", type: "decided", detail: { decisionId: "d1", gateId: "scoped-final-code-review", choice: "accept" } },
+  ]
+  const base = { workflow, policy, stageId: "code-review", scope: throughStageScope, reports, journal, decisions: e2eSkipped }
   const accepted = gateCheck({ ...base, artifacts: registeredArtifacts, decisions: [...e2eSkipped, { decisionId: "d1", gateId: "scoped-final-code-review", choice: "accept", fingerprint }] })
   assert.equal(accepted.passed, true)
 
@@ -170,6 +206,77 @@ test("门：人工批准绑定制品指纹，制品变化即失效（I7）", () 
   assert.equal(stale.passed, false)
   assert.match(stale.blockers.find((b) => b.awaitingUser).requirement, /指纹已过期/)
 })
+
+// F-2：构造真实提交序与人工门指纹；报告数组故意乱序，不能依赖墙钟或数组顺序。
+const reviewEvent = (seq, report, type = "report-committed") => ({ seq, type, detail: { reportId: report.reportId, ver: report.ver ?? 1 } })
+
+test("F-2：同一报告版本比较相等，不因数组排序改变选取", () => {
+  const report = { ...challengerReview(1, "accept"), ver: 1 }
+  const compare = reportOrderComparator([reviewEvent(1, report)])
+  assert.equal(compare(report, report), 0)
+  assert.equal(compare({ ...report }, report), 0)
+})
+
+for (const role of ["challenger", "expert"]) {
+  test("F-2：" + role + " 同 key 时间回拨改判后，旧批准和旧 accept 均失效", () => {
+    const owner = { ...ownerDeliver(1), ver: 1 }
+    const challenger = { ...challengerReview(1, "accept"), ver: 1, at: "2026-01-01T00:00:08Z" }
+    const expert = { ...expertVerdict("accept"), ver: 1, at: "2026-01-01T00:00:09Z" }
+    const previous = role === "challenger" ? challenger : expert
+    const revised = { ...previous, ver: 2, at: "2026-01-01T00:00:02Z", payload: {
+      ...previous.payload, ...(role === "challenger" ? { recommendation: "rework" } : { verdict: { ...previous.payload.verdict, outcome: "rework" } }),
+      findings: [{ disposition: "must-fix", scope: { kind: "all-covered" } }],
+    } }
+    const beforeReports = [owner, challenger, expert]
+    const events = beforeReports.map((report, index) => reviewEvent(index + 1, report))
+    const oldFingerprint = reviewChainFingerprint({ reports: beforeReports, journal: events, core: true })
+    const artifactFp = artifactFingerprints(registeredArtifacts.items, null)
+    const decision = { decisionId: "approval", gateId: "scoped-final-code-review", choice: "accept", artifactFingerprint: artifactFp, reviewFingerprint: oldFingerprint }
+    const journal = [...events,
+      { seq: 4, type: "decision-issued", detail: { decisionId: "approval", gateId: decision.gateId, fingerprints: { artifactFingerprint: artifactFp, reviewFingerprint: oldFingerprint } } },
+      { seq: 5, type: "decided", detail: { decisionId: "approval", gateId: decision.gateId, choice: "accept" } },
+    ]
+    const base = { workflow, policy, stageId: "code-review", scope: throughStageScope, artifacts: registeredArtifacts, decisions: [...e2eSkipped, decision] }
+    assert.equal(gateCheck({ ...base, reports: beforeReports, journal }).passed, true, "修订前批准有效")
+    journal.push(reviewEvent(6, revised))
+    const reports = [owner, revised, expert, challenger]
+    assert.notEqual(reviewChainFingerprint({ reports, journal, core: true }), oldFingerprint, "新提交必须更新评审链指纹")
+    const result = gateCheck({ ...base, reports, journal })
+    assert.equal(result.passed, false)
+    assert.ok(result.blockers.some((b) => b.requirement.includes("指纹已过期")), JSON.stringify(result))
+    assert.ok(result.blockers.some((b) => b.requirement.includes(role === "challenger" ? "非作者评审" : "Expert")), JSON.stringify(result))
+    const scene = role === "expert" ? codeReviewScene : implScene
+    assert.equal(nextWave({ scenePolicy: scene, reports, journal }).kind, "respond", "波次与门禁均须采用最新提交的返工结论")
+  })
+
+  test("F-2：" + role + " 旧新协议不同报告 ID 混用时，新协议修订使旧批准失效", () => {
+    const owner = { ...ownerDeliver(1), ver: 1 }
+    const challenger = { ...challengerReview(1, "accept"), ver: 1 }
+    const expert = { ...expertVerdict("accept"), ver: 1 }
+    const current = role === "challenger" ? challenger : expert
+    const legacy = { ...current, reportId: "legacy-" + role, at: "2026-01-01T00:00:20Z" }
+    const modern = { ...current, reportId: "modern-" + role, at: "2026-01-01T00:00:10Z" }
+    const other = role === "challenger" ? expert : challenger
+    const reports = [owner, legacy, modern, other]
+    const journal = [reviewEvent(1, owner), reviewEvent(2, legacy, "report-accepted"), reviewEvent(3, modern), reviewEvent(4, other)]
+    const oldFingerprint = reviewChainFingerprint({ reports, journal, core: true })
+    const artifactFp = artifactFingerprints(registeredArtifacts.items, null)
+    const decision = { decisionId: "approval", gateId: "scoped-final-code-review", choice: "accept", artifactFingerprint: artifactFp, reviewFingerprint: oldFingerprint }
+    journal.push(
+      { seq: 5, type: "decision-issued", detail: { decisionId: "approval", gateId: decision.gateId, fingerprints: { artifactFingerprint: artifactFp, reviewFingerprint: oldFingerprint } } },
+      { seq: 6, type: "decided", detail: { decisionId: "approval", gateId: decision.gateId, choice: "accept" } },
+    )
+    const base = { workflow, policy, stageId: "code-review", scope: throughStageScope, artifacts: registeredArtifacts, decisions: [...e2eSkipped, decision] }
+    assert.equal(gateCheck({ ...base, reports, journal }).passed, true, "修订前批准有效")
+    const revised = { ...modern, ver: 2, at: "2026-01-01T00:00:01Z", payload: { ...modern.payload, summary: "修订后的评审" } }
+    journal.push(reviewEvent(7, revised))
+    const after = [owner, revised, legacy, other, modern]
+    assert.notEqual(reviewChainFingerprint({ reports: after, journal, core: true }), oldFingerprint, "旧协议报告不得遮蔽新协议修订")
+    const result = gateCheck({ ...base, reports: after, journal })
+    assert.equal(result.passed, false)
+    assert.ok(result.blockers.some((b) => b.requirement.includes("指纹已过期")), JSON.stringify(result))
+  })
+}
 
 test("AGENTS 规则 5：code-review 介入不检查历史阶段制品（制品两分法）", () => {
   const result = gateCheck({
@@ -261,10 +368,13 @@ test("derive：门通过且到 completion → next=complete", () => {
   const state = deriveTask({
     scope: throughStageScope, intent: { objective: "o" }, artifacts: registeredArtifacts,
     reports: [ownerDeliver(1), challengerReview(1, "accept"), expertVerdict("accept")],
-    decisions: [...e2eSkipped, { decisionId: "d1", gateId: "scoped-final-code-review", choice: "accept", fingerprint: artifactsFingerprint(registeredArtifacts.items) }],
-    journal: [], workflow, policy,
+    decisions: [...e2eSkipped, { decisionId: "d1", gateId: "scoped-final-code-review", choice: "accept", fingerprint: artifactFingerprints(registeredArtifacts.items, null).null }],
+    journal: [
+      { seq: 1, at: "t", type: "decision-issued", detail: { decisionId: "d1", gateId: "scoped-final-code-review", fingerprints: { artifactFingerprint: artifactFingerprints(registeredArtifacts.items, null) } } },
+      { seq: 2, at: "t", type: "decided", detail: { decisionId: "d1", gateId: "scoped-final-code-review", choice: "accept" } },
+    ],
+    workflow, policy,
   })
-  assert.equal(state.gate.passed, true)
   assert.deepEqual(state.next, { kind: "complete" })
 })
 

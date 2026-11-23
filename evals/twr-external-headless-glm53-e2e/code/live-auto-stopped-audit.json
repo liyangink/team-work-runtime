@@ -1,0 +1,288 @@
+{
+  "evidenceRoot": "/private/tmp/twr-headless-e2e-tHwIXx",
+  "completed": false,
+  "failedFullAudit": true,
+  "model": [
+    "zai-coding-cn",
+    "glm-5.3",
+    "max"
+  ],
+  "probeStatuses": [
+    {
+      "t": "isolation",
+      "exitCode": 0,
+      "signal": null,
+      "promptReleased": false,
+      "passedProbe": true,
+      "error": null
+    },
+    {
+      "t": "intake",
+      "exitCode": 0,
+      "signal": null,
+      "promptReleased": true,
+      "passedProbe": true,
+      "error": null
+    },
+    {
+      "t": "work",
+      "exitCode": 0,
+      "signal": null,
+      "promptReleased": true,
+      "passedProbe": true,
+      "error": null
+    }
+  ],
+  "gates": [
+    {
+      "kind": "intake-approval",
+      "id": "intake-184500",
+      "stopReceiptSeq": 43,
+      "externalInputSeq": 54,
+      "decisionSeq": 57,
+      "source": "test-driver"
+    },
+    {
+      "kind": "scoped-final-code-review",
+      "id": "dec-82b314",
+      "stopReceiptSeq": 224,
+      "passed": false,
+      "externallyApproved": false
+    }
+  ],
+  "sessions": [
+    {
+      "role": "CR·chal",
+      "id": "372efed1-fbbf-4406-8a5a-20e2d5f0fca0",
+      "file": "sessions/--private-tmp-twr-headless-e2e-tHwIXx-project--/372efed1-fbbf-4406-8a5a-20e2d5f0fca0/session.v4.jsonl.zstd",
+      "fileSha256": "c3bbb80dc2dbc7ae1e79325ad6d4ad9120dcbf1b7ec57fbf2d96811cbd7e7930",
+      "requestHeaders": 3,
+      "providerResponses": 14
+    },
+    {
+      "role": "CR·owner@beta",
+      "id": "3935906b-2cfd-4325-b97c-75f95ba1383e",
+      "file": "sessions/--private-tmp-twr-headless-e2e-tHwIXx-project--/3935906b-2cfd-4325-b97c-75f95ba1383e/session.v4.jsonl.zstd",
+      "fileSha256": "eb4e4e9888497a6d1b9e789fb201798d7e83f05db97255f2aacfcb8b33e6822d",
+      "requestHeaders": 1,
+      "providerResponses": 5
+    },
+    {
+      "role": "CR·expert",
+      "id": "857c5874-fb73-4f5f-8c16-748b0e16b2e5",
+      "file": "sessions/--private-tmp-twr-headless-e2e-tHwIXx-project--/857c5874-fb73-4f5f-8c16-748b0e16b2e5/session.v4.jsonl.zstd",
+      "fileSha256": "9ba3802715a61100876c7529bceef22181d265f595c3d4bcf230e4734f62f1f7",
+      "requestHeaders": 2,
+      "providerResponses": 13
+    },
+    {
+      "role": "CR·owner@alpha",
+      "id": "d8bb1334-f1d8-4a71-bf4a-44c1f0a43ae0",
+      "file": "sessions/--private-tmp-twr-headless-e2e-tHwIXx-project--/d8bb1334-f1d8-4a71-bf4a-44c1f0a43ae0/session.v4.jsonl.zstd",
+      "fileSha256": "fe1316b6727016c86da97d433155b9883412b290402fb26cab34dc3ded991b34",
+      "requestHeaders": 3,
+      "providerResponses": 14
+    },
+    {
+      "role": "Lead",
+      "id": "session-0000477d-8443-4b64-ab94-8e8ae61ad525",
+      "file": "sessions/--private-tmp-twr-headless-e2e-tHwIXx-project--/session-0000477d-8443-4b64-ab94-8e8ae61ad525/session.v4.jsonl.zstd",
+      "fileSha256": "a7c2daaaec9e2582e227e272d67c266b1208a1af854b1938cc7876143dbebb28",
+      "requestHeaders": 2,
+      "providerResponses": 36
+    }
+  ],
+  "officialDispatches": [
+    {
+      "key": "d1-70ee0c",
+      "session": "d8bb1334-f1d8-4a71-bf4a-44c1f0a43ae0",
+      "waveId": "wv1",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·owner@alpha",
+      "receivedSeq": 4,
+      "acceptedReportSeq": 38,
+      "reportId": "deliver-d1-70ee0c",
+      "promptSha256": "0e9f1bf3cab0d0e9713632ec076de6df7c4faa8b640c55cb46d744237fd601aa"
+    },
+    {
+      "key": "d1-2fb1a4",
+      "session": "3935906b-2cfd-4325-b97c-75f95ba1383e",
+      "waveId": "wv1",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·owner@beta",
+      "receivedSeq": 4,
+      "acceptedReportSeq": 34,
+      "reportId": "deliver-d1-2fb1a4",
+      "promptSha256": "6c4d678b0670976810b4c9e4c5f8212771008ea3d9dff9d5d2c584acabc1e3c0"
+    },
+    {
+      "key": "d3-d496b3",
+      "session": "372efed1-fbbf-4406-8a5a-20e2d5f0fca0",
+      "waveId": "wv3",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·chal",
+      "receivedSeq": 4,
+      "acceptedReportSeq": 53,
+      "reportId": "review-d3-d496b3",
+      "promptSha256": "df882af30ae1581efb55236c85917ff04f2938404b4abff37dc322b014cc450f"
+    },
+    {
+      "key": "d4-c56236",
+      "session": "d8bb1334-f1d8-4a71-bf4a-44c1f0a43ae0",
+      "waveId": "wv4",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·owner@alpha",
+      "receivedSeq": 45,
+      "acceptedReportSeq": 67,
+      "reportId": "deliver-d4-c56236",
+      "promptSha256": "01403ef160a07e70ea124688cdb6b1181785314345efef716413466a51ca3969"
+    },
+    {
+      "key": "d5-753dc5",
+      "session": "372efed1-fbbf-4406-8a5a-20e2d5f0fca0",
+      "waveId": "wv5",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·chal",
+      "receivedSeq": 60,
+      "acceptedReportSeq": 79,
+      "reportId": "review-d5-753dc5",
+      "promptSha256": "2d6dcce85952046e4751c475e1ad5b27fb733cd5f904d505e2a702c617688819"
+    },
+    {
+      "key": "d6-b75255",
+      "session": "857c5874-fb73-4f5f-8c16-748b0e16b2e5",
+      "waveId": "wv6",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·expert",
+      "receivedSeq": 4,
+      "acceptedReportSeq": 65,
+      "reportId": "review-d6-b75255",
+      "promptSha256": "bd4f6f5ea8a79ed9ca92ba0b6107ed14d8a3294b8ccbeafac1f0c2d4f7c9d912"
+    },
+    {
+      "key": "d7-a026ac",
+      "session": "d8bb1334-f1d8-4a71-bf4a-44c1f0a43ae0",
+      "waveId": "wv7",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·owner@alpha",
+      "receivedSeq": 74,
+      "acceptedReportSeq": 101,
+      "reportId": "deliver-d7-a026ac",
+      "promptSha256": "fc2b7b88c1177c8e54e96766c21b8b621bdcf57b7236ae58db6ab6f82ad1e693"
+    },
+    {
+      "key": "d8-30dead",
+      "session": "372efed1-fbbf-4406-8a5a-20e2d5f0fca0",
+      "waveId": "wv8",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·chal",
+      "receivedSeq": 86,
+      "acceptedReportSeq": 105,
+      "reportId": "review-d8-30dead",
+      "promptSha256": "f7eace8af314022be39f589a7e56a9e67cb92c7da82bfd181037101d18e73f3a"
+    },
+    {
+      "key": "d9-bf8679",
+      "session": "857c5874-fb73-4f5f-8c16-748b0e16b2e5",
+      "waveId": "wv9",
+      "registered": true,
+      "receiptVerified": true,
+      "role": "CR·expert",
+      "receivedSeq": 72,
+      "acceptedReportSeq": 91,
+      "reportId": "review-d9-bf8679",
+      "promptSha256": "60b548c32ab001c78d91699bc1aeeccef7b6a1168f38e8f666d84463db952c67"
+    }
+  ],
+  "reviewAttempts": {
+    "challenger": 4,
+    "expert": 6
+  },
+  "rejected": [
+    {
+      "role": "CR·chal",
+      "key": "d3-d496b3",
+      "callSeq": 47,
+      "resultSeq": 48,
+      "code": "INTAKE_REJECTED",
+      "flags": [
+        "--task",
+        "--key",
+        "--recommendation",
+        "--findings",
+        "--summary"
+      ]
+    },
+    {
+      "role": "CR·expert",
+      "key": null,
+      "callSeq": 39,
+      "resultSeq": 40,
+      "code": "TOOL_ERROR",
+      "flags": [
+        "--help"
+      ]
+    },
+    {
+      "role": "CR·expert",
+      "key": "d6-b75255",
+      "callSeq": 44,
+      "resultSeq": 45,
+      "code": "INTAKE_REJECTED",
+      "flags": [
+        "--task",
+        "--key",
+        "--recommendation",
+        "--summary",
+        "--verdict"
+      ]
+    },
+    {
+      "role": "CR·expert",
+      "key": "d6-b75255",
+      "callSeq": 54,
+      "resultSeq": 55,
+      "code": "USAGE",
+      "flags": [
+        "--task",
+        "--key",
+        "--recommendation",
+        "--summary",
+        "--findings",
+        "--verdict"
+      ]
+    },
+    {
+      "role": "CR·expert",
+      "key": "d6-b75255",
+      "callSeq": 59,
+      "resultSeq": 60,
+      "code": "INTAKE_REJECTED",
+      "flags": [
+        "--task",
+        "--key",
+        "--recommendation",
+        "--summary",
+        "--findings",
+        "--verdict"
+      ]
+    }
+  ],
+  "independentFileDiagnostic": {
+    "passed": true,
+    "writes": 5,
+    "reads": 16
+  },
+  "stop": {
+    "error": "不可缺交、多派或用错误试投掩盖流程\n+ actual - expected\n\n  [\n    3,\n    1,\n+   4,\n+   6\n-   3,\n-   2\n  ]\n",
+    "modelPromptSubmissions": 2
+  }
+}

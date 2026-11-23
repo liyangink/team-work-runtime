@@ -1,0 +1,69 @@
+{
+  "reportId": "review-d6-178e49",
+  "dispatchKey": "d6-178e49",
+  "role": "challenger",
+  "kind": "review",
+  "round": 1,
+  "stage": "design",
+  "taskSha": "9479fe6c79e93a9278c82bfa65a4f791c83fcc90c0496d1c715df73a9b1c123e",
+  "reviewedPackages": [
+    {
+      "package": "failure-analysis",
+      "round": 1
+    },
+    {
+      "package": "interface-analysis",
+      "round": 1
+    },
+    {
+      "package": "merge-final",
+      "round": 1
+    }
+  ],
+  "waveId": "wv6",
+  "ver": 1,
+  "payloadDigest": "9848eb8dae6c8725642dcab2a5a53357ff93fd6123d3792f639f6625d9638c33",
+  "payload": {
+    "summary": "accept：三包组合满足本轮验收——merge-final 完整读取并保留两上游分析（§2 十四接口契约与功能/非功能约束齐全、§3 二十一项 FMEA+检测+L0–L4+一致性齐全），新增 §4.1 接口↔恢复衔接映射与 §4.2 十六项带理由的取舍、§4.3 六项待裁决开放项，上游两文件经数值抽查与行数核对确认未改动（仍为 v1 原值）；上轮 9 项 findings 中 7 项已关闭（BLE 基线化并入 O1、命令重发拆传输/应用两层 C8、重连退避 C7、硬件基线统一 C1/C4/C5、潮汐表待裁决 C3+O2、证书列 O6、次级参数逐项统一 C6–C14），2 项部分关闭遗留为 info（L1 退出条件执行主体、遥测 topic 命名与诊断开关接口归属）；新发现 1 项 risk：L4 的 USB 有线修复通道是两上游文均无的新硬件假设且 bootloader 支持前提未声明，须随 O1 裁决一并确认；全部内容为虚构、本轮未运行任何验证（§6 如实声明）。",
+    "recommendation": "accept",
+    "findings": [
+      {
+        "severity": "risk",
+        "package": "merge-final",
+        "location": "final-plan.md §4.2-C2 / §3.4.2 L4 行 / §4.3-O1",
+        "statement": "无 BLE 基线把 L4 修复通道定为「USB 有线刷机」，这是两上游文均未出现的新能力假设，且未声明 TL-MC200 bootloader 支持 USB 刷机的硬件前提；若不支持，否决 BLE 后 L4（旧分区亦不可启动）的修复将退化为仅送修，O1 裁决时缺此信息会低估否决 BLE 的代价。最小修正：在 O1 影响列补一句硬件前提与不支持时的后果，随 O1 一并裁决确认"
+      },
+      {
+        "severity": "info",
+        "package": "merge-final",
+        "location": "final-plan.md §3.2 表 / §4.2-C1",
+        "statement": "采纳双芯片架构后，Wi-Fi 模组/UART 链路故障未在 21 项 FMEA 表中设条目：TL-2011 模组自复位后仍反复失败的用户影响与去向仅在 §4.1/C1 注记（自复位），未进故障总表与恢复映射。最小修正：补一行（如 B5 模组故障：检测=连续 10 次 RPC 失败，影响=云通道丢失降 L1，恢复=自复位后仍失败则维持 L1 待换修），或注明由 C1/C2 行承载"
+      },
+      {
+        "severity": "info",
+        "package": "merge-final",
+        "location": "final-plan.md §3.2 C2 行 vs §4.3-O6",
+        "statement": "§3.2 C2 行仍写「证书过期需 App 引导更新」，与 O6 建议方向（证书链随 OTA 清单分发、App 仅提示）口径未对齐；CL-1（§2.6）已加「更新机制归属待裁决 §4.3-O6」标注而 C2 行漏加。最小修正：C2 行该句补「（归属待 O6）」"
+      },
+      {
+        "severity": "info",
+        "package": "merge-final",
+        "location": "final-plan.md §3.4.2 L1 退出条件 vs §3.3.2",
+        "statement": "上轮 info 遗留未关闭：L1 退出「连续 3 次健康检查通过」的执行主体仍未定义——§3.3.2 云健康检查是 App 首页聚合探测，设备端如何独立判定未写。最小修正：L1 行注明设备侧探测目标与计数口径（如网关连通探测连续 3 次成功 + 对账完成）"
+      },
+      {
+        "severity": "info",
+        "package": "merge-final",
+        "location": "final-plan.md §3.3.3 / §4.3-O5 / NF-04",
+        "statement": "遥测上报通道挂在 CL-1 MQTT 连接上但 topic 命名未显式纳入 O5（O5 仅写「topic 命名与影子 JSON schema」，语义可涵盖但不明确）；NF-04「用户显式开启」的诊断开关入口仍未落到具体接口（App 设置页/CL-3 用户偏好均未定义）。最小修正：O5 扩一句涵盖遥测 topic；诊断开关随 CL-3/AP-1 细化时补接口落点"
+      },
+      {
+        "severity": "info",
+        "package": "merge-final",
+        "location": "final-plan.md §3.2 C3 行",
+        "statement": "C3 行「需重新配对后恢复近控」沿用【故障】BLE 语境措辞，与无 BLE 基线不一致（基线下近控=本地触摸、无配对概念，云端绑定丢失影响的是远控）。最小修正：改为「重新绑定账户后恢复远控」"
+      }
+    ]
+  },
+  "at": "2026-11-16T10:29:36.297Z"
+}

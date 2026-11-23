@@ -5,7 +5,8 @@
 - 按本轮验收基线评价约定交付，不按理想系统加要求。
 - 本轮阻塞要说明对应哪条需求或完成条件、不修会怎样失败、证据与触发条件、现有保护为何不足、最小必要修正。历史问题或低概率重大风险如果有可信的触发链并直接妨碍本次目标，仍可阻塞；严重级别不能代替它是否属于本轮必须解决的问题，也不能代替修复方式是否已经获得用户批准。
 - 先核对已有的监控、权限、恢复、兼容和治理能力：没找到不等于不存在，已有保护足够就以证据关闭，不要求重复建设。证据不足又关系到本次安全交付时，针对性查证或说明缺什么。
-- 要求 rework 时，findings 只放需要本轮关闭的依据，涉及多个包时注明属于哪个包；非阻塞建议与范围外发现留在交付摘要（summary）或已有交付物里，并注明不属本轮修复清单。accept 时可以在 findings 里保留有价值的风险或信息并说明处置，不要求零意见；不以意见数量体现价值，不自动开任务或排期。
+- 要求 rework 时，findings 只放需要本轮关闭的依据，每条 must-fix 显式给出返工范围 scope（整组 {"kind":"all-covered"} 或点名 {"kind":"packages","ids":[...]}）；非阻塞建议与范围外发现留在交付摘要（summary）或已有交付物里，并注明不属本轮修复清单。accept 时可以在 findings 里保留有价值的风险或信息并说明处置，不要求零意见；不以意见数量体现价值，不自动开任务或排期。
+- Challenger 不填 verdict；verdict 是 Expert 的必填完整裁决，可复制范例：--verdict '{"outcome":"accept","rationale":"交付满足约定需求与完成条件","confidence":"high","recommendedAction":"进入人工验收"}'（outcome 可选 accept|rework|choose-option|need-more-evidence|escalate-to-user；confidence 只能 low、medium 或 high；rationale/recommendedAction 必须非空；risks 为可选非空字符串数组），其与 recommendation 的组合受一致性矩阵约束（accept×accept、accept×rework 合法；rework×accept、escalate×accept、escalate×rework 矛盾被拒）。
 - 交付本身是否满足需求按事实判断，满足不了可以要求返工；审查任务发现被审对象有缺陷时如实报告，不要求负责审查的 Owner 去修改被审对象。被审的审查报告如果缺少证据、归因错误或遗漏已约定内容，仍可要求返工。
 - 复审先核对既有阻塞是否关闭、修改是否引入回归；已关闭的事没有新证据不重开；如果这是本次允许的最后一轮评审，只聚焦还需要关闭的问题和剩余风险，新出现的重大问题仍要说明证据以及它与本轮目标的关系。
 - 需要做超出授权的修改时，先经 Lead 取得用户批准，不先改再补批准。

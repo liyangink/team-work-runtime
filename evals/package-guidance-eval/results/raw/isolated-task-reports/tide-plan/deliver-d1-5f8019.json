@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-5f8019",
+  "dispatchKey": "d1-5f8019",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "design",
+  "package": "interface-analysis",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "e54121fbb27b5c6da4a48f136cead2e3eeb24a1474aa6b7f82b11c3dbe9eddbd",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已按包完成标准交付虚构产品「潮汐灯」的接口与约束分析：完整正文位于 docs/design/interface-constraints.md，含硬件/固件/云端/客户端 14 个虚构接口的输入输出与错误约定、统一错误模型、功能/非功能约束、边界条件、排除项与实现顺序；全部内容为虚构且未运行任何实现验证，故障与恢复深度分析和最终合并方案不在本包范围（由故障分析包与 Lead 承担）。",
+    "paths": [
+      "docs/design/interface-constraints.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T10:10:11.450Z"
+}

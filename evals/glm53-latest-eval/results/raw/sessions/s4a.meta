@@ -1,0 +1,10 @@
+tag=s4a
+started_at=2026-11-17T21:31:19+08:00
+session_arg=-
+task_file=/Users/liyang/Projects/Opensource/team-work-runtime/evals/glm53-latest-eval/code/tasks/s4a.md
+task_sha256=16808b57b4480db357bde2a9428ed51fde2daf0f49db01d4f8b1daea6dba6b4e
+permission_mode=danger-full-access
+home=/private/tmp/glm53-latest-eval-20261117b/home
+dsh_home=/private/tmp/glm53-latest-eval-20261117b/home/.dsh
+project=/private/tmp/glm53-latest-eval-20261117b/project
+finished_at=2026-11-17T21:32:21+08:00

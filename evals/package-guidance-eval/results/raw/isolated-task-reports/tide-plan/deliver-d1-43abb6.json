@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-43abb6",
+  "dispatchKey": "d1-43abb6",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "design",
+  "package": "failure-analysis",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "1851c5dc5b7700cf2732809d1627b049f1c430f15fbaed956ebbbcfd47e2c013",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已交付完整方案正文 docs/design/failure-recovery.md：虚构产品潮汐灯的故障与恢复分析独立成文，四项完成标准全部覆盖（§2 六类 21 项故障模式与 S1–S4 影响分级、§3 设备端与通信云端检测手段及遥测事件表、§4 恢复原则与 L0–L4 降级阶梯及逐故障恢复映射、§5 状态事实源/rev 幂等/原子双区写入/三段对账的一致性保障），§0 给出推荐方向与 8.5 人周代价；§6.3 验证项为设计声明本轮未运行，§7 接口假设待并行接口包对齐。",
+    "paths": [
+      "docs/design/failure-recovery.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-16T10:11:38.018Z"
+}

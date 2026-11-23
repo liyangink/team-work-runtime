@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto"
 import { spawn } from "node:child_process"
 import {
-  coldSessionReceived,
+  sessionReceived,
   coldResumePrompt,
+  followupChild,
+  dispatchKeyFromPrompt,
+  toHostTarget,
   reconcileSession as inspectSession,
   createDirectedSubagent,
-  followupChild,
   SUBAGENT_PROVIDER,
 } from "./subagent-session.js"
 import { decisionTableText } from "./settings.js"
 import { createSleepConfirmGuard } from "./sleep-confirm.js"
 import { resolveChildCwd, resolveTwExecutable } from "./tw-tool.js"
+import { dispatchLockPath, withOwnerLock } from "../runtime-v3/store.mjs"
 
 export const TOOL_NAME = "tw-dispatch"
 
@@ -50,8 +53,8 @@ export function deterministicSessionId(task, key) {
 
 export function twDispatchToolDescription() {
   return [
-    "team-work 正式成员派发：推进到当前波次、先登记确定性会话 ID、按派单 modelRef（provider/modelName/effort?）创建成员并拼接展示标签。同 key 重试先检查同 ID：同父活会话等待；同父冷会话用 sendMessage 续投；异主拒绝接管；确认不存在才重建。读取不确定时返回恢复错误，保留映射；初始消息已接收但持久化未确认时保留 sessionId，不回收或另建成员。模型来自任务级 agents.json.roles 与包级 packages.json[].model（派发零配置反查）；新任务首步会先出意图确认卡（awaiting-user 时由 Lead 请用户确认），已有会话换模型会出换模型确认卡（保留原会话 / 重开会话 / 回滚 roles）。",
-    '续派先登记本轮 key 到原成员会话，再等待或冷唤醒：日志已含本轮完整正文则发送轻量续行提醒，仅有旧轮上下文则发送本轮增量，尚无上下文则发送全量；断链重建发送全量上下文。正常波次全部在途（nextAction="wait-children"）时输出派发简报后自然结束回合即可，宿主会在成员完成时自动唤醒本会话；确需同步等待时，sleep 类命令首次会被确认引导，在你看到引导后的后续 Step 再次执行即确认放行（更推荐 bash run_in_background + job_output 等原生等待通道）；awaiting-user/completed/blocked/archived 卡停止派发并由 Lead 向用户汇报，wait-inflight 逐项恢复。人工等待时只能等新用户输入，不轮询。主动催单和续聊用原生 send_message。防重复创建不承诺消息恰好投递一次；回执丢失后先核对已有会话 ID。',
+    "team-work 正式成员派发：按每个 key 先持投递锁、再短持任务锁重验波状态和映射，不持任务锁等待宿主；按派单 modelRef 创建并拼接展示标签。正文必须是可验证的冻结版本，重算 SHA-256 并逐块核对同父会话收单；内容冲突、停写未确认或身份与状态不确定时保留原会话及文件并返回 recover。模型来自任务 roles 与包级 model；人工门停止派发。",
+    'wait-children 只表示核实本轮正文已被宿主接收，不代表成员已完成或通知一定可达；活会话未见本轮正文时，仅有可靠旧轮活动与通知证据才返回 wait-prior-turn，否则 recover。冷会话补投或同 ID 补建按用户裁决执行，但日志缺项和 stat 未命中不能证明旧调用不会迟到，存在重复投递风险，需隔离宿主验证。确需同步等待时 sleep 首次会有确认引导；人工等待不轮询，主动续聊用原生 send_message，不承诺跨崩溃恰好一次。新任务先展示意图确认卡，换模型须沿用已有确认卡；多张待决卡按实际 decisionId 答复。',
     decisionTableText(),
   ].join("\n")
 }
@@ -71,34 +74,69 @@ export const TW_DISPATCH_OUTPUT_SCHEMA = Object.freeze({
     },
     nextAction: {
       type: "string",
-      enum: ["wait-children", "needs-user-report", "recover", "complete"],
-      description: "机器可读后续动作：wait-children=成员已在途，可输出简报后结束回合等待通知；recover=存在需修复或核对的异常项",
+      enum: ["wait-children", "wait-prior-turn", "needs-user-report", "recover", "complete"],
+      description: "wait-children=已核实本轮收单，不保证成员完成或通知可达；wait-prior-turn=只确认旧轮活动和通知、本轮未送；recover=有状态或安全边界无法证明的条目。",
     },
     dispatched: { type: "array", items: { type: "object" }, description: "本波已派发或续派的成员回执列表" },
     inflight: { type: "array", items: { type: "object" }, description: "wait-inflight 在途核对与恢复结果列表" },
     failures: { type: "integer", description: "失败条目数" },
+    pendingDecisions: { type: "array", items: { type: "object" }, description: "全部有效待决卡，按实际 decisionId 作答" },
+    staleDecisions: { type: "array", items: { type: "object" }, description: "绑定已失效但尚未收口的卡" },
+    needsDecisionId: { type: "boolean", description: "是否必须指定实际答复的决定卡" },
+    blockedPackages: { type: "array", items: { type: "object" }, description: "按包阻塞证据" },
     code: { type: "string", description: "错误码" },
     message: { type: "string", description: "说明或错误恢复指引" },
   },
 })
 
 export function isHealthyInflightItem(item) {
-  return Boolean(
-    item &&
-      typeof item === "object" &&
-      item.ok === true &&
-      item.passthrough !== true &&
-      item.accepted !== true &&
-      item.persistenceConfirmed !== false &&
-      typeof item.sessionId === "string" &&
-      item.sessionId.trim().length > 0 &&
-      (item.registered === true || item.continuation === true) &&
-      (item.action === "wait" || item.action === "followup" || item.action === "recreated" || item.action === "fresh_rebuilt")
-  )
+  return Boolean(item && item.ok === true && item.receiptVerified === true && ["wait", "followup", "recreated", "fresh_rebuilt"].includes(item.action) && typeof item.sessionId === "string" && item.sessionId.trim())
 }
 
 export function isHealthyInflightBatch(items, failures = 0) {
-  return Array.isArray(items) && items.length > 0 && failures === 0 && items.every(isHealthyInflightItem)
+  if (!Array.isArray(items) || failures !== 0 || items.some((item) => !item?.ok)) return false
+  const outstanding = items.filter((item) => item.action !== "reported")
+  return outstanding.length > 0 && outstanding.every(isHealthyInflightItem)
+}
+
+// 已报告项不需会话；任何未决项不确定都不能被其他成功项掩盖。
+function nextActionFor(items) {
+  if (!Array.isArray(items) || !items.length || items.some((item) => !item?.ok)) return "recover"
+  const outstanding = items.filter((item) => item.action !== "reported")
+  if (!outstanding.length) return "recover" // 本波已结，重新推进而非等待通知。
+  const prior = (item) => item.action === "wait-prior-turn" && item.priorActivityConfirmed === true && item.notificationConfirmed === true && item.receiptVerified !== true
+  if (outstanding.every(isHealthyInflightItem)) return "wait-children"
+  return outstanding.every((item) => isHealthyInflightItem(item) || prior(item)) ? "wait-prior-turn" : "recover"
+}
+
+function frozenPromptProblem(item, key) {
+  if (item?.promptFrozen !== true) return "派单正文不是可验证的冻结版本"
+  const valid = (text, digest) => typeof text === "string" && text.length > 0 && dispatchKeyFromPrompt(text) === key && typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest) && createHash("sha256").update(text, "utf8").digest("hex") === digest
+  if (!valid(item.prompt, item.promptDigest)) return "增量/首派正文的 key 或 SHA-256 与冻结摘要不符"
+  if (item.continuation || item.promptFull !== undefined || item.promptFullDigest !== undefined) {
+    if (!valid(item.promptFull, item.promptFullDigest)) return "全量正文的 key 或 SHA-256 与冻结摘要不符"
+  }
+  return null
+}
+
+function decisionOutput(plan) {
+  if (plan?.stop !== "awaiting-user") return plan
+  const card = plan.card && typeof plan.card === "object" ? plan.card : {}
+  const result = { ...plan }
+  for (const name of ["pendingDecisions", "staleDecisions", "needsDecisionId", "blockedPackages"]) {
+    if (card[name] !== undefined) result[name] = card[name]
+  }
+  if (Array.isArray(result.pendingDecisions) && result.pendingDecisions.length > 1) {
+    result.needsDecisionId = true
+    delete result.decisionId
+    delete result.question
+    delete result.choices
+    result.card = { ...card }
+    delete result.card.decisionId
+    delete result.card.question
+    delete result.card.choices
+  }
+  return result
 }
 
 const TW_TIMEOUT_MS = 120000
@@ -201,8 +239,10 @@ export function twDispatchDefinition(ctx, deps = {}) {
       const args = ["dispatch-plan", "--task", task, "--json"]
       for (const w of writables ?? []) args.push("--writable", w.path.trim() + ":" + w.kind.trim())
       const plan = await runTw(args, cwd)
-      const isDispatchPlan =
-        plan && typeof plan === "object" && plan.ok === true && plan.stop === null && Array.isArray(plan.waves) && plan.waves.length > 0
+      const isDispatchPlan = plan?.ok === true && plan.stop === null && Array.isArray(plan.waves) && plan.waves.length > 0
+      const isInflight = plan?.ok === true && plan.stop === "wait-inflight" && Array.isArray(plan.inflight)
+      if (!isDispatchPlan && !isInflight) return decisionOutput(plan)
+
       const getService = deps.getService ?? ((name) => (ctx && typeof ctx.get === "function" ? ctx.get(name) : ctx ? ctx[name] : undefined))
       let sessionsSvc = null
       try { sessionsSvc = getService("sessions") } catch { sessionsSvc = null }
@@ -210,240 +250,202 @@ export function twDispatchDefinition(ctx, deps = {}) {
       try { persistenceSvc = getService("sessionPersistence") } catch { persistenceSvc = null }
       let subagentsSvc = null
       try { subagentsSvc = getService("subagents") } catch { subagentsSvc = null }
-      const reconcileSession = async (id) => {
-        return inspectSession({ sessions: sessionsSvc, persistence: persistenceSvc, parentSessionId: exec?.agent?.id, signal: exec?.signal }, id)
-      }
-      // 只透传 Lead 自身呈现；成员规范随派单卡正文下发，不在工具结果重复展开。
+      const observe = (id) => inspectSession({ sessions: sessionsSvc, persistence: persistenceSvc, parentSessionId: exec?.agent?.id, signal: exec?.signal }, id)
       const leadPresentation = plan?.presentation ?? plan?.card?.presentation
       const presentation = leadPresentation === undefined ? {} : { presentation: leadPresentation }
-      const handleContinuation = async ({ key, label, waveFields, expectedAgentId, modelRef, prompt, promptFull, retireText }) => {
-        if (typeof prompt !== "string" || !prompt.trim()) {
-          return { ok: false, key, label, continuation: true, expectedAgentId, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "续派派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未投递未创建。若为误报请修复任务目录后重新 tw-dispatch；" + retireText }
-        }
-        const full = typeof promptFull === "string" && promptFull.trim() ? promptFull : prompt
-        const prior = expectedAgentId
-        const observation = await reconcileSession(prior)
-        const state = observation.status
-        if (state === "unknown") return { ok: false, key, label, sessionId: prior, ...waveFields, code: "TW_SUB_SESSION_UNKNOWN", message: "续派会话读取不确定：" + (observation.message ?? "宿主未提供具体原因") + "；保留映射，检查同 ID 会话后重试，勿另建成员或补投正文" }
-        if (state === "live" || state === "ours") {
-          const mapped = await runTw(["agent-map", "--task", task, "--key", key, "--agent", prior], cwd)
-          if (mapped?.ok !== true) return { ok: false, key, label, sessionId: prior, ...waveFields, code: "TW_DISPATCH_REGISTER_FAILED", message: "续派登记失败，未发送本轮正文；保留原成员会话，请修复登记后重试：" + String(mapped?.message ?? mapped) }
-        }
-        if (state === "live") {
-          // reused：活会话在场是纯重入等待，没有新投递——sleep 引导的派发世代不得因此递增。
-          return {
-            ok: true, key, label, continuation: true, expectedAgentId: prior, sessionId: prior, reused: true, action: "wait", ...waveFields,
-            message: "续派原会话（" + prior + "）在场：任务进行中（正在处理本轮，或等子代——子代停止时宿主注入父级通知逐级传导），等待成员完成通知；重入恒等待不重投，催单用 send_message",
-          }
-        }
-        if (state === "ours") {
-          let read
-          try { read = await coldSessionReceived(persistenceSvc, prior, exec?.signal, [prompt, full]) } catch (error) { return { ok: false, key, label, sessionId: prior, code: "TW_SUB_SESSION_UNKNOWN", message: String(error?.message ?? error) + "；保留映射，请检查同 ID 会话后重试，未补投正文" } }
-          if (!read.ok) return { ...read, key, label, continuation: true, expectedAgentId: prior, ...waveFields }
-          const followup = coldResumePrompt(read, prompt, full)
-          const sent = await followupChild({ subagents: subagentsSvc, parent: exec?.agent, signal: exec?.signal }, prior, followup.text)
-          if (!sent.ok) return { ...sent, key, label, continuation: true, expectedAgentId: prior, ...waveFields }
-          return {
-            ok: true, key, label, continuation: true, expectedAgentId: prior, sessionId: prior, messageId: sent.messageId, action: "followup",
-            resume: followup.resume, ...waveFields,
-            message: "续派原会话（" + prior + "）归属一致，已冷唤醒并发送" + (followup.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : followup.resume === "incremental" ? "本轮增量派单（仅有旧轮上下文）" : "全量派单（尚无工作上下文）"),
-          }
-        }
-        if (state === "foreign") {
-          return {
-            ok: false, key, label, continuation: true, expectedAgentId: prior, ...waveFields, code: "TW_SUB_TAKEOVER_CONFLICT",
-            message: "续派原会话（" + prior + "）是冷持久会话且归属其他父会话（接管冲突）：本工具不做接管（冷唤醒鉴权与同 ID 重建判重两路必被宿主拒绝）。处置：由原 Lead 会话继续，或 " + retireText,
-          }
-        }
-        const done = await registerThenCreate({ key, label, waveFields, modelRef, prompt: full, retireText })
-        if (!done.ok) return { ...done, continuation: true, expectedAgentId: prior }
-        return {
-          ...done, recovered: true, freshRebuilt: true, action: "fresh_rebuilt", continuation: true, priorAgentId: prior,
-          message: "续派原会话（" + prior + "）已不存在（断链），已 fresh 重建 " + done.sessionId + "（key 映射已回填，全量派单变体照发——新成员无原上下文）。" + retireText,
-        }
-      }
-      const retireHint = (item) => "若本波不应执行，立即 tw retire --task " + (plan.task ?? task) + " --wave " + (item?.waveId ?? "<waveId 见本卡>") + " 回收"
-      // 绑定层只校验 ModelRef 形状；宿主字段映射交给 subagent-session.toHostTarget（单点）。
-      const refValid = (ref) => Boolean(ref && typeof ref === "object" && typeof ref.provider === "string" && ref.provider && typeof ref.modelName === "string" && ref.modelName)
-      const registerThenCreate = async ({ key, label, waveFields, modelRef, prompt, retireText }) => {
-        if (typeof prompt !== "string" || !prompt.trim()) {
-          return { ok: false, key, label, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING", message: "派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未登记未创建。" + retireText + "；若为误报请修复任务目录后重新 tw-dispatch" }
-        }
-        const sessionId = deterministicSessionId(task, key)
-        const mapped = await runTw(["agent-map", "--task", task, "--key", key, "--agent", sessionId], cwd)
-        if (!mapped || mapped.ok !== true) {
-          return {
-            ok: false, key, label, ...waveFields, code: "TW_DISPATCH_REGISTER_FAILED",
-            message: "映射登记失败：" + String(mapped?.message ?? mapped) + "。尚未创建子会话（先登记后创建），原样重试安全、不会双发；若本波不应执行，" + retireText,
-          }
-        }
-        const created = await createSubagent(ctx, coreDeps, {
-          description: label,
-          prompt,
-          ...(refValid(modelRef) ? { modelRef } : {}),
-          sessionId,
-          dispatchKey: key,
-          exec,
-        })
-        if (!created || created.ok !== true) {
-          const refBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !refValid(modelRef)
-          return {
-            ok: false, key, label, sessionId, ...waveFields,
-            ...(created?.accepted ? { accepted: true, persistenceConfirmed: false, messageId: created.messageId } : {}),
-            code: refBlocked ? "TW_DISPATCH_MODEL_REF_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
-            message:
-              (refBlocked
-                ? "会话无记录需同 id 重建，但该派单无可用 modelRef（任务 roles/packages 未固化模型），重建无 target"
-                : created?.message ?? "子代理创建失败（未知原因）") +
-              "。映射已登记（" + sessionId + "）：重试先检查同 ID 会话；若本波不应执行，" + retireText +
-              (refBlocked ? "；若仍需执行，tw roles --resolve 重建角色模型（或 tw plan 重登记包模型）后重新 tw-dispatch" : ""),
-          }
-        }
-        return {
-          ok: true, key, label, sessionId: created.sessionId,
-          ...(created.provider ? { provider: created.provider } : {}),
-          ...(created.model ? { model: created.model } : {}),
-          ...(created.effort ? { effort: created.effort } : {}),
-          ...(created.reused ? { reused: true } : {}),
-          ...(created.refollowed ? { refollowed: true, ...(created.resume ? { resume: created.resume } : {}) } : {}),
-          ...waveFields, registered: true,
-          ...(created.reused
-            ? { action: "wait", message: "判定链命中：会话（" + created.sessionId + "）在场——任务进行中，等待成员完成通知；重入恒等待不重投" }
-            : created.refollowed
-              ? { action: "followup", message: "同父冷会话（" + created.sessionId + "）已冷唤醒并发送" + (created.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : created.resume === "incremental" ? "本轮增量派单" : "全量派单") }
-              : { action: "wait", message: "已创建成员会话（" + created.sessionId + "）并投递派单；输出派发简报后自然结束回合即可，等待成员完成通知（宿主会自动唤醒本会话）；请勿轮询或调用 sleep，确需同步等待时 sleep 类命令首次会被确认引导" }),
+      const keyOf = (item) => typeof item?.dispatchKey === "string" && item.dispatchKey ? item.dispatchKey : typeof item?.key === "string" ? item.key : ""
+      // 重验必须只读：dispatch-plan 是推进通道，调用它会在原波已完成时产生未投递的新波。
+      const inspectPlan = () => runTw(["run", "--task", task], cwd)
+      const mapAgent = (key, id) => runTw(["agent-map", "--task", task, "--key", key, "--agent", id], cwd)
+
+      // 两种入口走同一条对账链。锁路径与 retire 共用：先 key 锁，再由 CLI 短持任务锁，
+      // 宿主 I/O 始终在任务锁外；后到者拿锁后重读投影和映射，不复用旧计划快照。
+      const reconcileItem = async (initial) => {
+        const key = keyOf(initial)
+        const label = buildDispatchLabel(plan, initial, note)
+        const waveFields = initial?.waveId ? { waveId: initial.waveId } : {}
+        const base = { key, label, ...waveFields }
+        const errorCard = (code, message, extra = {}) => ({ ok: false, ...base, ...extra, code, message })
+        if (!key) return errorCard("TW_DISPATCH_KEY_MISSING", "派单缺少 key；未登记或投递，请核对波次事实。")
+        const reported = (mapping) => ({ ok: true, ...base, action: "reported", ...(typeof mapping?.agentId === "string" && mapping.agentId ? { sessionId: mapping.agentId } : {}), message: "该 key 已有有效报告，未创建或发送；重新推进以检查后续波。" })
+        const mappingFailure = (mapping, id) => errorCard(mapping?.code ?? "TW_DISPATCH_REGISTER_FAILED", (mapping?.message ?? "映射状态无法确认") + "；保留原会话与映射，核对后重试。", { sessionId: id, ...(mapping?.agentId ? { mappedAgentId: mapping.agentId } : {}) })
+        const checkMapping = (mapping, id) => mapping?.ok === true && mapping.status === "active" && mapping.agentId === id && typeof mapping.idempotent === "boolean"
+        let currentId = typeof initial?.mappedAgentId === "string" && initial.mappedAgentId ? initial.mappedAgentId : typeof initial?.expectedAgentId === "string" && initial.expectedAgentId ? initial.expectedAgentId : null
+        let hostAttempted = false
+        try {
+          return await withOwnerLock(dispatchLockPath(cwd, task, key), async () => {
+            const refreshed = await inspectPlan()
+            if (refreshed?.ok !== true) return errorCard(refreshed?.code ?? "TW_DISPATCH_STATE_UNKNOWN", "波次重验失败：" + String(refreshed?.message ?? refreshed?.card?.blockers?.[0]?.message ?? "状态不可确定") + "；保留原事实，请核对后重试。", { ...(currentId ? { sessionId: currentId } : {}) })
+            const matches = refreshed?.transition === "wait-inflight" && Array.isArray(refreshed.inflight) ? refreshed.inflight.filter((entry) => keyOf(entry) === key) : []
+            if (matches.length !== 1) {
+              // 只对已登记 ID 做无新增映射的状态重验；报告已在锁内确认时不依赖宿主。
+              if (initial?.registered === true && typeof initial.mappedAgentId === "string" && initial.mappedAgentId) {
+                const mapping = await mapAgent(key, initial.mappedAgentId)
+                if (mapping?.ok === true && mapping.status === "reported") return reported(mapping)
+                if (!checkMapping(mapping, initial.mappedAgentId) || mapping.idempotent !== true) return mappingFailure(mapping, initial.mappedAgentId)
+              }
+              return errorCard("TW_DISPATCH_STATE_CHANGED", "获取投递锁后未能唯一找到原在途派单；未投递，请重新推进并核对当前波。")
+            }
+            const item = matches[0]
+            if ((initial?.waveId && item.waveId !== initial.waveId) || Boolean(initial?.continuation) !== Boolean(item.continuation)) return errorCard("TW_DISPATCH_STATE_CHANGED", "派单波或续派身份已变化；未投递，请重新核对。")
+            if (typeof item.registered !== "boolean") return errorCard("TW_DISPATCH_REGISTERED_UNKNOWN", "映射状态缺失或账本损坏；保留原事实，从可信来源核对恢复后重试。", { ...(item.registeredUnresolved ? { reason: item.registeredUnresolved } : {}) })
+            if (item.registered && (typeof item.mappedAgentId !== "string" || !item.mappedAgentId.trim())) return errorCard("TW_DISPATCH_REGISTERED_UNKNOWN", "已登记但 sessionId 不可确定；不得猜用确定性 ID。")
+            let id = item.registered ? item.mappedAgentId : item.continuation ? item.expectedAgentId : deterministicSessionId(task, key)
+            currentId = typeof id === "string" && id.trim() ? id : null
+            if (typeof id !== "string" || !id.trim()) return errorCard("TW_DISPATCH_EXPECTED_AGENT_MISSING", "续派原会话 ID 未知；不得据此推定断链或新建，请核对原映射及宿主。", { ...(item.writerSafety?.required ? { writerSafety: item.writerSafety } : initial?.writerSafety?.required ? { writerSafety: initial.writerSafety } : {}) })
+
+            // 对已登记项先重验报告/作废与严格 CAS：reported 直接短路，不依赖会话。
+            if (item.registered) {
+              const mapping = await mapAgent(key, id)
+              if (mapping?.ok === true && mapping.status === "reported") return reported(mapping)
+              if (!checkMapping(mapping, id) || mapping.idempotent !== true) return mappingFailure(mapping, id)
+            }
+            if (initial?.expectedAgentIdMissing === true || item.expectedAgentIdMissing === true) return errorCard("TW_DISPATCH_EXPECTED_AGENT_MISSING", "续派原会话 ID 未经确认；不得据此推定断链或新建，请核对原映射及宿主。", { sessionId: id, ...(item.writerSafety?.required ? { writerSafety: item.writerSafety } : initial?.writerSafety?.required ? { writerSafety: initial.writerSafety } : {}) })
+            const safety = item.writerSafety?.required === true ? item.writerSafety : initial?.writerSafety?.required === true ? initial.writerSafety : null
+            if (safety) return errorCard("TW_DISPATCH_WRITER_SAFETY_UNKNOWN", "存在重叠的已作废旧写者，未证明其停写或撤权；未投递。" + (safety.recovery ?? "请核对旧会话后处理。"), { sessionId: id, writerSafety: safety })
+            if ((item.writerSafety && typeof item.writerSafety.required !== "boolean") || (initial?.writerSafety && typeof initial.writerSafety.required !== "boolean")) return errorCard("TW_DISPATCH_WRITER_SAFETY_UNKNOWN", "旧写者安全状态损坏或未知；未投递，请核对。", { sessionId: id })
+            if (initial?.modelStaleForSession === true) return errorCard("TW_DISPATCH_MODEL_CONFIRM_REQUIRED", "续派会话模型与当前模型不同，须先完成已有换模型确认。", { sessionId: id })
+            const problem = frozenPromptProblem(item, key) ?? frozenPromptProblem(initial, key)
+            if (problem) return errorCard("TW_DISPATCH_PROMPT_UNVERIFIED", problem + "；保留原 ID，不能比对或发送现场重建正文。", { sessionId: id })
+            if (initial.prompt !== item.prompt || (initial.promptFull ?? null) !== (item.promptFull ?? null)) return errorCard("TW_DISPATCH_PROMPT_CHANGED", "获取锁后冻结正文改变；未发送，请核对派单事实。", { sessionId: id })
+
+            let state = await observe(id)
+            let priorAgentId = null
+            if (state.status === "foreign") return errorCard("TW_SUB_TAKEOVER_CONFLICT", "原会话归属其他父会话；未接管或发送，请由原 Lead 核对。", { sessionId: id })
+            if (state.status === "unknown") return errorCard("TW_SUB_SESSION_UNKNOWN", "会话状态无法确认：" + (state.message ?? "宿主未提供原因") + "；保留原 ID，不创建或补投。", { sessionId: id })
+
+            // 原续派 ID 在当前宿主不可见且本 key 尚无映射时，按用户裁决使用新 key 的确定性 ID；
+            // none 仅是当前观察，不证明旧调用不可能迟到。已登记的 ID 永不被此分支覆盖。
+            if (state.status === "none" && item.continuation && !item.registered && item.expectedAgentId === id) {
+              priorAgentId = id
+              id = deterministicSessionId(task, key)
+              currentId = id
+              state = await observe(id)
+              if (state.status === "foreign") return errorCard("TW_SUB_TAKEOVER_CONFLICT", "重建 ID 已由其他父会话使用；未接管或发送。", { sessionId: id, priorAgentId })
+              if (state.status === "unknown") return errorCard("TW_SUB_SESSION_UNKNOWN", "重建 ID 状态无法确认：" + (state.message ?? "宿主未提供原因") + "；保留原会话，不创建。", { sessionId: id, priorAgentId })
+            }
+
+            const receiptFor = (observation, current) => sessionReceived({ sessions: sessionsSvc, persistence: persistenceSvc, signal: exec?.signal }, id, observation, [current.prompt, current.promptFull], key)
+            const readReceipt = async (observation, current) => {
+              const receipt = await receiptFor(observation, current)
+              if (!receipt.ok) return { error: errorCard(receipt.code, receipt.message, { sessionId: id }) }
+              if (receipt.conflict) return { error: errorCard("TW_DISPATCH_PROMPT_CONFLICT", "同 key 收单正文与冻结版本不同；保留原会话，不发送或重建。", { sessionId: id }) }
+              return { receipt }
+            }
+            const ensureMapping = async () => {
+              const mapping = await mapAgent(key, id)
+              if (mapping?.ok === true && mapping.status === "reported") return { error: reported(mapping) }
+              if (!checkMapping(mapping, id) || (item.registered && mapping.idempotent !== true)) return { error: mappingFailure(mapping, id) }
+              return { mapping }
+            }
+            const waitForReceipt = () => ({ ok: true, ...base, sessionId: id, registered: true, reused: true, receiptVerified: true, action: "wait", ...(priorAgentId ? { priorAgentId } : {}), message: "已核实宿主收单（仅证明宿主收单，不保证活动或通知可达），等待成员完成通知。" })
+            const liveUnreceived = async (observation) => {
+              // 当前 DSH 版本未证实暴露此类活动证明；仅显式标记同时存在时才采用。
+              if (observation.session?.turnActive === true && observation.session?.notificationReachable === true) {
+                const registered = await ensureMapping()
+                if (registered.error) return registered.error
+                return { ok: true, ...base, sessionId: id, registered: true, action: "wait-prior-turn", priorActivityConfirmed: true, notificationConfirmed: true, receiptVerified: false, message: "旧轮仍在运行且通知可达，本轮正文尚未确认收单。" }
+              }
+              return errorCard("TW_SUB_ACTIVITY_UNVERIFIED", "原会话在场但未见本轮正文，无法证明旧轮活动与通知；未补投，请核对原会话。", { sessionId: id, receiptVerified: false })
+            }
+            const frozenTarget = (() => {
+              try {
+                const target = toHostTarget(item.modelRef)
+                if (JSON.stringify(target) !== JSON.stringify(toHostTarget(initial.modelRef))) throw new Error("模型快照与初始派单不一致")
+                return { target }
+              } catch (error) { return { error: String(error?.message ?? error) } }
+            })()
+            // 映射登记后再次只读投影，再用 agent-map 在任务锁内确认波状态与 CAS。
+            const confirmCurrent = async () => {
+              const afterMap = await inspectPlan()
+              if (afterMap?.ok !== true) return { error: errorCard(afterMap?.code ?? "TW_DISPATCH_STATE_UNKNOWN", "登记后波次重验失败；保留映射，未投递。", { sessionId: id }) }
+              const current = afterMap.transition === "wait-inflight" && Array.isArray(afterMap.inflight) ? afterMap.inflight.filter((entry) => keyOf(entry) === key) : []
+              const checked = await mapAgent(key, id)
+              if (checked?.ok === true && checked.status === "reported") return { error: reported(checked) }
+              if (!checkMapping(checked, id) || checked.idempotent !== true) return { error: mappingFailure(checked, id) }
+              if (current.length !== 1 || current[0].waveId !== item.waveId || current[0].registered !== true || current[0].mappedAgentId !== id) return { error: errorCard("TW_DISPATCH_STATE_CHANGED", "登记后波或映射已变化；保留映射，未投递。", { sessionId: id }) }
+              const now = current[0]
+              if (now.writerSafety && (typeof now.writerSafety.required !== "boolean" || now.writerSafety.required)) return { error: errorCard("TW_DISPATCH_WRITER_SAFETY_UNKNOWN", "登记后旧写者停写状态不可证明；未投递。", { sessionId: id, writerSafety: now.writerSafety }) }
+              const nowProblem = frozenPromptProblem(now, key)
+              if (nowProblem || now.prompt !== item.prompt || (now.promptFull ?? null) !== (item.promptFull ?? null)) return { error: errorCard("TW_DISPATCH_PROMPT_UNVERIFIED", (nowProblem ?? "登记后冻结正文发生变化") + "；未投递。", { sessionId: id }) }
+              try {
+                if (JSON.stringify(toHostTarget(now.modelRef)) !== JSON.stringify(frozenTarget.target)) throw new Error("模型快照已改变")
+              } catch (error) { return { error: errorCard("TW_DISPATCH_MODEL_REF_UNRESOLVED", "登记后无法验证精确模型：" + String(error?.message ?? error) + "；保留映射，未投递。", { sessionId: id }) } }
+              return { now }
+            }
+
+            if (state.status === "live" || state.status === "ours") {
+              const firstRead = await readReceipt(state, item)
+              if (firstRead.error) return firstRead.error
+              if (state.status === "live") {
+                if (!firstRead.receipt.currentReceived) return liveUnreceived(state)
+                const registered = await ensureMapping()
+                if (registered.error) return registered.error
+                return waitForReceipt()
+              }
+              if (frozenTarget.error) return errorCard("TW_DISPATCH_MODEL_REF_UNRESOLVED", "无法验证派单的精确模型：" + frozenTarget.error + "；未投递。", { sessionId: id })
+              const registered = await ensureMapping()
+              if (registered.error) return registered.error
+              const checked = await confirmCurrent()
+              if (checked.error) return checked.error
+              const now = checked.now
+              // 重验后重新查询：如果会话已在场，不向 live 重投。
+              const beforeSend = await observe(id)
+              if (beforeSend.status !== "live" && beforeSend.status !== "ours") return errorCard("TW_SUB_SESSION_UNKNOWN", "续投前会话状态或归属已变化；保留映射，未发送。", { sessionId: id })
+              const latestRead = await readReceipt(beforeSend, now)
+              if (latestRead.error) return latestRead.error
+              if (beforeSend.status === "live") return latestRead.receipt.currentReceived ? waitForReceipt() : liveUnreceived(beforeSend)
+              if ((firstRead.receipt.currentReceived && !latestRead.receipt.currentReceived) || (firstRead.receipt.received && !latestRead.receipt.received)) return errorCard("TW_SUB_SESSION_UNKNOWN", "续投前日志回退，无法判定收单；保留映射，未发送。", { sessionId: id })
+              const followup = coldResumePrompt(latestRead.receipt, now.prompt, now.promptFull ?? now.prompt)
+              hostAttempted = true
+              const sent = await followupChild({ subagents: subagentsSvc, parent: exec?.agent, signal: exec?.signal }, id, followup.text)
+              if (!sent.ok) return errorCard(sent.code, sent.message, { sessionId: id, registered: true })
+              const afterSend = await observe(id)
+              if (afterSend.status !== "live" && afterSend.status !== "ours") return errorCard("TW_SUB_SESSION_UNKNOWN", "续投回执已收到，但会话或归属不可核验；保留 ID，检查收单。", { sessionId: id, registered: true, accepted: true, messageId: sent.messageId })
+              const afterRead = await readReceipt(afterSend, now)
+              if (afterRead.error) return { ...afterRead.error, registered: true, accepted: true, messageId: sent.messageId }
+              if (!afterRead.receipt.currentReceived) return errorCard("TW_SUB_RECEIPT_UNCONFIRMED", "续投回执已收到，但本轮正文尚未确认；保留 ID 核对，不把回执冒充收单。", { sessionId: id, registered: true, accepted: true, messageId: sent.messageId })
+              return { ok: true, ...base, sessionId: id, registered: true, receiptVerified: true, action: "followup", resume: followup.resume, refollowed: true, messageId: sent.messageId, ...(priorAgentId ? { priorAgentId } : {}), message: "已核实宿主收单；仅表示收单，不保证成员完成或通知可达。" }
+            }
+
+            if (state.status !== "none") return errorCard("TW_SUB_SESSION_UNKNOWN", "会话状态不受支持；保留原映射，未投递。", { sessionId: id })
+            if (frozenTarget.error) return errorCard("TW_DISPATCH_MODEL_REF_UNRESOLVED", "无法验证派单的精确模型：" + frozenTarget.error + "；未投递。", { sessionId: id })
+            const registered = await ensureMapping()
+            if (registered.error) return registered.error
+            const checked = await confirmCurrent()
+            if (checked.error) return checked.error
+            const now = checked.now
+            const createPrompt = item.continuation ? now.promptFull : now.prompt
+            hostAttempted = true
+            const created = await createSubagent(ctx, coreDeps, { description: label, prompt: createPrompt, modelRef: now.modelRef, sessionId: id, dispatchKey: key, allowCreate: true, exec })
+            if (!created || created.ok !== true || created.sessionId !== id) {
+              return errorCard(created?.code ?? "TW_DISPATCH_CREATE_FAILED", (created?.message ?? "创建回执不可确认") + "；保留原映射，检查同 ID。", { sessionId: id, ...(created?.accepted ? { accepted: true, persistenceConfirmed: created.persistenceConfirmed, messageId: created.messageId } : {}), ...(created?.returnedSessionId ? { returnedSessionId: created.returnedSessionId } : {}), ...(priorAgentId ? { priorAgentId } : {}) })
+            }
+            const afterCreate = await observe(id)
+            if (afterCreate.status !== "live" && afterCreate.status !== "ours") return errorCard("TW_SUB_SESSION_UNKNOWN", "宿主已返回创建回执，但当前会话或其归属不可核验；保留 ID 并核对。", { sessionId: id, registered: true, accepted: true, messageId: created.messageId })
+            const afterRead = await readReceipt(afterCreate, now)
+            if (afterRead.error) return { ...afterRead.error, registered: true, accepted: true, messageId: created.messageId }
+            if (!afterRead.receipt.currentReceived) return errorCard("TW_SUB_RECEIPT_UNCONFIRMED", "创建回执已收到，但冻结正文尚未在日志确认；保留原 ID。", { sessionId: id, registered: true, accepted: true, messageId: created.messageId })
+            const action = priorAgentId ? "fresh_rebuilt" : item.registered ? "recreated" : "wait"
+            return { ok: true, ...base, sessionId: id, registered: true, accepted: true, receiptVerified: true, action, messageId: created.messageId, provider: created.provider, model: created.model, ...(created.effort ? { effort: created.effort } : {}), ...(priorAgentId ? { priorAgentId, continuation: true, recovered: true, freshRebuilt: true } : {}), message: "已核实宿主收单（仅证明收单，不保证活动或通知可达），等待成员完成通知。" }
+          })
+        } catch (error) {
+          return errorCard(error?.code ?? "TW_DISPATCH_LOCK_FAILED", "投递锁或对账失败：" + String(error?.message ?? error) + "；保留原映射与会话，请核对后重试。", { ...(currentId ? { sessionId: currentId } : {}), ...(hostAttempted ? { hostAttempted: true } : {}) })
         }
       }
 
-      if (plan && plan.ok === true && plan.stop === "wait-inflight" && Array.isArray(plan.inflight)) {
-        const handleInflightItem = async (item) => {
-          const key = typeof item?.dispatchKey === "string" && item.dispatchKey ? item.dispatchKey : typeof item?.key === "string" ? item.key : ""
-          const label = buildDispatchLabel(plan, item, note)
-          const waveFields = item?.waveId ? { waveId: item.waveId } : {}
-          if (item == null || typeof item !== "object" || item.registered === undefined) {
-            return {
-              ok: true, key, label, ...waveFields, passthrough: true,
-              code: item?.registeredUnresolved ? "TW_DISPATCH_REGISTRY_CORRUPT" : "TW_DISPATCH_REGISTERED_UNKNOWN",
-              message:
-                "在途派单 " + (key || "(缺 key)") + " 缺 registered 判定字段（任务级 agents.json " +
-                (item?.registeredUnresolved ? "损坏：" + item.registeredUnresolved : "缺失") + "），不自动补派。" +
-                "恢复边：tw agent-map --task " + (plan.task ?? task) + " --key " + (key || "<派单key>") + " --agent <childId> 补登记（账本损坏时该命令自动重建账本，历史映射丢失的续派走 fresh 重建路径）后重新 tw-dispatch；已确认子代理未创建则直接重新 tw-dispatch（按未登记自动补派）",
-            }
-          }
-          if (item.registered === true) {
-            const mappedId = typeof item.mappedAgentId === "string" && item.mappedAgentId ? item.mappedAgentId : ""
-            const targetId = mappedId || deterministicSessionId(task, key)
-            if (typeof item.prompt !== "string" || !item.prompt.trim()) {
-              return {
-                ok: false, key, label, ...waveFields, code: "TW_DISPATCH_PROMPT_MISSING",
-                message: "在途派单 " + key + " 的 prompt 缺失（runtime 投影缺陷），未补发未创建（登记保持不变）。" + retireHint(item) + "；若为误报请修复任务目录后重新 tw-dispatch",
-              }
-            }
-            const modelRef = item?.modelRef
-            const created = await createSubagent(ctx, coreDeps, {
-              description: label,
-              prompt: item.prompt,
-              ...(item.continuation && typeof item.promptFull === "string" && item.promptFull.trim() ? { promptFull: item.promptFull } : {}),
-              ...(refValid(modelRef) ? { modelRef } : {}),
-              sessionId: targetId,
-              dispatchKey: key,
-              exec,
-            })
-            if (!created || created.ok !== true) {
-              const refBlocked = created?.code === "TW_SUB_TARGET_INVALID" && !refValid(modelRef)
-              return {
-                ok: false, key, label, sessionId: targetId, ...waveFields,
-                ...(created?.accepted ? { accepted: true, persistenceConfirmed: false, messageId: created.messageId } : {}),
-                code: created?.code === "TW_SUB_TAKEOVER_CONFLICT" || created?.code === "TW_SUB_NOT_RESUMABLE" || created?.code === "TW_SUB_FOLLOWUP_UNAVAILABLE"
-                  ? created.code
-                  : refBlocked ? "TW_DISPATCH_MODEL_REF_UNRESOLVED" : created?.code ?? "TW_DISPATCH_CREATE_FAILED",
-                message: (created?.message ?? "在途处置失败（未知原因）") + "。登记保持不变，重试先检查同 ID 会话；" + retireHint(item) +
-                  (refBlocked ? "；若仍需执行，tw roles --resolve 重建角色模型（或 tw plan 重登记包模型）后重新 tw-dispatch" : ""),
-              }
-            }
-            return {
-              ok: true, key, label, sessionId: created.sessionId,
-              ...(created.provider ? { provider: created.provider } : {}),
-              ...(created.model ? { model: created.model } : {}),
-              ...(created.effort ? { effort: created.effort } : {}),
-              ...waveFields, registered: true,
-              ...(created.reused
-                ? { reused: true, action: "wait", message: "已登记在途且会话在场（" + created.sessionId + "）：任务进行中，等待成员完成通知；重入恒等待不重投，催单用 send_message" }
-                : created.refollowed
-                  ? { recovered: true, action: "followup", ...(created.resume ? { resume: created.resume } : {}), message: "已登记在途，同父冷会话（" + created.sessionId + "）已唤醒并发送" + (created.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : created.resume === "incremental" ? "本轮增量派单" : "全量派单") + "。" + retireHint(item) }
-                  : { recovered: true, action: "recreated", message: "已登记在途但会话无记录（崩溃窗口或会话被清），已同 id 重建（投全量变体）：" + created.sessionId + "。" + retireHint(item) }),
-            }
-          }
-          if (item.continuation && item.expectedAgentId) {
-            return handleContinuation({
-              key, label, waveFields, expectedAgentId: item.expectedAgentId, modelRef: item?.modelRef,
-              prompt: item.prompt, promptFull: item.promptFull, retireText: retireHint(item),
-            })
-          }
-          const done = await registerThenCreate({ key, label, waveFields, modelRef: refValid(item?.modelRef) ? item.modelRef : null, prompt: item.prompt, retireText: retireHint(item) })
-          if (!done.ok) return done
-          return {
-            ...done, recovered: true,
-            message:
-              (done.reused
-                ? "补派判定链命中：会话在场（此前崩溃窗口的登记+投递实际已完成，任务进行中）：" + done.sessionId
-                : done.refollowed
-                  ? "补派判定链投递：同父冷会话（" + done.sessionId + "）已唤醒并发送" + (done.resume === "reminder" ? "轻量续行提醒（日志已含本轮正文）" : done.resume === "incremental" ? "本轮增量派单" : "全量派单")
-                  : "补派：此前已落盘无执行登记（dispatch 崩溃窗口），已按确定性 sessionId 登记并创建 " + done.sessionId) +
-              "。同 key 重试经判定链收敛，不会双发。" + retireHint(item),
-          }
-        }
-        const inflight = []
-        for (const item of plan.inflight) inflight.push(await handleInflightItem(item))
-        const failures = inflight.filter((d) => !d.ok).length
-        const healthyInflight = isHealthyInflightBatch(inflight, failures)
-        const inflightResult = {
-          ok: true,
-          task: plan.task ?? task,
-          stage: plan.stage,
-          stop: "wait-inflight",
-          nextAction: healthyInflight ? "wait-children" : "recover",
-          inflight,
-          ...presentation,
-          ...(failures > 0 ? { failures, note: "部分在途条目处置失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : { note: "在途条目已逐条处置（等待/补发/冷唤醒/续派 followup/重建）" }),
-        }
-        if (healthyInflight) sleepConfirm.noteDispatch(exec, inflightResult)
-        return inflightResult
+      const items = []
+      for (const item of isInflight ? plan.inflight : plan.waves) items.push(await reconcileItem(item))
+      const failures = items.filter((item) => !item.ok).length
+      const nextAction = nextActionFor(items)
+      const result = {
+        ok: true, task: plan.task ?? task, stage: plan.stage,
+        ...(isInflight || nextAction === "wait-prior-turn" ? { stop: "wait-inflight" } : { stop: null }),
+        nextAction, ...(isInflight ? { inflight: items } : { dispatched: items }), ...presentation,
+        ...(failures ? { failures, note: "有条目需要核对；其他条目的结果保留，不得重投未知项。" } : nextAction === "recover" ? { note: "本波已报告或没有可证明的等待条件；请重新推进或按条目核对。" } : {}),
       }
-      if (!isDispatchPlan) return plan
-
-      const dispatched = []
-      for (const wave of plan.waves) {
-        const key = typeof wave?.dispatchKey === "string" ? wave.dispatchKey : ""
-        const label = buildDispatchLabel(plan, wave, note)
-        const waveFields = wave?.waveId ? { waveId: wave.waveId } : {}
-        if (!key) {
-          dispatched.push({ ok: false, key, label, ...waveFields, code: "TW_DISPATCH_KEY_MISSING", message: "派单缺 dispatchKey（波次事实损坏）；已跳过。请核对任务目录后重试 tw-dispatch" })
-          continue
-        }
-        if (wave.continuation && wave.expectedAgentId) {
-          dispatched.push(await handleContinuation({
-            key, label, waveFields, expectedAgentId: wave.expectedAgentId, modelRef: wave?.modelRef,
-            prompt: wave.prompt, promptFull: wave.promptFull, retireText: retireHint(wave),
-          }))
-          continue
-        }
-        const card = await registerThenCreate({ key, label, waveFields, modelRef: refValid(wave?.modelRef) ? wave.modelRef : null, prompt: wave.prompt, retireText: retireHint(wave) })
-        dispatched.push(card)
-      }
-      const failures = dispatched.filter((d) => !d.ok).length
-      const healthyDispatched = isHealthyInflightBatch(dispatched, failures)
-      const dispatchedResult = {
-        ok: true,
-        task: plan.task ?? task,
-        stage: plan.stage,
-        nextAction: healthyDispatched ? "wait-children" : "recover",
-        dispatched,
-        ...presentation,
-        ...(failures > 0 ? { failures, note: "部分派单项失败：已成功项不回滚；失败项按各自 message 的指引恢复" } : {}),
-      }
-      if (healthyDispatched) sleepConfirm.noteDispatch(exec, dispatchedResult)
-      return dispatchedResult
+      if (nextAction === "wait-children") sleepConfirm.noteDispatch(exec, result)
+      return result
     },
     output: {
       schema: TW_DISPATCH_OUTPUT_SCHEMA,

@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d1-3d7a2f",
+  "dispatchKey": "d1-3d7a2f",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 1,
+  "stage": "design",
+  "package": "failure-recovery-analysis",
+  "waveId": "wv1",
+  "ver": 1,
+  "payloadDigest": "0b94c97f497a778bde8d74bf3c28bd011dc01856be35e887b67545d77531b309",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "潮汐灯（虚构产品）故障与恢复分析已完成并写入 docs/failure-recovery.md（完整方案正文：第 1 节推荐方向与代价、第 3 节 FMEA、第 4 节三层恢复体系与掉电/OTA/断网处理及错误码接口、第 5~7 节约束、实现顺序与故障注入验证清单）；已直接验证文件写入成功，未运行任何实际固件测试（产品为虚构，第 7 节为设计规定的待执行验证项），遗留机构降级取舍等未决项见正文第 8 节。",
+    "paths": [
+      "docs/failure-recovery.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:33:05.273Z"
+}

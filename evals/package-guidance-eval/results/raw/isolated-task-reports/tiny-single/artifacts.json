@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "path": "docs/one-note.md",
+      "digest": "e9ea92be9d580acb225eb3a0e104e558689acd8c824f4bfb9cbfc0a6a08344d0",
+      "kind": "source",
+      "stage": "implementation",
+      "reportRef": "deliver-d1-570117",
+      "snapshotRef": "snapshots/e9ea92be9d580acb225eb3a0e104e558689acd8c824f4bfb9cbfc0a6a08344d0.json"
+    }
+  ]
+}

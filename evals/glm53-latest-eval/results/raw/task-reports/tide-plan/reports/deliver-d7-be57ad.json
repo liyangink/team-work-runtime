@@ -1,0 +1,22 @@
+{
+  "reportId": "deliver-d7-be57ad",
+  "dispatchKey": "d7-be57ad",
+  "role": "owner",
+  "kind": "deliver",
+  "round": 3,
+  "stage": "design",
+  "package": "failure-recovery-analysis",
+  "waveId": "wv7",
+  "ver": 1,
+  "payloadDigest": "1d5ecd3ee13462d82cd344ccea9c1080985dea1c6acfff7663c7bcd3438bb710",
+  "payload": {
+    "outcome": "delivered",
+    "summary": "已按方向 A（保留运动机构于基线）完成 docs/failure-recovery.md 的缝 1 收敛（完整方案正文仍在该文件，可逐行核对）：§1/§2 基线声明改为与 interface-constraints.md §1/§3/§4 一致的机构/传感/备电 SRAM 基线（motion_driver/sensors/logbuf），F-04 恢复为摆动机构卡死、F-09 解除可选标注、F-05 恢复双点 NTC、§4.5 日志恢复 2KB 备电 SRAM 路径（经其 logbuf 实现）、V-04 恢复机构卡死，交互输入失效按 Challenger「或增行」授权以新增 F-11/V-07 承接，§4.5 顺带刷新「不新增独立端点」为引用其 §2.3 已登记的 GET /device/status；选择方向 A 的依据是 interface 现行交付物已全面落位 A 且 B 向修改全在其文件（非我可写），收敛后 Challenger 所列失效交叉引用在我侧全部转真（其 §7 过期说明与 §3 err_reg 行「F-01~F-10」描述性计数留其自清，已在本文 §8 注明）；已直接验证修改后 FMEA 表 F-01~F-11 无重复、无静态基线/可选扩展残留，虚构方案第 7 节验证项仍未执行实际测试。",
+    "paths": [
+      "docs/failure-recovery.md"
+    ],
+    "checks": [],
+    "unresolved": []
+  },
+  "at": "2026-11-17T13:47:14.619Z"
+}

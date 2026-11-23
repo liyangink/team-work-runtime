@@ -1,0 +1,55 @@
+{
+  "items": [
+    {
+      "id": "interface-analysis",
+      "writable": [
+        "docs/interface-constraints.md:design"
+      ],
+      "done": [
+        "完成潮汐灯接口与约束分析说明，写入 docs/interface-constraints.md（虚构内容）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "failure-recovery-analysis",
+      "writable": [
+        "docs/failure-recovery.md:design"
+      ],
+      "done": [
+        "完成潮汐灯故障与恢复分析说明，写入 docs/failure-recovery.md（虚构内容）"
+      ],
+      "dependsOn": [],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    },
+    {
+      "id": "final-plan-merge",
+      "writable": [
+        "docs/final-plan.md:design"
+      ],
+      "done": [
+        "读取 docs/interface-constraints.md 与 docs/failure-recovery.md，将两份分析合并为最终方案，写入 docs/final-plan.md"
+      ],
+      "dependsOn": [
+        "interface-analysis",
+        "failure-recovery-analysis"
+      ],
+      "model": {
+        "provider": "zai-coding-cn",
+        "modelName": "glm-5.3",
+        "effort": "max",
+        "family": "glm"
+      }
+    }
+  ]
+}

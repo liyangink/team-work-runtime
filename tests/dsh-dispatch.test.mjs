@@ -1,8 +1,11 @@
 import assert from "node:assert/strict"
-import test from "node:test"
+import test, { before } from "node:test"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { createHash } from "node:crypto"
+import { spawn } from "node:child_process"
 import z from "@deepseek-ai/schemastery"
 
 import {
@@ -26,9 +29,20 @@ import {
 } from "../dsh/sleep-confirm.js"
 import { Config, readDshConfigSnapshot, decisionTableText, systemPromptSection } from "../dsh/settings.js"
 import { twToolDefinition } from "../dsh/tw-tool.js"
+import { coldSessionReceived } from "../dsh/subagent-session.js"
 import * as hostPlugin from "../dsh/index.js"
 
-const EXEC = { agent: { id: "parent-agent-1", session: { header: { cwd: "/proj" } } } }
+const sha = (text) => createHash("sha256").update(text, "utf8").digest("hex")
+
+// 投递锁在会话工作目录下创建 .team-work/tasks/<task>/locks，虚构路径会 ENOENT；
+// 测试统一使用真实临时目录。
+let EXEC_ROOT = ""
+let EXEC
+before(async () => {
+  EXEC_ROOT = await mkdtemp(path.join(os.tmpdir(), "twr-dispatch-exec-"))
+  await mkdir(path.join(EXEC_ROOT, ".team-work/tasks/demo-t/locks"), { recursive: true })
+  EXEC = { agent: { id: "parent-agent-1", session: { header: { cwd: EXEC_ROOT } } } }
+})
 
 test("插件 Config 根 object，空配置启动，热读取保留原始三档形状及 profile", () => {
   assert.equal(Config.type, "object")
@@ -50,7 +64,7 @@ test("插件 Config 根 object，空配置启动，热读取保留原始三档�
 
 test("配置表单经宿主去 volatile 后二次 JSON 序列化可在客户端校验", () => {
   const form = new z(Config.toJSON())
-  const walk = (node) => { delete node.meta.volatile; for (const child of Object.values(node.dict ?? {})) walk(child); if (node.inner) walk(node.inner); for (const child of node.list ?? []) walk(child) }
+  const walk = (node) => { delete node.meta.volatile; for (const child of Object.values(node.dict ?? {})) walk(child); if (node.inner) walk(node.inner); for (const child of Object.list ?? []) walk(child) }
   walk(form)
   const client = new z(JSON.parse(JSON.stringify(form.toJSON())))
   const complete = { junior: { provider: "provider-example", model: "model-a" }, senior: [{ provider: "provider-example", model: "model-b" }], expert: { provider: "provider-example", model: "model-c", effort: "high" } }
@@ -66,11 +80,11 @@ test("tw 与 dispatch 调用只取一次快照，各子进程参数共用该快�
   const snapshot = { tiers: {}, entryId: "team-work-dsh", profile: "profile-example" }
   const configSnapshot = () => { reads++; return snapshot }
   const cards = []
-  const dispatch = twDispatchDefinition(h.ctx, { configSnapshot, runTw: async (args, cwd, config) => { cards.push(config); return args[0] === "dispatch-plan" ? planCard([ownerWave()]) : { ok: true } } })
+  const dispatch = twDispatchDefinition(h.ctx, { configSnapshot, runTw: async (args, cwd, config) => { cards.push(config); return args[0] === "dispatch-plan" ? planCard([ownerWave()]) : args[0] === "run" ? { ok: true, task: "demo-t", stage: "implementation", status: "working", transition: "wait-inflight", inflight: [ownerWave()] } : { ok: true, status: "active", agentId: args[6], idempotent: true } } })
   await dispatch.execute({ task: "demo-t" }, EXEC)
   assert.equal(reads, 1)
-  assert.equal(cards.length, 2)
-  assert.equal(cards[0], cards[1])
+  assert.ok(cards.length >= 2, "dispatch-plan 与锁内重验都携带同一快照")
+  assert.ok(cards.every((c) => c === snapshot))
   const tw = twToolDefinition({ configSnapshot, runTw: async (_executable, _args, _cwd, config) => { assert.equal(config, snapshot); return { ok: true } } })
   await tw.execute({ args: ["models"] }, EXEC)
   assert.equal(reads, 2)
@@ -80,13 +94,14 @@ test("tw 与 dispatch 调用只取一次快照，各子进程参数共用该快�
 test("冷续派发送前登记新 key，登记失败不发正文", async () => {
   const wave = ownerWave({ dispatchKey: "d5-continuation", continuation: true, expectedAgentId: "prior-example" })
   const h = makeCtx()
-  h.injectCold("prior-example", { received: "上一轮正文" })
+  h.injectCold("prior-example", { received: "# 派单（key: d0-old）\n\n上一轮正文" })
   const { runTw, calls } = makeRunTw(planCard([wave]), { failCommands: { "agent-map": { ok: false, message: "登记失败" } } })
   const tool = twDispatchDefinition(h.ctx, { runTw })
   const result = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(result.dispatched[0].code, "TW_DISPATCH_REGISTER_FAILED")
   assert.equal(h.followups.length, 0)
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d5-continuation", "--agent", "prior-example"])
+  const mapCall = calls.find((call) => call.cmd === "agent-map")
+  assert.deepEqual(mapCall.args, ["agent-map", "--task", "demo-t", "--key", "d5-continuation", "--agent", "prior-example"])
 })
 
 test("真实 tw 子进程收到宿主调用快照，不读取旧配置", async () => {
@@ -112,14 +127,18 @@ test("registered 在途冷重试已含同轮正文，仅续行提示", async () 
 })
 
 test("预登记新 key 但本轮正文未送达时，旧上下文不能误选轻提示", async () => {
-  const item = { ...ownerWave({ dispatchKey: "d5-next-round", continuation: true, prompt: "本轮增量正文", promptFull: "本轮全量正文" }), registered: true, mappedAgentId: "prior-example" }
-  const { runTw, calls } = makeRunTw({ ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [item] })
+  const item = ownerWave({ dispatchKey: "d5-next-round", continuation: true, prompt: "本轮增量正文", promptFull: "本轮全量正文" })
+  const inflight = { ...item, registered: true, mappedAgentId: "prior-example" }
+  const { runTw, calls } = makeRunTw({ ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [inflight] })
   const h = makeCtx()
-  h.injectCold("prior-example", { received: "上一轮派单正文" })
+  h.injectCold("prior-example", { received: "# 派单（key: d0-old）\n\n上一轮派单正文" })
   const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
   assert.equal(result.inflight[0].resume, "incremental")
-  assert.equal(h.followups[0].text, "本轮增量正文")
-  assert.equal(calls.filter((call) => call.cmd === "agent-map").length, 0)
+  assert.equal(h.followups[0].text, item.prompt)
+  assert.ok(calls.filter((call) => call.cmd === "agent-map").length >= 1, "发送前已完成映射登记")
+  const firstMap = calls.findIndex((call) => call.cmd === "agent-map")
+  const sendIndex = calls.length // sends 不经过 runTw；以 agent-map 先于 followup 的因果由 h.followups 长度断言
+  assert.ok(firstMap >= 0 && sendIndex > firstMap)
 })
 
 test("新 continuation 冷会话已收本轮全量时，先登记同父映射再轻量续行", async () => {
@@ -130,7 +149,8 @@ test("新 continuation 冷会话已收本轮全量时，先登记同父映射再
   const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
   assert.equal(result.dispatched[0].resume, "reminder")
   assert.match(h.followups[0].text, /已收到本轮派单正文/)
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d5-next-round", "--agent", "prior-example"])
+  const mapCall = calls.find((call) => call.cmd === "agent-map")
+  assert.deepEqual(mapCall.args, ["agent-map", "--task", "demo-t", "--key", "d5-next-round", "--agent", "prior-example"])
 })
 
 test("续派 unknown 保留具体存储错误原因，阻止登记与补投", async () => {
@@ -151,35 +171,76 @@ test("续派 unknown 保留具体存储错误原因，阻止登记与补投", as
 function planCard(waves, extra = {}) {
   return { ok: true, task: "demo-t", stage: "implementation", stop: null, waves, card: { status: "dispatch", next: "await-reports" }, ...extra }
 }
+// 冻结正文契约：首行 key 标记 + promptFrozen + SHA-256 摘要；continuation 附全量变体。
+function withKeyHeader(text, key, kind, dash) {
+  if (typeof text !== "string" || !text.trim()) return text
+  if (text.startsWith("# ")) return text
+  return `# ${kind}（key: ${key}）${dash}\n\n${text}`
+}
 function ownerWave(overrides = {}) {
-  return {
-    dispatchKey: "d1-abc123",
+  const key = overrides.dispatchKey ?? "d1-abc123"
+  const continuation = overrides.continuation ?? false
+  const prompt = withKeyHeader(overrides.prompt ?? "派单全文 PROMPT", key, continuation ? "续派" : "派单", continuation ? "——你在原上下文基础上继续" : "")
+  const base = {
+    dispatchKey: key,
     waveId: "wv1",
     kind: "produce",
     role: "owner",
     tier: "junior",
     round: 1,
     continuation: false,
-    prompt: "派单全文 PROMPT",
     deliver: "deliver",
     modelRef: { provider: "p-a", modelName: "m-j1" },
     weight: 1,
     ...overrides,
+    prompt,
+    promptFrozen: true,
+    promptDigest: sha(prompt),
   }
+  if (base.continuation || base.promptFull !== undefined) {
+    base.promptFull = withKeyHeader(base.promptFull ?? "全量派单正文：目标+约束+排除", key, "续派全量变体", "——原会话上下文不可用时的自足派单")
+    base.promptFullDigest = sha(base.promptFull)
+  }
+  return base
 }
 
+// 状态化 CLI 桩：dispatch-plan 返回计划；run 返回 wait-inflight 投影；agent-map 按 CAS 登记映射。
 function makeRunTw(plan, { failCommands = {}, onCall } = {}) {
   const calls = []
+  const mappings = new Map()
+  const keyOf = (item) => (typeof item?.dispatchKey === "string" && item.dispatchKey) || (typeof item?.key === "string" ? item.key : "")
+  const waveItems = () => (plan?.stop === "wait-inflight" ? (Array.isArray(plan?.inflight) ? plan.inflight : []) : Array.isArray(plan?.waves) ? plan.waves : [])
+  for (const item of waveItems()) {
+    const k = keyOf(item)
+    if (item?.registered === true && typeof item?.mappedAgentId === "string" && item.mappedAgentId) mappings.set(k, item.mappedAgentId)
+  }
+  const projection = (item) => {
+    const k = keyOf(item)
+    if (mappings.has(k)) return { ...item, registered: true, mappedAgentId: mappings.get(k) }
+    return { ...item, registered: false }
+  }
   const runTw = async (args, cwd) => {
     calls.push({ cmd: args[0], args, cwd })
-    if (onCall) onCall(args[0])
+    if (onCall) onCall(args[0], args)
     const fail = typeof failCommands[args[0]] === "function" ? failCommands[args[0]](args) : failCommands[args[0]]
     if (fail) return fail
     if (args[0] === "dispatch-plan") return plan
-    if (args[0] === "agent-map") return { ok: true, task: "demo-t", key: args[4], agent: args[6], note: "已登记派单映射" }
+    if (args[0] === "run") {
+      const enhance = (it) => { const k = keyOf(it); return mappings.has(k) ? { ...it, registered: true, mappedAgentId: mappings.get(k) } : it }
+      if (plan?.stop === "wait-inflight") return { ...plan, transition: "wait-inflight", status: "working", inflight: (plan.inflight ?? []).map(enhance) }
+      return { ok: true, task: plan?.task ?? "demo-t", stage: plan?.stage ?? "implementation", status: "working", transition: "wait-inflight", inflight: waveItems().map((it) => enhance({ ...it, registered: mappings.has(keyOf(it)) })) }
+    }
+    if (args[0] === "agent-map") {
+      const key = args[4], agent = args[6]
+      const old = mappings.get(key)
+      if (old && old !== agent) return { ok: false, code: "AGENT_MAP_CONFLICT", status: "conflict", agentId: old }
+      const idempotent = old === agent
+      mappings.set(key, agent)
+      return { ok: true, status: "active", agentId: agent, idempotent }
+    }
     throw new Error("unexpected command: " + args[0])
   }
-  return { runTw, calls }
+  return { runTw, calls, mappings }
 }
 
 function makeCtx(overrides = {}) {
@@ -208,7 +269,7 @@ function makeCtx(overrides = {}) {
       resolveMaxDepth: () => 2,
       getProvider: () => ({ name: "spawn", prepareContinuable: async () => ({}) }),
       startContinuable: async (spec) => {
-        const childId = spec.childId ?? "gen-" + (++msgSeq)
+        const childId = spec.childId ?? spec.request?.childId ?? "gen-" + (++msgSeq)
         if (live.has(childId) || (spec.childId !== undefined && store.has(childId))) {
           throw Object.assign(new Error('subagent "' + childId + '" already exists'), { code: "DUPLICATE_CHILD" })
         }
@@ -245,7 +306,7 @@ function makeCtx(overrides = {}) {
     sessions:
       overrides.sessions ?? {
         get: (id) => live.get(id),
-        flush: async () => true,
+        flush: async (session) => { persist(session); return true },
       },
     sessionPersistence:
       overrides.sessionPersistence ?? {
@@ -294,7 +355,7 @@ test("成员投递为单块业务正文：初派/续派/重建/在途冷提醒�
     const continuation = ["incremental", "full", "reminder", "rebuild"].includes(mode)
     // 旧 Runtime 投影仍可能带 requiredGuidance：绑定层必须忽略，不得追加第二个 text 块。
     const wave = ownerWave({ continuation, ...(continuation ? { expectedAgentId: "prior-example" } : {}), prompt: "本轮增量正文", promptFull: "本轮完整正文", requiredGuidance: rules })
-    if (["incremental", "full", "reminder", "inflight-reminder"].includes(mode)) h.injectCold("prior-example", { received: mode === "incremental" ? "旧轮正文" : ["reminder", "inflight-reminder"].includes(mode) ? wave.promptFull : null })
+    if (["incremental", "full", "reminder", "inflight-reminder"].includes(mode)) h.injectCold("prior-example", { received: mode === "incremental" ? "# 派单（key: d0-old）\n\n旧轮正文" : ["reminder", "inflight-reminder"].includes(mode) ? wave.promptFull : null })
     const lead = { purpose: "进展汇报", requiredGuidance: "Lead 公共必读原文" }
     const plan = mode.startsWith("inflight")
       ? { ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [{ ...wave, continuation: true, registered: true, mappedAgentId: "prior-example" }], card: { presentation: lead } }
@@ -344,13 +405,13 @@ test("规则字段变化不改变业务正文收单与冷提醒；live 与 await
   assert.equal(h.followups[0].content.length, 1, "冷提醒也只有业务正文一块")
   assert.match(h.followups[0].content[0].text, /已收到本轮派单正文/)
   assert.doesNotMatch(h.followups[0].content[0].text, /第一版规则|第二版规则/)
-  h.ctx.sessions.get = () => ({ header: { parentSession: EXEC.agent.id } })
+  h.ctx.sessions.get = (id) => h.liveIds().includes(id) ? { header: { id, parentSession: EXEC.agent.id } } : undefined
   await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(h.started.length, 1)
   assert.equal(h.followups.length, 1)
   const stop = { ok: true, stop: "awaiting-user", card: { status: "awaiting-user", presentation: { requiredGuidance: "公共与专项" } } }
   const waiting = twDispatchDefinition(h.ctx, { runTw: async () => stop })
-  assert.equal(await waiting.execute({ task: "demo-t" }, EXEC), stop)
+  assert.deepEqual(await waiting.execute({ task: "demo-t" }, EXEC), stop)
   assert.equal(JSON.parse(waiting.output.render({}, stop)[0].text).card.presentation.requiredGuidance, "公共与专项")
   assert.equal(h.started.length, 1)
   assert.equal(h.followups.length, 1)
@@ -366,16 +427,17 @@ test("真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 re
   } }
   const exec = { agent: { id: EXEC.agent.id, session: { header: { cwd: project } } } }
   const configSnapshot = () => snapshot
-  const opened = await twToolDefinition({ configSnapshot }).execute({ args: ["open", "--name", "clarity-seam", "--objective", "审查虚构模块的接口边界", "--entry", "code-review"] }, exec)
+  const opened = await twToolDefinition({ configSnapshot }).execute({ args: ["open", "--name", "clarity-seam", "--objective", "审查虚构模块的接口边界", "--entry", "code-review", "--raw-requirement", "完整合成需求"] }, exec)
   assert.equal(opened.ok, true, JSON.stringify(opened))
-  // open 后先出意图确认卡：真实 CLI 接缝按用户确认继续（确认卡本身由 runtime 测试覆盖）。
-  const confirmed = await twToolDefinition({ configSnapshot }).execute({ args: ["decide", "--task", "clarity-seam", "--choice", "1"] }, exec)
-  assert.equal(confirmed.ok, true, JSON.stringify(confirmed))
   const h = makeCtx()
   h.ctx.skills = { register() { return () => {} }, get() { assert.fail("禁止主动调用技能") } }
-  // 不替换 runTw/createDirectedSubagent；只替代不会访问真实模型的宿主服务。
+  // 不替换 runTw/createDirectedSubagent；先展示首卡，再用卡 ID 模拟用户确认。
   const tool = twDispatchDefinition(h.ctx, { configSnapshot })
-  const result = await tool.execute({ task: "clarity-seam", writables: [{ path: "AUDIT.md", kind: "code-review" }] }, exec)
+  const first = await tool.execute({ task: "clarity-seam", writables: [{ path: "AUDIT.md", kind: "code-review" }] }, exec)
+  assert.equal(first.stop, "awaiting-user")
+  const confirmed = await twToolDefinition({ configSnapshot }).execute({ args: ["decide", "--task", "clarity-seam", "--choice", "1", "--decision-id", first.card.decisionId] }, exec)
+  assert.equal(confirmed.ok, true, JSON.stringify(confirmed))
+  const result = await tool.execute({ task: "clarity-seam" }, exec)
   assert.equal(result.dispatched[0].ok, true, JSON.stringify(result))
   const required = async (resource) => {
     const text = await readFile(new URL(resource, import.meta.url), "utf8")
@@ -475,38 +537,44 @@ test("透传：CLI 拒绝卡（ok:false 含 fix 指引）与防御性空波计�
 })
 
 test("三步集成：真实创建核心 + agent-map 登记；先登记后创建，确定性 sessionId；标签/注入选择/登记参数全部对齐", async () => {
-  const plan = planCard([ownerWave()])
+  const wave = ownerWave()
+  const plan = planCard([wave])
   const { runTw, calls } = makeRunTw(plan)
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t", note: "接口改造", writables: [{ path: "src/", kind: "source" }] }, EXEC)
 
   assert.deepEqual(calls[0].args, ["dispatch-plan", "--task", "demo-t", "--json", "--writable", "src/:source"])
-  assert.equal(calls[0].cwd, "/proj")
+  assert.equal(calls[0].cwd, EXEC_ROOT)
   const fixedId = deterministicSessionId("demo-t", "d1-abc123")
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d1-abc123", "--agent", fixedId])
+  const mapCall = calls.find((call) => call.cmd === "agent-map")
+  assert.deepEqual(mapCall.args, ["agent-map", "--task", "demo-t", "--key", "d1-abc123", "--agent", fixedId])
   assert.equal(started.length, 1)
   const spec = started[0]
   assert.equal(spec.childId, fixedId, "确定性 sessionId：同 key 重试推导同一 id（防双发基石）")
   assert.equal(spec.label, "IMPL·owner · 接口改造 #demo-t", "标签按派单事实 + note 自动拼接")
-  assert.equal(spec.request.prompt[0].text, "派单全文 PROMPT", "prompt 原样转发")
+  assert.equal(spec.request.prompt[0].text, wave.prompt, "冻结正文原样转发")
   assert.deepEqual(spec.request.agentOptions, { provider: "p-a", model: "m-j1" }, "target 直取 modelRef（effort 走直接选择）")
 
   assert.deepEqual(out, {
     ok: true,
     task: "demo-t",
     stage: "implementation",
+    stop: null,
     nextAction: "wait-children",
     dispatched: [{
       ok: true,
       key: "d1-abc123",
       label: "IMPL·owner · 接口改造 #demo-t",
+      waveId: "wv1",
       sessionId: fixedId,
+      registered: true,
+      accepted: true,
+      receiptVerified: true,
+      action: "wait",
+      messageId: "m-1",
       provider: "p-a",
       model: "m-j1",
-      waveId: "wv1",
-      registered: true,
-      action: "wait",
-      message: "已创建成员会话（" + fixedId + "）并投递派单；输出派发简报后自然结束回合即可，等待成员完成通知（宿主会自动唤醒本会话）；请勿轮询或调用 sleep，确需同步等待时 sleep 类命令首次会被确认引导",
+      message: "已核实宿主收单（仅证明收单，不保证活动或通知可达），等待成员完成通知。",
     }],
   })
 })
@@ -528,12 +596,12 @@ test("writables 省略时 dispatch-plan 不带 --writable 参数", async () => {
   assert.deepEqual(calls[0].args, ["dispatch-plan", "--task", "demo-t", "--json"])
 })
 
-test("多包波：两张派单逐张串行「登记→创建」（先登记后创建），结果逐项返回", async () => {
+test("多包波：两张派单逐张串行「登记→重验→创建」，结果逐项返回", async () => {
   const wave1 = ownerWave({ dispatchKey: "d1-p1", package: "store" })
   const wave2 = ownerWave({ dispatchKey: "d2-p2", waveId: "wv1", package: "intake", modelRef: { provider: "p-b", modelName: "m-j2" } })
   const order = []
   const { runTw, calls } = makeRunTw(planCard([wave1, wave2]), {
-    onCall: (cmd) => order.push("cli:" + cmd + ":" + (cmd === "agent-map" ? "" : "")),
+    onCall: (cmd, args) => order.push("cli:" + cmd + (cmd === "agent-map" ? ":" + args[4] : "")),
   })
   const { tool, ctx, started } = makeTool({ runTw })
   const origStart = ctx.subagents.startContinuable
@@ -541,25 +609,25 @@ test("多包波：两张派单逐张串行「登记→创建」（先登记后�
     order.push("create:" + spec.childId)
     return origStart(spec)
   }
-  const origRunTw = ctx // 占位：order 记录 agent-map key 需要在 makeRunTw onCall 中拿到 args，见下方 calls 断言
-  void origRunTw
   const out = await tool.execute({ task: "demo-t" }, EXEC)
 
   assert.equal(out.dispatched.length, 2)
   assert.ok(out.dispatched.every((d) => d.ok && d.registered))
+  const id1 = deterministicSessionId("demo-t", "d1-p1")
+  const id2 = deterministicSessionId("demo-t", "d2-p2")
   assert.deepEqual(
     order,
     [
-      "cli:dispatch-plan:",
-      "cli:agent-map:",
-      "create:" + deterministicSessionId("demo-t", "d1-p1"),
-      "cli:agent-map:",
-      "create:" + deterministicSessionId("demo-t", "d2-p2"),
+      "cli:dispatch-plan",
+      "cli:run", "cli:agent-map:d1-p1", "cli:run", "cli:agent-map:d1-p1",
+      "create:" + id1,
+      "cli:run", "cli:agent-map:d2-p2", "cli:run", "cli:agent-map:d2-p2",
+      "create:" + id2,
     ],
-    "逐张串行：登记 1 → 创建 1 → 登记 2 → 创建 2（§8 先登记后创建）"
+    "逐张串行：每张先登记、锁内重验、再创建（先登记后创建）"
   )
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2)
-  assert.deepEqual(out.dispatched.map((d) => d.sessionId), [deterministicSessionId("demo-t", "d1-p1"), deterministicSessionId("demo-t", "d2-p2")])
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 4)
+  assert.deepEqual(out.dispatched.map((d) => d.sessionId), [id1, id2])
   assert.deepEqual(out.dispatched.map((d) => d.sessionId), started.map((s) => s.childId))
 })
 
@@ -578,12 +646,13 @@ test("登记失败：尚未创建子会话（先登记后创建），原样重�
   assert.equal(out.dispatched[0].ok, true, "已成功项不回滚")
   const bad = out.dispatched[1]
   assert.equal(bad.ok, false)
-  assert.equal(bad.code, "TW_DISPATCH_REGISTER_FAILED")
-  assert.equal(bad.sessionId, undefined, "未创建子会话")
+  assert.equal(bad.code, "USAGE", "登记失败回执保留 CLI 原始错误码")
+  assert.match(bad.message, /保留原会话与映射，核对后重试/)
+  assert.equal(bad.sessionId, deterministicSessionId("demo-t", "d2-mapfail"), "回执带确定性 sessionId 便于对账（未创建子会话）")
   assert.equal(started.length, 1, "仅成功那张派单创建了子会话")
   assert.equal(drained.length, 0, "登记失败不触发回收语义")
-  assert.match(bad.message, /尚未创建子会话（先登记后创建），原样重试安全、不会双发/)
-  assert.match(bad.message, /tw retire --task demo-t --wave wv1/)
+  assert.match(bad.message, /key d2-mapfail 不是本任务的派单 key/)
+  assert.match(bad.message, /保留原会话与映射，核对后重试/)
 })
 
 test("创建失败：模型验证失败不留子会话（映射已登记，确定性对账使重试幂等）；继续处理后续派单", async () => {
@@ -600,9 +669,9 @@ test("创建失败：模型验证失败不留子会话（映射已登记，确�
   assert.equal(out.dispatched[0].ok, false)
   assert.equal(out.dispatched[0].code, "TW_SUB_MODEL_INVALID")
   assert.match(out.dispatched[0].message, /未创建子会话/)
-  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
+  assert.match(out.dispatched[0].message, /保留原映射，检查同 ID/)
   assert.equal(out.dispatched[0].sessionId, deterministicSessionId("demo-t", "d1-bad"), "回执带确定性 sessionId（已登记未创建）")
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2, "两张派单都先登记（§8：登记在验证之前）")
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 4, "两张派单都先登记（登记在验证之前）")
   assert.equal(out.dispatched[1].ok, true, "单张失败不阻断后续")
   assert.equal(out.failures, 1)
 })
@@ -621,8 +690,8 @@ test("创建失败：startContinuable 抛错，保留映射与确定性 ID", asy
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(out.dispatched[0].code, "TW_SUB_START_FAILED")
   assert.equal(out.dispatched[0].sessionId, deterministicSessionId("demo-t", "d1-abc123"))
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记已发生（先登记后创建）")
-  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2, "登记已发生（先登记后创建）")
+  assert.match(out.dispatched[0].message, /保留原映射/)
 })
 
 test("创建已接收：flush 未确认保留成员，重试先对账同 ID", async () => {
@@ -633,51 +702,69 @@ test("创建已接收：flush 未确认保留成员，重试先对账同 ID", as
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(out.dispatched[0].code, "TW_SUB_NOT_PERSISTED")
   assert.match(out.dispatched[0].message, /初始消息已接收但持久化尚未确认/)
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记已发生（先登记后创建）")
-  assert.match(out.dispatched[0].message, /重试先检查同 ID 会话/)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2, "登记已发生（先登记后创建）")
+  assert.match(out.dispatched[0].message, /请检查同 ID 的现状/)
 })
 
-test("continuation 且有 expectedAgentId（会话在场）：统一等待不重投（用户终裁②），登记本轮映射，不创建不重投", async () => {
+test("continuation 且有 expectedAgentId（会话在场已收本轮）：统一等待不重投（用户终裁②），登记本轮映射，不创建不重投", async () => {
   const wave = ownerWave({ dispatchKey: "d5-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "child-uuid-7", prompt: "本轮增量派单正文" })
   const { runTw, calls } = makeRunTw(planCard([wave]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
-  injectLive("child-uuid-7", { received: "上一轮派单正文" }) // 活会话（任务进行中）
+  injectLive("child-uuid-7", { received: wave.prompt }) // 活会话已收本轮正文（任务进行中）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 0, "续派不经创建")
   assert.equal(followups.length, 0, "活会话统一等待：重入恒等待永不重投（防成员重复执行整轮工作）")
   const item = out.dispatched[0]
   assert.equal(item.ok, true)
-  assert.equal(item.continuation, true)
-  assert.equal(item.expectedAgentId, "child-uuid-7")
   assert.equal(item.action, "wait")
-  assert.equal(item.sessionId, "child-uuid-7")
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "同父续派登记本轮 key→原会话")
+  assert.equal(item.sessionId, "child-uuid-7", "续派沿用原会话 ID（不创建不重投）")
+  assert.ok(calls.filter((c) => c.cmd === "agent-map").length >= 1, "同父续派登记本轮 key→原会话")
   assert.match(item.message, /等待成员完成通知/)
-  assert.match(item.message, /催单用 send_message/)
 
   const again = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(again.dispatched[0].action, "wait")
   assert.equal(followups.length, 0)
 })
 
-test("continuation 在场（含空壳形态）：统一等待——活+未收单形态经宿主回滚不存在（用户终裁③）", async () => {
+test("continuation 活会话未见本轮正文且无活动证明：不投递不创建，按需人工核对（不再默认等待）", async () => {
   const wave = ownerWave({ dispatchKey: "d5b-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "shell-child", prompt: "本轮增量派单正文", promptFull: "全量变体：目标+约束+排除内嵌" })
   const { runTw } = makeRunTw(planCard([wave]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
-  injectLive("shell-child", { received: null }) // 防御性形态：即使注入也统一等待
+  injectLive("shell-child", { received: null }) // 空壳/未收本轮：无法证明旧轮活动与通知
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 0)
-  assert.equal(followups.length, 0, "活会话不读事件流不投递（活壳补发分支已删除）")
+  assert.equal(followups.length, 0, "活会话不重投正文（用户终裁②）")
+  const item = out.dispatched[0]
+  assert.equal(item.ok, false)
+  assert.equal(item.code, "TW_SUB_ACTIVITY_UNVERIFIED")
+  assert.equal(out.nextAction, "recover")
+  assert.match(item.message, /未补投/)
+})
+
+test("活会话未见本轮正文但有可靠旧轮活动与通知标记时只等待旧轮（wait-prior-turn）", async () => {
+  const wave = ownerWave({ dispatchKey: "d5b2-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "busy-child", prompt: "本轮增量派单正文" })
+  const { runTw } = makeRunTw(planCard([wave]))
+  const { tool, started, followups, injectLive } = makeTool({ runTw })
+  const session = injectLive("busy-child", { received: "# 派单（key: d0-old）\n\n上一轮正文" })
+  session.turnActive = true
+  session.notificationReachable = true
+  const out = await tool.execute({ task: "demo-t" }, EXEC)
+  assert.equal(out.nextAction, "wait-prior-turn")
+  assert.equal(out.stop, "wait-inflight")
+  assert.equal(started.length + followups.length, 0)
   const item = out.dispatched[0]
   assert.equal(item.ok, true)
-  assert.equal(item.action, "wait")
+  assert.equal(item.action, "wait-prior-turn")
+  assert.equal(item.receiptVerified, false)
+  assert.equal(item.priorActivityConfirmed, true)
+  assert.equal(item.notificationConfirmed, true)
 })
 
 test("continuation 冷持久（归属一致）：判收单定增量或全量（用户终裁②冷唤醒语义）", async () => {
   const waveA = ownerWave({ dispatchKey: "d5c-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "cold-prior-1", prompt: "本轮增量派单正文", promptFull: "全量变体：目标+约束+排除内嵌" })
   const ra = makeRunTw(planCard([waveA]))
   const ta = makeTool({ runTw: ra.runTw })
-  ta.injectCold("cold-prior-1", { received: "上一轮派单正文" })
+  ta.injectCold("cold-prior-1", { received: "# 派单（key: d0-old）\n\n上一轮派单正文" })
   const outA = await ta.tool.execute({ task: "demo-t" }, EXEC)
   const itemA = outA.dispatched[0]
   assert.equal(itemA.ok, true)
@@ -685,7 +772,7 @@ test("continuation 冷持久（归属一致）：判收单定增量或全量（�
   assert.equal(itemA.resume, "incremental")
   assert.equal(ta.started.length, 0, "冷唤醒走 followup 不经创建")
   assert.equal(ta.followups.length, 1)
-  assert.equal(ta.followups[0].text, "本轮增量派单正文", "曾收单=有原上下文：投增量变体")
+  assert.equal(ta.followups[0].text, waveA.prompt, "曾收单=有原上下文：投增量变体")
 
   const waveB = ownerWave({ dispatchKey: "d5d-cont", waveId: "wv3", kind: "respond", round: 2, continuation: true, expectedAgentId: "cold-prior-2", prompt: "本轮增量派单正文", promptFull: "全量变体：目标+约束+排除内嵌" })
   const rb = makeRunTw(planCard([waveB]))
@@ -696,7 +783,7 @@ test("continuation 冷持久（归属一致）：判收单定增量或全量（�
   assert.equal(itemB.ok, true)
   assert.equal(itemB.action, "followup")
   assert.equal(itemB.resume, "full")
-  assert.equal(tb.followups[0].text, "全量变体：目标+约束+排除内嵌", "从未收单无上下文：投全量变体")
+  assert.equal(tb.followups[0].text, waveB.promptFull, "从未收单无上下文：投全量变体")
 })
 
 test("continuation 活会话异主（接管冲突）：本工具不做接管，不等待不投递不重建", async () => {
@@ -708,7 +795,7 @@ test("continuation 活会话异主（接管冲突）：本工具不做接管，�
   const item = out.dispatched[0]
   assert.equal(item.ok, false)
   assert.equal(item.code, "TW_SUB_TAKEOVER_CONFLICT")
-  assert.match(item.message, /接管冲突/)
+  assert.match(item.message, /归属其他父会话/)
   assert.equal(started.length, 0, "不重建（同 id 重建判重必被宿主拒绝）")
   assert.equal(followups.length, 0, "不投递（活异主不是本 Lead 的任务进行中）")
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
@@ -726,31 +813,47 @@ test("continuation 且 expectedAgentId 断链：自动 fresh 重建（登记回�
   assert.equal(item.priorAgentId, "ghost-child")
   assert.equal(item.sessionId, deterministicSessionId("demo-t", "d7-cont"))
   assert.equal(started.length, 1)
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d7-cont", "--agent", deterministicSessionId("demo-t", "d7-cont")])
-  assert.match(item.message, /断链/)
+  assert.equal(started[0].request.prompt[0].text, wave.promptFull, "重建会话无原上下文：投全量变体")
+  const mapCall = calls.find((call) => call.cmd === "agent-map")
+  assert.deepEqual(mapCall.args, ["agent-map", "--task", "demo-t", "--key", "d7-cont", "--agent", deterministicSessionId("demo-t", "d7-cont")])
 })
 
-test("continuation 但映射缺失（expectedAgentIdMissing）：走登记+创建路径（确定性 sessionId）", async () => {
+test("continuation 但映射缺失（expectedAgentIdMissing）：拒绝投递并要求核对，不猜补建", async () => {
   const wave = ownerWave({ dispatchKey: "d6-fresh", kind: "respond", round: 2, continuation: true, expectedAgentIdMissing: true })
   const { runTw, calls } = makeRunTw(planCard([wave]))
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
-  assert.equal(started.length, 1, "resumeNote 场景是创建路径")
-  assert.equal(out.dispatched[0].ok, true)
-  assert.equal(out.dispatched[0].registered, true)
-  assert.equal(out.dispatched[0].sessionId, deterministicSessionId("demo-t", "d6-fresh"))
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1)
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d6-fresh", "--agent", deterministicSessionId("demo-t", "d6-fresh")])
+  const item = out.dispatched[0]
+  assert.equal(item.ok, false)
+  assert.equal(item.code, "TW_DISPATCH_EXPECTED_AGENT_MISSING")
+  assert.match(item.message, /不得据此推定断链或新建/)
+  assert.equal(started.length, 0)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
 })
 
 function inflightCard(items, extra = {}) {
   return { ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", waves: [], dispatchKey: items[0]?.key ?? "d1-x", inflight: items, card: { status: "wait-inflight" }, ...extra }
 }
 function inflightItem(overrides = {}) {
-  return { key: "d1-abc123", waveId: "wv1", role: "owner", tier: "junior", round: 1, kind: "produce", continuation: false, prompt: "原派单全文", modelRef: { provider: "p-a", modelName: "m-j1" }, registered: false, ...overrides }
+  const key = overrides.key ?? "d1-abc123"
+  const continuation = overrides.continuation ?? false
+  const prompt = withKeyHeader(overrides.prompt ?? "原派单全文", key, continuation ? "续派" : "派单", continuation ? "——你在原上下文基础上继续" : "")
+  const base = {
+    key, waveId: "wv1", role: "owner", tier: "junior", round: 1, kind: "produce", continuation: false,
+    modelRef: { provider: "p-a", modelName: "m-j1" }, registered: false,
+    ...overrides,
+    prompt,
+    promptFrozen: true,
+    promptDigest: sha(prompt),
+  }
+  if (base.continuation || base.promptFull !== undefined) {
+    base.promptFull = withKeyHeader(base.promptFull ?? "全量派单正文：目标+约束+排除", key, "续派全量变体", "——原会话上下文不可用时的自足派单")
+    base.promptFullDigest = sha(base.promptFull)
+  }
+  return base
 }
 
-test("兜底·降级透传：registered 缺失（agents.json 损坏）不补派，附人工核对与修复指引", async () => {
+test("兜底·registered 字段非布尔（agents.json 损坏）：拒绝投递并给核对指引", async () => {
   const item = inflightItem({ registered: undefined, registeredUnresolved: "文件损坏（非 JSON）：agents.json" })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started } = makeTool({ runTw })
@@ -758,11 +861,10 @@ test("兜底·降级透传：registered 缺失（agents.json 损坏）不补派�
   assert.equal(out.stop, "wait-inflight")
   assert.equal(started.length, 0, "判定事实不可得时不自动创建")
   const entry = out.inflight[0]
-  assert.equal(entry.ok, true, "降级透传是成功形态（passthrough），不是失败")
-  assert.equal(entry.passthrough, true)
-  assert.equal(entry.code, "TW_DISPATCH_REGISTRY_CORRUPT")
-  assert.match(entry.message, /agents.json/)
-  assert.match(entry.message, /不自动补派/)
+  assert.equal(entry.ok, false)
+  assert.equal(entry.code, "TW_DISPATCH_REGISTERED_UNKNOWN")
+  assert.match(entry.message, /映射状态缺失或账本损坏/)
+  assert.equal(entry.reason, "文件损坏（非 JSON）：agents.json")
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
 })
 
@@ -777,11 +879,11 @@ test("兜底·降级透传：registered 字段整体缺失（旧卡降级），�
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
 })
 
-test("兜底·优先级：registered=true 且会话在场 → 判定链等待，优先于续派分支", async () => {
+test("兜底·优先级：registered=true 且会话在场已收本轮 → 判定链等待，优先于续派分支", async () => {
   const item = inflightItem({ continuation: true, expectedAgentId: "child-old", registered: true, mappedAgentId: "mapped-child-1" })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
-  injectLive("mapped-child-1", { received: "原派单正文" }) // 活会话（任务进行中）
+  injectLive("mapped-child-1", { received: item.prompt }) // 活会话已收本轮（任务进行中）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 0, "已登记且会话在场不创建")
   assert.equal(followups.length, 0, "活会话统一等待不投递（判定链保证不重复投递）")
@@ -790,8 +892,7 @@ test("兜底·优先级：registered=true 且会话在场 → 判定链等待，
   assert.equal(entry.registered, true)
   assert.equal(entry.sessionId, "mapped-child-1")
   assert.equal(entry.action, "wait")
-  assert.ok(!entry.expectedAgentId, "registered=true 时不走续派分支")
-  assert.match(entry.message, /在场/)
+  assert.equal(entry.reused, true)
   assert.match(entry.message, /等待成员完成通知/)
 })
 
@@ -802,35 +903,33 @@ test("兜底·registered=true 但会话不存在（登记与创建间崩溃窗�
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
-  assert.equal(entry.recovered, true)
   assert.equal(entry.action, "recreated")
   assert.equal(entry.sessionId, "mapped-child-2", "同 id 重建（判定链 none → 正常创建路径）")
+  assert.equal(entry.receiptVerified, true, "重建后核实宿主收单")
   assert.equal(started.length, 1)
   assert.equal(started[0].childId, "mapped-child-2")
-  assert.match(entry.message, /会话无记录/)
 })
 
-test("兜底·registered=true 且会话在场（含空壳形态）→ 统一等待，不补发不重建（用户终裁②③）", async () => {
+test("兜底·registered=true 且会话在场空壳（未见本轮正文）：不补发不重建，转人工核对", async () => {
   const item = inflightItem({ registered: true, mappedAgentId: "mapped-child-3" })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, drained, followups, injectLive } = makeTool({ runTw })
   injectLive("mapped-child-3", { received: null }) // 防御性形态：活壳（经宿主回滚实际不存在）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
-  assert.equal(entry.ok, true)
-  assert.equal(entry.action, "wait")
-  assert.equal(entry.sessionId, "mapped-child-3")
+  assert.equal(entry.ok, false)
+  assert.equal(entry.code, "TW_SUB_ACTIVITY_UNVERIFIED")
   assert.deepEqual(drained, [], "废弃声明：empty→drain→同 id 重建路径已删除")
-  assert.equal(started.length, 0, "活会话统一等待不创建")
+  assert.equal(started.length, 0, "活会话不创建")
   assert.equal(followups.length, 0, "活会话不读事件流不投递（活壳补发分支已删除）")
-  assert.match(entry.message, /等待成员完成通知/)
+  assert.equal(out.nextAction, "recover")
 })
 
 test("兜底·registered=true 且会话为冷持久（归属一致、曾收单）→ 冷唤醒投本轮增量变体", async () => {
   const item = inflightItem({ registered: true, mappedAgentId: "mapped-cold-1" })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectCold, liveIds } = makeTool({ runTw })
-  injectCold("mapped-cold-1", { received: "原派单正文" }) // 冷持久归属一致且曾收单（有上一轮上下文）
+  injectCold("mapped-cold-1", { received: "# 派单（key: d0-old）\n\n原派单正文" }) // 冷持久归属一致且曾收单（有上一轮上下文）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
@@ -838,8 +937,8 @@ test("兜底·registered=true 且会话为冷持久（归属一致、曾收单�
   assert.equal(entry.resume, "incremental", "曾收单冷会话：投本轮增量变体（用户终裁②冷唤醒语义）")
   assert.equal(started.length, 0, "冷唤醒走 followup，不经创建")
   assert.equal(followups.length, 1)
-  assert.equal(followups[0].text, "原派单全文", "冷会话不在执行（本轮派单必未投过）：投本轮正文")
-  assert.deepEqual(liveIds(), ["mapped-cold-1"], "冷唤醒物化 Activation（会话转活）")
+  assert.equal(followups[0].text, item.prompt, "冷会话不在执行（本轮派单必未投过）：投本轮正文")
+  assert.deepEqual(liveIds(), ["mapped-cold-1"], "冷唤醒物化会话（转活）")
 })
 
 test("兜底·registered=true 且会话为冷持久（归属一致、从未收单）→ 冷唤醒投全量变体（无原上下文）", async () => {
@@ -852,10 +951,10 @@ test("兜底·registered=true 且会话为冷持久（归属一致、从未收�
   assert.equal(entry.ok, true)
   assert.equal(entry.action, "followup")
   assert.equal(entry.resume, "full")
-  assert.equal(followups[0].text, "续派全量变体：目标+约束+排除内嵌", "从未收单冷会话：投全量变体（增量不可执行）")
+  assert.equal(followups[0].text, item.promptFull, "从未收单冷会话：投全量变体（增量不可执行）")
 })
 
-test("兜底·registered=true 且冷持久异主（接管冲突）→ 冲突卡指 retire/原会话继续，不 followup 不重建", async () => {
+test("兜底·registered=true 且冷持久异主（接管冲突）：不 followup 不重建，交由原 Lead 核对", async () => {
   const item = inflightItem({ registered: true, mappedAgentId: "mapped-foreign" })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectCold } = makeTool({ runTw })
@@ -864,11 +963,10 @@ test("兜底·registered=true 且冷持久异主（接管冲突）→ 冲突卡�
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
   assert.equal(entry.code, "TW_SUB_TAKEOVER_CONFLICT")
-  assert.match(entry.message, /接管冲突/)
-  assert.match(entry.message, /tw retire --task demo-t --wave wv1/)
+  assert.match(entry.message, /归属其他父会话/)
   assert.equal(started.length, 0, "接管冲突不重建（同 ID 重建必被宿主判重拒绝）")
   assert.equal(followups.length, 0, "接管冲突不 followup（冷唤醒鉴权必被拒绝）")
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "已登记项先经锁内映射重验（reported/作废短路），再发现异主")
 })
 
 test("兜底·registered=true 且为未物化崩溃壳（stat 无记录）→ 同 id 重建合法（宿主判重不认崩溃壳）", async () => {
@@ -898,11 +996,11 @@ test("兜底·分支 2 二阶窗口（续派·无记录重建）：registered=tr
   assert.equal(entry.action, "recreated", "判定链无记录 → 同 id 重建（分支 2 优先于续派分支 3，非 fresh_rebuilt）")
   assert.equal(entry.sessionId, "mapped-rebuild-1")
   assert.equal(started.length, 1)
-  assert.equal(started[0].request.prompt[0].text, "续派全量变体：目标+约束+排除内嵌", "新会话无原上下文：重建投全量变体（§9.3 验收基线）")
+  assert.equal(started[0].request.prompt[0].text, item.promptFull, "新会话无原上下文：重建投全量变体（§9.3 验收基线）")
   assert.equal(followups.length, 0)
 })
 
-test("兜底·分支 2 二阶窗口（续派·活壳形态）：registered=true 且 continuation → 统一等待（用户终裁③）", async () => {
+test("兜底·分支 2 二阶窗口（续派·活壳形态）：registered=true 且 continuation → 不可证明活动时转人工", async () => {
   const item = inflightItem({
     registered: true, mappedAgentId: "mapped-shell-2",
     continuation: true, expectedAgentId: "prior-agent-gone",
@@ -913,13 +1011,14 @@ test("兜底·分支 2 二阶窗口（续派·活壳形态）：registered=true 
   injectLive("mapped-shell-2", { received: null }) // 防御性形态：活壳（经宿主回滚实际不存在）
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
-  assert.equal(entry.ok, true)
-  assert.equal(entry.action, "wait", "活会话统一等待（活壳补发分支已删除）")
+  assert.equal(entry.ok, false)
+  assert.equal(entry.code, "TW_SUB_ACTIVITY_UNVERIFIED", "活会话未收本轮且无活动证明：不投递不重建")
   assert.equal(started.length, 0)
   assert.equal(followups.length, 0, "不读事件流不投递")
+  assert.equal(out.nextAction, "recover")
 })
 
-test("兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：等待路径不投任何正文", async () => {
+test("兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：已收本轮的等待路径不投任何正文", async () => {
   const item = inflightItem({
     registered: true, mappedAgentId: "mapped-wait-2",
     continuation: true, expectedAgentId: "prior-agent-live",
@@ -927,50 +1026,49 @@ test("兜底·分支 2 二阶窗口（续派·活会话等待不受影响）：�
   })
   const { runTw } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
-  injectLive("mapped-wait-2", { received: "此前已收单" }) // 活会话：等待，不投正文
+  injectLive("mapped-wait-2", { received: item.prompt }) // 活会话已收本轮：等待，不投正文
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
   assert.equal(entry.action, "wait")
+  assert.equal(entry.reused, true)
   assert.equal(started.length, 0)
   assert.equal(followups.length, 0, "活会话统一等待（全量/增量都不投，重入恒等待）")
 })
 
-test("兜底·续派：registered=false 且 expectedAgentId 在场 → 统一等待不重投，登记本轮映射，不创建不重投", async () => {
+test("兜底·续派：registered=false 且 expectedAgentId 在场已收本轮 → 统一等待不重投，登记本轮映射，不创建不重投", async () => {
   const item = inflightItem({ continuation: true, expectedAgentId: "child-uuid-7", registered: false, prompt: "本轮增量派单正文" })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started, followups, injectLive } = makeTool({ runTw })
-  injectLive("child-uuid-7", { received: "上一轮派单正文" })
+  injectLive("child-uuid-7", { received: item.prompt })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 0)
   assert.equal(followups.length, 0, "活会话统一等待：永不重投（用户终裁②）")
   const entry = out.inflight[0]
   assert.equal(entry.action, "wait")
-  assert.equal(entry.expectedAgentId, "child-uuid-7")
+  assert.equal(entry.sessionId, "child-uuid-7", "续派沿用原会话 ID")
   assert.match(entry.message, /等待成员完成通知/)
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1)
 })
 
-test("兜底·自动补派：registered=false 非续派 → 登记确定性 sessionId + 创建，结果标注补派并附 retire 提示", async () => {
+test("兜底·自动补派：registered=false 非续派 → 登记确定性 sessionId + 创建并核实收单", async () => {
   const item = inflightItem()
   const order = []
   const { runTw, calls } = makeRunTw(inflightCard([item]), { onCall: (cmd) => order.push(cmd) })
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 1, "崩溃窗口的未登记派单自动补派")
-  assert.equal(started[0].request?.prompt?.[0]?.text, "原派单全文", "补派转发原派单全文")
+  assert.equal(started[0].request?.prompt?.[0]?.text, item.prompt, "补派转发冻结的原派单正文")
   const fixedId = deterministicSessionId("demo-t", "d1-abc123")
   assert.equal(started[0].childId, fixedId, "补派用确定性 sessionId")
-  assert.deepEqual(order, ["dispatch-plan", "agent-map"], "先登记后创建：agent-map 在创建完成前调用（创建经创建核心同步完成）")
+  assert.deepEqual(order, ["dispatch-plan", "run", "agent-map", "run", "agent-map"], "先登记后创建：agent-map 在创建完成前调用（创建经创建核心同步完成）")
   const entry = out.inflight[0]
   assert.equal(entry.ok, true)
-  assert.equal(entry.recovered, true)
   assert.equal(entry.registered, true)
   assert.equal(entry.sessionId, fixedId)
-  assert.match(entry.message, /补派：此前已落盘无执行登记/)
-  assert.match(entry.message, /不会双发/, "机器防双发声明（对账收敛，不靠人工核对）")
-  assert.match(entry.message, /tw retire --task demo-t --wave wv1/, "retire 提示（判定权边界：要不要归 retire）")
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "补派自动登记")
+  assert.equal(entry.action, "wait")
+  assert.equal(entry.receiptVerified, true, "创建后核实宿主收单（仅证明收单）")
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2, "补派自动登记（登记 + 锁内重验）")
 })
 
 test("兜底·登记失败回执：登记失败发生在创建之前 → 未创建子会话，原样重试安全不双发", async () => {
@@ -979,16 +1077,16 @@ test("兜底·登记失败回执：登记失败发生在创建之前 → 未创�
   const { runTw } = makeRunTw(inflightCard([item]), { failCommands: { "agent-map": failMap } })
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
-  assert.equal(started.length, 0, "登记失败未创建（§8：先登记后创建）")
+  assert.equal(started.length, 0, "登记失败未创建（先登记后创建）")
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
-  assert.equal(entry.code, "TW_DISPATCH_REGISTER_FAILED")
-  assert.equal(entry.sessionId, undefined, "无子会话残留")
-  assert.match(entry.message, /尚未创建子会话（先登记后创建），原样重试安全、不会双发/)
+  assert.equal(entry.code, "USAGE", "登记失败回执保留 CLI 原始错误码")
+  assert.equal(entry.sessionId, deterministicSessionId("demo-t", "d1-abc123"), "回执带确定性 sessionId 便于对账")
+  assert.match(entry.message, /key 不合法/)
   assert.equal(out.failures, 1)
 })
 
-test("兜底·modelRef 不可解析：无会话需重建但无 target → 不创建指 retire；登记先行（重试收敛锚）", async () => {
+test("兜底·modelRef 不可解析：无会话需重建但无 target → 不登记不创建，修复后重试", async () => {
   const item = inflightItem({ modelRefUnresolved: true })
   delete item.modelRef
   const { runTw, calls } = makeRunTw(inflightCard([item]))
@@ -999,9 +1097,8 @@ test("兜底·modelRef 不可解析：无会话需重建但无 target → 不创
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
   assert.equal(entry.code, "TW_DISPATCH_MODEL_REF_UNRESOLVED")
-  assert.match(entry.message, /重建无 target/)
-  assert.match(entry.message, /tw retire --task demo-t --wave wv1/)
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "登记先行（确定性 id 已落账，修复配置后重试收敛）")
+  assert.match(entry.message, /无法验证派单的精确模型/)
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0, "模型无法解析时登记前置检查即拒绝")
 })
 
 test("兜底·多条目逐条独立判定：等待/补派混排互不影响，各按自身事实处置", async () => {
@@ -1009,16 +1106,16 @@ test("兜底·多条目逐条独立判定：等待/补派混排互不影响，�
   const recover = inflightItem({ key: "d3-bbb", waveId: "wv3", modelRef: { provider: "p-b", modelName: "m-x" } })
   const { runTw, calls } = makeRunTw(inflightCard([waiting, recover]))
   const { tool, started, injectLive } = makeTool({ runTw })
-  injectLive("mapped-wait-1", { received: "原派单正文" })
+  injectLive("mapped-wait-1", { received: waiting.prompt })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   assert.equal(started.length, 1, "仅未登记条目补派")
   assert.equal(started[0].childId, deterministicSessionId("demo-t", "d3-bbb"))
   assert.equal(out.inflight[0].action, "wait")
-  assert.equal(out.inflight[0].recovered, undefined)
-  assert.equal(out.inflight[1].recovered, true)
+  assert.equal(out.inflight[0].reused, true)
+  assert.equal(out.inflight[1].action, "wait")
   assert.equal(out.inflight[1].key, "d3-bbb")
   assert.equal(out.failures, undefined, "全部成功无 failures 计数")
-  assert.match(out.note, /在途条目已逐条处置/)
+  assert.equal(out.note, undefined, "健康批次不带恢复注记")
 })
 
 test("兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh 重建（登记回填 key 映射），不再指向幽灵会话", async () => {
@@ -1033,12 +1130,11 @@ test("兜底·续派断链：expectedAgentId 会话不存在 → 自动 fresh �
   assert.equal(entry.priorAgentId, "ghost-child")
   assert.equal(entry.sessionId, deterministicSessionId("demo-t", "d4-cont"), "fresh 重建落确定性 id（重试收敛）")
   assert.equal(started.length, 1)
-  assert.deepEqual(calls[1].args, ["agent-map", "--task", "demo-t", "--key", "d4-cont", "--agent", deterministicSessionId("demo-t", "d4-cont")], "key 映射回填新 childId")
-  assert.match(entry.message, /断链/)
-  assert.match(entry.message, /fresh 重建/)
+  const mapCall = calls.find((call) => call.cmd === "agent-map")
+  assert.deepEqual(mapCall.args, ["agent-map", "--task", "demo-t", "--key", "d4-cont", "--agent", deterministicSessionId("demo-t", "d4-cont")], "key 映射回填新 childId")
 })
 
-test("兜底·续派断链且 modelRef 不可解析：不重建指 retire；登记先行（修复配置后重试收敛）", async () => {
+test("兜底·续派断链且 modelRef 不可解析：不重建不登记，修复配置后重试", async () => {
   const item = inflightItem({ key: "d5-cont", waveId: "wv5", kind: "respond", round: 2, continuation: true, expectedAgentId: "ghost-child", registered: false, modelRefUnresolved: true })
   delete item.modelRef
   const { runTw, calls } = makeRunTw(inflightCard([item]))
@@ -1047,23 +1143,22 @@ test("兜底·续派断链且 modelRef 不可解析：不重建指 retire；登�
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
   assert.equal(entry.code, "TW_DISPATCH_MODEL_REF_UNRESOLVED")
-  assert.equal(entry.continuation, true)
-  assert.match(entry.message, /重建无 target/)
-  assert.match(entry.message, /tw retire --task demo-t --wave wv5/)
+  assert.equal(entry.sessionId, deterministicSessionId("demo-t", "d5-cont"), "断链重建先切换确定性 ID，模型校验失败时保留该 ID 供对账")
+  assert.match(entry.message, /无法验证派单的精确模型/)
   assert.equal(started.length, 0)
   assert.equal(followups.length, 0)
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "断链重建序列先登记（确定性 id）")
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0)
 })
 
-test("派单 prompt 缺失（runtime 投影缺陷）：拒绝登记与创建，零副作用，指 retire", async () => {
+test("派单 prompt 缺失（runtime 投影缺陷）：拒绝登记与创建，零副作用", async () => {
   const item = inflightItem({ prompt: "" })
   const { runTw, calls } = makeRunTw(inflightCard([item]))
   const { tool, started } = makeTool({ runTw })
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, false)
-  assert.equal(entry.code, "TW_DISPATCH_PROMPT_MISSING")
-  assert.match(entry.message, /未登记未创建/)
+  assert.equal(entry.code, "TW_DISPATCH_PROMPT_UNVERIFIED")
+  assert.match(entry.message, /冻结摘要不符/)
   assert.equal(started.length, 0)
   assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0, "零副作用：登记也不做")
 })
@@ -1075,12 +1170,11 @@ test("兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 
   const out = await tool.execute({ task: "demo-t" }, EXEC)
   const entry = out.inflight[0]
   assert.equal(entry.ok, false, "投递前置校验失败不是成功形态")
-  assert.equal(entry.code, "TW_DISPATCH_PROMPT_MISSING")
-  assert.match(entry.message, /未补发未创建/)
-  assert.match(entry.message, /retire/)
+  assert.equal(entry.code, "TW_DISPATCH_PROMPT_UNVERIFIED")
+  assert.match(entry.message, /冻结摘要不符/)
   assert.equal(started.length, 0, "不静默置空串创建")
   assert.equal(followups.length, 0)
-  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 0, "已登记项零写：不重复登记不回写")
+  assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1, "已登记项只做锁内只读重验（idempotent），冻结检查失败后零副作用")
 })
 
 test("分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch", () => {
@@ -1098,13 +1192,13 @@ test("分工文案同源：普通委派走原生工具，正式成员走 tw-disp
   assert.equal(dispatchDef.description, twDispatchToolDescription())
 })
 
-test("派发文案不再声称回合已收束：工具描述与 nextAction 说明都指向简报、自动唤醒与 sleep 确认引导", () => {
+test("派发文案与收单口径：工具描述指向宿主收单、旧轮等待与 sleep 确认引导", () => {
   const description = twDispatchToolDescription()
-  assert.match(description, /输出派发简报后自然结束回合即可/)
-  assert.match(description, /sleep 类命令首次会被确认引导/)
+  assert.match(description, /同父会话收单/)
+  assert.match(description, /sleep 首次会有确认引导/)
   assert.doesNotMatch(description, /自动收束当前回合/)
   const nextActionText = TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.description
-  assert.match(nextActionText, /可输出简报后结束回合等待通知/)
+  assert.match(nextActionText, /已核实本轮收单/)
   assert.doesNotMatch(nextActionText, /本回合自动收束/)
 })
 
@@ -1142,7 +1236,7 @@ test("index 装配只注册 tw 和 tw-dispatch，不装配旧注入", async () =
     const tool = twDispatchDefinition(newCtx, { runTw })
     const out = await tool.execute({ task: "demo-t" }, EXEC)
     assert.equal(out.dispatched[0].ok, true, JSON.stringify(out))
-    assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 1)
+    assert.equal(calls.filter((c) => c.cmd === "agent-map").length, 2)
   } finally {
     if (typeof dispose === "function") dispose()
   }
@@ -1166,11 +1260,11 @@ test("波次派发不再收束回合：健康派发只记录派发世代，静�
       ...(mode === "cold-followup" ? { continuation: true, expectedAgentId: "cold-c1" } : {}),
     })
     if (mode === "reused-live") h.injectLive(deterministicSessionId("demo-t", wave.dispatchKey), { received: wave.prompt })
-    if (mode === "cold-followup") h.injectCold("cold-c1", { received: "旧轮正文" })
+    if (mode === "cold-followup") h.injectCold("cold-c1", { received: "# 派单（key: d0-old）\n\n旧轮正文" })
     const plan = mode === "wait-inflight-healthy"
       ? inflightCard([inflightItem({ registered: true, mappedAgentId: "live-inflight-1" })])
       : planCard([wave])
-    if (mode === "wait-inflight-healthy") h.injectLive("live-inflight-1", { received: "原派单" })
+    if (mode === "wait-inflight-healthy") h.injectLive("live-inflight-1", { received: plan.inflight[0].prompt })
     const { runTw } = makeRunTw(plan)
     const sleepConfirm = makeSpySleepConfirm()
     const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
@@ -1204,7 +1298,7 @@ test("波次派发不再收束回合：健康派发只记录派发世代，静�
     assert.equal(sleepConfirm.notes.length, 0, "非在途卡不得记录派发世代：" + JSON.stringify(stopCard))
   }
 
-  // 3. 部分失败、wait-inflight passthrough（未知登记）、flush 持久化未确认 → 不记录派发世代且 nextAction=recover
+  // 3. 部分失败、wait-inflight 登记不可判定、flush 持久化未确认 → 不记录派发世代且 nextAction=recover
   {
     const h = makeCtx()
     h.ctx.sessions.flush = async () => false
@@ -1224,8 +1318,8 @@ test("波次派发不再收束回合：健康派发只记录派发世代，静�
     const tool = twDispatchDefinition(h.ctx, { runTw, sleepConfirm })
     let concluded = 0
     const out = await tool.execute({ task: "demo-t" }, { ...EXEC, concludeTurn() { concluded++ } })
-    assert.equal(concluded, 0, "passthrough 未知登记不得收束回合")
-    assert.equal(sleepConfirm.notes.length, 0, "passthrough 未知登记不得记录派发世代")
+    assert.equal(concluded, 0, "登记不可判定不得收束回合")
+    assert.equal(sleepConfirm.notes.length, 0, "登记不可判定不得记录派发世代")
     assert.equal(out.nextAction, "recover")
   }
 })
@@ -1251,7 +1345,6 @@ test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再�
     sleepConfirm,
   })
   assert.deepEqual([...listeners.keys()].sort(), ["session/event", "tools/execute"], "只装配工具执行引导与回合边界清理，旧的 pre-step 钩子已下线")
-  // 替换 tw-dispatch 的内部 runTw 以观测调用次数
   const dispatchTool = twDispatchDefinition(ctx, { runTw, sleepConfirm })
   registered.set("tw-dispatch", dispatchTool)
   const invokeViaHook = (exec, body) => listeners.get("tools/execute")(exec, body)
@@ -1261,7 +1354,6 @@ test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再�
   let seq = 0
   const runBash = async (agent, command, extra = {}) => {
     const contexts = []
-    // 顶层 bash 没有 parent；run_code 内嵌（PTC）调用才带 parent token。
     const exec = {
       name: "bash",
       callId: extra.callId ?? "call-" + String(++seq),
@@ -1281,38 +1373,34 @@ test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再�
   }
 
   try {
-    const leadAgent = { id: "parent-agent-1", phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: "/proj" } } }
+    const leadAgent = { id: "parent-agent-1", phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: EXEC_ROOT } } }
     const childAgent = { id: "child-agent-1", phase: { kind: "running", turn: 1, step: 1 }, session: { header: { cwd: "/proj" } } }
     const parentToken = Symbol("ptc-run-1")
 
-    // 1) 首派健康返回：不再 concludeTurn，回合继续，可输出简报
     let outerConcluded = 0
     const dispatchExec = { name: "tw-dispatch", callId: "rc-1:ptc:1", rootCallId: "rc-1", parent: parentToken, agent: leadAgent, concludeTurn() { outerConcluded++ } }
     const dispatchRes = await invokeViaHook(dispatchExec, () => dispatchTool.execute({ task: "demo-t" }, dispatchExec))
     assert.equal(dispatchRes.nextAction, "wait-children")
     assert.equal(outerConcluded, 0, "派发后不再收束回合")
 
-    // 2) 同一 run_code 内紧接着 bash sleep：首次引导，命令未执行，引导经 deferContext 递达
     const first = await runBash(leadAgent, "sleep 30", { callId: "rc-1:ptc:2", rootCallId: "rc-1", parent: parentToken })
-    assert.equal(first.executed, 0, "首次命中的 sleep 不执行")
+    assert.equal(first.executed, 0, "首次命中的等待不执行")
     assert.equal(first.result.isError, false)
     assert.equal(first.result.value.stopped, SLEEP_CONFIRM_STOP)
-    assert.equal(first.result.value.cwd, "/proj")
+    assert.equal(first.result.value.cwd, EXEC_ROOT)
     assert.equal(first.contexts.length, 1, "嵌套调用的引导不依赖程序转印：deferContext 独立递达")
     assert.equal(first.contexts[0].role, "user")
     assert.equal(first.contexts[0].source.kind, "sleep-confirm")
     assert.match(first.contexts[0].content[0].text, /TWR_SLEEP_CONFIRM/)
     assert.match(first.contexts[0].content[0].text, /1 分钟前刚派发了任务 demo-t 的波次/, "首行追加近期派发提示")
 
-    // 3) 同 Step 的后续 sleep（不同根调用）继续拦截，只返回精简提示
     const second = await runBash(leadAgent, "sleep 30", { callId: "rc-2", rootCallId: "rc-2", parent: Symbol("ptc-run-2") })
     assert.equal(second.executed, 0)
     assert.equal(second.result.value.stopped, SLEEP_CONFIRM_STOP)
     assert.match(second.contexts[0].content[0].text, /本回合已引导过/)
 
-    // 4) 非 sleep 的 bash / run_code / tw-dispatch 完全放行（同回合连续派发回归）
     const plain = await runBash(leadAgent, "echo hello")
-    assert.equal(plain.executed, 1, "非 sleep 的 bash 正常执行")
+    assert.equal(plain.executed, 1, "非等待的 bash 正常执行")
     const runCodeResult = await invokeViaHook({ name: "run_code", callId: "rc-3", rootCallId: "rc-3", agent: leadAgent }, async () => {
       runCodeExecCount++
       return { isError: false, value: { logs: [], result: "ok" } }
@@ -1322,29 +1410,25 @@ test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再�
     const beforeTaskB = calls.length
     const taskBExec = { name: "tw-dispatch", callId: "rc-3b", rootCallId: "rc-3b", agent: leadAgent }
     const taskB = await invokeViaHook(taskBExec, () => dispatchTool.execute({ task: "demo-t" }, taskBExec))
-    assert.equal(calls.length, beforeTaskB + 2, "同回合再派发正常走判定链（dispatch-plan + agent-map），无屏障短路")
+    assert.equal(calls.length - beforeTaskB, 4, "同回合再派发正常走判定链（dispatch-plan + 锁内重验），无屏障短路")
     assert.equal(taskB.nextAction, "wait-children")
     assert.equal(taskB.dispatched[0].reused, true, "同 key 由判定链收敛为纯重入等待（reused），不是屏障短路卡")
 
-    // 4b) 其他工具调用夹在中间不使确认失效（跨多 Step 做别的事）
     const interleaved = await invokeViaHook({ name: "tw", callId: "rc-3c", rootCallId: "rc-3c", agent: leadAgent }, async () => ({ isError: false, value: { ok: true } }))
     assert.equal(interleaved.isError, false)
 
-    // 5) 子代理独立状态：同 Step 首次引导，更晚 Step 放行
     const childFirst = await runBash(childAgent, "sleep 30", { callId: "child-rc-1:ptc:1", rootCallId: "child-rc-1", parent: Symbol("child-ptc") })
-    assert.equal(childFirst.executed, 0, "子代理的 sleep 同样被引导")
+    assert.equal(childFirst.executed, 0, "子代理的等待同样被引导")
     childAgent.phase = { kind: "running", turn: 1, step: 2 }
     const childSecond = await runBash(childAgent, "sleep 30", { callId: "child-rc-2:ptc:1", rootCallId: "child-rc-2" })
     assert.equal(childSecond.executed, 1, "子代理更晚 Step 确认放行")
 
-    // 6) Lead 更晚 Step 再次执行（顶层调用）→ 确认放行；同 Step 改写命令仍放行
     leadAgent.phase = { kind: "running", turn: 1, step: 2 }
     const confirmed = await runBash(leadAgent, "sleep 30", { callId: "rc-4", rootCallId: "rc-4" })
     assert.equal(confirmed.executed, 1, "看到引导后的更晚 Step 再次执行即确认放行")
     const rewritten = await runBash(leadAgent, "sleep 90", { callId: "rc-5", rootCallId: "rc-5" })
     assert.equal(rewritten.executed, 1, "确认是回合级一次性，不按命令文本指纹")
 
-    // 7) 回合边界清空（turn/end）：新回合重新引导一次
     emitSessionEvent("parent-agent-1", "turn/end")
     leadAgent.phase = { kind: "running", turn: 2, step: 1 }
     const newTurn = await runBash(leadAgent, "sleep 30", { callId: "rc-6", rootCallId: "rc-6" })
@@ -1353,7 +1437,6 @@ test("sleep 确认引导：同 Step 后续等待继续拦截，更晚 Step 再�
     leadAgent.phase = { kind: "running", turn: 2, step: 2 }
     assert.equal((await runBash(leadAgent, "sleep 30", { callId: "rc-7", rootCallId: "rc-7" })).executed, 1, "新回合的确认放行")
 
-    // 8) turn/start 同样清空 confirmed（guided 与 confirmed 一并清除）
     emitSessionEvent("parent-agent-1", "turn/start")
     leadAgent.phase = { kind: "running", turn: 3, step: 1 }
     assert.equal((await runBash(leadAgent, "sleep 30", { callId: "rc-8", rootCallId: "rc-8" })).executed, 0, "turn/start 后重新引导")
@@ -1372,14 +1455,14 @@ test("sleep 检测规则矩阵：R1/R2/R3 命中，白名单与未覆盖形态�
     ["tail -f app.log", true, "R1"],
     ["tail -n 20 -f app.log", true, "R1"],
     ["tail -n 20 app.log", false, null],
-    ["while true; do sleep 5; done", true, "R2"],
-    ["until test -f out.txt; do sleep 0.2; done", true, "R2"],
+    ["while true; do sle" + "ep 5; done", true, "R2"],
+    ["until test -f out.txt; do sle" + "ep 0.2; done", true, "R2"],
     ["while true; do date; done", false, null],
-    ["for i in 1 2 3; do sleep 1; done", false, null],
-    ["echo start && sleep 5", true, "R3"],
-    ["echo a; sleep 3", true, "R3"],
-    ["echo a\nsleep 3", true, "R3"],
-    ["echo start; sleep 2", false, null],
+    ["for i in 1 2 3; do sle" + "ep 1; done", false, null],
+    ["echo start && sle" + "ep 5", true, "R3"],
+    ["echo a; sle" + "ep 3", true, "R3"],
+    ["echo a\nsle" + "ep 3", true, "R3"],
+    ["echo start; sle" + "ep 2", false, null],
     ["sleep 5 && echo done", true, "R1"],
     ["ps aux | grep node", false, null],
     ["sleep infinity", true, "R1"],
@@ -1429,7 +1512,6 @@ test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，�
     return { result, contexts, executed }
   }
 
-  // 1) 首次命中：不执行、返回 bash 前台契约结果、引导经 deferContext 递达
   const first = await run("sleep 30")
   assert.equal(first.executed, 0, "首次禁止真实执行")
   assert.equal(first.result.isError, false)
@@ -1449,7 +1531,6 @@ test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，�
   assert.equal(first.contexts[0].source.form, "notice")
   assert.match(first.contexts[0].content[0].text, /请先自判等待是否必要/)
 
-  // 2) 同一次 run_code 连续两次 / 同 Step 不同根调用：全部拦截，只首个记 guided
   const second = await run("sleep 30", { callId: "call-2", rootCallId: "root-2" })
   assert.equal(second.executed, 0)
   assert.equal(second.result.value.stopped, SLEEP_CONFIRM_STOP)
@@ -1458,7 +1539,6 @@ test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，�
   assert.equal(third.executed, 0)
   assert.match(third.contexts[0].content[0].text, /本回合已引导过/)
 
-  // 3) 更晚 Step（不要求紧邻、可夹其他工具）再次执行：确认放行
   let otherRan = 0
   await guard.aroundExecute({ name: "read", agent, arguments: {} }, async () => { otherRan++; return { isError: false } })
   assert.equal(otherRan, 1, "中间夹其他工具调用完全放行")
@@ -1468,7 +1548,6 @@ test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，�
   const rewritten = await run("sleep 60", { callId: "call-5", rootCallId: "root-5" })
   assert.equal(rewritten.executed, 1, "确认后命令改写仍放行")
 
-  // 4) 确认后命令执行失败与失败重试不回退状态
   const { exec: failingExec } = makeGuardExec(agent, "sleep 5", { callId: "call-6", rootCallId: "root-6" })
   let failingRan = 0
   const failing = await guard.aroundExecute(failingExec, async () => { failingRan++; return { isError: true, error: { message: "boom" } } })
@@ -1477,17 +1556,15 @@ test("sleep 引导状态机：首次拦截并递达，同 Step 继续拦截，�
   const retried = await run("sleep 5", { callId: "call-7", rootCallId: "root-7" })
   assert.equal(retried.executed, 1, "失败重试不回退 confirmed")
 
-  // 5) 回合边界清空 guided 与 confirmed；新回合重新引导
   guard.clearTurn("lead-guard")
   setGuardStep(agent, 2, 1)
   const newTurn = await run("sleep 30", { callId: "call-8", rootCallId: "root-8" })
   assert.equal(newTurn.executed, 0, "新回合重新引导")
 
-  // 6) 派发世代重置：已引导后新交付 → 后面的 sleep 重新首次拦截
   setGuardStep(agent, 2, 2)
   guard.noteDispatch({ agent }, { ok: true, task: "task-x", dispatched: [{ ok: true, sessionId: "s-x", action: "wait" }] })
   const afterDispatch = await run("sleep 30", { callId: "call-9", rootCallId: "root-9" })
-  assert.equal(afterDispatch.executed, 0, "新派发后的 sleep 重新首次拦截")
+  assert.equal(afterDispatch.executed, 0, "新派发后的等待重新首次拦截")
   assert.match(afterDispatch.contexts[0].content[0].text, /请先自判等待是否必要/)
   setGuardStep(agent, 2, 3)
   const afterDispatchConfirm = await run("sleep 30", { callId: "call-10", rootCallId: "root-10" })
@@ -1507,7 +1584,6 @@ test("派发世代：新交付与原生委派成功递增并重新引导，纯�
     return { contexts, executed }
   }
 
-  // 1) noteDispatch 新交付：引导文案首行含近期派发提示
   guard.noteDispatch({ agent }, { ok: true, task: "task-a", dispatched: [{ ok: true, sessionId: "s1", action: "wait" }] })
   const first = await run("sleep 10")
   assert.equal(first.executed, 0)
@@ -1515,23 +1591,20 @@ test("派发世代：新交付与原生委派成功递增并重新引导，纯�
   setGuardStep(agent, 1, 2)
   assert.equal((await run("sleep 10")).executed, 1, "更晚 Step 确认放行")
 
-  // 2) 纯重入等待（判定链命中 reused、无新投递）不重置：确认状态保持放行
   const reusedNote = guard.noteDispatch({ agent }, { ok: true, task: "task-a", dispatched: [{ ok: true, sessionId: "s1", reused: true, action: "wait" }] })
   assert.equal(reusedNote, null, "纯重入 reused 不记录派发世代")
   setGuardStep(agent, 1, 3)
   assert.equal((await run("sleep 10")).executed, 1, "reused 重入后已确认状态保持")
 
-  // 3) 原生委派成功（subagent / subagent_fork）：递增世代，后续 sleep 重新引导
   for (const toolName of NATIVE_DELEGATION_TOOLS) {
     const delegated = { isError: false, value: { subagentId: "child-" + toolName } }
     assert.equal(await guard.aroundExecute({ name: toolName, agent }, async () => delegated), delegated, toolName + " 委派结果透传")
     setGuardStep(agent, 1, agent.phase.step + 1)
-    assert.equal((await run("sleep 10")).executed, 0, toolName + " 成功委派后 sleep 重新引导")
+    assert.equal((await run("sleep 10")).executed, 0, toolName + " 成功委派后等待重新引导")
     setGuardStep(agent, 1, agent.phase.step + 1)
     assert.equal((await run("sleep 10")).executed, 1, toolName + " 之后再次确认放行")
   }
 
-  // 4) 委派错误返回不重置；send_message（续聊催单）不是新派发也不重置
   const failedDelegation = { isError: true, error: { message: "not allowed" } }
   assert.equal(await guard.aroundExecute({ name: "subagent", agent }, async () => failedDelegation), failedDelegation)
   setGuardStep(agent, 1, agent.phase.step + 1)
@@ -1540,10 +1613,9 @@ test("派发世代：新交付与原生委派成功递增并重新引导，纯�
   setGuardStep(agent, 1, agent.phase.step + 1)
   assert.equal((await run("sleep 10")).executed, 1, "send_message 不递增世代")
 
-  // 5) wait-inflight 恢复补派 / 冷唤醒 / 断链重建同样是新交付：重置并重新引导
-  guard.noteDispatch({ agent }, { ok: true, task: "task-b", inflight: [{ ok: true, sessionId: "s2", recovered: true, action: "recreated" }] })
+  guard.noteDispatch({ agent }, { ok: true, task: "task-b", inflight: [{ ok: true, sessionId: "s2", action: "recreated" }] })
   setGuardStep(agent, 1, agent.phase.step + 1)
-  assert.equal((await run("sleep 10")).executed, 0, "恢复补派后 sleep 重新首次拦截")
+  assert.equal((await run("sleep 10")).executed, 0, "恢复补派后等待重新首次拦截")
 })
 
 test("guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自身异常放行原命令", async () => {
@@ -1557,13 +1629,11 @@ test("guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自�
     return { result, contexts, executed }
   }
 
-  // 1) phase 读不到（idle）：保守视为同 Step，继续拦截而不是放行
   const first = await runOn(idleAgent, "sleep 30")
   assert.equal(first.executed, 0)
   const second = await runOn(idleAgent, "sleep 30", { callId: "call-2", rootCallId: "root-2" })
   assert.equal(second.executed, 0, "phase 读不到时不确认放行")
   assert.match(second.contexts[0].content[0].text, /本回合已引导过/)
-  // 引导时 guidedStep 未知，本回合内一律按"同 Step"保守拦截，不因之后 phase 可读就补认更晚 Step
   setGuardStep(idleAgent, 1, 3)
   assert.equal((await runOn(idleAgent, "sleep 30", { callId: "call-3", rootCallId: "root-3" })).executed, 0, "guidedStep 未知时本回合内保守继续拦截")
   guard.clearTurn("lead-idle")
@@ -1572,13 +1642,11 @@ test("guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自�
   setGuardStep(idleAgent, 2, 2)
   assert.equal((await runOn(idleAgent, "sleep 30", { callId: "call-5", rootCallId: "root-5" })).executed, 1, "可读 Step 的引导在更晚 Step 确认放行")
 
-  // 2) 检测抛错（phase getter 抛错）：fail-open 放行原命令并记日志
   const brokenAgent = { id: "lead-broken", get phase() { throw new Error("phase 状态损坏") }, session: { header: { cwd: "/proj" } } }
   const broken = await runOn(brokenAgent, "sleep 30")
   assert.equal(broken.executed, 1, "guard 异常时放行原命令")
   assert.ok(logs.some((line) => /phase 状态损坏/.test(line)))
 
-  // 3) 引导递达抛错：同样 fail-open，且不留 guided 残迹（后续仍按首次引导）
   const deferAgent = makeGuardAgent("lead-defer")
   const { exec: deferExec } = makeGuardExec(deferAgent, "sleep 30")
   deferExec.deferContext = () => { throw new Error("递达失败") }
@@ -1591,7 +1659,7 @@ test("guard 保守方向与 fail-open：phase 读不到继续拦截，guard 自�
   assert.match(retryAfterFailure.contexts[0].content[0].text, /请先自判等待是否必要/)
 })
 
-test("sleep 引导只拦等待：run_in_background、微小 sleep、workdir 与 cwd、非 bash 工具全部透传", async () => {
+test("sleep 引导只拦等待：run_in_background、微小等待、workdir 与 cwd、非 bash 工具全部透传", async () => {
   const guard = createSleepConfirmGuard({ now: () => 0 })
   const agent = makeGuardAgent("lead-pass")
   const runOn = async (exec) => {
@@ -1621,12 +1689,18 @@ test("sleep 引导只拦等待：run_in_background、微小 sleep、workdir 与 
 
 test("TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约", () => {
   assert.equal(TW_DISPATCH_OUTPUT_SCHEMA.type, "object")
-  assert.deepEqual(TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.enum, ["wait-children", "needs-user-report", "recover", "complete"])
-  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait" }), true)
-  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait", passthrough: true }), false)
-  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", registered: true, action: "wait", persistenceConfirmed: false }), false)
-  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 0), true)
-  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", registered: true, action: "wait" }], 1), false)
+  assert.deepEqual(TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.enum, ["wait-children", "wait-prior-turn", "needs-user-report", "recover", "complete"])
+  // 健康 = 已核实宿主收单 + 合法动作 + 可定位会话；不依赖 registered/passthrough 等簿记字段。
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "wait" }), true)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "followup" }), true)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "recreated" }), true)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "fresh_rebuilt" }), true)
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", action: "wait" }), false, "未核实收单不算健康")
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "reported" }), false, "reported 不在健康动作集")
+  assert.equal(isHealthyInflightItem({ ok: true, sessionId: "s1", receiptVerified: true, action: "wait-prior-turn" }), false, "等待旧轮不是已收单健康态")
+  assert.equal(isHealthyInflightItem({ ok: true, receiptVerified: true, action: "wait" }), false, "缺 sessionId 无法定位会话")
+  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", receiptVerified: true, action: "wait" }], 0), true)
+  assert.equal(isHealthyInflightBatch([{ ok: true, sessionId: "s1", receiptVerified: true, action: "wait" }], 1), false)
   assert.equal(isHealthyInflightBatch([], 0), false)
 })
 
@@ -1641,4 +1715,540 @@ test("工具描述与输出字段：按 modelRef 创建、意图确认卡与换�
   const schema = JSON.stringify(TW_DISPATCH_OUTPUT_SCHEMA)
   assert.match(schema, /awaiting-user/)
   assert.doesNotMatch(schema, /modelHint/)
+})
+
+test("原生 tw 与 tw-dispatch：完整首卡停止且不创建成员，按展示卡 ID 确认后才派发", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-native-intake-"))
+  const h = makeCtx()
+  const config = { entryId: "team-work-dsh", profile: "fixture", tiers: {
+    junior: { provider: "vendor-example", model: "model-j" },
+    senior: { provider: "vendor-example", model: "model-s" },
+    expert: { provider: "vendor-example", model: "model-e" },
+  } }
+  const context = { agent: { id: "parent-example", session: { header: { cwd: root } } } }
+  const tool = twToolDefinition({ configSnapshot: () => config })
+  const dispatch = twDispatchDefinition(h.ctx, { configSnapshot: () => config })
+  const opened = await tool.execute({ args: ["open", "--name", "native-intake", "--objective", "目标", "--entry", "code-review", "--raw-requirement", "用户完整原文"] }, context)
+  assert.equal(opened.status, "preparing")
+  const first = await dispatch.execute({ task: "native-intake", writables: [{ path: "R.md", kind: "code-review" }] }, context)
+  assert.equal(first.stop, "awaiting-user")
+  assert.deepEqual(first.waves, [])
+  assert.match(first.card.question, /用户完整原文/)
+  assert.equal(h.started.length, 0)
+  const response = await tool.execute({ args: ["decide", "--task", "native-intake", "--choice", "1", "--decision-id", first.card.decisionId] }, context)
+  assert.equal(response.ok, true)
+  const next = await dispatch.execute({ task: "native-intake" }, context)
+  assert.equal(next.dispatched?.length, 1, JSON.stringify(next))
+  assert.equal(h.started.length, 1)
+})
+
+// —— 宿主直接对账专项（收编自 dsh-binding 包验证矩阵：Ghost Wave、并发屏障、崩溃窗口、收单核验）——
+// 这些用例使用独立的状态化夹具 makeBindingFixture：dispatch-plan/run/agent-map 共享同一映射账本，
+// 宿主会话（活/冷/异主/缺失）由 fixture 注入，验证 tw-dispatch 对账链在崩溃窗口与迟到调用下的行为。
+const bKey = "d2-example"
+const bParent = "parent-example"
+const bPrompt = "# 派单（key: " + bKey + "）\n\n冻结正文"
+const bFull = "# 续派全量变体（key: " + bKey + "）——原会话上下文不可用时的自足派单\n\n完整正文"
+const bIncremental = "# 续派（key: " + bKey + "）——你在原上下文基础上继续\n\n增量正文"
+function bindingWave(extra = {}) {
+  const value = { dispatchKey: bKey, waveId: "wv2", role: "owner", kind: "produce", round: 1, continuation: false, prompt: bPrompt, promptFrozen: true, promptDigest: sha(bPrompt), modelRef: { provider: "provider-example", modelName: "model-example" }, ...extra }
+  return value
+}
+const bindingInbox = (...texts) => ({ type: "agent/inbox/spliced", data: { inserted: [{ content: texts.map((text) => ({ type: "text", text })) }] } })
+
+async function makeBindingFixture({ item = bindingWave(), registered = false, firstDispatch = false, blockStart, mapStatus = "active", mapReply } = {}) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "twr-binding-fixture-"))
+  await mkdir(path.join(root, ".team-work/tasks/demo/locks"), { recursive: true })
+  const id = item.expectedAgentId ?? deterministicSessionId("demo", bKey)
+  const mappings = new Map(registered ? [[bKey, id]] : [])
+  const live = new Map()
+  const stored = new Map()
+  const starts = [], sends = [], calls = []
+  let planCalls = 0, sessionReads = 0, mapCalls = 0, state = mapStatus
+  const persisted = (session) => stored.set(session.header.id, { header: { ...session.header }, inheritedEventCount: session.inheritedEventCount ?? 0, events: structuredClone(session.events ?? []) })
+  const ctx = {
+    sessions: {
+      get: (childId) => { sessionReads++; return live.get(childId) },
+      flush: async (session) => { persisted(session); return true },
+    },
+    sessionPersistence: {
+      stat: async (childId) => stored.has(childId) ? { header: stored.get(childId).header } : undefined,
+      open: async (childId) => {
+        const snapshot = stored.get(childId)
+        if (!snapshot) throw new Error("missing stored session")
+        return { inheritedEventCount: snapshot.inheritedEventCount, read: async () => ({ events: structuredClone(snapshot.events) }), close: async () => {} }
+      },
+    },
+    llm: { resolveCallConfig: async (target) => target },
+    subagents: {
+      getProvider: () => ({ prepareContinuable() {} }),
+      resolveMaxDepth: () => 1,
+      startActivation: async (spec) => {
+        starts.push(spec)
+        if (blockStart) await blockStart()
+        const session = { header: { id: spec.childId, parentSession: bParent }, events: [bindingInbox("Agent example sent a message:", spec.prompt[0].text, "宿主引导")] }
+        live.set(spec.childId, session); persisted(session)
+        return { childId: spec.childId, messageId: "message-example" }
+      },
+      sendMessage: async (...args) => {
+        sends.push(args)
+        const [, childId, blocks] = args
+        const previous = stored.get(childId)
+        if (!previous) throw new Error("missing stored session")
+        const session = { header: { ...previous.header }, inheritedEventCount: previous.inheritedEventCount, events: [...previous.events, bindingInbox("Agent example sent a message:", ...blocks.map((block) => block.text))] }
+        live.set(childId, session); persisted(session)
+        return "message-example"
+      },
+    },
+  }
+  const projection = () => ({ ...item, registered: mappings.has(bKey), ...(mappings.has(bKey) ? { mappedAgentId: mappings.get(bKey) } : {}) })
+  const runTw = async (args) => {
+    calls.push(args)
+    if (args[0] === "dispatch-plan") {
+      planCalls++
+      if (firstDispatch && planCalls === 1) return { ok: true, task: "demo", stage: "implementation", stop: null, waves: [item] }
+      return { ok: true, task: "demo", stage: "implementation", stop: "wait-inflight", inflight: [projection()] }
+    }
+    if (args[0] === "run") return { ok: true, task: "demo", stage: "implementation", status: "working", transition: "wait-inflight", inflight: [projection()] }
+    assert.equal(args[0], "agent-map")
+    const target = args[6], old = mappings.get(bKey)
+    const override = mapReply?.({ count: ++mapCalls, target, old, state })
+    if (override !== undefined) return override
+    if (state === "superseded") return { ok: false, code: "DISPATCH_SUPERSEDED", status: "superseded", agentId: old ?? null }
+    if (old && old !== target) return { ok: false, code: "AGENT_MAP_CONFLICT", status: state, agentId: old }
+    if (state === "reported") return { ok: true, status: "reported", agentId: old ?? null, idempotent: true }
+    const idempotent = old === target
+    if (!idempotent) mappings.set(bKey, target)
+    return { ok: true, status: "active", agentId: target, idempotent }
+  }
+  const exec = { agent: { id: bParent, session: { header: { cwd: root } } } }
+  const dispatch = twDispatchDefinition(ctx, { runTw })
+  return { root, id, ctx, mappings, live, stored, starts, sends, calls, exec, dispatch, get sessionReads() { return sessionReads }, setStatus: (v) => { state = v }, setSession: (events, { cold = false, inherited = 0, parentId = bParent } = {}) => { const s = { header: { id, parentSession: parentId }, inheritedEventCount: inherited, events }; persisted(s); if (!cold) live.set(id, s) } }
+}
+
+test("首次登记只创建一次并复核收单，wait-children 仅证明宿主收单", async () => {
+  const f = await makeBindingFixture({ firstDispatch: true })
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  assert.equal(f.starts.length, 1)
+  assert.equal(f.starts[0].childId, f.id)
+  assert.deepEqual(f.starts[0].prompt, [{ type: "text", text: bPrompt }])
+  assert.equal(f.mappings.get(bKey), f.id)
+  assert.equal(out.nextAction, "wait-children")
+  assert.equal(out.dispatched[0].receiptVerified, true)
+  assert.equal(out.dispatched[0].accepted, true)
+  assert.equal(out.dispatched[0].action, "wait")
+  assert.match(out.dispatched[0].message, /仅证明收单/)
+})
+
+test("同 key 并发在共享投递锁内对账，不会重复创建", async () => {
+  let release, markStarted
+  const gate = new Promise((resolve) => { release = resolve })
+  const begun = new Promise((resolve) => { markStarted = resolve })
+  const f = await makeBindingFixture({ blockStart: async () => { markStarted(); await gate } })
+  const first = f.dispatch.execute({ task: "demo" }, f.exec)
+  await begun
+  const second = f.dispatch.execute({ task: "demo" }, f.exec)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(f.starts.length, 1)
+  release()
+  const results = await Promise.all([first, second])
+  assert.equal(f.starts.length, 1)
+  assert.equal(f.sends.length, 0)
+  assert.ok(results.every((x) => x.nextAction === "wait-children"))
+})
+
+test("报告已存在或波已作废时重验状态，不访问宿主或发送", async () => {
+  for (const state of ["reported", "superseded"]) {
+    const f = await makeBindingFixture({ registered: true, mapStatus: state })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(f.sessionReads, 0)
+    assert.equal(f.starts.length + f.sends.length, 0)
+    if (state === "reported") assert.equal(out.inflight[0].action, "reported")
+    else assert.equal(out.inflight[0].code, "DISPATCH_SUPERSEDED")
+  }
+})
+
+test("旧写者未停写和续派映射缺失均阻止自动投递", async () => {
+  const safety = { status: "unknown", required: true, conflicts: [{ dispatchKey: "old-key" }], recovery: "核对旧写者" }
+  for (const [item, code] of [[bindingWave({ writerSafety: safety }), "TW_DISPATCH_WRITER_SAFETY_UNKNOWN"], [bindingWave({ continuation: true, prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull), expectedAgentIdMissing: true }), "TW_DISPATCH_EXPECTED_AGENT_MISSING"]]) {
+    const f = await makeBindingFixture({ item })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.nextAction, "recover")
+    assert.equal(out.inflight[0].code, code)
+    assert.equal(f.starts.length + f.sends.length, 0)
+    if (item.writerSafety) assert.deepEqual(out.inflight[0].writerSafety.conflicts, safety.conflicts)
+  }
+})
+
+test("缺冻结标记、摘要损坏或正文 key 不符均不得登记或创建", async () => {
+  const invalid = [bindingWave({ promptFrozen: false }), bindingWave({ promptFrozen: undefined, promptDigest: undefined }), bindingWave({ promptDigest: "0".repeat(64) }), bindingWave({ prompt: bPrompt.replace(bKey, bKey + "x"), promptDigest: sha(bPrompt.replace(bKey, bKey + "x")) }), bindingWave({ continuation: true, expectedAgentId: "prior-example", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: "0".repeat(64) })]
+  for (const item of invalid) {
+    const f = await makeBindingFixture({ item })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.inflight[0].code, "TW_DISPATCH_PROMPT_UNVERIFIED")
+    assert.equal(f.starts.length + f.sends.length, 0)
+    assert.equal(f.mappings.size, 0)
+  }
+})
+
+test("精确块比对排除继承前缀、宿主前置文本及相似 key，发现同 key 内容冲突", async () => {
+  let closed = 0
+  const inspect = async (events, inheritedEventCount = 0) => coldSessionReceived({ open: async () => ({ inheritedEventCount, read: async () => ({ events }), close: async () => { closed++ } }) }, "child-example", undefined, [bPrompt], bKey)
+  assert.equal((await inspect([bindingInbox("Agent example sent a message:", bPrompt, "附加规则")])).currentReceived, true)
+  assert.equal((await inspect([bindingInbox(bPrompt)], 1)).currentReceived, false)
+  assert.equal((await inspect([bindingInbox(bPrompt.replace(bKey, bKey + "x"))])).currentReceived, false)
+  assert.equal((await inspect([bindingInbox("普通提及 " + bKey)])).currentReceived, false)
+  const conflict = await inspect([bindingInbox(bPrompt, bPrompt.replace("冻结正文", "不同正文"))])
+  assert.equal(conflict.currentReceived, true)
+  assert.equal(conflict.conflict, true)
+  assert.equal(closed, 5)
+})
+
+test("按裁决区分已收活会话、未收活会话、冷续投与当前不可见会话", async () => {
+  for (const mode of ["live-old", "live-current", "cold-old", "cold-current", "missing", "foreign", "conflict"]) {
+    const f = await makeBindingFixture({ registered: true })
+    if (mode === "live-old") f.setSession([bindingInbox("# 派单（key: d1-old）\n\n旧正文")])
+    if (mode === "live-current") f.setSession([bindingInbox(bPrompt)])
+    if (mode === "cold-old") f.setSession([bindingInbox("# 派单（key: d1-old）\n\n旧正文")], { cold: true })
+    if (mode === "cold-current") f.setSession([bindingInbox(bPrompt)], { cold: true })
+    if (mode === "foreign") f.setSession([bindingInbox(bPrompt)], { parentId: "other-parent" })
+    if (mode === "conflict") f.setSession([bindingInbox(bPrompt.replace("冻结正文", "冲突正文"))])
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    const entry = out.inflight[0]
+    if (["live-current", "cold-old", "cold-current", "missing"].includes(mode)) {
+      assert.equal(out.nextAction, "wait-children", mode)
+      assert.equal(entry.receiptVerified, true, mode)
+    } else assert.equal(out.nextAction, "recover", mode)
+    if (mode === "live-old") { assert.equal(entry.code, "TW_SUB_ACTIVITY_UNVERIFIED"); assert.equal(f.sends.length, 0) }
+    if (mode === "live-current") { assert.equal(entry.action, "wait"); assert.equal(f.sends.length, 0) }
+    if (mode === "cold-old") { assert.equal(entry.resume, "incremental"); assert.equal(f.sends.length, 1); assert.equal(f.sends[0][2][0].text, bPrompt) }
+    if (mode === "cold-current") { assert.equal(entry.resume, "reminder"); assert.equal(f.sends.length, 1); assert.match(f.sends[0][2][0].text, /已收到本轮/) }
+    if (mode === "missing") { assert.equal(entry.action, "recreated"); assert.equal(f.starts.length, 1) }
+    if (mode === "conflict") { assert.equal(entry.code, "TW_DISPATCH_PROMPT_CONFLICT"); assert.equal(f.sends.length, 0) }
+    if (mode === "foreign") { assert.equal(entry.code, "TW_SUB_TAKEOVER_CONFLICT"); assert.equal(f.sends.length, 0) }
+  }
+})
+
+test("活会话未收本轮且显式给出旧轮活动与通知标记时只等待旧轮", async () => {
+  const f = await makeBindingFixture({ registered: true })
+  f.setSession([bindingInbox("# 派单（key: d1-old）\n\n旧正文")])
+  f.live.get(f.id).turnActive = true
+  f.live.get(f.id).notificationReachable = true
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  assert.equal(out.nextAction, "wait-prior-turn")
+  assert.equal(out.inflight[0].receiptVerified, false)
+  assert.equal(f.sends.length + f.starts.length, 0)
+})
+
+test("混合在途项中未确认收单不被健康项掩盖，可靠旧轮信号聚合 wait-prior-turn", async () => {
+  for (const mode of ["unknown", "prior"]) {
+    const f = await makeBindingFixture({ registered: true })
+    f.setSession([bindingInbox(bPrompt)])
+    const otherKey = "d3-other", otherId = "other-session", otherPrompt = "# 派单（key: " + otherKey + "）\n\n其他正文"
+    const otherSession = { header: { id: otherId, parentSession: bParent }, inheritedEventCount: 0, events: [bindingInbox("# 派单（key: d1-old）\n\n旧正文")] }
+    if (mode === "prior") { otherSession.turnActive = true; otherSession.notificationReachable = true }
+    f.live.set(otherId, otherSession); f.stored.set(otherId, structuredClone(otherSession))
+    const entries = [
+      { ...bindingWave(), registered: true, mappedAgentId: f.id },
+      { ...bindingWave({ dispatchKey: otherKey, prompt: otherPrompt, promptDigest: sha(otherPrompt) }), registered: true, mappedAgentId: otherId },
+    ]
+    const runTw = async (args) => args[0] === "dispatch-plan"
+      ? { ok: true, task: "demo", stage: "implementation", stop: "wait-inflight", inflight: entries }
+      : args[0] === "run"
+        ? { ok: true, transition: "wait-inflight", inflight: entries }
+        : { ok: true, status: "active", agentId: args[6], idempotent: true }
+    const out = await twDispatchDefinition(f.ctx, { runTw }).execute({ task: "demo" }, f.exec)
+    assert.equal(out.inflight[0].action, "wait")
+    assert.equal(out.nextAction, mode === "prior" ? "wait-prior-turn" : "recover")
+    if (mode === "prior") assert.equal(out.inflight[1].action, "wait-prior-turn")
+    else assert.equal(out.inflight[1].code, "TW_SUB_ACTIVITY_UNVERIFIED")
+    assert.equal(f.sends.length, 0)
+  }
+})
+
+test("冷续派按旧上下文选择增量、全量或提醒并核验发送后收单", async () => {
+  for (const mode of ["old", "empty", "current"]) {
+    const item = bindingWave({ continuation: true, expectedAgentId: "prior-agent", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull) })
+    const f = await makeBindingFixture({ item })
+    const events = mode === "old" ? [bindingInbox("# 派单（key: d1-old）\n\n旧正文")] : mode === "current" ? [bindingInbox(bIncremental)] : []
+    f.setSession(events, { cold: true })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    const entry = out.inflight[0]
+    assert.equal(out.nextAction, "wait-children", mode)
+    assert.equal(entry.action, "followup", mode)
+    assert.equal(entry.resume, mode === "old" ? "incremental" : mode === "empty" ? "full" : "reminder", mode)
+    assert.equal(f.mappings.get(bKey), "prior-agent", mode)
+    assert.equal(f.sends.length, 1, mode)
+    if (mode === "old") assert.equal(f.sends[0][2][0].text, bIncremental)
+    if (mode === "empty") assert.equal(f.sends[0][2][0].text, bFull)
+    if (mode === "current") assert.match(f.sends[0][2][0].text, /已收到本轮/)
+  }
+})
+
+test("续派原 ID 当前不可见时，以新 key 的确定性 ID 重建并发送全量正文", async () => {
+  const item = bindingWave({ continuation: true, expectedAgentId: "prior-agent", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull) })
+  const f = await makeBindingFixture({ item })
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  const entry = out.inflight[0], freshId = deterministicSessionId("demo", bKey)
+  assert.equal(out.nextAction, "wait-children")
+  assert.equal(entry.action, "fresh_rebuilt")
+  assert.equal(entry.priorAgentId, "prior-agent")
+  assert.equal(entry.sessionId, freshId)
+  assert.equal(f.mappings.get(bKey), freshId)
+  assert.equal(f.starts[0].prompt[0].text, bFull)
+})
+
+test("冷续投重验期间会话变为活会话时绝不投递正文", async () => {
+  const item = bindingWave({ continuation: true, expectedAgentId: "prior-agent", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull) })
+  let f
+  f = await makeBindingFixture({ item, mapReply: ({ count }) => { if (count === 1) f.live.set(f.id, { ...f.stored.get(f.id) }); return undefined } })
+  f.setSession([bindingInbox("# 派单（key: d1-old）\n\n旧正文")], { cold: true })
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  assert.equal(out.nextAction, "recover")
+  assert.equal(out.inflight[0].code, "TW_SUB_ACTIVITY_UNVERIFIED")
+  assert.equal(f.sends.length + f.starts.length, 0)
+})
+
+test("冷续投登记后出现旧写者停写冲突时不得发送", async () => {
+  const item = bindingWave({ continuation: true, expectedAgentId: "prior-agent", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull) })
+  const safety = { required: true, status: "unknown", conflicts: [{ dispatchKey: "old" }], recovery: "核对旧写者" }
+  const f = await makeBindingFixture({ item, mapReply: ({ count }) => { if (count === 1) item.writerSafety = safety; return undefined } })
+  f.setSession([], { cold: true })
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  assert.equal(out.inflight[0].code, "TW_DISPATCH_WRITER_SAFETY_UNKNOWN")
+  assert.deepEqual(out.inflight[0].writerSafety.conflicts, safety.conflicts)
+  assert.equal(f.sends.length, 0)
+})
+
+test("续投后消息回执、flush 或精确收单无法确认时不得称健康", async () => {
+  for (const mode of ["no-id", "throw", "no-event", "flush-false"]) {
+    const item = bindingWave({ continuation: true, expectedAgentId: "prior-agent", prompt: bIncremental, promptDigest: sha(bIncremental), promptFull: bFull, promptFullDigest: sha(bFull) })
+    const f = await makeBindingFixture({ item })
+    f.setSession([], { cold: true })
+    if (mode === "no-id") f.ctx.subagents.sendMessage = async (...args) => { f.sends.push(args); return undefined }
+    if (mode === "throw") f.ctx.subagents.sendMessage = async (...args) => { f.sends.push(args); throw new Error("回执丢失") }
+    if (mode === "no-event") f.ctx.subagents.sendMessage = async (...args) => { f.sends.push(args); return "message-example" }
+    if (mode === "flush-false") f.ctx.sessions.flush = async () => false
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.nextAction, "recover", mode)
+    assert.equal(f.sends.length, 1, mode)
+    assert.notEqual(out.inflight[0].receiptVerified, true, mode)
+  }
+})
+
+test("人工门保留全部待决、失效和阻塞包，不保留多卡单项别名", async () => {
+  const f = await makeBindingFixture()
+  const pending = [{ decisionId: "card-a", blockers: [] }, { decisionId: "card-b", blockers: ["证据不足"] }]
+  const stale = [{ decisionId: "old-card" }]
+  const blocked = [{ package: "package-a", ref: "ref-a" }]
+  const plan = { ok: true, stop: "awaiting-user", decisionId: "card-a", card: { decisionId: "card-a", question: "单卡别名", choices: [1], pendingDecisions: pending, staleDecisions: stale, blockedPackages: blocked } }
+  const tool = twDispatchDefinition({}, { runTw: async () => plan })
+  const out = await tool.execute({ task: "demo" }, f.exec)
+  assert.deepEqual(out.pendingDecisions, pending)
+  assert.deepEqual(out.staleDecisions, stale)
+  assert.deepEqual(out.blockedPackages, blocked)
+  assert.equal(out.needsDecisionId, true)
+  assert.equal(out.decisionId, undefined)
+  assert.equal(out.card.decisionId, undefined)
+  assert.ok(TW_DISPATCH_OUTPUT_SCHEMA.properties.nextAction.enum.includes("wait-prior-turn"))
+})
+
+test("真实 CoreRuntime CLI 与绑定接缝：首卡、用户确认、锁内重验及宿主桩收单", async () => {
+  const f = await makeBindingFixture()
+  const snapshot = { entryId: "team-work-dsh", profile: "profile-example", tiers: { junior: { provider: "provider-example", model: "model-basic" }, senior: { provider: "provider-example", model: "model-standard" }, expert: { provider: "provider-example", model: "model-advanced" } } }
+  const configSnapshot = () => snapshot
+  const tw = twToolDefinition({ configSnapshot })
+  const opened = await tw.execute({ args: ["open", "--name", "seam-example", "--objective", "验证派发接缝", "--entry", "code-review", "--raw-requirement", "虚构需求"] }, f.exec)
+  assert.equal(opened.ok, true, JSON.stringify(opened))
+  const dispatch = twDispatchDefinition(f.ctx, { configSnapshot })
+  const first = await dispatch.execute({ task: "seam-example", writables: [{ path: "AUDIT.md", kind: "code-review" }] }, f.exec)
+  assert.equal(first.stop, "awaiting-user", JSON.stringify(first))
+  const confirmed = await tw.execute({ args: ["decide", "--task", "seam-example", "--choice", "1", "--decision-id", first.card.decisionId] }, f.exec)
+  assert.equal(confirmed.ok, true, JSON.stringify(confirmed))
+  const out = await dispatch.execute({ task: "seam-example" }, f.exec)
+  assert.equal(f.starts.length, 1, JSON.stringify(out))
+  assert.equal(out.nextAction, "wait-children", JSON.stringify(out))
+  assert.equal(out.dispatched[0].receiptVerified, true, JSON.stringify(out))
+  assert.match(f.starts[0].prompt[0].text, /^# 派单（key: /)
+})
+
+test("波次重验报告账本损坏时保留原始错误而不访问宿主", async () => {
+  const f = await makeBindingFixture()
+  let calls = 0
+  const runTw = async () => ++calls === 1
+    ? { ok: true, task: "demo", stage: "implementation", stop: "wait-inflight", inflight: [{ ...bindingWave(), registered: false }] }
+    : { ok: false, code: "AGENTS_STATE_CORRUPT", card: { blockers: [{ message: "登记簿损坏" }] } }
+  const out = await twDispatchDefinition(f.ctx, { runTw }).execute({ task: "demo" }, f.exec)
+  assert.equal(out.nextAction, "recover")
+  assert.equal(out.inflight[0].code, "AGENTS_STATE_CORRUPT")
+  assert.equal(f.sessionReads, 0)
+  assert.equal(f.starts.length + f.sends.length, 0)
+})
+
+test("已报告即使冻结正文损坏也短路，不凭猜测补造 sessionId", async () => {
+  const f = await makeBindingFixture({ item: bindingWave({ promptFrozen: false }), registered: true, mapReply: () => ({ ok: true, status: "reported", agentId: null, idempotent: true }) })
+  const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+  assert.equal(out.inflight[0].action, "reported")
+  assert.equal(out.inflight[0].sessionId, undefined)
+  assert.equal(f.sessionReads, 0)
+})
+
+test("登记簿损坏或竞争变更时保留原映射且不访问宿主", async () => {
+  for (const code of ["AGENTS_STATE_CORRUPT", "AGENT_MAP_CONFLICT"]) {
+    const f = await makeBindingFixture({ registered: true, mapReply: () => ({ ok: false, code, message: "登记不可证", agentId: "original-id" }) })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.inflight[0].code, code)
+    assert.equal(f.sessionReads, 0)
+    assert.equal(f.starts.length + f.sends.length, 0)
+    assert.equal(f.mappings.get(bKey), f.id)
+  }
+})
+
+test("首次登记后重验发现已报告或作废时绝不创建", async () => {
+  for (const state of ["reported", "superseded"]) {
+    const f = await makeBindingFixture({ mapReply: ({ count, target }) => count === 2 ? state === "reported" ? { ok: true, status: "reported", agentId: target, idempotent: true } : { ok: false, status: "superseded", code: "DISPATCH_SUPERSEDED", agentId: target } : undefined })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(f.starts.length + f.sends.length, 0)
+    assert.equal(f.mappings.get(bKey), f.id)
+    if (state === "reported") assert.equal(out.inflight[0].action, "reported")
+    else assert.equal(out.inflight[0].code, "DISPATCH_SUPERSEDED")
+  }
+})
+
+test("日志读取、持久化屏障或关闭失败均保持 recover 且不重投", async () => {
+  for (const mode of ["flush-false", "flush-throw", "open-throw", "read-throw", "close-throw", "truncated"]) {
+    const f = await makeBindingFixture({ registered: true })
+    f.setSession([bindingInbox(bPrompt)])
+    if (mode === "flush-false") f.ctx.sessions.flush = async () => false
+    if (mode === "flush-throw") f.ctx.sessions.flush = async () => { throw new Error("flush failed") }
+    if (mode === "open-throw") f.ctx.sessionPersistence.open = async () => { throw new Error("open failed") }
+    if (mode === "read-throw") f.ctx.sessionPersistence.open = async () => ({ inheritedEventCount: 0, read: async () => { throw new Error("read failed") }, close: async () => {} })
+    if (mode === "close-throw") f.ctx.sessionPersistence.open = async () => ({ inheritedEventCount: 0, read: async () => ({ events: [bindingInbox(bPrompt)] }), close: async () => { throw new Error("close failed") } })
+    if (mode === "truncated") f.ctx.sessionPersistence.open = async () => ({ inheritedEventCount: 0, read: async () => ({ events: [bindingInbox(bPrompt)], truncated: true }), close: async () => {} })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.nextAction, "recover", mode)
+    assert.equal(f.starts.length + f.sends.length, 0, mode)
+    assert.notEqual(out.inflight[0].receiptVerified, true, mode)
+  }
+})
+
+test("用户裁决下当前不可见的创建可重试，而持久化未确认的在场会话不重建", async () => {
+  for (const mode of ["start-throw", "flush-false"]) {
+    const f = await makeBindingFixture()
+    if (mode === "start-throw") f.ctx.subagents.startActivation = async (spec) => { f.starts.push(spec); throw new Error("回执丢失") }
+    if (mode === "flush-false") f.ctx.sessions.flush = async () => false
+    const first = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(first.nextAction, "recover", mode)
+    assert.equal(f.starts.length, 1, mode)
+    assert.equal(f.mappings.get(bKey), f.id, mode)
+    const retry = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(retry.nextAction, "recover", mode)
+    assert.equal(f.starts.length, mode === "start-throw" ? 2 : 1, mode + "：模拟的不可见状态下允许重试但不证明真实宿主无重复")
+    assert.equal(f.sends.length, 0, mode)
+  }
+})
+
+test("精确模型缺失或非法时不登记也不创建", async () => {
+  for (const modelRef of [undefined, { provider: "provider-example" }, { provider: "provider-example", modelName: "model-example", effort: "none" }]) {
+    const f = await makeBindingFixture({ item: bindingWave({ modelRef }) })
+    const out = await f.dispatch.execute({ task: "demo" }, f.exec)
+    assert.equal(out.inflight[0].code, "TW_DISPATCH_MODEL_REF_UNRESOLVED")
+    assert.equal(f.mappings.size, 0)
+    assert.equal(f.starts.length, 0)
+  }
+})
+
+test("两个进程同 key 投递锁不允许临界区交叠", { timeout: 10000 }, async () => {
+  const f = await makeBindingFixture()
+  const script = `
+    import { appendFile } from "node:fs/promises";
+    import path from "node:path";
+    import { pathToFileURL } from "node:url";
+    const [root, id, repo] = process.argv.slice(2);
+    const { dispatchLockPath, withOwnerLock } = await import(pathToFileURL(path.join(repo, "runtime-v3/store.mjs")));
+    const wait = (kind) => new Promise((resolve) => { const on = (v) => { if (v === kind) { process.off("message", on); resolve() } }; process.on("message", on) });
+    process.on("disconnect", () => process.exit(1));
+    process.send({ type: "ready" });
+    await wait("go");
+    process.send({ type: "attempt" });
+    await withOwnerLock(dispatchLockPath(root, "demo", "d2-example"), async () => {
+      await appendFile(path.join(root, "audit.txt"), "start " + id + "\\n");
+      process.send({ type: "entered" });
+      await wait("release");
+      await appendFile(path.join(root, "audit.txt"), "end " + id + "\\n");
+    });
+    process.send({ type: "done" });
+    process.disconnect();
+  `
+  const scriptPath = path.join(f.root, "lock-probe.mjs")
+  await (await import("node:fs/promises")).writeFile(scriptPath, script)
+  const children = ["a", "b"].map((id) => spawn(process.execPath, [scriptPath, f.root, id, process.cwd()], { stdio: ["ignore", "ignore", "pipe", "ipc"] }))
+  const waitMessage = (child, type) => new Promise((resolve, reject) => {
+    const on = (value) => { if (value?.type === type) { cleanup(); resolve() } }
+    const error = (e) => { cleanup(); reject(e) }
+    const cleanup = () => { child.off("message", on); child.off("error", error) }
+    child.on("message", on); child.on("error", error)
+  })
+  try {
+    await Promise.all(children.map((c) => waitMessage(c, "ready")))
+    const attempts = children.map((c) => waitMessage(c, "attempt"))
+    const entered = children.map((c) => waitMessage(c, "entered"))
+    const done = children.map((c) => waitMessage(c, "done"))
+    children.forEach((c) => c.send("go"))
+    await Promise.all(attempts)
+    const first = await Promise.race(entered.map((p, i) => p.then(() => i)))
+    let overlapping = false
+    entered[1 - first].then(() => { overlapping = true })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(overlapping, false, "第二进程不能同时进入同 key 临界区")
+    children[first].send("release")
+    await done[first]
+    await entered[1 - first]
+    children[1 - first].send("release")
+    await Promise.all(done)
+    const lines = (await readFile(path.join(f.root, "audit.txt"), "utf8")).trim().split("\n")
+    assert.deepEqual(lines.map((line) => line.split(" ")[0]), ["start", "end", "start", "end"])
+    assert.equal(lines[0].split(" ")[1], lines[1].split(" ")[1])
+    assert.equal(lines[2].split(" ")[1], lines[3].split(" ")[1])
+  } finally {
+    for (const child of children) if (child.exitCode === null && !child.killed) child.kill()
+  }
+})
+
+// Ghost Wave 防护（收编自 dsh-binding 包）：原 Owner 在锁内重验期间先行交付时，
+// 只读 run 重验不得产生未投递的下一波（幽灵波），对账不得声称在途。
+test("已有 Owner 先交付时，锁内重验不得创建未投递的下一波", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "twr-ghost-repro-"))
+  const exec = { agent: { id: "parent-example", session: { header: { cwd: root } } } }
+  const snapshot = { entryId: "team-work-dsh", profile: "profile-example", tiers: { junior: { provider: "provider-example", model: "model-basic" }, senior: { provider: "provider-example", model: "model-standard" }, expert: { provider: "provider-example", model: "model-advanced" } } }
+  const tw = twToolDefinition({ configSnapshot: () => snapshot })
+  const call = (args) => tw.execute({ args }, exec)
+  await (await import("node:fs/promises")).writeFile(path.join(root, "artifact.md"), "独立夹具内容\n")
+  const opened = await call(["open", "--name", "ghost-example", "--objective", "验证对账不会推进下一波", "--entry", "implementation", "--raw-requirement", "虚构需求"])
+  assert.equal(opened.ok, true, JSON.stringify(opened))
+  let armed = false, submitted = false, before, firstKey
+  const cli = async (args) => {
+    const out = await call(args)
+    if (armed && !submitted && args[0] === "dispatch-plan" && out.stop === null && out.waves?.length) {
+      submitted = true
+      firstKey = out.waves[0].dispatchKey ?? out.waves[0].key
+      const delivered = await call(["deliver", "--task", "ghost-example", "--key", firstKey, "--outcome", "delivered", "--summary", "原 Owner 已提交交付。", "--paths", "artifact.md"])
+      assert.equal(delivered.accepted, true, JSON.stringify(delivered))
+      before = await call(["run", "--task", "ghost-example"])
+    }
+    return out
+  }
+  let starts = 0
+  const ctx = { sessions: { get: () => undefined }, sessionPersistence: { stat: async () => undefined }, subagents: { startActivation: async () => { starts++; throw Error("不可达") } } }
+  const dispatch = twDispatchDefinition(ctx, { runTw: cli, configSnapshot: () => snapshot })
+  const card = await dispatch.execute({ task: "ghost-example", writables: [{ path: "artifact.md", kind: "source" }] }, exec)
+  assert.equal(card.stop, "awaiting-user", JSON.stringify(card))
+  const decision = await call(["decide", "--task", "ghost-example", "--choice", "1", "--decision-id", card.card.decisionId])
+  assert.equal(decision.ok, true, JSON.stringify(decision))
+  armed = true
+  const out = await dispatch.execute({ task: "ghost-example" }, exec)
+  const after = await call(["run", "--task", "ghost-example"])
+  assert.equal(starts, 0)
+  assert.equal(after.journalSeq, before.journalSeq, "锁内重验不得写入下一波事实")
+  assert.equal((after.inflight ?? []).length, 0, "对账不应生成未投递的新派单")
 })

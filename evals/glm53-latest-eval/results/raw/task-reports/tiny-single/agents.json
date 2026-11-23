@@ -1,0 +1,26 @@
+{
+  "mappings": {
+    "d1-918b74": "92835e4c-1a0c-402a-9c13-2fb6e0722f98",
+    "d2-0760e4": "33d01815-c869-4896-8b68-b3ba8d574dd0"
+  },
+  "roles": {
+    "owner": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "challenger": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    },
+    "expert": {
+      "provider": "zai-coding-cn",
+      "modelName": "glm-5.3",
+      "effort": "max",
+      "family": "glm"
+    }
+  }
+}

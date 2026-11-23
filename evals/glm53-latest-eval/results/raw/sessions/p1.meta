@@ -1,0 +1,10 @@
+tag=p1
+started_at=2026-11-17T21:21:51+08:00
+session_arg=-
+task_file=/Users/liyang/Projects/Opensource/team-work-runtime/evals/glm53-latest-eval/code/tasks/p1.md
+task_sha256=a67bb09cd09f3fbc65f5b75817b17bf957244de203f88737d124fd443a7ef1d9
+permission_mode=danger-full-access
+home=/private/tmp/glm53-latest-eval-20261117b/home
+dsh_home=/private/tmp/glm53-latest-eval-20261117b/home/.dsh
+project=/private/tmp/glm53-latest-eval-20261117b/project
+finished_at=2026-11-17T21:23:39+08:00

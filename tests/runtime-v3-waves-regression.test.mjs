@@ -6,16 +6,17 @@
 // run 只读化（docs/dsh-dispatch-tool-plan.md §7）迁移：推进类 run 调用（派单/签卡/流转/完成）已机械迁移为 dispatch-plan；只读场景（wait-inflight 在途重建、已签待决卡重渲染、completed 幂等/归档摘要）保留 run。
 import test from "node:test"
 import assert from "node:assert/strict"
-import { writeFile, readFile } from "node:fs/promises"
+import { writeFile, readFile, mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { createHash } from "node:crypto"
 
 import { tw } from "../runtime-v3/cli.mjs"
 import { loadTask } from "../runtime-v3/store.mjs"
 import { deriveTask } from "../runtime-v3/derive.mjs"
 import { projectRounds, inflightBatch, waveGroups, supersededKeys, effectiveBlockedSet } from "../runtime-v3/waves.mjs"
 import { humanDecisionFresh } from "../runtime-v3/gate.mjs"
-import { makeProject, autoCaller, openTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
+import { makeProject, autoCaller, openTask, asLegacyTask, seedConvergedStage, seedDispatch, FIX_WORKFLOW, FIX_POLICY } from "./support/v3-fixtures.mjs"
 
 // dispatch-plan 需要完整三档调用快照。
 process.env.TW_DSH_CONFIG = JSON.stringify({
@@ -79,7 +80,7 @@ test("F1/F8：派发 key 为 d<序号>-<hex>、同批共享 waveId、waveId 全�
   assert.equal(rv.waves[0].role, "challenger")
   assert.equal(rv.waves[0].waveId, "wv2", "下一波严格递增")
   assert.notEqual(rv.waves[0].dispatchKey, d1.waves[0].dispatchKey)
-  await call(["review", "--task", "wave-id", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "wave-id", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const r2 = await call(["dispatch-plan", "--task", "wave-id", "--json", "--writable", "R.md:code-review"])
   assert.equal(r2.waves[0].kind, "respond")
   assert.equal(r2.waves[0].waveId, "wv3")
@@ -201,7 +202,7 @@ test("V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序
   await call(["agent-map", "--task", "chain-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-O"])
   await deliverContent(call, root, "chain-t", d1.waves[0].dispatchKey, "R.md", "v1")
   const rv1 = await call(["dispatch-plan", "--task", "chain-t", "--json"])
-  await call(["review", "--task", "chain-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "chain-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl1 = await call(["dispatch-plan", "--task", "chain-t", "--json", "--writable", "R.md:code-review"])
   const k2 = pl1.waves[0]
   assert.equal(k2.continuation, true)
@@ -209,7 +210,7 @@ test("V3-E2E-02：Owner 三轮连续派发 expectedAgentId 始终解析（倒序
   assert.equal(k2.expectedAgentIdMissing, undefined)
   await deliverContent(call, root, "chain-t", k2.dispatchKey, "R.md", "v2")
   const rv2 = await call(["dispatch-plan", "--task", "chain-t", "--json"])
-  await call(["review", "--task", "chain-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修"])
+  await call(["review", "--task", "chain-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"再修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl2 = await call(["dispatch-plan", "--task", "chain-t", "--json", "--writable", "R.md:code-review"])
   const k3 = pl2.waves[0]
   assert.equal(k3.expectedAgentId, "child-O", "第三次续派（映射链中间隔无映射 key）仍解析原 Owner")
@@ -223,14 +224,14 @@ test("F4：replace-owner 后解析新成员（最新映射自然胜出）", asyn
   await call(["agent-map", "--task", "repl-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-A"])
   await deliverContent(call, root, "repl-t", d1.waves[0].dispatchKey, "R.md", "v1")
   const rv1 = await call(["dispatch-plan", "--task", "repl-t", "--json"])
-  await call(["review", "--task", "repl-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "repl-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl1 = await call(["dispatch-plan", "--task", "repl-t", "--json", "--writable", "R.md:code-review"])
   const k2 = pl1.waves[0]
   assert.equal(k2.expectedAgentId, "child-A")
   await call(["agent-map", "--task", "repl-t", "--key", k2.dispatchKey, "--agent", "child-B"])
   await deliverContent(call, root, "repl-t", k2.dispatchKey, "R.md", "v2")
   const rv2 = await call(["dispatch-plan", "--task", "repl-t", "--json"])
-  await call(["review", "--task", "repl-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修"])
+  await call(["review", "--task", "repl-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"再修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl2 = await call(["dispatch-plan", "--task", "repl-t", "--json", "--writable", "R.md:code-review"])
   assert.equal(pl2.waves[0].expectedAgentId, "child-B", "replace-owner 后新映射为最近合法映射")
 })
@@ -246,7 +247,7 @@ test("F4：Challenger 复审 expectedAgentId 可解析（无包波按同角色�
   assert.equal(c1.role, "challenger")
   assert.equal(c1.continuation, false, "首次评审非续派")
   await call(["agent-map", "--task", "chal-t", "--key", c1.dispatchKey, "--agent", "child-C"])
-  await call(["review", "--task", "chal-t", "--key", c1.dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "chal-t", "--key", c1.dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl2 = await call(["dispatch-plan", "--task", "chal-t", "--json", "--writable", "R.md:code-review"])
   const k2 = pl2.waves[0]
   await deliverContent(call, root, "chal-t", k2.dispatchKey, "R.md", "v2")
@@ -277,7 +278,7 @@ test("F4：同名角色/包不跨阶段串线（stage-advanced 边界停止回�
   assert.equal(d1.stage, "code-review", "research 门禁通过后锁内推进至 code-review 派发点（advance 中间卡消失）")
   await deliverContent(call, root, "xstage-t", d1.waves[0].dispatchKey, "R.md", "v1")
   const rv1 = await call(["dispatch-plan", "--task", "xstage-t", "--json"])
-  await call(["review", "--task", "xstage-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "xstage-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl = await call(["dispatch-plan", "--task", "xstage-t", "--json", "--writable", "R.md:code-review"])
   assert.equal(pl.waves[0].expectedAgentIdMissing, true, "跨阶段同名 owner 不得续到上一阶段成员（child-R1）")
   assert.match(pl.waves[0].resumeNote ?? "", /未找到可续会话/)
@@ -291,6 +292,7 @@ test("F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh�
   await call(["agent-map", "--task", "vdct-t", "--key", d1.waves[0].dispatchKey, "--agent", "child-O"])
   await deliverContent(call, root, "vdct-t", d1.waves[0].dispatchKey, "R.md", "v1")
   const verdictJson = (outcome) => JSON.stringify({ outcome, rationale: "r", confidence: "high", recommendedAction: "a" })
+  const mustFix = (statement) => '[{"severity":"risk","statement":"' + statement + '","disposition":"must-fix","scope":{"kind":"all-covered"}}]'
   const plan = () => call(["dispatch-plan", "--task", "vdct-t", "--json"])
   const planOwner = () => call(["dispatch-plan", "--task", "vdct-t", "--json", "--writable", "R.md:code-review"])
   // 首裁：无既有 Expert 报告 → fresh（continuation=false、无 expectedAgentId 字段）
@@ -302,7 +304,7 @@ test("F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh�
   assert.equal(v1.expectedAgentId, undefined)
   assert.equal(v1.expectedAgentIdMissing, undefined)
   await call(["agent-map", "--task", "vdct-t", "--key", v1.dispatchKey, "--agent", "child-E1"])
-  await call(["review", "--task", "vdct-t", "--key", v1.dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", verdictJson("rework")])
+  await call(["review", "--task", "vdct-t", "--key", v1.dispatchKey, "--recommendation", "accept", "--summary", "v", "--findings", mustFix("首轮需修"), "--verdict", verdictJson("rework")])
   // 第二轮：respond → 交付 → challenger accept → 重裁 1 解析原 Expert
   const k2 = (await planOwner()).waves[0]
   assert.equal(k2.expectedAgentId, "child-O", "Owner 续派照常解析")
@@ -313,7 +315,7 @@ test("F4/V3-E2E-02：Expert 重裁三次连续派发可解析——首裁 fresh�
   assert.equal(v2.role, "expert")
   assert.equal(v2.continuation, true, "重裁为续派（verdict 波带 continuation）")
   assert.equal(v2.expectedAgentId, "child-E1", "重裁按同角色倒序回溯解析原 Expert（原实现每次重裁断链 fresh）")
-  await call(["review", "--task", "vdct-t", "--key", v2.dispatchKey, "--recommendation", "accept", "--summary", "v", "--verdict", verdictJson("rework")])
+  await call(["review", "--task", "vdct-t", "--key", v2.dispatchKey, "--recommendation", "accept", "--summary", "v", "--findings", mustFix("次轮需修"), "--verdict", verdictJson("rework")])
   // 第三轮：重裁 2 仍解析同一 Expert（三次连续派发身份稳定）
   const k3 = (await planOwner()).waves[0]
   await deliverContent(call, root, "vdct-t", k3.dispatchKey, "R.md", "v3")
@@ -353,20 +355,23 @@ test("V3-E2E-03 全链路：同轮重复 key 迁移后 review 轮次不抬高、
   const root = await makeProject()
   const call = autoCaller(root)
   await openTask(root, "dup-t")
+  await asLegacyTask(root, "dup-t") // 该用例模拟无新版确认门的历史任务
   // 注入历史重复 key（同轮 round 2 两条、无 waveId——迁移前旧事实形态）；
   // 历史重复交付以报告文件 + 双条目制品索引播种（同 digest → 机械合并，不触发异 digest 冲突卡）
   await seedDispatch(root, "dup-t", { key: "w1-dup", kind: "produce", role: "owner", round: 2, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   await seedDispatch(root, "dup-t", { key: "w2-dup", kind: "produce", role: "owner", round: 2, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   const task0 = await loadTask(root, "dup-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const mkReport = (key, id) => writeFile(path.join(task0.root, "reports", id + ".json"), JSON.stringify({ reportId: id, dispatchKey: key, role: "owner", kind: "deliver", round: 2, stage: "code-review", package: null, payload: { outcome: "delivered", summary: "s", paths: ["R.md"] }, at: new Date().toISOString() }))
-  await mkReport("w1-dup", "ra")
-  await mkReport("w2-dup", "rb")
-  await writeFile(path.join(task0.root, "artifacts.json"), JSON.stringify({ items: [
-    { path: "R.md", digest: "d1", kind: "code-review", stage: "code-review", reportRef: "deliver-w1-dup", snapshotRef: "s1" },
-    { path: "R.md", digest: "d1", kind: "code-review", stage: "code-review", reportRef: "deliver-w2-dup", snapshotRef: "s1" },
-  ] }))
+  // 同轮重复 key 的两条交付走真实协议（完整清单 + 字节 SHA + 快照 + journal 事实）；
+  // dispatch 事件本身保持迁移前旧形态（无 prompt 冻结等新字段，模拟历史任务）。
+  await writeFile(path.join(root, "R.md"), "历史交付内容", "utf8")
+  await call(["deliver", "--task", "dup-t", "--key", "w1-dup", "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  await call(["deliver", "--task", "dup-t", "--key", "w2-dup", "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
+  // 完整清单语义：同轮跨 key 双交付不再机械合并，迁移出用户取舍卡（§9「旧 key 用户取舍」行）
   const mig = await call(["migrate", "--task", "dup-t"])
-  assert.equal(mig.equivalent, true, "迁移前后投影等价")
+  assert.ok(mig.decisionId, "迁移出同轮多版本取舍卡")
+  assert.match(mig.question, /多个不同内容的交付版本/)
+  await call(["decide", "--task", "dup-t", "--choice", "2", "--decision-id", mig.decisionId])
+  const after = await loadTask(root, "dup-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const rv = await call(["dispatch-plan", "--task", "dup-t", "--json"])
   assert.equal(rv.waves[0].role, "challenger")
   assert.equal(rv.waves[0].round, 2, "review 轮次按投影轮 2，不被重复报告抬高到 3")
@@ -390,8 +395,8 @@ test("V3-E2E-04/F5：决定前旧 key 同/异内容重交均不能完成返工�
   const first = await call(["dispatch-plan", "--task", "imp-t", "--json", "--writable", "R.md:code-review"])
   assert.equal(first.waves[0].kind, "respond")
   const k2 = first.waves[0].dispatchKey
-  // 旧 key 同内容重交 → 幂等，不消费返工
-  const idem = await deliverContent(call, root, "imp-t", k1, "R.md", "报告v1", "s")
+  // 旧 key 同字节重交 → 幂等，不消费返工（新协议幂等判据 = 磁盘原始字节 SHA 一致）
+  const idem = await deliverContent(call, root, "imp-t", k1, "R.md", "报告", "s")
   assert.equal(idem.idempotent, true)
   const w1 = await call(["dispatch-plan", "--task", "imp-t", "--json"])
   assert.equal(w1.stop, "wait-inflight", "同内容旧 key 重交后仍在途（绑定波未交付）")
@@ -458,20 +463,30 @@ test("有效 blocked（seq 因果纯函数）：同毫秒不误判、墙钟回�
   // 1) blocked 后无新事件 → 有效（同毫秒不影响 seq 因果；旧 at 严格 > 口径在同毫秒会误判）
   const j1 = mkJournal([ownerDispatch("k1"), { type: "report-accepted", detail: { reportId: "b-k1" } }])
   assert.equal(effectiveBlockedSet({ journal: j1, reports: [blockedReport("k1")], packages: null }).has(null), true)
-  // 2) 扩权重派（at 回拨到更早、seq 更大）→ 解除：seq 因果不受墙钟回拨影响
+  // 2) §6.3（F-N3）：新派发与重拆都不再自动解除 blocked——恢复必须走 blocked-resolved 事件
   const j2 = mkJournal([
     ownerDispatch("k1"),
     { type: "report-accepted", detail: { reportId: "b-k1" } },
     { ...ownerDispatch("k2"), at: "2025-01-01T00:00:00.000Z" },
+    { type: "re-planned", detail: { packages: [] } },
   ])
-  assert.equal(effectiveBlockedSet({ journal: j2, reports: [blockedReport("k1")], packages: null }).has(null), false, "锚后新 owner 派发（即使墙钟更早）解除 blocked")
-  // 3) 重拆（packages-planned/re-planned，seq 更大）→ 解除（任意包的重拆都是新范围承诺）
+  assert.equal(effectiveBlockedSet({ journal: j2, reports: [blockedReport("k1")], packages: null }).has(null), true, "锚后新派发/重拆不解除 blocked（计划变更不构成恢复授权）")
+  // 3) 恢复事件（seq 晚于锚、绑定 key/版本匹配）→ 解除；旧版本/错包事件不解除
+  const resolveEvent = (pkg = null, key = "k1", version = 1) => ({ type: "blocked-resolved", detail: { package: pkg, dispatchKey: key, reportVersion: version, action: "retry" } })
   const j3 = mkJournal([
     ownerDispatch("k1", "a"),
     { type: "report-accepted", detail: { reportId: "b-k1" } },
-    { type: "re-planned", detail: { packages: [] } },
+    resolveEvent("a"),
   ])
-  assert.equal(effectiveBlockedSet({ journal: j3, reports: [blockedReport("k1", "a")], packages: [{ id: "a" }] }).has("a"), false, "锚后重拆解除 blocked")
+  assert.equal(effectiveBlockedSet({ journal: j3, reports: [blockedReport("k1", "a")], packages: [{ id: "a" }] }).has("a"), false, "匹配的 blocked-resolved 事件解除该包")
+  const j3b = mkJournal([
+    ownerDispatch("k1", "a"),
+    { type: "report-accepted", detail: { reportId: "b-k1" } },
+    resolveEvent("a", "k1", 1),
+    { type: "report-accepted", detail: { reportId: "b2-k1", ver: 2 } },
+  ])
+  const blockedV2 = { ...blockedReport("k1", "a"), reportId: "b2-k1", ver: 2 }
+  assert.equal(effectiveBlockedSet({ journal: j3b, reports: [blockedReport("k1", "a"), blockedV2], packages: [{ id: "a" }] }).has("a"), true, "旧恢复事件不解除新 blocked 版本（重放不消费新版本）")
   // 4) 报告全序也走 seq：同 at 下后接受的 delivered 覆盖 blocked（最新 owner 报告为 delivered）
   const j4 = mkJournal([
     ownerDispatch("k1"),
@@ -516,7 +531,7 @@ test("F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 block
   // 评审链消化 store 的修复交付；challenger rework 点名 blocked 的 intake → 无可派波（intake 被有效 blocked 过滤）
   const rv2 = await call(["dispatch-plan", "--task", "xblk-t", "--json"])
   assert.equal(rv2.waves[0].role, "challenger")
-  await call(["review", "--task", "xblk-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "intake 仍需修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", package: "intake" }])])
+  await call(["review", "--task", "xblk-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "intake 仍需修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", disposition: "must-fix", scope: { kind: "packages", ids: ["intake"] } }])])
   const ve2 = await call(["dispatch-plan", "--task", "xblk-t", "--json"])
   assert.equal(ve2.waves[0].role, "expert", "core 场景 store 修复先过裁决")
   await reviewAccept(call, "xblk-t", ve2.waves[0].dispatchKey, VERDICT)
@@ -547,7 +562,7 @@ test("F5×produceBlocked 交叉：人工门 rework 多包一 delivered 一 block
   assert.equal(done.stop, "completed", "交叉场景消解后正常收敛")
 })
 
-test("r4 边界：轮次耗尽（exhausted）不遮蔽 F5——绑定波含有效 blocked 时直接出 reworkBlocked 仲裁卡，不先出「追加一轮」卡；重派交付后不二次触发", async () => {
+test("F-9：定点 blocked 先按包恢复，轮次耗尽需授权，再仅重派目标包", async () => {
   const root = await makeProject()
   const call = autoCaller(root)
   await openTask(root, "exh-t")
@@ -558,12 +573,12 @@ test("r4 边界：轮次耗尽（exhausted）不遮蔽 F5——绑定波含有�
   await deliverContent(call, root, "exh-t", keyOf(w1, "store"), "S.md", "store v1")
   await deliverContent(call, root, "exh-t", keyOf(w1, "intake"), "I.md", "intake v1")
   const rv1 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  await call(["review", "--task", "exh-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "两包都修"])
+  await call(["review", "--task", "exh-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "两包都修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"两包都修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const w2 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
   await deliverContent(call, root, "exh-t", keyOf(w2, "store"), "S.md", "store v2")
   await deliverContent(call, root, "exh-t", keyOf(w2, "intake"), "I.md", "intake v2")
   const rv2 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  await call(["review", "--task", "exh-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修"])
+  await call(["review", "--task", "exh-t", "--key", rv2.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "再修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"再修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const w3 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
   await deliverContent(call, root, "exh-t", keyOf(w3, "store"), "S.md", "store v3")
   await deliverContent(call, root, "exh-t", keyOf(w3, "intake"), "I.md", "intake v3")
@@ -580,35 +595,33 @@ test("r4 边界：轮次耗尽（exhausted）不遮蔽 F5——绑定波含有�
   assert.equal(r4.waves.length, 2)
   await deliverContent(call, root, "exh-t", keyOf(r4, "store"), "S.md", "store v4 修复", "修store")
   await call(["deliver", "--task", "exh-t", "--key", keyOf(r4, "intake"), "--outcome", "blocked", "--summary", "intake 需范围外文件"])
-  // challenger 对 store 修复交付 rework 并点名 blocked 的 intake——此刻 intake 投影轮 3 = maxRounds，
-  // nextWave 的 exhausted 检查先于 review/verdict 派发触发（不会先派 store 的裁决波）
+  // challenger 对已交付部分复审后由 expert 定点裁决；blocked 包仍需按 §6.3 恢复。
   const rv4 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
   assert.equal(rv4.waves[0].role, "challenger")
-  await call(["review", "--task", "exh-t", "--key", rv4.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "intake 待修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", package: "intake" }])])
-  // 关键断言：nextWave 的 exhausted 分支（intake 投影轮 3 ≥ maxRounds 3）被让位检查接管——
-  // 直接出 F5 reworkBlocked 仲裁卡，而非「轮次上限」卡（否则用户先追加一轮、随后又收 F5 卡，双重处理）
+  await call(["review", "--task", "exh-t", "--key", rv4.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "intake 待修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", disposition: "must-fix", scope: { kind: "packages", ids: ["intake"] } }])])
+  const ve4 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
+  assert.equal(ve4.waves[0].role, "expert")
+  await call(["review", "--task", "exh-t", "--key", ve4.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "裁决 intake 待修", "--findings", JSON.stringify([{ severity: "risk", statement: "intake 待修", disposition: "must-fix", scope: { kind: "packages", ids: ["intake"] } }]), "--verdict", JSON.stringify({ outcome: "rework", rationale: "intake 未修复", confidence: "high", recommendedAction: "重派 intake" })])
+  // 定点裁决后不得退回 challenger/expert 空转：先保持 blocked，按包确认恢复。
   const card = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  assert.equal(card.stop, "awaiting-user")
-  assert.match(card.card.question, /无法完成本次返工/, "出 F5 reworkBlocked 仲裁卡")
-  assert.doesNotMatch(card.card.question, /轮次上限|自主轮次/, "不被 exhausted 卡抢先")
-  assert.deepEqual(card.card.choices.map((c) => c.label), ["重派 respond", "结束任务"])
-  // decide 重派 → 双包交付 → 回人工门，旧 blocked 不二次触发
-  await call(["decide", "--task", "exh-t", "--choice", "1"])
-  const r5 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  assert.equal(r5.waves.length, 2, "rework-rerun 覆盖波含绑定波整波包集")
-  await deliverContent(call, root, "exh-t", keyOf(r5, "store"), "S.md", "store v5 终版", "s5")
-  await deliverContent(call, root, "exh-t", keyOf(r5, "intake"), "I.md", "intake v5 终版", "i5")
-  const rv5 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  await reviewAccept(call, "exh-t", rv5.waves[0].dispatchKey)
-  const ve5 = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  await reviewAccept(call, "exh-t", ve5.waves[0].dispatchKey, VERDICT)
-  const gate = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  assert.equal(gate.stop, "awaiting-user")
-  assert.doesNotMatch(gate.card.question ?? "", /无法完成本次返工/, "旧 blocked 不再二次触发 F5 仲裁")
-  assert.match(gate.card.question ?? "", /scoped-final|人工|批准/, "回人工门等待用户")
-  await call(["decide", "--task", "exh-t", "--choice", "1"])
-  const done = await call(["dispatch-plan", "--task", "exh-t", "--json"])
-  assert.equal(done.stop, "completed", "耗尽×blocked 交叉场景消解后正常收敛")
+  assert.equal(card.stop, "awaiting-user", JSON.stringify(card))
+  assert.equal(card.card.next, "re-scope")
+  const taskR4 = await loadTask(root, "exh-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  const blockedNow = effectiveBlockedSet({ journal: taskR4.journal, reports: taskR4.reports, packages: [{ id: "store" }, { id: "intake" }] })
+  assert.equal(blockedNow.has("intake"), true, "intake 仍在有效 blocked 集")
+  assert.equal(blockedNow.has("store"), false, "store 有新交付不在 blocked 集")
+  const ref = card.card.blockedPackages.find((item) => item.package === "intake").ref
+  const recovery = await call(["plan", "--task", "exh-t", "--resolve-blocked", JSON.stringify({ package: "intake", action: "retry", reason: "用户确认继续" }), "--blocked-ref", ref])
+  assert.equal(recovery.kind, "package-recovery", JSON.stringify(recovery))
+  assert.equal((await call(["decide", "--task", "exh-t", "--decision-id", recovery.decisionId, "--choice", "1"])).ok, true)
+  const exhausted = await call(["dispatch-plan", "--task", "exh-t", "--json"])
+  assert.equal(exhausted.stop, "awaiting-user", JSON.stringify(exhausted))
+  assert.match(exhausted.card.question ?? "", /轮次上限|自主轮次/, "恢复不绕过自主轮次上限")
+  assert.match(exhausted.card.question ?? "", /intake/, "只点名耗尽的返工包")
+  assert.equal(exhausted.card.choices[0].grant, "extra-round")
+  assert.equal((await call(["decide", "--task", "exh-t", "--decision-id", exhausted.card.decisionId, "--choice", "1"])).ok, true)
+  const retry = await call(["dispatch-plan", "--task", "exh-t", "--json"])
+  assert.deepEqual(retry.waves.map((wave) => ({ package: wave.package, kind: wave.kind })), [{ package: "intake", kind: "respond" }], JSON.stringify(retry))
 })
 
 test("F5：僵局检测——delivered 但制品指纹未变 → 仲裁卡含未修包清单；仅重派未修包 → 修复 → 完成", async () => {
@@ -763,19 +776,19 @@ test("F6-1：同门多次决定 → 二次 accept 后门通过、不再成环；
   const { call } = await seedConvergedStage(root, "f6m-t")
   const card1 = await call(["dispatch-plan", "--task", "f6m-t", "--json"])
   await call(["decide", "--task", "f6m-t", "--choice", "1"])
-  // 批准后制品指纹变化（模拟决定后内容被改）→ 旧批准失效 → 重新呈卡
-  const task = await loadTask(root, "f6m-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  await writeFile(path.join(task.root, "artifacts.json"), JSON.stringify({ items: [{ path: "R.md", digest: "tampered", kind: "code-review", stage: "code-review", reportRef: "x", snapshotRef: "y" }] }))
-  const card2 = await call(["dispatch-plan", "--task", "f6m-t", "--json"])
-  assert.equal(card2.stop, "awaiting-user")
-  assert.notEqual(card2.card.decisionId, card1.card.decisionId, "批准指纹过期 → 重新呈卡（已决分支取最新事实）")
-  await call(["decide", "--task", "f6m-t", "--choice", "1"])
+  // 新契约 §6.2：人工批准绑定报告清单与磁盘字节摘要——决定后磁盘被改 → 实时核对拒绝（旧批准不能掩盖不一致）
+  await writeFile(path.join(root, "R.md"), "被外部改写的内容", "utf8")
+  const tampered = await call(["dispatch-plan", "--task", "f6m-t", "--json"])
+  assert.equal(tampered.stop, "blocked", "批准等待期磁盘改写：门禁实时核对拒绝")
+  assert.match(tampered.card?.blockers?.map((b) => b.requirement ?? b.message).join("\n") ?? "", /磁盘内容与登记摘要不一致/, "blocker 指出路径与期望摘要")
+  // 恢复磁盘字节 → 清单与决定指纹重新一致 → 门通过完成（单次 accept 不成环）
+  await writeFile(path.join(root, "R.md"), "报告", "utf8")
   const done = await call(["dispatch-plan", "--task", "f6m-t", "--json"])
-  assert.equal(done.stop, "completed", "二次 accept 后门通过、不再成环")
+  assert.equal(done.stop, "completed", "恢复后原 accept 决定仍有效、门通过不再成环")
   const t2 = await loadTask(root, "f6m-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   // 人工门决定（排除意图确认卡的"确认开始"）：恰好两次 accept，无循环重签。
   const accepted = t2.decisions.filter((d) => d.gateId && d.gateId !== "intake-approval").map((d) => d.choice)
-  assert.deepEqual(accepted, ["accept", "accept"], "恰好两次 accept 决定，无循环重签")
+  assert.deepEqual(accepted, ["accept"], "恰好一次 accept：磁盘恢复后原决定仍新鲜，不触发循环重签")
 })
 
 test("F6/R2：旧决定缺 reviewFingerprint 降级仅制品指纹（纯函数；新决定启用双指纹）", async () => {
@@ -803,13 +816,13 @@ test("F7：同 key 同 payload 幂等 ver 不变；变 payload ver+1；report-ac
   const dl3 = await call(["deliver", "--task", "ver-t", "--key", d.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "改摘要", "--paths", "R.md"])
   assert.equal(dl3.ver, 2, "payload 变化 → ver+1（身份 = key+ver）")
   const task = await loadTask(root, "ver-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  const rep = task.reports.find((r) => r.dispatchKey === d.waves[0].dispatchKey)
+  const rep = task.reports.filter((r) => r.dispatchKey === d.waves[0].dispatchKey).at(-1)
   assert.equal(rep.reportId, "deliver-" + d.waves[0].dispatchKey, "报告文件名跟随 d key（F8）")
   assert.equal(rep.ver, 2)
   assert.ok(rep.payloadDigest, "报告落盘带 payloadDigest（digest 链即时可审计）")
   assert.equal(rep.waveId, "wv1", "waveId 仅展示字段")
-  const evts = task.journal.filter((e) => e.type === "report-accepted" && e.detail.dispatchKey === d.waves[0].dispatchKey)
-  assert.deepEqual(evts.map((e) => e.detail.ver), [1, 2], "journal report-accepted 补 ver")
+  const evts = task.journal.filter((e) => e.type === "report-committed" && e.detail.dispatchKey === d.waves[0].dispatchKey)
+  assert.deepEqual(evts.map((e) => e.detail.ver), [1, 2], "journal report-committed 补 ver")
   assert.ok(evts.every((e) => typeof e.detail.payloadDigest === "string" && e.detail.payloadDigest.length > 0), "journal 事件带 payloadDigest")
   assert.equal(evts.length, 2, "幂等重交不追加第二条事件")
 })
@@ -842,6 +855,7 @@ test("F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d �
   const root = await makeProject()
   const call = autoCaller(root)
   await openTask(root, "wdmix-t")
+  await asLegacyTask(root, "wdmix-t") // 该用例模拟无新版确认门的历史任务
   // 旧 w 前缀派发（迁移前事实）+ 旧键映射
   await seedDispatch(root, "wdmix-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   await call(["agent-map", "--task", "wdmix-t", "--key", "w1-aa", "--agent", "child-W"])
@@ -850,7 +864,7 @@ test("F8：agents.json 旧 w 键只读保留、新 d 键并存；跨版本 w/d �
   assert.deepEqual(mig.assignedWaves, [{ waveId: "wv1", dispatchKeys: ["w1-aa"] }])
   const rv = await call(["dispatch-plan", "--task", "wdmix-t", "--json"])
   assert.match(rv.waves[0].dispatchKey, KEY_RE, "新派发用 d 前缀")
-  await call(["review", "--task", "wdmix-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call(["review", "--task", "wdmix-t", "--key", rv.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl = await call(["dispatch-plan", "--task", "wdmix-t", "--json", "--writable", "R.md:code-review"])
   const k2 = pl.waves[0]
   assert.equal(k2.expectedAgentId, "child-W", "跨版本 w/d 混存：d 派发回溯 w 键映射不断链（F4 按 key 精匹配）")
@@ -1000,6 +1014,7 @@ test("F9 加固：migrate 冲突卡 pending 期间 run 静止（migratePending�
   const root = await makeProject()
   const call = autoCaller(root)
   await openTask(root, "mgpend-t")
+  await asLegacyTask(root, "mgpend-t") // 该用例模拟无新版确认门的历史任务
   // 三条历史派发：w1/w2 同轮异 digest（冲突），w3 在途未交付
   await seedDispatch(root, "mgpend-t", { key: "w1-aa", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   await seedDispatch(root, "mgpend-t", { key: "w2-bb", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
@@ -1053,13 +1068,14 @@ test("F3 retire 幂等矩阵：缺 reason/未知波/已结波拒绝附指引；�
   assert.deepEqual(ok.supersededKeys, [k1])
   const idem = await call(["retire", "--task", "ret-t", "--wave", "wv1", "--reason", "again"])
   assert.equal(idem.idempotent, true, "重复 retire 幂等返回")
+  assert.ok(idem.writerSafety ?? ok.writerSafety, "retire 回执带旧写者停写安全提示")
   const task = await loadTask(root, "ret-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   const ev = task.journal.find((e) => e.type === "dispatch-superseded")
   assert.equal(ev.detail.waveId, "wv1")
   assert.equal(ev.detail.reason, "派错了")
   assert.equal(ev.detail.at, undefined, "dispatch-superseded detail 不含 at（事件顶层已有）")
   const agents = JSON.parse(await readFile(path.join(task.root, "agents.json"), "utf8"))
-  assert.equal(agents.mappings[k1], undefined, "retire 清退该波映射（审计记录保留在 journal）")
+  assert.equal(agents.mappings[k1], "child-R", "retire 保留原 key→sessionId 映射（宿主对账锚，防重投旧会话）")
   const oldDeliver = await call(["deliver", "--task", "ret-t", "--key", k1, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
   assert.equal(oldDeliver.ok, false)
   assert.equal(oldDeliver.code, "INTAKE_REJECTED")
@@ -1100,7 +1116,7 @@ test("F3 retire：部分交付后 retire——已交付报告保留审计、投�
   await call2(["agent-map", "--task", "retb-t", "--key", o1.waves[0].dispatchKey, "--agent", "child-A"])
   await deliverContent(call2, root2, "retb-t", o1.waves[0].dispatchKey, "R.md", "v1")
   const rv1 = await call2(["dispatch-plan", "--task", "retb-t", "--json"])
-  await call2(["review", "--task", "retb-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修"])
+  await call2(["review", "--task", "retb-t", "--key", rv1.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "需修", "--findings", '[{\"severity\":\"risk\",\"statement\":\"需修\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
   const pl1 = await call2(["dispatch-plan", "--task", "retb-t", "--json", "--writable", "R.md:code-review"])
   const k2 = pl1.waves[0]
   await call2(["agent-map", "--task", "retb-t", "--key", k2.dispatchKey, "--agent", "child-B"])
@@ -1115,6 +1131,7 @@ test("B8：无 waveId 派发按 key 兜底各自成波，守卫回退尾部连�
   const root = await makeProject()
   const call = autoCaller(root)
   await openTask(root, "legacy-t")
+  await asLegacyTask(root, "legacy-t") // 该用例模拟无新版确认门的历史任务
   await seedDispatch(root, "legacy-t", { key: "w9-legacy", kind: "produce", role: "owner", round: 1, package: null, writable: [{ path: "R.md", artifactKind: "code-review" }] })
   const w = await call(["dispatch-plan", "--task", "legacy-t", "--json"])
   assert.equal(w.stop, "wait-inflight", "无 waveId 在途派发按 key 兜底（不重复派发）")
@@ -1134,7 +1151,9 @@ test("损坏输入与重复决定：损坏 journal 抛错不静默；重复 deci
   await openTask(root, "corrupt-t")
   const task = await loadTask(root, "corrupt-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   await writeFile(path.join(task.root, "journal.jsonl"), "{ 这不是 JSON\\n")
-  await assert.rejects(call(["dispatch-plan", "--task", "corrupt-t", "--json", "--writable", "R.md:code-review"]), SyntaxError, "损坏 journal 显式抛错（不静默吞掉）")
+  const corruptCard = await call(["dispatch-plan", "--task", "corrupt-t", "--json", "--writable", "R.md:code-review"])
+  assert.equal(corruptCard.ok, false, "损坏 journal 显式拒绝：" + JSON.stringify(corruptCard).slice(0, 160))
+  assert.ok([corruptCard.code, corruptCard.message ?? ""].some((v) => typeof v === "string" && (/STATE_CORRUPT|journal|JSON/.test(v))), "错误可定位（不静默吞掉）")
   const root2 = await makeProject()
   const { call: call2 } = await seedConvergedStage(root2, "dupdec-t")
   await call2(["dispatch-plan", "--task", "dupdec-t", "--json"])
@@ -1142,6 +1161,73 @@ test("损坏输入与重复决定：损坏 journal 抛错不静默；重复 deci
   const again = await call2(["decide", "--task", "dupdec-t", "--choice", "1"])
   assert.equal(again.ok, false)
   assert.equal(again.code, "DECISION_STALE", "重复 decide 拒绝（卡片已被消费）")
+})
+
+test("F-9：定点返工 blocked 不解锁依赖也不冻结无关包，确认重试后须先回应目标包", async () => {
+  const root = await makeProject()
+  const call = autoCaller(root)
+  const name = "expert-blocked-cross"
+  await openTask(root, name)
+  const packages = [
+    { id: "a", writable: ["A.md:code-review"], done: ["完成"], dependsOn: [] },
+    { id: "b", writable: ["B.md:code-review"], done: ["完成"], dependsOn: [] },
+    { id: "c", writable: ["C.md:code-review"], done: ["完成"], dependsOn: ["a"] },
+    { id: "d", writable: ["D.md:code-review"], done: ["完成"], dependsOn: ["b"] },
+  ]
+  assert.equal((await call(["plan", "--task", name, "--packages", JSON.stringify(packages)])).ok, true)
+  const first = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(first.waves.map((wave) => wave.package).sort(), ["a", "b"])
+  for (const wave of first.waves) {
+    const file = wave.package.toUpperCase() + ".md"
+    assert.equal((await deliverContent(call, root, name, wave.dispatchKey, file, "初次交付 " + wave.package)).accepted, true)
+  }
+  let wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "challenger")
+  assert.equal((await reviewAccept(call, name, wave.waves[0].dispatchKey)).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "expert")
+  const verdict = await call(["review", "--task", name, "--key", wave.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "a 待修", "--findings", JSON.stringify([{ severity: "blocker", statement: "a 待修", disposition: "must-fix", scope: { kind: "packages", ids: ["a"] } }]), "--verdict", JSON.stringify({ outcome: "rework", rationale: "a 待修", confidence: "high", recommendedAction: "修复 a" })])
+  assert.equal(verdict.accepted, true, JSON.stringify(verdict))
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(wave.waves.map((w) => ({ package: w.package, kind: w.kind })), [{ package: "a", kind: "respond" }], "只重派 Expert 点名的包")
+  assert.equal((await call(["deliver", "--task", name, "--key", wave.waves[0].dispatchKey, "--outcome", "blocked", "--summary", "等待明确方向"])).accepted, true)
+
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(wave.waves.map((w) => w.package), ["d"], "a 的旧基线不能解锁 c，b 的依赖 d 仍可开工")
+  assert.equal((await deliverContent(call, root, name, wave.waves[0].dispatchKey, "D.md", "d 的交付")).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "challenger")
+  const unrelatedReviewKey = wave.waves[0].dispatchKey
+  assert.equal((await reviewAccept(call, name, unrelatedReviewKey)).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "expert")
+  assert.equal((await reviewAccept(call, name, wave.waves[0].dispatchKey, VERDICT)).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.stop, "awaiting-user", JSON.stringify(wave))
+  assert.equal(wave.card.next, "re-scope")
+  const ref = wave.card.blockedPackages.find((item) => item.package === "a").ref
+  const recovery = await call(["plan", "--task", name, "--resolve-blocked", JSON.stringify({ package: "a", action: "retry", reason: "用户明确继续" }), "--blocked-ref", ref])
+  assert.equal(recovery.kind, "package-recovery", JSON.stringify(recovery))
+  assert.equal((await call(["decide", "--task", name, "--decision-id", recovery.decisionId, "--choice", "1"])).ok, true)
+  // 恢复确认后、目标包重派前，无关包的旧评审 key 合法修订为 accept。
+  const revised = await call(["review", "--task", name, "--key", unrelatedReviewKey, "--recommendation", "accept", "--summary", "补充确认无关包"])
+  assert.equal(revised.accepted, true, JSON.stringify(revised))
+  assert.equal(revised.ver, 2, "确实登记了新的 accept 修订，而非幂等回显")
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(wave.waves.map((w) => ({ package: w.package, kind: w.kind })), [{ package: "a", kind: "respond" }], "无关包的 accept 不得消费 a 的重试承诺")
+  const retryKey = wave.waves[0].dispatchKey
+  const waiting = await call(["dispatch-plan", "--task", name])
+  assert.equal(waiting.stop, "wait-inflight")
+  assert.equal(waiting.dispatchKey, retryKey)
+  assert.equal((await call(["deliver", "--task", name, "--key", retryKey, "--outcome", "delivered", "--summary", "按原内容回应", "--paths", "A.md"])).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "challenger")
+  assert.equal((await reviewAccept(call, name, wave.waves[0].dispatchKey)).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.equal(wave.waves[0].role, "expert")
+  assert.equal((await reviewAccept(call, name, wave.waves[0].dispatchKey, VERDICT)).accepted, true)
+  wave = await call(["dispatch-plan", "--task", name])
+  assert.deepEqual(wave.waves.map((w) => ({ package: w.package, kind: w.kind })), [{ package: "c", kind: "produce" }], "a 回应并审过后，依赖包 c 才能开工")
 })
 
 test("并发：retire×run 与 迁移×交付 并发后状态一致（任务锁串行化，任意顺序均收敛）", async () => {

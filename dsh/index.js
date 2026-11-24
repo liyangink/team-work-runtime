@@ -2,6 +2,7 @@
 import { twToolDefinition } from "./tw-tool.js"
 import { twDispatchDefinition } from "./tw-dispatch.js"
 import { createSleepConfirmGuard } from "./sleep-confirm.js"
+import { createMemberMessageGuard } from "./member-message-guard.js"
 import { registerEmbeddedSkill } from "./skill-embed.js"
 import { readDshConfigSnapshot, systemPromptSection } from "./settings.js"
 export { Config } from "./settings.js"
@@ -26,22 +27,31 @@ export async function apply(ctx, config = {}, deps = {}) {
   const sleepConfirm = deps.sleepConfirm ?? createSleepConfirmGuard({
     log: (message) => ctx.logger?.warn?.("team-work-dsh: " + message),
   })
-  for (const definition of [twToolDefinition({ configSnapshot }), twDispatchDefinition(ctx, { configSnapshot, sleepConfirm })]) {
+  const memberGuard = createMemberMessageGuard({
+    // 与宿主 send_message 使用相同的名称解析器，以实际目标会话 ID 对账，不信任显示名。
+    resolveRecipient: (exec, address) => optional("subagents")?.resolveName?.(exec.agent, address, exec.signal),
+    log: (message) => ctx.logger?.warn?.("team-work-dsh: " + message),
+  })
+  disposers.push(memberGuard.dispose)
+  for (const definition of [twToolDefinition({ configSnapshot, memberGuard }), twDispatchDefinition(ctx, { configSnapshot, sleepConfirm, memberGuard })]) {
     try { const dispose = ctx.tools.register(definition); if (typeof dispose === "function") disposers.push(dispose) } catch (error) {
       ctx.logger?.warn?.("team-work-dsh: 工具注册失败：" + String(error?.message ?? error))
     }
   }
   try {
     if (typeof ctx?.on === "function") {
-      const offExec = ctx.on("tools/execute", (exec, next) => sleepConfirm.aroundExecute(exec, next))
+      const offExec = ctx.on("tools/execute", (exec, next) => exec?.name === "send_message"
+        ? memberGuard.aroundExecute(exec, next)
+        : sleepConfirm.aroundExecute(exec, next))
       if (typeof offExec === "function") disposers.push(offExec)
-      // 只清回合边界：同回合跨 Step 的已确认放行持续有效（连续派发所需），step 边界不清空。
       const offSessionEvent = ctx.on("session/event", (session, event) => {
+        memberGuard.observeSession(session, event)
+        // 保留 sleep 原有的整回合确认语义，不以 Step 清空。
         if (event?.type === "turn/start" || event?.type === "turn/end") sleepConfirm.clearTurn(session?.id)
       })
       if (typeof offSessionEvent === "function") disposers.push(offSessionEvent)
-    }
-  } catch (error) { ctx.logger?.warn?.("team-work-dsh: sleep 确认引导钩子未启用：" + String(error?.message ?? error)) }
+    } else ctx.logger?.warn?.("team-work-dsh: 宿主无执行钩子，软引导未启用；成员汇报规则仍有效。")
+  } catch (error) { ctx.logger?.warn?.("team-work-dsh: 软引导钩子未完整启用：" + String(error?.message ?? error)) }
   try {
     const systemPrompt = optional("systemPrompt")
     if (typeof systemPrompt?.section === "function") disposers.push(systemPrompt.section(systemPromptSection(ctx, config)))

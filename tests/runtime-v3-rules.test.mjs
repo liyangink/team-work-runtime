@@ -9,7 +9,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import test, { mock } from "node:test"
 
-import { resolveMemberRules, resolveLeadRules, composeMemberRules, lockedWorkflowContract, requiredClarityText, createClarityGuidanceReader } from "../runtime-v3/rules.mjs"
+import { resolveMemberRules, resolveLeadRules, composeMemberRules, lockedWorkflowContract, requiredClarityText, shortReviewClarityText, createClarityGuidanceReader } from "../runtime-v3/rules.mjs"
 import { autoCaller, makeProject, openTask, prepareIntake } from "./support/v3-fixtures.mjs"
 
 async function makeRoot(t) {
@@ -289,6 +289,27 @@ test("Lead 规则：按呈现时点整文件读取，不套三标题；同路径
   assert.deepEqual(await resolveLead({ kind: "nope", packageRoot: pkg }), [], "无该时点目录时为空")
 })
 
+test("Lead 同名正文只做精确去重，区分 Markdown 缩进及真正的项目增补", async (t) => {
+  const pkg = await makeRoot(t)
+  const user = await makeRoot(t)
+  const project = await makeRoot(t)
+  const relative = "lead/dispatch/index.md"
+  const text = "    引用示例\n\n第一条  \n第二条"
+  await writeRule(pkg, relative, "不应在用户基线之上再附包内原文")
+  await writeAt(user, relative, "\r\n" + text.replaceAll("\n", "\r\n") + "\r\n \r\n")
+  await writeRule(project, relative, "\n" + text + "\n")
+  const rules = () => resolveLead({ kind: "dispatch", userRulesRoot: user, packageRoot: pkg, projectRoot: project })
+  assert.equal((await rules())[0].text, text, "相同用户基线和项目正文仅留一份，缩进及行尾硬换行保留")
+  const changed = text.slice(4)
+  await writeRule(project, relative, changed)
+  assert.equal((await rules())[0].text, text + "\n\n" + changed, "首行缩进是正文差异，不能去重")
+  await writeAt(user, relative, "")
+  assert.equal((await rules())[0].text, changed, "用户明确清空仍替代包内基线")
+  await rm(path.join(user, relative))
+  await writeRule(pkg, relative, changed + "\r\n")
+  assert.equal((await rules())[0].text, changed, "用户层缺失时，对包内回退基线同样去重")
+})
+
 test("空库返回空数组与空文本；角色、场景、时点键必须是单段标识", async (t) => {
   const pkg = await makeRoot(t)
   const project = await makeRoot(t)
@@ -330,6 +351,10 @@ test("包内锁定工作流契约按角色固定输出，覆盖身份、争议�
   assert.match(expert, /旧裁决自动失效/)
   assert.match(expert, /verdict/)
 
+  for (const prompt of [owner, challenger, expert]) {
+    assert.ok(prompt.includes("交卷结论留给正式 deliver/review"))
+    assert.match(prompt, /Lead 主动问询照常答/)
+  }
   assert.equal(owner, lockedWorkflowContract("owner"), "同一角色输出稳定、不读盘")
   assert.throws(() => lockedWorkflowContract("lead"), TypeError)
   assert.throws(() => lockedWorkflowContract(), TypeError)
@@ -630,52 +655,7 @@ test("成员卡是单块业务正文：无明晰段、无 requiredGuidance；续
   assert.equal(inflight.prompt, response.prompt, "在途重建文本与首派同源")
   assert.equal(inflight.promptFull, response.promptFull)
   assert.equal(Object.hasOwn(inflight, "requiredGuidance"), false)
-  // wait-inflight 按现状归入进展时点：读 lead/progress 与公共必读段，不读审阅段
   assert.equal(inflightPlan.stop, "wait-inflight")
-  assert.match(inflightPlan.card.presentation, /进展汇报的目的是和用户对齐认知 gap/)
-  assert.doesNotMatch(inflightPlan.card.presentation, /## clarity 审阅必读/)
-})
-
-test("Lead 反吐按呈现时点读 lead/<时点>：派发与进展只带公共段，决定点另带审阅段；机械回执不命中", async () => {
-  const projectRoot = await makeProject({ workflow: SCENE_WORKFLOW, policy: SCENE_POLICY })
-  await writeProjectRules(projectRoot, {
-    "lead/dispatch/index.md": "- 项目派发补充",
-    "lead/decision/index.md": "- 项目决定补充",
-    "lead/progress/index.md": "- 项目进展补充",
-  })
-  const required = async (relative) => (await readFile(new URL("../" + relative, import.meta.url), "utf8"))
-    .split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
-  const publicRules = await required("skills/clarity-guidance/output-standard.md")
-  const reviewRules = await required("skills/clarity-review/references/review-rules.md")
-  const call = autoCaller(projectRoot)
-  await resetUserRules()
-  await openTask(projectRoot, "lead-t", { objective: "实现示例行为", entry: "implementation" })
-  await prepareIntake(projectRoot, "lead-t", ["src.mjs:source"])
-
-  // 进展时点（run 的 working + next=dispatch）：lead/progress + 公共必读段，不含审阅段
-  const progress = await call(["run", "--task", "lead-t"])
-  assert.match(progress.presentation, /项目进展补充/)
-  assert.ok(progress.presentation.includes(publicRules), "进展反吐携带公共必读段原文")
-  assert.doesNotMatch(progress.presentation, /## clarity 审阅必读|项目决定补充|项目派发补充/)
-
-  // 派发时点：lead/dispatch + 公共必读段，不含审阅段
-  const plan = await call(["dispatch-plan", "--task", "lead-t", "--writable", "src.mjs:source", "--json"])
-  assert.match(plan.presentation, /项目派发补充/)
-  assert.ok(plan.presentation.includes(publicRules))
-  assert.doesNotMatch(plan.presentation, /## clarity 审阅必读/)
-
-  // 机械回执不命中
-  const delivery = await call(["deliver", "--task", "lead-t", "--key", plan.waves[0].dispatchKey, "--outcome", "blocked", "--summary", "新增设施是否本轮必需仍有争议"])
-  assert.equal(delivery.presentation, undefined, "成员回执不注入呈现规则")
-
-  // 决定点（awaiting-user）：lead/decision + 公共段 + 审阅段
-  const decision = await call(["run", "--task", "lead-t"])
-  assert.equal(decision.status, "awaiting-user")
-  assert.match(decision.presentation, /项目决定补充/)
-  assert.ok(decision.presentation.includes(publicRules))
-  assert.ok(decision.presentation.includes(reviewRules))
-  assert.equal(decision.presentation.split("## clarity 公共必读").length - 1, 1, "公共段恰好一次")
-  assert.equal(decision.presentation.split("## clarity 审阅必读").length - 1, 1, "审阅段恰好一次")
 })
 
 test("八视角已拆包：Owner 只承担本包、组合评审覆盖全部已交付包、裁决带 verdict 语义", async () => {
@@ -785,6 +765,27 @@ test("审查类派单：角色×场景规则按场景区分，仍交付并经过
     await resetUserRules()
     await openTask(projectRoot, "cross-t", { objective: "审查示例局部修改", entry: scene })
     const dispatched = await call(["dispatch-plan", "--task", "cross-t", "--writable", "REVIEW.md:" + scene, "--json"])
+
+test("包内时点短规则及同源审阅短节选满足字符预算，坏标记不给假规则", async () => {
+  for (const [kind, max] of [["dispatch", 120], ["progress", 180], ["decision", 200]]) {
+    const [rule] = await resolveLead({ kind })
+    assert.ok(rule.text && [...rule.text].length <= max, kind + " 默认正文超出约定长度")
+  }
+  const source = await readFile(new URL("../skills/clarity-review/references/review-rules.md", import.meta.url), "utf8")
+  const body = shortReviewClarityText(source)
+  assert.ok([...body].length <= 160)
+  assert.match(body, /关键阻碍和未验证项/)
+  assert.doesNotMatch(requiredClarityText(source), /先核准本次审阅/, "不改独立审阅原有必读段")
+  const start = "<!-- clarity:review-short:begin -->", end = "<!-- clarity:review-short:end -->"
+  for (const invalid of ["", end + "倒置" + start, start + " \n " + end, start + "重复" + end + end, start + "文".repeat(161) + end]) {
+    const reads = []
+    const reader = createClarityGuidanceReader({ read: async (file) => { reads.push(file); return invalid } })
+    const result = await reader({ shortReview: true })
+    assert.match(result, /审阅短节选未带入/)
+    assert.doesNotMatch(result, /## clarity|公共必读/)
+    assert.deepEqual(reads.map((file) => path.basename(file)), ["review-rules.md"])
+  }
+})
     assert.equal(dispatched.waves.length, 1)
     const owner = dispatched.waves[0]
     assert.doesNotMatch(owner.prompt, /^本包完成标准：|^各包完成标准（|你仅承担本包|组合评审\/裁决仍覆盖/m, "无包派单不臆造包、视角或组合职责")

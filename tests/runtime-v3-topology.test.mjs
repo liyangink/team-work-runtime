@@ -1,6 +1,6 @@
 // v3.2 拓扑波组集成测试：tw plan 验收/重拆窗口/多包全链路/波组导出/inflight 重建
 import assert from "node:assert/strict"
-import { writeFile, readFile } from "node:fs/promises"
+import { writeFile, readFile, mkdir, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test from "node:test"
@@ -824,6 +824,39 @@ test("写边界声明：owner 派单内嵌越界后果（deliver 拒绝 + 快照
   const d = await call(["dispatch-plan", "--task", "wb-t", "--writable", "R.md:code-review"])
   assert.match(d.waves[0].prompt, /可写范围外的修改会被 deliver 拒绝/, "边界声明在场")
   assert.match(d.waves[0].prompt, /快照恢复/, "恢复通道提示在场")
+})
+
+test("后续 Owner 派单只接受已授权路径和类型，不接受别名", async () => {
+  for (const mode of ["subset", "prefix", "kind", "alias", "parent"]) {
+    const root = await makeProject()
+    const call = caller(root)
+    const name = "scope-include-" + mode
+    await openTask(root, name)
+    await mkdir(path.join(root, "docs"))
+    await mkdir(path.join(root, "other"))
+    const plan = (writable) => call(["dispatch-plan", "--task", name, ...(writable ? ["--writable", writable] : []), "--json"])
+    const original = mode === "parent" ? "docs/R.md:code-review" : "docs/:code-review"
+    const { card } = await plan(original)
+    assert.equal((await call(["decide", "--task", name, "--decision-id", card.decisionId, "--choice", "1"])).ok, true)
+    const owner = (await plan(original)).waves[0]
+    await writeFile(path.join(root, "docs/R.md"), "范围内初稿", "utf8")
+    await call(["deliver", "--task", name, "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "初稿", "--paths", "docs/R.md"])
+    const review = (await plan()).waves[0]
+    await call(["review", "--task", name, "--key", review.dispatchKey, "--recommendation", "rework", "--summary", "继续修订", "--findings", JSON.stringify([{ severity: "risk", statement: "需修订", disposition: "must-fix", scope: { kind: "all-covered" } }])])
+    if (mode === "alias") await symlink("../other", path.join(root, "docs/alias"), "dir")
+    const writable = { subset: "docs/R.md:code-review", prefix: "docs-other/R.md:code-review", kind: "docs/R.md:source", alias: "docs/alias/R.md:code-review", parent: "docs/:code-review" }[mode]
+    const next = await plan(writable)
+    if (mode === "alias") {
+      assert.equal(next.code, "USAGE")
+      assert.match(next.message, /符号链接/)
+    } else if (mode === "subset") {
+      assert.equal(next.stop, null)
+      assert.deepEqual(next.waves[0].writable, [{ path: "docs/R.md", artifactKind: "code-review" }])
+    } else {
+      assert.deepEqual(next.waves, [])
+      assert.equal(next.card.kind, "intent")
+    }
+  }
 })
 
 test("单 owner 任务无 packages：行为与 v3.1 一致（--writable 派单）", async () => {

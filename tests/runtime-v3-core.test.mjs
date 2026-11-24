@@ -70,7 +70,7 @@ test("I6/三轮收敛：rework 循环与轮次耗尽升级用户", () => {
   const verdictAt = (round, id, at) => ({ reportId: id, role: "expert", kind: "review", round, stage: "code-review", payload: { summary: "s", recommendation: "accept", verdict: { outcome: "rework", rationale: "r", confidence: "high", risks: [], recommendedAction: "a" } }, at })
   const r3 = [...r2, ownerDeliver(3), challengerReview(3, "rework"), verdictAt(3, "e3", "2026-01-01T00:00:31Z")]
   const exhausted = nextWave({ scenePolicy: codeReviewScene, reports: r3 })
-  assert.equal(exhausted.kind, "converge-user")
+  assert.equal(exhausted.kind, "round-limit")
   assert.match(exhausted.reason, /自主轮次上限/)
 })
 
@@ -104,7 +104,7 @@ test("波组：按包计轮（F2）——单包轮耗尽只出该包，不牵连
   const r2 = [...r1, pkgDeliver("store", 2), pkgReview(2, "rework", ["store"], snap(["store"], 2))]
   const r3 = [...r2, pkgDeliver("store", 3), pkgReview(3, "rework", ["store"], snap(["store"], 3))]
   const exhausted = nextWave({ scenePolicy: codeReviewScene, reports: r3, packages: PACKAGES })
-  assert.equal(exhausted.kind, "converge-user")
+  assert.equal(exhausted.kind, "round-limit")
   assert.match(exhausted.reason, /store/, "理由点名耗尽的包")
 })
 

@@ -56,10 +56,10 @@ DSH 会话内直接调用原生 `tw` 工具（`args` 是 CLI 参数字符串数�
 ```bash
 tw open --name <名字> --objective "<目标一句话>" [--entry <stage>]
         [--raw-requirement "<原文>"] [--constraint ...] [--exclusion ...] [--scope-note ...] [--acceptance ...] [--gap '<JSON>']
-                                                                    # 开任务并准备意图；首次推进才签发唯一完整确认卡，重名会拒绝
+                                                                    # 开任务并准备意图；首次推进先核对意图，必要时签完整确认卡，重名会拒绝
 tw roles --task <名字> [--set owner=<provider>/<model>[@<effort>]] [--clear owner] [--resolve]
                                                                     # 查看/显式修改例外角色模型；默认由策略确定
-tw dispatch-plan --task <名字> [--writable <路径>:<kind> ...]        # 推进一步：输出波次派单或 stop 卡；首次推进签发唯一完整确认卡；路径以 / 结尾 = 目录授权（如 docs/:doc）
+tw dispatch-plan --task <名字> [--writable <路径>:<kind> ...]        # 推进一步：输出波次派单或 stop 卡；先核对意图，必要时签固定卡；路径以 / 结尾 = 目录授权（如 docs/:doc）
 tw run --task <名字>                                                  # 只读查状态：当前状态卡 + 下一步指引（不写任务事实）
 tw decide --task <名字> --choice <序号> [--decision-id <卡片ID>] [--note ...]
                                                                     # 按 decisionId 任意审批有效卡片；多张待决卡时缺 ID 会被拒绝并列出全部卡 ID/用途，
@@ -85,12 +85,15 @@ tw archive --task <名字>                                              # 用户
 - **续聊与深度**：使用支持续聊的原生后端，返回的 `subagentId` 可用于 `send_message`；参数以当前工具 schema 为准，不补造模式字段，旧版非会话回执不作续聊身份。宿主默认深度 1，正式成员要再开只读助手须用户允许至少两层；不得自行提高上限，助手不得继续委托。
 - `tw run` 只读：不确定当前状态时用它查（状态卡 + 下一步指引），不产生任何写入；`tw gate` 只读查门禁。
 - `awaiting-user` 卡片出现时任务静止：向用户呈现选项并等待；不要轮询、不要代答。同时有多张待决卡时返回 `pendingDecisions` 全列表（每张含 decisionId、用途、绑定前提与暂时阻碍，多卡时带 `needsDecisionId:true`）：呈现完整列表、按用户实际答复的卡调 `tw decide --decision-id`，不默认队首、不跨卡消费；`staleDecisions` 里的失效卡只能按其原 ID 安全取消或等重签，不能执行旧批准。
-- **首卡与答复**：新任务的 `open/plan/roles/intent` 在首卡签发前只返回内部准备回执，不向用户出确认卡；首次 `tw-dispatch`（无插件终端为 `dispatch-plan`）在任务锁内签发唯一完整意图卡，向用户完整呈现原始需求、目标/约束/排除、范围与产出、三角色模型、完整分包计划（每包 id/model/writable/done/dependsOn）或未拆包时单 Owner 的首派可写范围与验收。答复按当前对话中实际展示的卡片及其上下文确定用户所指，将该卡 `decisionId` 原样传给 `tw decide --decision-id`，不能用最新待决卡的 ID 替换；迟到旧卡 ID 返回 `DECISION_STALE`，重新呈现最新卡后再确认。确认前不派发。首卡确认后，因意图、角色模型或包字段局部调整重签时，新卡只首屏突出相对最近一次已确认快照的增量变更（新增/删除/修改的字段与条目，并标明基准卡 `baseDecisionId`），未变更项折叠引用完整卡；结构化 `intake.diff` 给出 `baseDecisionId`/`baseFingerprint`/`changes`/`unchangedFolded`/`unchangedCount`，`intakeFingerprint`（SHA-256）与 `--decision-id` 仍绑定完整快照，增量只是呈现、不放宽确认。卡类型按结构化返回识别（`decisionId` 且 choices 含 `accept-intake`；`intake.diff` 在场为增量重签卡、`diffBaselineUnavailable` 在场为基线缺失回退的完整卡），不能只看 `question` 标题。答复关联有两种合法收口：只展示过唯一一张完整卡 A、用户仅回复确认且语境无歧义时，直接按 A 的展示记录取 `decisionId` 调用 `tw decide`，不追问用户复述；多张卡均已展示而无法确定答复所指、或对话记录不完整时，先请用户澄清并暂停决定与派发，不猜。
+- **意图分流与答复**：新任务的 `open/plan/roles/intent` 在首卡签发前只返回内部准备回执。开局和变更用同一判据：用户明确指定且与实际目标、范围、模型和分工吻合、没有信息差时，用 `--user-direction` 报告本次原话与精确覆盖的字段及条目，核对后直接登记；不能把自行补全、纠偏或备注说成用户授权。缺件先修复，已有会话换模型冲突走专用卡。首次**需要确认**时，在任务锁内签发唯一完整意图卡，载有完整分包计划（每包 id/model/writable/done/dependsOn）或未拆包时单 Owner 的首派可写范围与验收。
+- **卡面契约**：卡类型按结构化返回识别，不能只看 `question` 标题；原样呈现已签正文及选项，不手工重写。首卡确认后，因意图、角色模型或包字段局部调整重签时，新卡只首屏突出相对最近一次已确认快照的增量变更，未变更项折叠引用完整卡；若中间已有直接授权修订，以包含已登记补充的有效快照为准，不重问已覆盖项。结构化 `intake.diff` 给出 `baseDecisionId`、`baseFingerprint`、`changes`、`unchangedFolded` 与 `unchangedCount`；`intakeFingerprint`（SHA-256）与 `--decision-id` 仍绑定完整快照，增量只是呈现、不放宽确认。没有可核验的完整基准时回退完整卡。
+- **答复关联**：按实际展示的卡片及其上下文确定用户所指，将该卡 `decisionId` 原样传给 `tw decide --decision-id`，不能用最新待决卡的 ID 替换。迟到旧卡 ID 返回 `DECISION_STALE`，重新呈现有效卡后再确认。只展示过唯一一张完整卡 A、用户仅回复确认且语境无歧义时，直接按 A 的展示记录取 `decisionId` 调用 `tw decide`，不追问用户复述；多张卡均已展示而无法确定答复所指、或对话记录不完整时，先请用户澄清并暂停决定与派发，不猜。
 - 成员通知到达后先核报告；无未决授权争议再推进，有争议先向用户正常最终消息说明方向与风险。普通等待不是 Runtime 已落卡；新用户方向不消费原卡，也不等于轮数/角色模型调整/阶段批准/部署。原作者按当前制品和合法 key 重核，Lead 不代改报告。
-- **Lead 规则与表达**：开工先调 `tw help` 读取返回的 `leadGeneralRules`（即 Lead 通用 README，运行时按 用户公共 `~/.team-work/rules/` → 包内出厂默认 → 项目 `team-work/rules/` 三层合并解析，不从技能目录猜包根相对路径，也不依赖 cwd）；具体时点以派发/决定/进展返回卡 `presentation` 反吐的 `lead/<时点>/` 规则为准，其他时点再按 `leadGeneralRulesSources` 的来源线索主动读取。工具在决定点、派发与在途、进展三个时点把对应规则与根包同源明晰必读段反吐到返回卡（决定点加审阅段）；成员卡不再有独立的明晰段，交卷摘要与表达要求由规则库条目承载。明晰段仍从根包 clarity 技能文件提取、无静态副本：公共规范见[明晰表达](../clarity-guidance/output-standard.md)，人工决定/阻塞的专项见[明晰审阅](../clarity-review/references/review-rules.md)。不要求主动调用 clarity 技能；深看按工具给出的准确路径，不读取独立账本。
+- **Lead 规则与表达**：开工先调 `tw help` 读取 `leadGeneralRules`；其他时点按 `leadGeneralRulesSources` 指路。新派发和实际进展只带对应短规则，方案批准、最终验收与技术取舍另带同源审阅短节选；意图卡原样转呈，机械卡不用审阅规则。独立的[公共表达](../clarity-guidance/output-standard.md)与[明晰审阅](../clarity-review/references/review-rules.md)规范保留，不要求重复调用技能。
 
 ## 成员纪律（派单已内嵌，这里是你核对成员行为的基准）
 
+- 开工、过程进度和交卷摘要留给正式报告或最终结束语；同 key 已登记就正常结束，不预告、不另发摘要。Lead 主动问询照常答；确需立即纠偏、叫停或处理阻塞，可说明影响和请求。若收到发送前软提示，确需发送可在后续 Step 再发一次。
 - 成员只做派单内工作；可写路径外的修改会被 deliver 检查拒绝、已污染产出物可经快照恢复回滚（派单内已声明，不要尝试绕过）。可写条目写目录（尾斜杠）即授权其下全部路径——派单前预估产出文件位置，目录授权比逐文件列举更稳。
 - **范围或授权未决**：Owner deliver blocked（paths 留空），报告基线、证据和待确认方向，保留有效制品；Challenger/Expert 按场景详则走评审升级。blocked 以只读 `blockedPackages` 证据展示（包名、blocked 报告 key/version 与摘要），本身不是 decision 卡；用户给出某包明确方向后，由 Lead 准备按包恢复卡（`tw plan --resolve-blocked`），用户按卡确认后仅解除所选包，多包不保证立即全任务暂停；Lead 收到争议先停推进。非空路径不证明授权，不能自行扩权；重派保留原 blocked 原因，细则见场景指导。
 - Owner 交卷：`tw deliver --task <名字> --key <派单key> --outcome delivered --summary "<一句话>" --paths <路径1> --paths <路径2> [--checks '<JSON>'] [--unresolved '<JSON>']`——`--paths` 是本包当前阶段的**完整交付清单**，不是本次改动增量：要保留的旧文件必须全部重新列入，未列入即移出本包有效制品（磁盘文件保留待审计，评审/门禁按新清单实时核对字节 SHA-256）。多路径必须**每条重复一次 `--paths`**（如 `--paths docs/a.md --paths docs/b.md`）或用**一个逗号分隔参数**（`--paths docs/a.md,docs/b.md`）；单个 `--paths` 后用空格列多个路径只会收集第一个、其余被静默忽略，会让完整清单漏登——交卷后核对回执 `registered`/`manifest` 列出的路径数与预期一致、复查 `removed` 是否有意外移出，发现遗漏用原 key 重交完整清单。派单正文会列出上一条有效报告的完整路径清单供对照，交付回执同时给出相对上一份的新增/移出。`blocked` 交付 paths 必须为空且不覆盖此前有效清单。

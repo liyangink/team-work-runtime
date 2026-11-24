@@ -656,6 +656,85 @@ test("F5：僵局检测——delivered 但制品指纹未变 → 仲裁卡含未
   assert.equal(done.stop, "completed")
 })
 
+test("展示轮继续累加：两次有效人工返工不耗自主额度，耗尽后一次答卡只放行下一轮", async () => {
+  const root = await makeProject({ policy: { ...FIX_POLICY, maxAutonomousRounds: 1 } })
+  const name = "human-round-budget"
+  const call = autoCaller(root)
+  await openTask(root, name)
+  const advance = () => call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", "--json"])
+  const decide = (card, choice) => call(["decide", "--task", name, "--decision-id", card.decisionId, "--choice", String(choice)])
+  // 首轮的交付和双评审均正式登记；即使时间戳相同，提交顺序仍能证明技术裁决更新。
+  const initialOwner = (await advance()).waves[0]
+  assert.equal((await deliverContent(call, root, name, initialOwner.dispatchKey, "R.md", "初版报告")).accepted, true)
+  const initialReview = (await advance()).waves[0]
+  assert.equal((await reviewAccept(call, name, initialReview.dispatchKey)).accepted, true)
+  const initialExpert = (await advance()).waves[0]
+  assert.equal((await reviewAccept(call, name, initialExpert.dispatchKey, VERDICT)).accepted, true)
+  assert.equal((await call(["route", "--task", name, "--route", "e2e", "--decision", "skip", "--basis", "测试报告无需端到端验证"])).ok, true)
+  for (const round of [2, 3]) {
+    const { card: gate } = await advance()
+    assert.equal(gate.kind, "human-gate", "返工须由本轮实际人工门授权")
+    assert.equal((await decide(gate, 2)).ok, true)
+    const owner = (await advance()).waves[0]
+    assert.equal(owner.round, round)
+    assert.equal((await deliverContent(call, root, name, owner.dispatchKey, "R.md", "人工修改 " + round)).accepted, true)
+    const review = (await advance()).waves[0]
+    if (round === 2) {
+      await reviewAccept(call, name, review.dispatchKey)
+      const expert = (await advance()).waves[0]
+      await reviewAccept(call, name, expert.dispatchKey, VERDICT)
+    } else {
+      const findings = JSON.stringify([{ severity: "risk", statement: "继续修订", disposition: "must-fix", scope: { kind: "all-covered" } }])
+      assert.equal((await call(["review", "--task", name, "--key", review.dispatchKey, "--recommendation", "rework", "--summary", "继续修订", "--findings", findings])).accepted, true)
+    }
+  }
+  const limit = (await advance()).card
+  assert.equal(limit.kind, "round-limit")
+  assert.deepEqual(limit.roundLimit.exhausted.map(({ round, used, limit }) => [round, used, limit]), [[3, 1, 1]])
+  assert.equal((await decide(limit, 1)).ok, true)
+  assert.equal((await decide(limit, 1)).replay, true)
+  const next = (await advance()).waves[0]
+  assert.equal(next.kind, "respond")
+  assert.equal(next.round, 4)
+})
+
+test("历史用量高于旧上限：同包授权并发只提交一次，换包合同不继承", async () => {
+  const root = await makeProject({ policy: { ...FIX_POLICY, maxAutonomousRounds: 4 } })
+  const call = autoCaller(root)
+  const name = "package-round-contract"
+  await openTask(root, name)
+  const plain = JSON.parse(PKGS2)
+  const plan = (items) => call(["plan", "--task", name, "--packages", JSON.stringify(items)])
+  const advance = () => call(["dispatch-plan", "--task", name, "--json"])
+  assert.equal((await plan(plain)).ok, true)
+  let owner = await advance()
+  for (const round of [1, 2, 3]) {
+    for (const wave of owner.waves) await deliverContent(call, root, name, wave.dispatchKey, wave.package === "store" ? "S.md" : "I.md", "第 " + round + " 轮")
+    const review = (await advance()).waves[0]
+    await call(["review", "--task", name, "--key", review.dispatchKey, "--recommendation", "rework", "--summary", "继续修订",
+      "--findings", JSON.stringify([{ severity: "risk", statement: "只修材料", disposition: "must-fix", scope: { kind: "packages", ids: ["store"] } }])])
+    if (round < 3) owner = await advance()
+  }
+  await writeFile(path.join(root, "team-work/policies/default.json"), JSON.stringify({ ...FIX_POLICY, maxAutonomousRounds: 1 }))
+  const first = (await advance()).card
+  assert.equal(first.kind, "round-limit")
+  assert.deepEqual(first.roundLimit.exhausted.map((r) => [r.package, r.round, r.used, r.limit]), [["store", 3, 3, 1]])
+  const approve = (card) => call(["decide", "--task", name, "--decision-id", card.decisionId, "--choice", "1"])
+  assert.equal((await Promise.all([approve(first), approve(first)])).filter((x) => x.ok && !x.replay).length, 1)
+  // 改未耗尽的包，不撤已批准包的额度；保持不实际派发以测后续替换。
+  const otherChanged = plain.map((p) => p.id === "intake" ? { ...p, done: ["更新无关完成条件"] } : p)
+  assert.equal((await plan(otherChanged)).ok, true)
+  let state = deriveTask(await loadTask(root, name, { workflow: FIX_WORKFLOW, policy: { ...FIX_POLICY, maxAutonomousRounds: 1 } }))
+  assert.equal(state.wave.kind, "respond")
+  assert.equal(state.wave.owners[0].round, 4)
+  for (const items of [otherChanged.map((p) => p.id === "store" ? { ...p, done: ["替换同名合同"] } : p), otherChanged]) assert.equal((await plan(items)).ok, true)
+  const second = (await advance()).card
+  assert.equal(second.kind, "round-limit")
+  assert.notEqual(second.roundLimit.exhausted[0].instance.planStartSeq, first.roundLimit.exhausted[0].instance.planStartSeq, "A→B→A 不能复活旧额度")
+  assert.equal((await approve(second)).ok, true)
+  assert.deepEqual((await advance()).waves.map((w) => [w.package, w.round]), [["store", 4]])
+})
+
 test("F5：第二次 rework 不能被第一次绑定波报告消费", async () => {
   const root = await makeProject()
   const { call } = await seedConvergedStage(root, "r2-t")

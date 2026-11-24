@@ -5,7 +5,10 @@ import { mkdir } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
-import { spawn } from "node:child_process"
+import childProcess, { spawn } from "node:child_process"
+import { EventEmitter, once } from "node:events"
+import { syncBuiltinESMExports } from "node:module"
+import { Readable } from "node:stream"
 import z from "@deepseek-ai/schemastery"
 
 import {
@@ -29,6 +32,7 @@ import {
 } from "../dsh/sleep-confirm.js"
 import { Config, readDshConfigSnapshot, decisionTableText, systemPromptSection } from "../dsh/settings.js"
 import { twToolDefinition } from "../dsh/tw-tool.js"
+import { createMemberMessageGuard } from "../dsh/member-message-guard.js"
 import { coldSessionReceived } from "../dsh/subagent-session.js"
 import * as hostPlugin from "../dsh/index.js"
 
@@ -116,6 +120,36 @@ test("真实 tw 子进程收到宿主调用快照，不读取旧配置", async (
   assert.equal(result.tiers.find((tier) => tier.tier === "junior").model, "model-junior")
 })
 
+for (const [name, execute] of [
+  ["tw", () => twToolDefinition().execute({ args: ["run", "--task", "demo-t"] }, EXEC)],
+  ["tw-dispatch", () => twDispatchDefinition({}).execute({ task: "demo-t" }, EXEC)],
+]) {
+  for (const stream of ["stdout", "stderr"]) {
+    test(`${name}：${stream} 跨分块时完整保留中文回执`, async (t) => {
+      const card = { ok: true, task: "demo-t", stop: "completed", message: "中文回执" }
+      const bytes = Buffer.from(JSON.stringify(card), "utf8")
+      // 在「中」的首字节后断开，逐块交给管道读取方，不依赖真实管道何时合并写入。
+      const split = bytes.indexOf("中") + 1
+      const chunks = [bytes.subarray(0, split), bytes.subarray(split)]
+      const spawnMock = t.mock.method(childProcess, "spawn", () => {
+        const child = Object.assign(new EventEmitter(), {
+          stdout: Readable.from(stream === "stdout" ? chunks : []),
+          stderr: Readable.from(stream === "stderr" ? chunks : []),
+        })
+        void Promise.all([once(child.stdout, "end"), once(child.stderr, "end")]).then(() => child.emit("close", 0))
+        return child
+      })
+      syncBuiltinESMExports()
+      try {
+        assert.deepEqual(await execute(), card)
+      } finally {
+        spawnMock.mock.restore()
+        syncBuiltinESMExports()
+      }
+    })
+  }
+}
+
 test("registered 在途冷重试已含同轮正文，仅续行提示", async () => {
   const item = { ...ownerWave(), registered: true, mappedAgentId: "prior-example" }
   const { runTw } = makeRunTw({ ok: true, task: "demo-t", stage: "implementation", stop: "wait-inflight", inflight: [item] })
@@ -124,6 +158,7 @@ test("registered 在途冷重试已含同轮正文，仅续行提示", async () 
   const result = await twDispatchDefinition(h.ctx, { runTw }).execute({ task: "demo-t" }, EXEC)
   assert.equal(result.inflight[0].resume, "reminder")
   assert.match(h.followups[0].text, /已收到本轮派单正文/)
+  assert.match(h.followups[0].text, /登记则正常结束，不预告、不另发交卷摘要/)
 })
 
 test("预登记新 key 但本轮正文未送达时，旧上下文不能误选轻提示", async () => {
@@ -417,9 +452,17 @@ test("规则字段变化不改变业务正文收单与冷提醒；live 与 await
   assert.equal(h.followups.length, 1)
 })
 
-test("真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 render 只保留 Lead 呈现", async (t) => {
+test("真实 CLI 接缝：成员只收单块冻结正文，Lead 只渲染一次派发短规则", async (t) => {
   const project = await mkdtemp(path.join(os.tmpdir(), "twr-clarity-dispatch-"))
   t.after(() => rm(project, { recursive: true, force: true }))
+  // CLI 子进程使用包内默认规则，不读取执行者的用户公共覆盖。
+  const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME"
+  const oldHome = process.env[homeKey]
+  process.env[homeKey] = project
+  t.after(() => {
+    if (oldHome === undefined) delete process.env[homeKey]
+    else process.env[homeKey] = oldHome
+  })
   const snapshot = { entryId: "team-work-dsh", profile: "profile-example", tiers: {
     junior: { provider: "provider-example", model: "model-basic" },
     senior: { provider: "provider-example", model: "model-standard" },
@@ -444,23 +487,25 @@ test("真实 CLI 接缝：派单卡以单块业务正文直达成员，最终 re
     return text.split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
   }
   const publicRules = await required("../skills/clarity-guidance/output-standard.md")
-  assert.match(publicRules, /实质争议.*暂停依赖/, "真实 CLI 派单到创建消息的通用暂停提醒，仅证明送达")
   const reviewRules = await required("../skills/clarity-review/references/review-rules.md")
   const message = h.started[0].request.prompt
   assert.equal(message.length, 1, "成员消息是单块业务正文，不再追加规则块")
   assert.equal(message[0].type, "text")
   assert.match(message[0].text, /^# 派单（key: /)
   assert.match(message[0].text, /任务：clarity-seam；阶段：code-review/)
-  assert.equal(message[0].text.includes(publicRules), false, "明晰段只随 Lead 反吐出现")
-  assert.equal(message[0].text.includes(reviewRules), false)
+  assert.equal(message[0].text.includes(publicRules), false, "成员正文不注入明晰公共段")
+  assert.equal(message[0].text.includes(reviewRules), false, "成员正文不注入明晰审阅段")
+  const dispatchRules = (await readFile(new URL("../team-work/rules/lead/dispatch/index.md", import.meta.url), "utf8")).trim()
   const rendered = tool.output.render({}, result)[0].text
-  const leadText = JSON.parse(rendered).presentation
-  assert.equal(typeof leadText, "string")
-  assert.equal(leadText.split(publicRules).length - 1, 1)
-  assert.equal(leadText.includes(reviewRules), false)
-  assert.equal("waves" in JSON.parse(rendered), false)
-  assert.equal(rendered.includes(JSON.stringify(message[0].text)), false)
-  t.diagnostic("真实子进程 → 插件核心 → start 参数：成员单块业务正文 " + message[0].text.length + " 字符；Lead 仅自身呈现，无主动 skill 调用或真实 LLM。")
+  const card = JSON.parse(rendered)
+  const jsonText = (text) => JSON.stringify(text).slice(1, -1)
+  assert.equal(card.presentation, dispatchRules, "Lead 只透传包内派发短规则")
+  assert.equal(rendered.split(jsonText(dispatchRules)).length - 1, 1, "短规则在最终渲染中只出现一次")
+  assert.equal(rendered.includes(jsonText(publicRules)), false, "派发结果不带明晰公共段")
+  assert.equal(rendered.includes(jsonText(reviewRules)), false, "派发结果不带明晰审阅段")
+  assert.equal("waves" in card, false)
+  assert.equal(rendered.includes(jsonText(message[0].text)), false, "成员冻结正文不在 Lead 渲染中复述")
+  t.diagnostic("真实 CLI 子进程到成员创建参数：单块业务正文 " + message[0].text.length + " 字符；Lead 只渲染派发短规则，未调用技能或真实模型。")
 })
 
 test("buildDispatchLabel：多包带 @包、显式 note、阶段缩写按固定表", () => {
@@ -1179,8 +1224,9 @@ test("兜底·分支 2 同款 prompt 防御：registered=true 时 prompt 缺失 
 
 test("分工文案同源：普通委派走原生工具，正式成员走 tw-dispatch", () => {
   const table = decisionTableText()
-  assert.match(table, /正式任务.*tw-dispatch/)
-  assert.match(table, /仅由 Lead 执行/, "正式组团由 Lead 承担")
+  assert.match(table, /正式波次由 Lead 用 tw-dispatch/, "正式组团由 Lead 承担")
+  assert.match(table, /Lead 问询、纠偏和叫停不受影响/)
+  assert.match(table, /不主动播报或另发交卷摘要/)
   assert.match(table, /成员内部只读助手：原生 subagent/)
   assert.match(table, /限定小问题.*不得继续委托/, "成员仍可开有范围的辅助，不能递归招募")
   assert.match(table, /list_subagent_models.*精确查询/)
@@ -1208,7 +1254,7 @@ test("工具定义形态：名称/并发安全/参数面只收语义（key、mod
   assert.equal(def.name, "tw-dispatch")
   assert.equal(typeof def.timeoutMs, "number")
   assert.equal(def.isConcurrencySafe(), false, "§7.3.3 并发保守：同任务连点排队串行，防补派双发")
-  assert.deepEqual(Object.keys(def.parameters.properties), ["task", "note", "writables"])
+  assert.deepEqual(Object.keys(def.parameters.properties), ["task", "note", "userDirection", "writables"])
   assert.deepEqual(def.parameters.required, ["task"])
 })
 
@@ -1707,7 +1753,7 @@ test("TW_DISPATCH_OUTPUT_SCHEMA 与健康在途判定纯函数符合契约", () 
 test("工具描述与输出字段：按 modelRef 创建、意图确认卡与换模型卡说明在位，不回退 modelHint", async () => {
   const description = twDispatchToolDescription()
   assert.match(description, /modelRef/, "按派单 modelRef 创建")
-  assert.match(description, /意图确认卡/, "说明新任务首步意图确认卡")
+  assert.match(description, /无信息差.*直接推进.*原样呈现已签正文/, "说明可直接授权和有卡时的固定正文")
   assert.match(description, /换模型确认卡|已有会话换模型/, "说明已有会话换模型确认")
   assert.doesNotMatch(description, /按派单 modelHint/)
   const tool = twDispatchDefinition({}, { runTw: async () => ({ ok: true, stop: "completed", card: {}, waves: [] }) })
@@ -1740,6 +1786,181 @@ test("原生 tw 与 tw-dispatch：完整首卡停止且不创建成员，按展�
   const next = await dispatch.execute({ task: "native-intake" }, context)
   assert.equal(next.dispatched?.length, 1, JSON.stringify(next))
   assert.equal(h.started.length, 1)
+})
+
+function memberProbe(guard, { root = EXEC_ROOT, key = "d1-example", task = "demo-t", role = "owner", child = "member-example", lead = "lead-example" } = {}) {
+  const wave = ownerWave({ dispatchKey: key, role })
+  const header = { id: child, parentSession: lead, cwd: root }
+  const session = { id: child, header }
+  const member = { id: child, session, phase: { kind: "running", turn: 1, step: 1 } }
+  const binding = { cwd: root, task, key, sessionId: child, leadId: lead, role, promptDigest: wave.promptDigest }
+  const admission = { type: "user/message", data: { content: [{ type: "text", text: wave.prompt }] } }
+  const notices = []
+  const deliveries = []
+  const exec = { name: "send_message", agent: member, arguments: { agent: "父会话路由", message: "例行进展" }, deferContext: (msg) => notices.push(msg) }
+  const fire = (overrides = {}) => guard.aroundExecute({ ...exec, ...overrides }, () => {
+    deliveries.push(overrides.arguments ?? exec.arguments)
+    return { isError: false, value: { messageId: "原生回执" } }
+  })
+  return { exec, member, session, binding, admission, fire, notices, deliveries }
+}
+
+test("发送前软引导只拦当前已进入上下文的正式成员，同 Step 并发只提示一次且较晚 Step 只放行一条", async () => {
+  let checked = 0
+  const guard = createMemberMessageGuard({ resolveRecipient: (_exec, name) => name === "父会话路由" ? "lead-example" : "other-example", reportStatus: async () => { checked++; return "unreported" } })
+  const m = memberProbe(guard)
+  assert.equal((await m.fire()).isError, false, "无正式派发映射直通")
+  guard.trackDispatch(m.binding)
+  guard.observeSession(m.session, { type: "agent/inbox/spliced", data: { inserted: [m.admission.data] } })
+  assert.equal((await m.fire()).isError, false, "排入 inbox 不把下一 key 强套给还在运行的旧轮")
+  const fake = structuredClone(m.admission)
+  fake.data.content[0].text += "\n不一致的正文"
+  guard.observeSession(m.session, fake)
+  assert.equal((await m.fire()).isError, false, "不能只认正文里的 key")
+  guard.observeSession(m.session, m.admission)
+  assert.equal((await m.fire({ arguments: { agent: "其他收件人", message: "协调" } })).isError, false)
+  assert.equal((await m.fire({ deferContext: undefined })).isError, false, "宿主能力未知直通")
+  assert.equal((await m.fire({ agent: { ...m.member, phase: null } })).isError, false, "Step 未知直通")
+  assert.equal(checked, 0)
+  const before = m.deliveries.length
+  const first = await Promise.all([m.fire(), m.fire(), m.fire()])
+  assert.ok(first.every((item) => item.isError && !item.value && /未发送|还没发/.test(item.content[0].text)))
+  assert.equal(m.deliveries.length, before)
+  assert.equal(m.notices.length, 1)
+  assert.match(m.notices[0].content[0].text, /答 Lead 的问询.*后续 Step/)
+  m.member.phase.step = 2
+  const retry = await Promise.all([m.fire({ arguments: { agent: "父会话路由", message: "需立即处理阻塞" } }), m.fire(), m.fire()])
+  assert.equal(retry.filter((item) => !item.isError).length, 1)
+  assert.equal(m.deliveries.length, before + 1)
+  assert.equal(m.notices.length, 1)
+  m.member.phase.step = 3
+  assert.equal((await m.fire()).isError, true, "后续新发送不继承全 turn 白名单")
+  assert.equal(m.notices.length, 2)
+  guard.observeSession(m.session, { type: "turn/end" })
+  m.member.phase = { kind: "running", turn: 2, step: 1 }
+  assert.equal((await m.fire()).isError, true, "新 turn 的第一次仍提示")
+  assert.equal(m.notices.length, 3)
+  guard.dispose()
+  assert.equal((await m.fire()).isError, false, "释放后不残留引导")
+})
+
+test("原生 tw 只缓存正式同 key 的成功登记；失败、旧 key 与异任务不放行", async () => {
+  for (const [role, command, payload] of [["owner", "deliver", ["--outcome", "blocked"]], ["challenger", "review", ["--recommendation", "escalate"]], ["expert", "review", ["--recommendation", "escalate"]]]) {
+    const guard = createMemberMessageGuard({ resolveRecipient: () => "lead-example", reportStatus: () => "unreported" })
+    const m = memberProbe(guard, { role })
+    guard.trackDispatch(m.binding, true)
+    let card = { accepted: false, reportId: command + "-" + m.binding.key }
+    const tw = twToolDefinition({ memberGuard: guard, runTw: async () => card })
+    const report = (task, key) => tw.execute({ args: [command, "--task", task, "--key", key, ...payload] }, m.exec)
+    await report(m.binding.task, m.binding.key)
+    assert.equal((await m.fire()).isError, true)
+    card = { accepted: true, idempotent: true, reportId: command + "-d0-old" }
+    await report(m.binding.task, "d0-old")
+    assert.equal((await m.fire()).isError, true)
+    card = { accepted: true, idempotent: true, reportId: command + "-" + m.binding.key }
+    await report("another-task", m.binding.key)
+    assert.equal((await m.fire()).isError, true)
+    assert.equal(await report(m.binding.task, m.binding.key), card)
+    assert.equal((await m.fire()).value.messageId, "原生回执", "报告登记后同 Step 也直接放行")
+  }
+})
+
+test("异常不阻塞原生 send_message，也不重试或改写原生失败", async () => {
+  const alreadyFailed = Object.assign(new Error("原生发送失败"), { code: "ORIGINAL_FAILURE" })
+  for (const mode of ["路由", "报告", "提醒"]) {
+    const logs = []
+    const guard = createMemberMessageGuard({
+      resolveRecipient: () => { if (mode === "路由") throw new Error(mode); return "lead-example" },
+      reportStatus: () => { if (mode === "报告") throw new Error(mode); return "unreported" },
+      log: (line) => logs.push(line),
+    })
+    const m = memberProbe(guard)
+    guard.trackDispatch(m.binding, true)
+    let called = 0
+    await assert.rejects(() => guard.aroundExecute({ ...m.exec, deferContext() { throw new Error(mode) } }, () => { called++; throw alreadyFailed }), (error) => error === alreadyFailed)
+    assert.equal(called, 1, mode)
+    assert.equal(logs.length, 1, mode)
+  }
+})
+
+test("插件装配：只在成员实际收单后提示，冷恢复重建当前身份，CLI 已登记不因回执丢失而拦截", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tw-member-report-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const h = makeCtx()
+  const tiers = Object.fromEntries(["junior", "senior", "expert"].map((tier) => [tier, { provider: "example", model: tier }]))
+  const definitions = new Map()
+  const handlers = new Map()
+  h.ctx.tools = { register(def) { definitions.set(def.name, def); return () => definitions.delete(def.name) } }
+  h.ctx.on = (event, fn) => { handlers.set(event, fn); return () => handlers.delete(event) }
+  h.ctx.subagents.resolveName = (_agent, address) => address === "父会话路由" ? "lead-example" : address
+  const mount = () => hostPlugin.apply(h.ctx, { tiers }, { registerEmbeddedSkill: async () => {} })
+  const firstMount = await mount()
+  t.after(firstMount)
+  const lead = { id: "lead-example", session: { header: { cwd: root } } }
+  const call = (args) => definitions.get("tw").execute({ args }, { agent: lead })
+  const dispatch = (params) => definitions.get("tw-dispatch").execute(params, { agent: lead })
+  const task = "member-report"
+  await call(["open", "--name", task, "--objective", "验证真实报告回执兜底", "--entry", "implementation", "--raw-requirement", "示例需求"])
+  const params = { task, writables: [{ path: "sample.mjs", kind: "source" }] }
+  const intent = await dispatch(params)
+  assert.equal(intent.stop, "awaiting-user")
+  assert.equal((await call(["decide", "--task", task, "--choice", "1", "--decision-id", intent.card.decisionId])).ok, true)
+  const plan = await dispatch(params)
+  const item = plan.dispatched[0]
+  assert.equal(item.ok, true)
+  const session = h.ctx.sessions.get(item.sessionId)
+  session.header.cwd = root
+  const member = { id: item.sessionId, session, phase: { kind: "running", turn: 1, step: 1 } }
+  const contexts = []
+  let sent = 0
+  const fire = (agent = member, target = "父会话路由") => handlers.get("tools/execute")({
+    name: "send_message", agent, arguments: { agent: target, message: "示例消息" }, deferContext: (note) => contexts.push(note),
+  }, () => { sent++; return { isError: false, value: { messageId: "原生回执" } } })
+  assert.equal((await fire(lead, member.id)).isError, false, "Lead 主动协调直通")
+  assert.equal((await fire()).isError, false, "只登记/排队而未进入上下文时直通")
+  const adopted = { type: "user/message", data: { content: h.started[0].request.prompt } }
+  handlers.get("session/event")(session, adopted)
+  assert.equal((await fire()).isError, true)
+  assert.equal(sent, 2)
+  assert.equal(contexts.length, 1)
+
+  // 保留已接纳的派单日志，移走活会话并释放插件，冷读不能依赖原进程内的提示状态。
+  session.events.push(adopted)
+  await h.ctx.sessions.flush(session)
+  await h.ctx.subagents.drainContinuableChildren(lead, [item.sessionId])
+  firstMount()
+  t.after(await mount())
+  const cold = await dispatch({ task })
+  assert.equal(cold.inflight[0].resume, "reminder")
+  assert.match(h.followups[0].text, /登记则正常结束，不预告、不另发交卷摘要/)
+  member.session = h.ctx.sessions.get(item.sessionId)
+  member.phase = { kind: "running", turn: 2, step: 1 }
+  assert.equal((await fire()).isError, true, "冷读恢复已接纳的 key，首次重新给软提示")
+  assert.equal(contexts.length, 2)
+
+  const args = ["deliver", "--task", task, "--key", item.key, "--outcome", "blocked", "--summary", "存在待决范围争议"]
+  const standalone = twToolDefinition({ configSnapshot: () => ({ tiers, entryId: "team-work-dsh", profile: "fixture" }) })
+  assert.equal((await standalone.execute({ args }, { agent: member })).accepted, true)
+  assert.equal((await standalone.execute({ args }, { agent: member })).idempotent, true)
+  const journal = path.join(root, ".team-work/tasks", task, "journal.jsonl")
+  const before = await readFile(journal, "utf8")
+  assert.equal((await fire()).value.messageId, "原生回执", "未收到原生回执也能核实 CLI 已提交的 blocked")
+  assert.equal(await readFile(journal, "utf8"), before, "守卫不写任务事实")
+})
+
+
+
+test("tw-dispatch 只透传调用方精确方向与冻结意图卡，不渲染第二份正文", async () => {
+  const direction = { quote: "只写这一项", fields: { writable: ["sample.mjs:source"] } }
+  const card = { ok: true, stop: "awaiting-user", waves: [], card: { decisionId: "dec-example", question: "# 冻结正文\n\n不重新拼装。" } }
+  const def = twDispatchDefinition({}, { runTw: async (args) => {
+    assert.equal(args[args.indexOf("--user-direction") + 1], JSON.stringify(direction))
+    assert.equal(args[args.indexOf("--writable") + 1], "sample.mjs:source")
+    return card
+  } })
+  const actual = await def.execute({ task: "demo-t", userDirection: direction, writables: [{ path: "sample.mjs", kind: "source" }] }, EXEC)
+  assert.deepEqual(actual, card)
+  assert.equal(actual.presentation, undefined)
 })
 
 // —— 宿主直接对账专项（收编自 dsh-binding 包验证矩阵：Ghost Wave、并发屏障、崩溃窗口、收单核验）——

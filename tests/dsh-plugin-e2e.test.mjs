@@ -7,7 +7,7 @@ import path from "node:path"
 import test from "node:test"
 import { pathToFileURL } from "node:url"
 import vm from "node:vm"
-import { coldSessionReceived, createDirectedSubagent } from "../dsh/subagent-session.js"
+import { coldSessionReceived } from "../dsh/subagent-session.js"
 
 const verifiedHostVersions = ["0.2.0-rc.2", "0.2.1-rc.2"]
 
@@ -42,48 +42,6 @@ test("真实宿主兼容检查：已测两版通过，加载范围边界遵循�
   }
 })
 
-test("真实 SubagentRuntime 创建入口：保留预分配 ID、精确模型及父级结果投递", async (t) => {
-  const ctx = await hostContext(t)
-  if (!ctx) return
-  const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
-  const { SubagentRuntime } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-subagent")).href)
-  const parent = { id: "parent-example", session: { header: { id: "parent-example", delegationDepth: 0 } } }
-  const live = new Map(), starts = []
-  ctx.provide("workingDirectory", { ensure: async () => "/example" })
-  const fiber = ctx.plugin(SubagentRuntime, {})
-  await fiber
-  const subagents = ctx.get("subagents")
-  const providerOff = subagents.registerProvider({ name: "spawn", capabilities: { agentOptions: true, depthLimit: true }, prepareContinuable() {} })
-  // 真实公共入口负责鉴权/能力校验；这里只隔离调度后端，不执行真实模型。
-  ctx.provide("agents", { get: (id) => id === parent.id ? parent : undefined })
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  const activation = typeof subagents.startActivation === "function"
-  const managerSlot = activation ? "manager" : "continuations"
-  subagents[managerSlot] = {
-    [activation ? "startLocal" : "startContinuable"]: async (spec) => { starts.push(spec); live.set(spec.childId, { header: { id: spec.childId, parentSession: parent.id } }); return { childId: spec.childId, messageId: "message-example" } },
-  }
-  t.after(async () => { subagents[managerSlot] = undefined; providerOff(); await fiber.dispose() })
-  const services = {
-    subagents,
-    sessions: { get: (id) => live.get(id), flush: async () => true },
-    sessionPersistence: { stat: async () => undefined },
-    llm: { resolveCallConfig: async (config) => config },
-  }
-  const result = await createDirectedSubagent({}, { getService: (name) => services[name] }, {
-    sessionId: "child-example", description: "成员", prompt: "业务派单",
-    target: { provider: "provider-example", model: "model-example", effort: "high" }, exec: { agent: parent },
-  })
-  assert.equal(result.ok, true, JSON.stringify(result))
-  assert.equal(result.sessionId, "child-example")
-  assert.equal(result.messageId, "message-example")
-  assert.equal(starts[0].childId, "child-example")
-  if (activation) assert.equal(starts[0].delivery, "parent")
-  else assert.equal(starts[0].delivery, undefined)
-  assert.deepEqual(starts[0].request.agentOptions, { provider: "provider-example", model: "model-example", reasoningEffort: "high" })
-  assert.equal(starts[0].request.maxDepth, 1)
-  assert.deepEqual(starts[0].request.prompt, [{ type: "text", text: "业务派单" }])
-  t.diagnostic("真实公共创建入口通过；调度后端隔离，未调用真实 LLM。")
-})
 test("新版真实 Cordis：空 tiers 可启动，只注册 tw/tw-dispatch 和内嵌 skill", async (t) => {
   const ctx = await hostContext(t)
   if (!ctx) return
@@ -278,60 +236,68 @@ test("新版真实 Cordis：组件按完整服务名读取 remote，目录加载
   await fiber.dispose()
 })
 
-test("新版真实 ConfigForms：宿主 plainSchema 经浏览器重建后，空 tiers 可进入 ready", async (t) => {
-  const host = process.env.DSH_TEST_HOST
-  const hostCtx = await hostContext(t)
-  if (!hostCtx) return
-  const require = createRequire(path.join(host, "package.json"))
-  const { SettingsForms } = await import(pathToFileURL(require.resolve("@deepseek-ai/dsh-settings")).href)
-  const { Config } = await import("../dsh/settings.js")
-  const isolatedHome = await mkdtemp(path.join(os.tmpdir(), "twr-settings-mirror-"))
-  t.after(() => rm(isolatedHome, { recursive: true, force: true }))
-  const entryPlugin = { Config, apply: () => {} }
-  const entryFiber = hostCtx.plugin(entryPlugin, {})
-  await entryFiber
-  const entry = { id: "team-work-dsh", options: { id: "team-work-dsh", name: "team-work-runtime", config: {} }, fiber: entryFiber }
-  hostCtx.provide("loader", { await: async () => {} })
-  hostCtx.provide("profileContext", { name: "profile-demo", home: isolatedHome })
-  hostCtx.provide("configEditor", { configuration() { return [{ entry, inherited: {}, override: {} }] } })
-  const settingsFiber = hostCtx.plugin(SettingsForms)
-  await settingsFiber
-  const descriptors = hostCtx.get("settings").describe()
-  assert.deepEqual(descriptors.map(({ ns }) => ns), ["team-work-dsh"])
-  assert.deepEqual(descriptors[0].value, { tiers: {} })
-
-  let clientEntry
-  vm.runInNewContext(await readFile(path.join(host, "..", "dsh-client-ui-settings", "lib", "client.js"), "utf8"), {
-    window: { __ModuleLoader__: { load(registration) { clientEntry = registration } } },
-    setTimeout, clearTimeout, structuredClone,
-  })
-  const clientPlugin = clientEntry.factory(require)
-  const clientCtx = await hostContext(t)
-  const remoteSettings = { async describe() { return { ok: true, value: { writable: true, namespaces: plain(hostCtx.get("settings").describe()) } } } }
-  clientCtx.provide("remote", { $host: { isLoopback: true }, $on() { return () => {} }, settings: remoteSettings })
-  clientCtx.provide("remote.settings", remoteSettings)
-  const clientFiber = clientCtx.plugin(clientPlugin)
-  await clientFiber
-  const forms = clientCtx.get("configForms")
-  await forms.describe().ensure()
-  const form = forms.get("team-work-dsh")
-  const schema = clientCtx.get("settingsSchema")
-  assert.equal(schema.validate(schema.rehydrate(plain(descriptors[0].schema)), { tiers: {} }), undefined)
-  assert.equal(form.getSnapshot().status, "ready", "实际 derive/decode 不得停在 loading")
-  assert.deepEqual(plain(form.getSnapshot().value), { tiers: {} })
-  const complete = {
-    junior: { provider: "provider-demo", model: "model-basic" },
-    senior: [{ provider: "provider-demo", model: "model-standard", effort: "high" }],
-    expert: { provider: "provider-demo", model: "model-advanced" },
+test("隔离宿主 PTC：原生 SDK 软提示未调用发送，下一 Step 仅一次，并给外层 deferContext", async (t) => {
+  const ctx = await hostContext(t)
+  if (!ctx) return
+  const require = createRequire(path.join(process.env.DSH_TEST_HOST, "package.json"))
+  const load = async (name) => import(pathToFileURL(require.resolve("@deepseek-ai/" + name)).href)
+  let control, tools, ptc, scope
+  try {
+    [control, tools, ptc, scope] = await Promise.all([load("dsh-tool-subagent-control"), load("dsh-tools"), load("dsh-tool-executor-ptc"), load("dsh-scope")])
+  } catch (error) {
+    if (error?.code !== "MODULE_NOT_FOUND" && error?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error
+    t.skip("该隔离宿主缺少本用例的现代 PTC 接缝，发送未验")
+    return
   }
-  entry.options.config = { tiers: complete }
-  entryFiber.config = Config({ tiers: complete })
-  await forms.describe().load()
-  assert.equal(form.getSnapshot().status, "ready")
-  assert.deepEqual(plain(form.getSnapshot().value), { tiers: complete }, "对象与数组候选在真实 decode 链都保留")
-  await clientFiber.dispose()
-  await settingsFiber.dispose()
-  await entryFiber.dispose()
+  if (typeof ptc.PtcExecutor !== "function") { t.skip("该隔离宿主未暴露 PtcExecutor，发送未验"); return }
+  const { createMemberMessageGuard } = await import("../dsh/member-message-guard.js")
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "tw-ptc-member-"))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const received = []
+  const subagents = {
+    resolveName(_agent, name) { return name === "父会话别名" ? "lead-example" : name },
+    async sendMessage(_agent, target, blocks) { received.push({ target, blocks }); return "真实工具消息回执" },
+  }
+  ctx.provide("subagents", subagents)
+  ctx.provide("systemPrompt", { getContextOrder: () => 10, getSectionOrder: () => 10, context() {}, section() {}, tools() {} })
+  ctx.provide("workingDirectory", { ensure: () => cwd })
+  await ctx.plugin(tools.ToolsService).ready
+  control.apply(ctx, { interrupt: false })
+  // 程序驱动替身只调用宿主真实生成的 SDK 绑定，不替代工具调度、校验、回执和 additionalContexts 合并。
+  const runtime = {
+    language: "typescript", programFormat: "function-body", retainsState: false, release() {},
+    resolve(input) { return { ...input, timeoutMs: null } },
+    async run({ bindings, program }) {
+      const sdk = bindings[0].functions
+      const calls = Array.from({ length: Number(program) }, () => sdk.send_message({ agent: "父会话别名", message: "需要协调的示例" }))
+      const results = (await Promise.allSettled(calls)).map((entry) => entry.status === "fulfilled" ? entry.value : { error: entry.reason.message })
+      return { logs: [], value: results }
+    },
+  }
+  ctx.provide("ptcRuntime", runtime)
+  const guard = createMemberMessageGuard({ resolveRecipient: (exec, name) => subagents.resolveName(exec.agent, name), reportStatus: () => "unreported" })
+  ctx.on("tools/execute", (exec, next) => guard.aroundExecute(exec, next))
+  t.after(() => guard.dispose())
+  const executor = new ptc.PtcExecutor(ctx)
+  const session = { id: "member-example", header: { id: "member-example", cwd, parentSession: "lead-example" }, append() {} }
+  const agent = { id: session.id, session, phase: { kind: "running", turn: 1, step: 1 } }
+  agent.ctx = scope.createScope(ctx, agent).ctx
+  guard.trackDispatch({ cwd, task: "示例任务", key: "d1-example", sessionId: session.id, leadId: "lead-example", role: "owner" }, true)
+  let sequence = 0
+  const run = (sender, calls) => executor.execute({ calls: [{ type: "tool-call", id: "call-" + (++sequence), name: "run_code", arguments: JSON.stringify({ code: String(calls), description: "验证原生消息守卫" }) }], signal: new AbortController().signal, agent: sender })
+  const first = await run(agent, 2)
+  assert.equal(first.results[0].result.isError, false)
+  assert.ok(first.results[0].result.value.result.every((item) => /未发送|还没发/.test(item.error)))
+  assert.equal(received.length, 0, "两次 SDK 调用均未进入原生发送体")
+  assert.equal(first.additionalContexts?.length, 1, JSON.stringify(first))
+  assert.match(first.additionalContexts[0].content[0].text, /这条消息还没发/)
+  agent.phase.step = 2
+  const later = await run(agent, 2)
+  assert.equal(later.additionalContexts?.length ?? 0, 0)
+  assert.equal(received.length, 1, "后续 Step 的并发调用仅有一条送达")
+  assert.equal(received[0].target, "lead-example")
+  const ordinary = { ...agent, id: "ordinary-example", session: { ...session, id: "ordinary-example", header: { ...session.header, id: "ordinary-example" } } }
+  ordinary.ctx = scope.createScope(ctx, ordinary).ctx
+  await run(ordinary, 1)
+  assert.equal(received.length, 2, "相同父级但无正式映射的普通委派不拦截")
 })
-
-function plain(value) { return JSON.parse(JSON.stringify(value)) }

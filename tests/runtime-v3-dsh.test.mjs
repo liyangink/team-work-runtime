@@ -345,23 +345,45 @@ test("dispatch-plan：人工门 stop + 决定后推进到 completed", async () =
   assert.equal(done.stop, "completed")
 })
 
-test("dispatch-plan：门过即跨阶段推进并派发下一阶段首波", async () => {
+test("dispatch-plan：入口阶段过门且下一阶段范围获批后派发首波", async () => {
   const workflow = { terminalStages: ["code-review"], gates: [], stages: [
     { id: "research", label: "调研", outputs: [], teamScene: "research" },
     { id: "code-review", label: "审查", outputs: ["code-review"], teamScene: "code-review" },
   ], edges: [{ from: "research", to: "code-review", outcome: "pass" }] }
   const policy = { maxAutonomousRounds: 3, scenes: { research: { core: false }, "code-review": { core: false } } }
   const root = await makeProject({ workflow, policy })
-  const call = autoCaller(root)
   await openTask(root, "adv-t", { entry: null })
-  const task = await loadTask(root, "adv-t", { workflow, policy })
-  const at = new Date().toISOString()
-  await writeFile(path.join(task.root, "reports", "o.json"), JSON.stringify({ reportId: "o1", dispatchKey: "seed", role: "owner", kind: "deliver", round: 1, stage: "research", taskSha: "s", payload: { outcome: "delivered", summary: "s", paths: [] }, at }))
-  await writeFile(path.join(task.root, "reports", "c.json"), JSON.stringify({ reportId: "c1", dispatchKey: "seed", role: "challenger", kind: "review", round: 1, stage: "research", taskSha: "s", payload: { summary: "s", recommendation: "accept" }, at }))
-  const plan = await call(["dispatch-plan", "--task", "adv-t", "--writable", "R.md:code-review", "--json"])
-  assert.equal(plan.stop, null)
+
+  // 调研无需制品，按入口阶段的空可写范围正常派发、交付和评审。
+  const dispatch = ["dispatch-plan", "--task", "adv-t", "--json"]
+  const entry = await autoCaller(root)([...dispatch, "--writable", "none"])
+  assert.equal(entry.stage, "research", JSON.stringify(entry))
+  assert.equal(entry.waves[0]?.role, "owner", JSON.stringify(entry))
+  const call = caller(root)
+  const delivery = await call(["deliver", "--task", "adv-t", "--key", entry.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "调研已完成。"])
+  assert.equal(delivery.accepted, true, JSON.stringify(delivery))
+  const review = await call(dispatch)
+  assert.equal(review.waves[0]?.role, "challenger", JSON.stringify(review))
+  const reviewed = await call(["review", "--task", "adv-t", "--key", review.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "调研通过评审。"])
+  assert.equal(reviewed.accepted, true, JSON.stringify(reviewed))
+
+  // 下一阶段不能继承入口阶段的可写授权，按实际签发的意图卡确认。
+  const next = [...dispatch, "--writable", "R.md:code-review"]
+  const pending = await call(next)
+  assert.equal(pending.stage, "code-review", JSON.stringify(pending))
+  assert.equal(pending.stop, "awaiting-user", JSON.stringify(pending))
+  assert.deepEqual(pending.waves, [])
+  const { decisionId, choices } = pending.card
+  const accept = choices.find((choice) => choice.grant === "accept-intake")
+  assert.ok(decisionId && accept, "下一阶段应签发可确认的范围卡")
+  const approved = await call(["decide", "--task", "adv-t", "--choice", String(accept.n), "--decision-id", decisionId])
+  assert.equal(approved.ok, true, JSON.stringify(approved))
+
+  const plan = await call(next)
+  assert.equal(plan.stop, null, JSON.stringify(plan))
   assert.equal(plan.stage, "code-review")
   assert.equal(plan.waves[0].modelRef.modelName, "model-junior")
+  assert.deepEqual(plan.waves[0].writable, [{ path: "R.md", artifactKind: "code-review" }])
 })
 
 test("models 只读调用快照来源；init 只安装 skill，不创建项目 dsh.json", async () => {

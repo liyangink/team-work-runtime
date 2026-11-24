@@ -48,9 +48,14 @@ export async function coldSessionReceived(persistence, childId, signal, expected
     const expected = expectedPrompts.filter((text) => typeof text === "string" && text.trim())
     let received = false
     let currentReceived = false
+    let currentAdmitted = false
     let conflict = false
     for (const event of read.events.slice(inherited)) {
       if (typeof event?.type !== "string") throw new Error("会话事件无法判定")
+      // user/message 是派单已进入模型上下文的证据；仅排入 inbox 还不能切换成员当前 key。
+      if (event.type === "user/message" && dispatchKey !== null && Array.isArray(event.data?.content)) {
+        currentAdmitted ||= event.data.content.some((block) => block?.type === "text" && expected.includes(block.text) && dispatchKeyFromPrompt(block.text) === dispatchKey)
+      }
       if (event.type !== "agent/inbox/spliced") continue
       if (!Array.isArray(event.data?.inserted)) throw new Error("收单日志 inserted 无法判定")
       for (const message of event.data.inserted) {
@@ -67,7 +72,7 @@ export async function coldSessionReceived(persistence, childId, signal, expected
         }
       }
     }
-    result = { ok: true, received, currentReceived, ...(conflict ? { conflict: true } : {}) }
+    result = { ok: true, received, currentReceived, ...(currentAdmitted ? { currentAdmitted: true } : {}), ...(conflict ? { conflict: true } : {}) }
   } catch (error) {
     result = failure("TW_SUB_SESSION_UNKNOWN", "收单日志读取不确定：" + describe(error) + "；保留原 ID 并核对宿主，未补投正文", childId)
   } finally {
@@ -92,7 +97,7 @@ export async function sessionReceived({ sessions, persistence, signal }, childId
 
 // 冷续派保留历史行为：已收正文只发轻提醒，否则按是否有旧上下文选增量或全量。
 export function coldResumePrompt(read, prompt, promptFull = prompt) {
-  if (read.currentReceived) return { resume: "reminder", text: "会话日志确认你已收到本轮派单正文。请继续按已有派单完成工作，并通过 tw deliver/review 交付；如果已经交付，请汇报现有结果，不要重复执行整轮工作。" }
+  if (read.currentReceived) return { resume: "reminder", text: "会话日志确认你已收到本轮派单正文。同一 key 已通过 tw deliver/review 登记则正常结束，不预告、不另发交卷摘要，也不重复工作；未登记则按原派单继续，完成后用对应工具登记。" }
   return read.received ? { resume: "incremental", text: prompt } : { resume: "full", text: promptFull }
 }
 

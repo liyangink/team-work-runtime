@@ -20,7 +20,7 @@
 
 ### 1. 安装
 
-`1.1.5` 允许 DSH `>=0.2.0-rc.2 <0.3.0-0` 加载，即从 `0.2.0-rc.2` 起的 0.2 系列，不包括 0.3 预发布版。包含极简角色与包级模型实例（`ModelRef`）固化、任务初期意图与模型人工确认门（`intake-approval`）、已有会话换模型拦截与 `session-reset` 重置、Lead 汇报对齐认知 gap 规则，以及 DSH `0.2.2-rc.2` `startActivation` 顶层参数兼容。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
+`1.1.6` 允许 DSH `>=0.2.0-rc.2 <0.3.0-0` 加载，即从 `0.2.0-rc.2` 起的 0.2 系列，不包括 0.3 预发布版。包含成员未交卷前 `send_message` 一次软引导与冷恢复防噪、人工返工轮次抵扣与 `round-limit` 单次推进、基于认知 gap 的 `--user-direction` 免卡授权与固定意图卡模板、按场景裁剪 `presentation` 及同名 Lead 规则去重，以及子进程管道 UTF-8 跨块解码修复。根包 `team-work-runtime` 是唯一市场制品，包含 CLI、Runtime、skill 和 DSH 绑定。
 
 **方式一：DSH 市场**：在市场搜索并安装 `team-work-runtime`；使用新版适配前先确认安装包已包含本次变更。
 

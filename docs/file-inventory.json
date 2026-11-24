@@ -43,6 +43,7 @@
     "dsh/",
     "dsh/client/badge.js",
     "dsh/index.js",
+    "dsh/member-message-guard.js",
     "dsh/settings.js",
     "dsh/skill-embed.js",
     "dsh/sleep-confirm.js",

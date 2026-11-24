@@ -5,7 +5,7 @@ import path from "node:path"
 
 import { atomicWrite, atomicJson, withOwnerLock } from "./persistence/transactions.mjs"
 import { writableMatch } from "./domain/writable.mjs"
-import { deliverBaselines, reportOrderComparator } from "./waves.mjs"
+import { deliverBaselines, reportOrderComparator, isPackagePlanEvent } from "./waves.mjs"
 import { digestValue } from "./domain/digests.mjs"
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -289,12 +289,15 @@ export async function loadTask(projectRoot, name, { workflow, policy, repair = f
   ])
   const journal = parseJournal(journalRaw)
   if (scope?.intakeVersion === 2 && journal[0]?.type !== "task-opened") throw incompleteTask(name)
+  // 意图修订随 journal 原子提交；intent.json 的旧视图可在回执丢失或进程中断后复原。
+  const committedIntent = journal.findLast((event) => event.type === "intent-prepared" && Array.isArray(event.detail?.intent?.revisions))?.detail.intent
+  const effectiveIntent = committedIntent && committedIntent.revisions.length > (intent?.revisions?.length ?? 0) ? committedIntent : intent
   // B11/§6.3：完整计划是 journal 一次提交的事实（packages-planned/re-planned/block 计划事件带 items），
   // packages.json 是可重建视图——崩溃于"journal 已提交、视图未写"时计划不回退；旧事件（无 items）回退文件。
   let packagesEffective = packages?.items ?? null
   if (!ignorePackages) {
     for (const e of journal) {
-      if ((e.type === "packages-planned" || e.type === "re-planned") && Array.isArray(e.detail?.items)) {
+      if (isPackagePlanEvent(e) && Array.isArray(e.detail?.items)) {
         packagesEffective = e.detail.items
       }
     }
@@ -343,7 +346,7 @@ export async function loadTask(projectRoot, name, { workflow, policy, repair = f
   // decisions.json 是随后同步的视图——两边都有时以文件行为准，避免摘要行覆盖完整行）。
   const decisionFileIds = new Set((decisions?.items ?? []).map((d) => d?.decisionId))
   const mergedDecisions = [...(decisions?.items ?? []), ...journalDecisions.filter((j) => !decisionFileIds.has(j.decisionId))]
-  return { root, name, scope, intent, artifacts: { items, ...(artifactsRebuilt ? { journalSeq: projectionSeq } : artifacts?.journalSeq != null ? { journalSeq: artifacts.journalSeq } : {}) }, reports, decisions: mergedDecisions, journal, packages: packagesEffective, workflow, policy, ...(artifactsRebuilt ? { artifactsRebuilt, ...(artifactsDegraded?.length ? { artifactsDegraded } : {}) } : {}) }
+  return { root, name, scope, intent: effectiveIntent, artifacts: { items, ...(artifactsRebuilt ? { journalSeq: projectionSeq } : artifacts?.journalSeq != null ? { journalSeq: artifacts.journalSeq } : {}) }, reports, decisions: mergedDecisions, journal, packages: packagesEffective, workflow, policy, ...(artifactsRebuilt ? { artifactsRebuilt, ...(artifactsDegraded?.length ? { artifactsDegraded } : {}) } : {}) }
 }
 
 // E（返工终版 §二·E）：损坏 artifacts.json 的重建与正常登记等价——三源拼接：

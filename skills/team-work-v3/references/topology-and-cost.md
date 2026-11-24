@@ -12,7 +12,7 @@
 - **任务角色模型**：`agents.json.roles`。查看 `tw roles --task <n>`；显式改 `tw roles --task <n> --set owner=<provider>/<model>[@<effort>]`；按当前配置重解析 `tw roles --task <n> --resolve`；清除 `--clear owner`。
 - **包级模型**：`packages.json[].model`。`tw plan` 入参可给 `model`，或都不给（复用 `roles.owner`）；落盘前一律解析成 `ModelRef`。
 - **缺定位**：项目 policy 没有 `roles` 兜底段时，owner/challenger 仍可用场景 `ownerTier/challengerTier`，expert 会 unresolved（选模链不再有字面量默认档）；补齐 `roles` 后 `tw roles --resolve`，或直接 `tw roles --set expert=<provider>/<model>`。缺档时确认卡不提供“确认开始”，派发返回 `ROLES_UNRESOLVED` 及修复指引。
-- **确认**：新任务 `open/plan/roles/intent` 在首卡签发前只返回内部准备回执，不向用户出确认卡；首次 `tw-dispatch`（无插件终端为 `dispatch-plan`）在任务锁内签发唯一完整意图卡，完整呈现原始需求、目标/约束/排除、范围与产出、三角色模型、逐包 `id`/`model`/`writable`/`done`/`dependsOn`（未拆包时单 Owner 首派可写范围与验收）及 gap。答复携带实际展示卡的 `decisionId`（`tw decide --decision-id`），迟到旧卡 ID 会被拒绝；改 `intent`/`roles`/包字段会重签。首卡确认后重签的卡只首屏突出相对最近一次已确认快照的增量变更（新增/删除/修改的字段与条目，标明基准卡 `baseDecisionId`），未变更项折叠引用完整卡；结构化 `intake.diff` 给出变更条目与未变更折叠标识，`intakeFingerprint`（SHA-256）与 `--decision-id` 仍绑定完整快照，增量只是呈现、不放宽确认。答复关联：只展示过唯一一张完整卡 A、用户仅回复确认且语境无歧义时，直接按 A 的展示记录取 ID 确认，不追问；多张卡均已展示而无法确定答复所指时，先请用户澄清、暂停决定与派发，不猜。配置热变不会自动改已有任务，要改用 `tw roles --resolve`。
+- **确认**：初次推进与变更按同一判据核对用户原话；无信息差的明确指令按实际覆盖值和条目直接登记。确有信息差且需要在首派前确认时，首次 `tw-dispatch`（无插件终端为 `dispatch-plan`）在任务锁内签发唯一完整意图卡。首卡确认后重签的卡只首屏突出相对最近一次已确认快照的增量变更；有直接登记补充时以包含补充的有效基准为准。结构化 `intake.diff` 给出变更条目与未变更折叠标识；`intakeFingerprint` 仍绑定完整快照。原样呈现正文，答复携带实际展示卡的 `decisionId`。只展示过唯一一张完整卡 A、用户仅回复确认且语境无歧义时，直接按 A 的展示记录取 ID 确认，不追问；多张卡均已展示而无法确定答复所指时，先请用户澄清、暂停决定与派发，不猜。已有会话换模型仍用专用卡。
 - `effort` 语义：只在配置了合法枚举时保存（如 `high`/`max`/`off`）；不配置就不写该字段——禁止空串与 `"none"`（宿主会拒绝）。卡片与 `tw roles` 显示"省略（不设置）"。
 
 ## 角色（与 tw 工具的对应）
@@ -42,4 +42,4 @@
 
 明晰表达只随 Lead 卡片的同源反吐段出现，成员卡不再有独立明晰块，不增加文案角色或审查轮次；独立技能可单独使用，不要求在 TWR 双调用。短段送达成本与模型档位分开核对，规则装载缺失不改变角色模型或人工门，见[规则库](rules.md#lead-通道skill-指路与工具反吐)。
 
-每轮都有挑战者：Owner 产出 → Challenger 可验证问题 → Owner 独立核验修订或反驳；获派 Expert 时作技术裁决。复审先查阻塞关闭及修改回归，已关闭事项无新证据不重开；第三轮聚焦关闭条件与残余风险。新重大问题仍可提出，须说明证据与本轮关系，不能以轮次或成本强行接受缺陷。三轮未收敛，`tw-dispatch` / `tw dispatch-plan` 推进会给出 [追加一轮 / 结束任务] 卡片，由用户决定；追加必须目标明确。
+每轮都有挑战者：Owner 产出 → Challenger 可验证问题 → Owner 独立核验修订或反驳；获派 Expert 时作技术裁决。复审先查阻塞关闭及修改回归，已关闭事项无新证据不重开；第三轮聚焦关闭条件与残余风险。新重大问题仍可提出，须说明证据与本轮关系，不能以轮次或成本强行接受缺陷。展示轮号不变，已有效交付的人工授权返工不占自主额度。待返工包耗尽额度才出 [追加一轮 / 结束任务] 卡片；追加只授权卡上列出的耗尽包各做下一轮，不替代任何范围或制品批准。

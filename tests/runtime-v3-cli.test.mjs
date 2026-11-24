@@ -258,13 +258,13 @@ test("partial 归档：未完成任务由用户终止后归档", async () => {
   assert.equal(exhausted.status, "awaiting-user", "三轮后升级用户")
   assert.ok(exhausted.choices.some((c) => c.label === "结束任务"))
 
-  const ended = await call(["decide", "--task", "quick-scan", "--choice", "2"])
+  const ended = await call(["decide", "--task", "quick-scan", "--choice", "2", "--decision-id", exhausted.decisionId])
   assert.equal(ended.ok, true)
   const archived = await call(["archive", "--task", "quick-scan"])
   assert.equal(archived.form, "partial")
 })
 
-test("汇报呈现注入：用户决定点带纪律与素材，回执不注入，幂等稳定", async () => {
+test("按真实场景选择提示：派发只带派发规则，最终验收只带同源短审阅", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-present-"))
   const call = autoCaller(projectRoot)
   await call(["open", "--name", "present-check", "--objective", "验证呈现注入", "--entry", "code-review"])
@@ -273,9 +273,10 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   const d1 = await call(["dispatch-plan", "--task", "present-check", "--writable", "REPORT.md:code-review"])
   assert.equal(d1.stop, null)
   assert.ok(d1.presentation, "派发计划带呈现简报")
-  assert.match(d1.presentation, /派发简报的目的是和用户对齐认知 gap/, "派发时点反吐 lead/dispatch 规则")
-  assert.ok(d1.human.some((text) => text.includes("派单正文直接投递给成员")), "人读通道携带 lead/dispatch 规则全文")
-  assert.doesNotMatch(d1.presentation, /## clarity 审阅必读/, "派发时点只带公共必读段")
+  const dispatchRules = (await readFile(new URL("../team-work/rules/lead/dispatch/index.md", import.meta.url), "utf8")).trim()
+  assert.equal(d1.presentation, "完整呈现规则见 human[" + d1.human.indexOf(dispatchRules) + "]。")
+  assert.equal(d1.human.filter((text) => text === dispatchRules).length, 1, "终端只在 human 中附一次派发规则")
+  assert.doesNotMatch(d1.human.at(-1), /clarity/)
   assert.doesNotMatch(JSON.stringify(d1.waves), /requiredGuidance/, "成员派单不再投影第二块规则")
   assert.doesNotMatch(d1.waves[0].prompt, /## clarity 公共必读/, "成员卡不含明晰段")
 
@@ -290,10 +291,10 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   await call(["review", "--task", "present-check", "--key", d2.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "结论可靠"])
   const d3 = await call(["dispatch-plan", "--task", "present-check"])
   await call(["review", "--task", "present-check", "--key", d3.waves[0].dispatchKey, "--recommendation", "accept", "--summary", "裁决", "--verdict", '{"outcome":"accept","rationale":"证据链完整","confidence":"high","recommendedAction":"验收"}'])
-  // 路由卡也是用户决定点：同样带完整纪律与阶段工作摘要
+  // 路由是机械选择：保留阶段事实，不读写作规则。
   const routeCard = await call(["run", "--task", "present-check"])
   assert.equal(routeCard.next, "route")
-  assert.match(routeCard.presentation, /当前要决定什么/, "决定点反吐 lead/decision 规则")
+  assert.equal(routeCard.presentation, undefined)
   assert.match(routeCard.progress, /完成八视角审查/)
   await call(["route", "--task", "present-check", "--route", "e2e", "--decision", "skip", "--basis", "审查类任务，无跨系统路径"])
   // 人工门首签归 dispatch 通道；run 只读渲染已签发的待决卡
@@ -302,22 +303,16 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   const gate = await call(["run", "--task", "present-check"])
   assert.equal(gate.status, "awaiting-user")
 
-  // 完整呈现规则（lead/decision）+ 阶段工作摘素材（runtime 推导，不劳 Lead 翻目录）
-  assert.match(gate.presentation, /当前要决定什么/)
-  assert.match(gate.presentation, /推荐和依据/)
-  const required = async (relative) => (await readFile(new URL("../" + relative, import.meta.url), "utf8")).split("<!-- clarity:required:begin -->")[1].split("<!-- clarity:required:end -->")[0]
-  const publicRules = await required("skills/clarity-guidance/output-standard.md")
-  const reviewRules = await required("skills/clarity-review/references/review-rules.md")
-  assert.ok(gate.presentation.includes(publicRules), "公共段原文同源，不沿用旧硬编码副本")
-  assert.ok(gate.presentation.includes(reviewRules), "决定点追加专项段原文")
-  assert.match(publicRules, /完整句|自然语言|朴实中文/)
-  assert.match(publicRules, /批准.*范围|批准什么/)
-  assert.match(publicRules, /修订.*改变.*依据.*原结论/)
-  assert.match(publicRules, /比较.*批准.*核对真实来源.*缺失.*说明/)
-  assert.match(reviewRules, /不能跳过.*人工批准.*指纹重批/)
-  for (const header of ["## clarity 公共必读", "## clarity 审阅必读"]) assert.equal(gate.presentation.split(header).length - 1, 1)
+  assert.match(gate.presentation, /现在要决定什么/)
+  const reviewSource = await readFile(new URL("../skills/clarity-review/references/review-rules.md", import.meta.url), "utf8")
+  const shortReview = reviewSource.split("<!-- clarity:review-short:begin -->")[1].split("<!-- clarity:review-short:end -->")[0].trim()
+  assert.ok([...shortReview].length <= 160)
+  assert.ok(gate.presentation.includes(shortReview), "仅加载同一规范的短审阅段")
+  assert.doesNotMatch(gate.presentation, /公共必读|审阅必读/)
+  assert.equal(gate.presentation.split("## clarity 审阅短节选").length - 1, 1)
   assert.match(gate.progress, /完成八视角审查/)
   assert.match(gate.progress, /REPORT\.md/)
+  assert.match(gate.progress, /证据链完整/)
   assert.match(gate.progress, /证据链完整/)
 
   // 静止期重复 run：注入为静态文本，卡片自足稳定（I7 + 认知对等不随轮数漂移）
@@ -328,17 +323,17 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   // dispatch-plan 的嵌套 stop 卡同样注入（编排通道与 run 通道同纪律，素材同携）
   const plan = await call(["dispatch-plan", "--task", "present-check", "--json"])
   assert.equal(plan.stop, "awaiting-user")
-  assert.match(plan.card.presentation, /当前要决定什么/)
+  assert.match(plan.card.presentation, /现在要决定什么/)
   assert.equal(plan.card.presentation, gate.presentation, "run 与 dispatch 的决定呈现规则一致")
   assert.equal(plan.card.progress, gate.progress)
   for (const flags of [[], ["--json"]]) {
     const { stdout } = await promisify(execFile)(process.execPath, [new URL("../bin/tw.mjs", import.meta.url).pathname, "dispatch-plan", "--task", "present-check", "--project-root", projectRoot, ...flags])
-    for (const header of ["## clarity 公共必读", "## clarity 审阅必读"]) assert.equal(stdout.split(header).length - 1, 1, "真实 stdout 每段恰好一次：" + flags.join(" "))
+    assert.equal(stdout.split("## clarity 审阅短节选").length - 1, 1, "真实 stdout 同源短审阅只出现一次")
     const actual = JSON.parse(stdout)
-    if (flags.length) assert.ok(actual.card.presentation.includes(publicRules))
+    if (flags.length) assert.ok(actual.card.presentation.includes(shortReview))
     else {
       assert.match(actual.card.presentation, /完整呈现规则见 human\[/)
-      assert.ok(actual.human.some((text) => text.includes(publicRules) && text.includes(reviewRules)))
+      assert.ok(actual.human.some((text) => text.includes(shortReview)))
     }
   }
 
@@ -346,20 +341,19 @@ test("汇报呈现注入：用户决定点带纪律与素材，回执不注入�
   await call(["decide", "--task", "present-check", "--choice", "1"])
   const done = await call(["dispatch-plan", "--task", "present-check"])
   assert.equal(done.stop, "completed")
-  assert.match(done.card.presentation, /进展汇报的目的是和用户对齐认知 gap/, "进展时点反吐 lead/progress 规则")
-  assert.ok(done.human.some((text) => text.includes(publicRules)))
-  assert.doesNotMatch(done.card.presentation, /## clarity 审阅必读/)
+  const progressRules = (await readFile(new URL("../team-work/rules/lead/progress/index.md", import.meta.url), "utf8")).trim()
+  assert.ok(done.human.includes(progressRules))
+  assert.match(done.card.presentation, /完整呈现规则见 human\[/)
   const repeated = await call(["run", "--task", "present-check"])
-  assert.ok(repeated.presentation.includes(publicRules), "重复终态查询仍带公共规则")
+  assert.equal(repeated.presentation, undefined, "重复终态查询不加载提示")
   await call(["archive", "--task", "present-check"])
   const archived = await call(["dispatch-plan", "--task", "present-check"])
-  assert.ok(archived.human.some((text) => text.includes(publicRules)), "归档查询仍带规则")
-  assert.match(archived.card.presentation, /完整呈现规则见 human\[/, "早返回终态定位人读规则")
+  assert.equal(archived.card.presentation, undefined, "归档是机械回执")
 })
 
 // ── §7 修订 v2：run 只读矩阵 + dispatch-plan 人读模式 ─────────────────────────
 
-test("run 普通进展：待派发、过门和待收尾均带公共段，整个项目零写入", async () => {
+test("run 普通状态查询不附呈现规范且整个项目零写入", async () => {
   const snapshot = async (root) => {
     const entries = []
     const visit = async (dir) => {
@@ -397,8 +391,7 @@ test("run 普通进展：待派发、过门和待收尾均带公共段，整个�
     assert.equal(card.status, "working", mode)
     assert.equal(card.next, "dispatch", mode)
     assert.match(card.note, mode === "pending" ? /有待派发波次/ : mode === "advance" ? /门禁已通过/ : /完成条件已满足/)
-    assert.equal(card.presentation.split("## clarity 公共必读").length - 1, 1)
-    assert.doesNotMatch(card.presentation, /## clarity 审阅必读/)
+    assert.equal(card.presentation, undefined)
     assert.deepEqual(await snapshot(root), before, "读取规范和呈现不写任务事实或目录：" + mode)
     assert.equal((await call(["models"])).presentation, undefined)
   }
@@ -525,7 +518,7 @@ test("dispatch-plan 人读模式：waves 与全部 stop 卡均带 human 指引�
   await call(["route", "--task", "human-check", "--route", "e2e", "--decision", "skip", "--basis", "无跨系统路径"])
   const gate = await call(["dispatch-plan", "--task", "human-check"])
   assert.equal(gate.stop, "awaiting-user")
-  assert.ok(gate.human.some((l) => /待用户决定/.test(l)))
+  assert.ok(gate.human.some((l) => l.includes(gate.card.question)))
   assert.ok(gate.human.some((l) => /1\. accept/.test(l)))
 
   // stop: completed：human 即 note
@@ -614,6 +607,176 @@ test("旧未决升档卡收口：推进一次自动 decided:superseded 并恢复
   assert.equal(plan2.stop, "wait-inflight")
   const after2 = await fixLoadTask(root, "legacy-esc-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
   assert.equal(after2.journal.filter((event) => event.type === "decided" && event.detail.decisionId === "esc-legacy").length, 1)
+})
+
+test("用户精确指定开局和模型可直接派发，同字段夹带路径必须签意图卡", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  const quote = "核对范围，只交一份报告，使用指定的三角色模型。"
+  for (const [name, injected] of [["direct-start", false], ["mixed-start", true]]) {
+    const opened = await call(["open", "--name", name, "--objective", "核对范围", "--entry", "code-review", "--raw-requirement", quote,
+      "--user-direction", JSON.stringify({ quote, fields: { "intent.objective": "核对范围", "scope.entry": "code-review" } })])
+    assert.equal(opened.ok, true)
+    assert.equal((await call(["roles", "--task", name, "--set", "owner=样例/甲", "--set", "challenger=样例/乙", "--set", "expert=样例/丙",
+      "--user-direction", JSON.stringify({ quote, fields: { "roles.owner": "样例/甲", "roles.challenger": "样例/乙", "roles.expert": "样例/丙" } })])).ok, true)
+    const out = await call(["dispatch-plan", "--task", name, "--writable", "A.md:code-review", ...(injected ? ["--writable", "B.md:code-review"] : []),
+      "--user-direction", JSON.stringify({ quote, fields: { writable: ["A.md:code-review"] } }), "--json"])
+    if (injected) {
+      assert.equal(out.card.kind, "intent", JSON.stringify(out))
+      assert.deepEqual(out.waves, [])
+    } else {
+      assert.equal(out.stop, null, JSON.stringify(out))
+      assert.equal(out.waves[0].modelRef.modelName, "甲")
+      const run = await call(["run", "--task", name])
+      assert.equal(run.transition, "wait-inflight")
+    }
+  }
+})
+
+test("首开模型简写精确匹配槽位，自动填充的模型族不要求用户复述", async () => {
+  const saved = process.env.TW_DSH_CONFIG
+  process.env.TW_DSH_CONFIG = JSON.stringify({ entryId: "team-work-dsh", profile: "示例配置", tiers: {
+    junior: { provider: "示例", model: "甲", effort: "high" },
+    senior: { provider: "示例", model: "乙" },
+    expert: { provider: "示例", model: "丙" },
+  } })
+  try {
+    const quote = "请核对报告，只交指定文件，按指定的三角色模型运行。"
+    const direction = (fields) => ["--user-direction", JSON.stringify({ quote, fields })]
+    const variants = [
+      ["match", "示例/甲@high", true],
+      ["other-model", "示例/乙@high", false],
+      ["other-provider", "另一示例/甲@high", false],
+      ["other-effort", "示例/甲@low", false],
+      ["missing-effort", "示例/甲", false],
+      ["other-family", { provider: "示例", modelName: "甲", effort: "high", family: "错误归类" }, false],
+    ]
+    for (const [name, claim, expected] of variants) {
+      const root = await makeProject()
+      const call = caller(root)
+      const opened = await call(["open", "--name", name, "--entry", "code-review", "--objective", "核对报告", "--raw-requirement", quote,
+        ...direction({ "intent.objective": "核对报告", "scope.entry": "code-review", "roles.owner": claim, "roles.challenger": "示例/乙", "roles.expert": "示例/丙" })])
+      assert.ok(opened.roles.owner.family, "启动时确由配置解析填充模型族")
+      const result = await call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", ...direction({ writable: ["R.md:code-review"] }), "--json"])
+      if (expected) {
+        assert.equal(result.stop, null, JSON.stringify({ stop: result.stop, code: result.card?.code }))
+        assert.deepEqual(result.waves[0].modelRef, opened.roles.owner, "实际模型族等完整元数据仍入派单")
+        assert.equal((await call(["gate", "--task", name])).intake.issued, false)
+      } else {
+        assert.equal(result.card.kind, "intent", name)
+        assert.deepEqual(result.waves, [], name)
+      }
+    }
+  } finally { process.env.TW_DSH_CONFIG = saved }
+})
+
+async function openDirectFixture(root, name) {
+  const call = caller(root)
+  const quote = "核对报告本身的范围。"
+  const opts = (fields, amend) => ["--user-direction", JSON.stringify({ quote, fields, ...(amend ? { amend } : {}) })]
+  const models = { "roles.owner": "示例/甲", "roles.challenger": "示例/乙", "roles.expert": "示例/丙" }
+  assert.equal((await call(["open", "--name", name, "--entry", "code-review", "--objective", "核对报告", "--raw-requirement", quote, ...opts({ "scope.entry": "code-review", "intent.objective": "核对报告" })])).ok, true)
+  assert.equal((await call(["roles", "--task", name, ...Object.entries(models).flatMap(([role, model]) => ["--set", role.split(".")[1] + "=" + model]), ...opts(models)])).ok, true)
+  return { call, opts }
+}
+
+test("另一合法模型不会被同角色字段授权；完整新方向只作废旧意图卡", async () => {
+  const root = await makeProject()
+  const name = "exact-model"
+  const { call, opts } = await openDirectFixture(root, name)
+  const r = await call(["roles", "--task", name, "--set", "owner=示例/丁", ...opts({ "roles.owner": "示例/甲" })])
+  assert.equal(r.ok, true)
+  const next = () => call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", ...opts({ writable: ["R.md:code-review"] })])
+  const signed = await next()
+  assert.equal(signed.card.kind, "intent", JSON.stringify(signed))
+  assert.equal(signed.card.intake.roles.find(({ role }) => role === "owner").modelRef.modelName, "丁")
+  assert.equal((await call(["roles", "--task", name, "--set", "owner=示例/丁", ...opts({ "roles.owner": "示例/丁" })])).authorization.mode, "caller-reported")
+  assert.equal((await call(["decide", "--task", name, "--decision-id", signed.card.decisionId, "--choice", "1"])).code, "DECISION_STALE")
+  assert.equal((await next()).waves[0].modelRef.modelName, "丁")
+})
+
+test("免卡开局后的刷新和包恢复各自审批，旧授权日志引用不能消费新事实", async () => {
+  const root = await makeProject()
+  for (const [kind, stale] of [["refresh", false], ["refresh", true], ["retry", false], ["retry", true]]) {
+    const name = "direct-" + kind + (stale ? "-stale" : "-ok")
+    const { call, opts } = await openDirectFixture(root, name)
+    const file = "R.md"
+    const advance = () => call(["dispatch-plan", "--task", name, "--writable", file + ":code-review", ...opts({ writable: [file + ":code-review"] }), "--json"])
+    const owner = (await advance()).waves[0]
+    const gateState = await call(["gate", "--task", name])
+    assert.equal(gateState.intake.issued, false)
+    assert.equal(gateState.intake.confirmed, true)
+    let card
+    if (kind === "refresh") {
+      await writeFile(path.join(root, file), "原内容", "utf8")
+      assert.equal((await call(["deliver", "--task", name, "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "基线", "--paths", file])).accepted, true)
+      await writeFile(path.join(root, file), "替换内容", "utf8")
+      card = await call(["refresh-artifacts", "--task", name, "--reason", "录入修改后的字节"])
+      assert.equal(card.kind, "artifact-refresh")
+      assert.equal(card.binding.intakeConfirmedAtIssue.seq, gateState.intake.authorizationSeq)
+      assert.equal(card.binding.intakeConfirmedAtIssue.decisionId, undefined)
+    } else {
+      assert.equal((await call(["deliver", "--task", name, "--key", owner.dispatchKey, "--outcome", "blocked", "--summary", "缺少输入"])).accepted, true)
+      const blocked = await call(["run", "--task", name])
+      card = await call(["plan", "--task", name, "--resolve-blocked", JSON.stringify({ action: "retry", reason: "补齐后重试" }), "--blocked-ref", blocked.blockedPackages[0].ref])
+      assert.equal(card.kind, "package-recovery")
+      assert.equal(card.recovery.intakeConfirmedAtIssue.seq, gateState.intake.authorizationSeq)
+      assert.equal(card.intakeCard, undefined)
+    }
+    assert.equal((await advance()).stop, "awaiting-user", "授权不是刷新或恢复的决定")
+    if (stale) {
+      const change = await call(["intent", "--task", name, "--add-constraint", "只保留必要结论", ...opts({ "intent.constraints": ["只保留必要结论"] })])
+      assert.equal(change.authorization.mode, "caller-reported")
+    }
+    const answer = await call(["decide", "--task", name, "--decision-id", card.decisionId, "--choice", "1"])
+    assert.equal(answer.ok, !stale, JSON.stringify(answer))
+    if (stale) assert.equal(answer.code, "DECISION_STALE")
+    else assert.equal((await advance()).waves[0].role, kind === "refresh" ? "challenger" : "owner")
+  }
+})
+
+test("人工门答复同批修订：明确追加可立刻派发，夹带项必须先确认", async () => {
+  const root = await makeProject()
+  for (const injected of [false, true]) {
+    const name = injected ? "amend-with-gap" : "amend-direct"
+    const { call, opts } = await openDirectFixture(root, name)
+    const advance = () => call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", ...opts({ writable: ["R.md:code-review"] }), "--json"])
+    const owner = (await advance()).waves[0]
+    await writeFile(path.join(root, "R.md"), "原报告", "utf8")
+    await call(["deliver", "--task", name, "--key", owner.dispatchKey, "--outcome", "delivered", "--summary", "原报告", "--paths", "R.md"])
+    let wave = (await advance()).waves[0]
+    await call(["review", "--task", name, "--key", wave.dispatchKey, "--recommendation", "accept", "--summary", "通过"])
+    wave = (await advance()).waves[0]
+    await call(["review", "--task", name, "--key", wave.dispatchKey, "--recommendation", "accept", "--summary", "通过", "--verdict", JSON.stringify({ outcome: "accept", rationale: "证据在场", confidence: "high", recommendedAction: "请用户验收" })])
+    await call(["route", "--task", name, "--route", "e2e", "--decision", "skip", "--basis", "报告无需联调"])
+    const gate = (await advance()).card
+    assert.equal(gate.kind, "human-gate")
+    const authorized = "只保留可证明的结论"
+    const amend = { addConstraint: [authorized, ...(injected ? ["用户没有指定的限制"] : [])] }
+    const decide = () => call(["decide", "--task", name, "--decision-id", gate.decisionId, "--choice", "2", ...opts({ "intent.constraints": [authorized] }, amend)])
+    assert.equal((await decide()).ok, true)
+    assert.equal((await decide()).replay, true)
+    const next = await advance()
+    if (injected) { assert.equal(next.card.kind, "intent"); assert.deepEqual(next.waves, []) }
+    else { assert.equal(next.waves[0].kind, "respond"); assert.ok(next.waves[0].promptFull.includes(authorized)) }
+  }
+})
+
+test("固定意图卡隔离粘贴原文，并且正文和选项在人读数组中只出现一次", async () => {
+  const root = await makeProject()
+  const call = caller(root)
+  const name = "frozen-intent"
+  const raw = "# 原始标题\n~~~~\n1. 不是真的选项\n| 表格 |"
+  await call(["open", "--name", name, "--entry", "code-review", "--objective", "核对", "--raw-requirement", raw])
+  const signed = await call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review"])
+  assert.equal(signed.card.template.form, "full")
+  assert.equal(signed.card.presentation, undefined)
+  assert.equal(signed.presentation, undefined)
+  assert.equal(signed.human.filter((line) => line === signed.card.question).length, 1)
+  assert.equal(signed.human.join("\n").split("1. 确认开始").length - 1, 1)
+  assert.ok(signed.card.question.includes("~~~~~text\n" + raw + "\n~~~~~"))
+  assert.equal((await call(["run", "--task", name])).question, signed.card.question)
+  assert.equal((await call(["dispatch-plan", "--task", name, "--json"])).card.question, signed.card.question)
 })
 
 test("新版首卡：先准备完整分包，首次推进签一张卡并绑定 ID 与 SHA", async () => {
@@ -1161,34 +1324,48 @@ test("旧 packages.json 的 tier 首次推进物化：按当前快照解析成 M
   assert.equal(persisted[0].model.modelName, "cli-senior")
 })
 
-test("换模型选 3：回滚 roles 到首派模型并重签确认卡", async () => {
-  const root = await makeProject()
-  const call = autoCaller(root)
-  await openTask(root, "rollback-t")
-  const first = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
-  const firstKey = first.waves[0].dispatchKey
-  await call(["agent-map", "--task", "rollback-t", "--key", firstKey, "--agent", "child-rollback"])
-  await writeFile(path.join(root, "R.md"), "v1", "utf8")
-  await call(["deliver", "--task", "rollback-t", "--key", firstKey, "--outcome", "delivered", "--summary", "s", "--paths", "R.md"])
-  const review = await call(["dispatch-plan", "--task", "rollback-t"])
-  await call(["review", "--task", "rollback-t", "--key", review.waves[0].dispatchKey, "--recommendation", "rework", "--summary", "重做", "--findings", '[{\"severity\":\"risk\",\"statement\":\"重做\",\"disposition\":\"must-fix\",\"scope\":{\"kind\":\"all-covered\"}}]'])
-  await call(["roles", "--task", "rollback-t", "--set", "owner=tier:expert"])
-  const fresh = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
-  assert.equal(fresh.card.requiresFreshSession.toModelRef.modelName, "cli-expert")
-  assert.equal((await call(["decide", "--task", "rollback-t", "--choice", "3"])).ok, true)
-  const roles = await call(["roles", "--task", "rollback-t"])
-  assert.equal(roles.roles.owner.modelName, "cli-junior", "roles 回滚到首派模型")
-  const after = await fixLoadTask(root, "rollback-t", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
-  assert.equal(after.journal.filter((event) => event.type === "role-models-changed" && event.detail.changes?.some((change) => change.role === "owner" && change.reason?.includes("回滚"))).length, 1)
-  // 回滚使确认指纹回到旧 roles：计划按 §3.6 重签确认卡，用户确认后恢复续派。
-  const resign = await caller(root)(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review"])
-  assert.equal(resign.stop, "awaiting-user", "回滚后重签意图确认卡")
-  assert.equal(resign.card.intake.roles.find((entry) => entry.role === "owner").modelRef.modelName, "cli-junior")
-  assert.equal((await call(["decide", "--task", "rollback-t", "--choice", "1", "--decision-id", resign.card.decisionId])).ok, true)
-  const resumed = await call(["dispatch-plan", "--task", "rollback-t", "--writable", "R.md:code-review", "--json"])
-  assert.equal(resumed.stop, null)
-  assert.equal(resumed.waves[0].modelRef.modelName, "cli-junior", "回滚后按旧模型续派")
+test("换模型原卡选回滚后恢复续派，不代答独立意图差异", async () => {
+  for (const independent of [false, true]) {
+    const root = await makeProject()
+    const name = independent ? "rollback-with-uncovered" : "rollback-direct"
+    const { call, opts } = await openDirectFixture(root, name)
+    const advance = () => call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", ...opts({ writable: ["R.md:code-review"] }), "--json"])
+    const first = (await advance()).waves[0]
+    assert.equal(first.modelRef.modelName, "甲")
+    assert.equal((await call(["gate", "--task", name])).intake.issued, false)
+    await call(["agent-map", "--task", name, "--key", first.dispatchKey, "--agent", "样例会话"])
+    await writeFile(path.join(root, "R.md"), "首个报告版本", "utf8")
+    assert.equal((await call(["deliver", "--task", name, "--key", first.dispatchKey, "--outcome", "delivered", "--summary", "报告已交付", "--paths", "R.md"])).accepted, true)
+    const review = (await advance()).waves[0]
+    assert.equal((await call(["review", "--task", name, "--key", review.dispatchKey, "--recommendation", "rework", "--summary", "需要修改",
+      "--findings", JSON.stringify([{ severity: "risk", statement: "补足结论", disposition: "must-fix", scope: { kind: "all-covered" } }])])).accepted, true)
+    const requested = await call(["roles", "--task", name, "--set", "owner=示例/新模型", ...opts({ "roles.owner": "示例/新模型" })])
+    assert.ok(requested.authorization, "用户已明确指定新模型")
+    const fresh = (await advance()).card
+    assert.equal(fresh.code, "REQUIRES_FRESH_SESSION")
+    assert.deepEqual([fresh.requiresFreshSession.fromModelRef.modelName, fresh.requiresFreshSession.toModelRef.modelName], ["甲", "新模型"])
+    if (independent) await call(["intent", "--task", name, "--add-constraint", "尚未获准的新约束"])
+    const chooseRollback = () => call(["decide", "--task", name, "--decision-id", fresh.decisionId, "--choice", "3"])
+    assert.equal((await chooseRollback()).ok, true)
+    assert.equal((await chooseRollback()).replay, true)
+    assert.equal((await call(["roles", "--task", name])).roles.owner.modelName, "甲")
+    const next = await advance()
+    if (independent) {
+      assert.equal(next.card.kind, "intent")
+      assert.deepEqual(next.waves, [])
+      assert.match(next.card.question, /尚未获准的新约束/)
+      assert.doesNotMatch(next.card.question, /实际值没有完全匹配[^\n]*Owner/, "孤立的角色回滚值已得到授权")
+    } else {
+      assert.equal(next.stop, null, JSON.stringify({ stop: next.stop, code: next.card?.code }))
+      assert.equal(next.waves[0].modelRef.modelName, "甲")
+      assert.equal(next.waves[0].expectedAgentId, "样例会话")
+      const status = await call(["gate", "--task", name])
+      assert.equal(status.intake.issued, false, "回滚不补造意图卡")
+      assert.equal(status.intake.confirmed, true, "供共享门重核的完整投影已提交")
+    }
+  }
 })
+
 
 test("intent 扩展字段：范围/验收进入派单基线；gap 答复可结构化落到 intent.json", async () => {
   const root = await makeProject()
@@ -1199,9 +1376,9 @@ test("intent 扩展字段：范围/验收进入派单基线；gap 答复可结�
   assert.equal(opened.ok, true)
   const card = (await raw(["dispatch-plan", "--task", "scope-t", "--writable", "R.md:code-review"])).card
   assert.equal(card.intake.scope.notes[0], "只覆盖 A 模块")
-  assert.match(card.question, /范围补充：\n- 只覆盖 A 模块/, "确认卡展示范围补充")
+  assert.match(card.question, /范围补充[\s\S]*只覆盖 A 模块/, "确认卡展示范围补充")
   assert.equal(card.intake.acceptance[0], "验收一")
-  assert.match(card.question, /验收：\n- 验收一/, "确认卡展示验收项")
+  assert.match(card.question, /验收[\s\S]*验收一/, "确认卡展示验收项")
   await raw(["decide", "--task", "scope-t", "--choice", "1", "--decision-id", card.decisionId])
   const d = await raw(["dispatch-plan", "--task", "scope-t", "--writable", "R.md:code-review", "--json"])
   assert.equal(d.stop, null)
@@ -1299,13 +1476,8 @@ test("包级模型变更：续派出换模型卡（target=package），回滚恢
   assert.equal(task.packages[0].model.modelName, "cli-junior", "有效计划也必须回滚，不能仅修改视图")
   const rollback = task.journal.find((event) => event.type === "re-planned" && event.detail.source === "fresh-session-rollback")
   assert.equal(rollback.detail.items[0].model.modelName, "cli-junior", "回滚事件携带完整有效计划")
-  // 回滚改变已确认的配置指纹：必须重签意图卡，而不是重复签发换模型卡。
-  const resign = await caller(root)(["dispatch-plan", "--task", "pkg-fresh-t"])
-  assert.equal(resign.stop, "awaiting-user")
-  assert.ok(resign.card.decisionId.startsWith("intake-"), "回滚后重签意图确认卡")
-  assert.equal(resign.card.intake.packages[0].model.modelName, "cli-junior", "确认卡展示回滚后的模型")
-  assert.equal((await call(["decide", "--task", "pkg-fresh-t", "--choice", "1", "--decision-id", resign.card.decisionId])).ok, true)
-  const resumed = await call(["dispatch-plan", "--task", "pkg-fresh-t", "--json"])
+  // 不能使用会自动确认意图卡的夹具掩盖重复审批。
+  const resumed = await caller(root)(["dispatch-plan", "--task", "pkg-fresh-t", "--json"])
   assert.equal(resumed.stop, null)
   assert.equal(resumed.waves[0].modelRef.modelName, "cli-junior")
 })
@@ -1531,7 +1703,7 @@ test("E1：重开会话 B 后的续派基线是 B 首派模型；B→C 也按 B 
   // 轮次上限卡（第 3 轮 rework）先追加一轮，避免把收敛卡误当换模型卡
   const converge = await call(["dispatch-plan", "--task", "b-baseline-t"])
   if (converge.stop === "awaiting-user" && converge.card?.choices?.[0]?.grant === "extra-round") {
-    await call(["decide", "--task", "b-baseline-t", "--choice", "1"])
+    await call(["decide", "--task", "b-baseline-t", "--choice", "1", "--decision-id", converge.card.decisionId])
   }
 
   // B→C：再改 senior → 换模型卡的 from 必须是 B 的 expert
@@ -1792,7 +1964,7 @@ test("重签卡相对最近已确认完整快照展示增量，风险字段与�
   await plan(packages)
   const a = (await call(["dispatch-plan", "--task", "diff-card"])).card
   assert.equal(a.intake.risk, "critical")
-  assert.match(a.question, /风险标记：critical/)
+  assert.match(a.question, /风险标记\n~~~text\ncritical/)
   assert.equal(a.intake.diff, undefined, "首卡必须完整展示")
   await call(["decide", "--task", "diff-card", "--choice", "1", "--decision-id", a.decisionId])
   let state = await fixLoadTask(root, "diff-card", { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
@@ -1807,10 +1979,10 @@ test("重签卡相对最近已确认完整快照展示增量，风险字段与�
   assert.equal(b.intake.diff.baseFingerprint, a.intakeFingerprint)
   assert.equal(b.intake.diff.unchangedFolded, true)
   assert.ok(b.intake.diff.unchangedCount > 0)
-  assert.match(b.question, new RegExp("与已确认快照一致（" + b.intake.diff.unchangedCount + " 项未变）"))
+  assert.match(b.question, new RegExp("共 " + b.intake.diff.unchangedCount + " 项，已折叠引用该卡"))
   const paths = b.intake.diff.changes.map((change) => change.path)
   for (const p of ["packages[a].writable[0]", "packages[a].done[0]", "packages[a].model.modelName", "packages[b]", "packages[c]"]) assert.ok(paths.includes(p), p)
-  assert.match(b.question, /旧标准.*新标准/)
+  assert.match(b.question, /旧标准[\s\S]*新标准/)
   assert.doesNotMatch(b.question, new RegExp(rawText), "未变原文只在完整结构化基线中保留")
   assert.equal(b.intake.rawRequirement, rawText)
   assert.notEqual(b.intakeFingerprint, a.intakeFingerprint)
@@ -1822,7 +1994,7 @@ test("重签卡相对最近已确认完整快照展示增量，风险字段与�
   assert.equal(c.intake.diff.baseDecisionId, b.decisionId)
   assert.equal(c.intake.risk, "high")
   assert.ok(c.intake.diff.changes.some((change) => change.path === "intent.risk" && change.before === "critical" && change.after === "high"))
-  assert.match(c.question, /critical.*high/)
+  assert.match(c.question, /critical[\s\S]*high/)
   assert.doesNotMatch(c.question, new RegExp(rawText))
   const changedRole = await call(["roles", "--task", "diff-card", "--set", "challenger=example/new-reviewer@max"])
   assert.equal(changedRole.intake.diff.baseDecisionId, b.decisionId, "未确认的 C 不能当差异基准")

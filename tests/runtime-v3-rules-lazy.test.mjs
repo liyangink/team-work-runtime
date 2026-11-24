@@ -8,12 +8,13 @@
 //   Lead 通道：team-work/rules/lead/<kind>/index.md 损坏 → 警告数 = 该时点 Lead 规则读取次数。
 // 优化前（无条件提前加载）每条路径都付 1 次调用；优化后只在派发/重建/呈现时点付 1 次。
 import assert from "node:assert/strict"
-import { mkdir, writeFile, mkdtemp } from "node:fs/promises"
+import { mkdir, writeFile, mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import test, { mock } from "node:test"
 
-import { autoCaller, caller, makeProject, openTask, openTaskRaw, prepareIntake } from "./support/v3-fixtures.mjs"
+import { createClarityGuidanceReader, resolveLeadRules } from "../runtime-v3/rules.mjs"
+import { autoCaller, caller, makeProject, openTask, openTaskRaw } from "./support/v3-fixtures.mjs"
 
 // 用户公共规则隔离：HOME 指向临时目录，派单只读空的 ~/.team-work/rules，不读开发机真实用户规则。
 process.env.HOME = await mkdtemp(path.join(tmpdir(), "tw-lazy-home-"))
@@ -243,50 +244,27 @@ test("blocked 卡路径（门失败且非人工阻塞）零成员规则 I/O", as
   assert.equal(io(), 4, "blocked 卡路径零成员规则 I/O")
 })
 
-test("Lead 时点选择性读取：progress 只读 lead/progress，dispatch 只读 lead/dispatch", async () => {
+test("Lead 短段惰性接缝：未选不读，只读指定时点；人工审阅短段独立于公共段", async (t) => {
   const projectRoot = await makeProject({ workflow: IMPL_WORKFLOW, policy: IMPL_POLICY })
-  // 只损坏 progress 时点：其他时点读取不计入，非呈现路径也不应读它
-  await corruptLeadRule(projectRoot, "progress")
-  const call = autoCaller(projectRoot)
-  await openTask(projectRoot, "lead-io-t", { objective: "实现模块 X", entry: "implementation" })
-  await prepareIntake(projectRoot, "lead-io-t", ["src.mjs:source"])
-
-  const warns = []
-  mock.method(console, "warn", (...args) => warns.push(args.join(" ")))
-  const io = () => warns.length
-
-  // ① 任务不存在：零 Lead 规则 I/O
-  await call(["run", "--task", "ghost-t"])
-  assert.equal(io(), 0, "任务不存在路径零 Lead 规则 I/O")
-
-  // ② run 普通进展（working + next=dispatch）：读 lead/progress 恰好 1 次；重复查询每次在场（无已读标记）
-  const first = await call(["run", "--task", "lead-io-t"])
-  assert.equal(first.status, "working")
-  assert.equal(io(), 1, "进展时点恰好 1 次 lead/progress I/O")
-  await call(["run", "--task", "lead-io-t"])
-  assert.equal(io(), 2, "重复查询按现状每次重新反吐")
-
-  // ③ 派发时点读的是 lead/dispatch，不读损坏的 lead/progress
-  const plan = await call(["dispatch-plan", "--task", "lead-io-t", "--writable", "src.mjs:source"])
-  assert.equal(plan.stop, null)
-  assert.equal(io(), 2, "派发时点不读 lead/progress")
-
-  // ④ 机械回执不注入呈现，也不读 Lead 规则；随后的评审派发只读 lead/dispatch
-  await writeFile(path.join(projectRoot, "src.mjs"), "export const x = 1", "utf8")
-  const delivery = await call(["deliver", "--task", "lead-io-t", "--key", plan.waves[0].dispatchKey, "--outcome", "delivered", "--summary", "完成", "--paths", "src.mjs"])
-  assert.equal(delivery.presentation, undefined)
-  assert.equal(io(), 2, "机械回执零 Lead 规则 I/O")
-  const reviewer = (await call(["dispatch-plan", "--task", "lead-io-t"])).waves[0]
-  assert.equal(reviewer.role, "challenger")
-  assert.equal(io(), 2, "评审派发时点同样不读 lead/progress")
-
-  // ⑤ 决定点读 lead/decision，同样不读损坏的 lead/progress（另起一个 blocked 任务，避免 progress 路径）
-  await openTask(projectRoot, "decide-io-t", { objective: "实现模块 X", entry: "implementation" })
-  const decPlan = await call(["dispatch-plan", "--task", "decide-io-t", "--writable", "src.mjs:source"])
-  await call(["deliver", "--task", "decide-io-t", "--key", decPlan.waves[0].dispatchKey, "--outcome", "blocked", "--summary", "新增设施是否本轮必需仍有争议"])
-  const decision = await call(["run", "--task", "decide-io-t"])
-  assert.equal(decision.status, "awaiting-user")
-  assert.equal(io(), 2, "决定点读 lead/decision，不读 lead/progress")
+  for (const kind of ["dispatch", "progress", "decision"]) await corruptLeadRule(projectRoot, kind)
+  const warnings = []
+  t.mock.method(console, "warn", (...args) => warnings.push(args.join(" ")))
+  const counts = () => ["dispatch", "progress", "decision"].map((kind) => warnings.filter((line) => line.includes("lead/" + kind + "/")).length)
+  const reads = []
+  const clarity = createClarityGuidanceReader({ read(file, encoding) { reads.push(path.basename(file)); return readFile(file, encoding) } })
+  assert.deepEqual(counts(), [0, 0, 0])
+  assert.deepEqual(reads, [], "仅创建同源读取器不读资源")
+  for (const [kind, seen] of [["dispatch", [1, 0, 0]], ["progress", [1, 1, 0]], ["decision", [1, 1, 1]]]) {
+    const rules = await resolveLeadRules({ kind, projectRoot, userRulesRoot: null })
+    assert.ok(rules.length, "项目规则读取损坏不影响包内基线")
+    assert.deepEqual(counts(), seen)
+    assert.deepEqual(reads, [], "按时点选 Lead 规则不会隐式加载任何 clarity")
+  }
+  const [first, second] = await Promise.all([clarity({ shortReview: true }), clarity({ shortReview: true })])
+  assert.equal(first, second)
+  assert.match(first, /审阅短节选/)
+  assert.doesNotMatch(first, /公共必读|审阅必读/)
+  assert.deepEqual(reads, ["review-rules.md"], "只读取一次同源审阅资源，不读公共段")
 })
 
 test("热变语义：修改项目规则文件后下一次派发生效（无模块级缓存）", async () => {

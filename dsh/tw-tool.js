@@ -20,21 +20,22 @@ export function runTw(executable, args, cwd, snapshot, timeoutMs = TW_TIMEOUT_MS
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [executable, ...args], { cwd, env: { ...process.env, TW_DSH_CONFIG: JSON.stringify(snapshot) } })
     let done = false
-    let out = ""
-    let err = ""
+    const outChunks = []
+    const errChunks = []
     const timer = setTimeout(() => {
       if (done) return
       done = true
       child.kill("SIGKILL")
       resolve({ ok: false, code: "TW_TIMEOUT", message: "tw 命令超时（" + timeoutMs + "ms）被终止" })
     }, timeoutMs)
-    child.stdout.on("data", (chunk) => { out += chunk })
-    child.stderr.on("data", (chunk) => { err += chunk })
+    child.stdout.on("data", (chunk) => { outChunks.push(chunk) })
+    child.stderr.on("data", (chunk) => { errChunks.push(chunk) })
     child.on("close", () => {
       if (done) return
       done = true
       clearTimeout(timer)
-      const text = (out || err || "").trim()
+      // 管道可能从 UTF-8 字符中间切块，合并同一流的字节后再解码。
+      const text = (Buffer.concat(outChunks).toString("utf8") || Buffer.concat(errChunks).toString("utf8")).trim()
       let card = null
       try { card = JSON.parse(text) } catch { card = { ok: false, code: "TW_OUTPUT_UNPARSEABLE", message: text.slice(0, 400) } }
       resolve(card)
@@ -52,7 +53,7 @@ export function twToolDefinition(deps = {}) {
   return {
     name: "tw",
     timeoutMs: TW_TIMEOUT_MS,
-    description: 'team-work CLI：任务目录读写（open/plan/run/deliver/review/decide/refresh-artifacts/...）。args 原样透传 CLI，输出为 JSON 卡片；多张待决卡按实际 decisionId 独立答复，Lead 刷新制品须绑定用户实际授权，不能代替评审。运行 tw help 查看完整命令与恢复指引。',
+    description: 'team-work CLI：args 原样透传，返回 JSON 卡片；成员用 deliver/review 登记结果。意图卡原样呈现已签正文，按用户实际答复的卡片 ID 提交 decide；刷新制品须绑定用户实际授权，不能代替评审。运行 tw help 查看命令与恢复指引。',
     parameters: {
       type: "object",
       properties: {
@@ -74,7 +75,9 @@ export function twToolDefinition(deps = {}) {
         }
       }
       const args = Array.isArray(params?.args) ? params.args.map(String) : []
-      return (deps.runTw ?? runTw)(resolveTwExecutable(), args, cwd, snapshot)
+      const result = await (deps.runTw ?? runTw)(resolveTwExecutable(), args, cwd, snapshot)
+      deps.memberGuard?.noteReport(exec, cwd, args, result)
+      return result
     },
     output: {
       schema: { type: "object" },

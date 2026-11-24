@@ -10,14 +10,14 @@ import { fileURLToPath } from "node:url"
 
 import { initTask, loadTask, taskExists, taskRoot, archiveRoot, controlRoot, atomicJson, atomicWrite, withOwnerLock, validName, readJson, rebuildArtifacts, dispatchLockPath, parseJournal } from "./store.mjs"
 import { syncDirectory } from "./persistence/transactions.mjs"
-import { deriveTask, currentStageOf, pendingDecisionsOf, duplicateIssuedIds, cardOf, INTAKE_GATE } from "./derive.mjs"
+import { deriveTask, currentStageOf, stageEntrySeqOf, pendingDecisionsOf, duplicateIssuedIds, cardOf, INTAKE_GATE } from "./derive.mjs"
 import { gateCheck, artifactsFingerprint, artifactFingerprints, reviewChainFingerprint, humanDecisionFresh, baselineCommitFloor } from "./gate.mjs"
-import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf, deliverBaselines, reportOrderComparator, effectiveBlockedSet } from "./waves.mjs"
+import { scenePolicy, projectRounds, inflightBatch, supersededKeys, waveGroups, waveIdOf, deliverBaselines, reportOrderComparator, effectiveBlockedSet, isPackagePlanEvent } from "./waves.mjs"
 import { registerDelivery, registerReview, verifyArtifactBytes } from "./intake.mjs"
 import { lockedWorkflowContract, resolveMemberRules, composeMemberRules, resolveLeadRules, resolveLeadGeneralRules, createClarityGuidanceReader, requiredClarityText } from "./rules.mjs"
 import { TIERS, resolveTiers, computeModelHint, normalizeModelRef, modelRefFromHint, modelRefsEqual } from "./dsh-map.mjs"
 import { digestValue, digestBytes, BYTES_DIGEST_ALGORITHM } from "./domain/digests.mjs"
-import { writableMatch, writablePathsOverlap } from "./domain/writable.mjs"
+import { writableMatch, writablePathsOverlap, writableIncludes } from "./domain/writable.mjs"
 
 function collectList(argv, flag) {
   const out = []
@@ -50,9 +50,9 @@ function parseJsonArg(value, label) {
 const FLAG_SPECS = {
   deliver: { single: ["task", "key", "outcome", "summary", "checks", "unresolved"], multi: ["paths"] },
   review: { single: ["task", "key", "recommendation", "summary", "findings", "verdict"], multi: [] },
-  plan: { single: ["task", "packages", "resolve-blocked", "blocked-ref"], multi: [] },
+  plan: { single: ["task", "packages", "resolve-blocked", "blocked-ref", "user-direction"], multi: [] },
   "refresh-artifacts": { single: ["task", "package", "paths-json", "reason"], multi: [] },
-  decide: { single: ["task", "choice", "note", "decision-id"], multi: [] },
+  decide: { single: ["task", "choice", "note", "decision-id", "user-direction"], multi: [] },
   restore: { single: ["task", "path", "source"], multi: ["list"] },
 }
 
@@ -149,29 +149,52 @@ function fixHint(code) {
   })[code] ?? "运行 tw help 查看全部命令与参数"
 }
 
-// 呈现注入：Lead 规则通道的代码半边——只决定"在哪个时点读哪个目录、拼哪几段"，
-// 文案本身是规则数据 team-work/rules/lead/<时点>/*.md（见 rules.mjs 的 resolveLeadRules）。
-// 反吐内容 = 该时点目录下文件正文（按文件名排序）+ 根包明晰必读段（决定点加审阅段，同源提取）。
-// 时点判定完全沿用原口径：决定点 = status/stop/transition 为 awaiting-user/blocked；
-// 派发 = transition 为 dispatch；进展 = advance/complete/wait-inflight 或 completed/archived/wait-inflight
-// 或 run 的 working+next=dispatch；机械回执不命中。
-async function presentationText({ kind, projectRoot, readGuidance, review = false }) {
+// 只在命中实际动作时读取对应的简短规则；意图和机械卡不触碰规则源。
+async function presentationText({ kind, projectRoot, decisions = [] }) {
   const rules = await resolveLeadRules({ kind, projectRoot })
-  const leadText = rules.map((rule) => rule.text.trim()).filter(Boolean).join("\n\n")
-  const clarity = await readGuidance({ review })
-  return leadText ? leadText + "\n\n" + clarity : clarity
+  const parts = rules.map((rule) => rule.text.trim()).filter(Boolean)
+  if (kind === "decision") {
+    if (decisions.length) parts.unshift("仅适用于人工审阅卡：" + decisions.join("、") + "。")
+    parts.push(await createClarityGuidanceReader()({ shortReview: true }))
+  }
+  return parts.join("\n\n")
 }
 
-async function attachPresentation(card, readGuidance, stop = null, runProgress = false, projectRoot = null) {
-  if (!card || typeof card !== "object" || Array.isArray(card) || card.presentation) return card
-  const decision = [card.status, stop, card.transition].some((v) => v === "awaiting-user" || v === "blocked")
-  const dispatch = card.transition === "dispatch"
-  const progress = ["advance", "complete", "wait-inflight"].includes(card.transition) ||
-    [card.status, stop].some((v) => ["completed", "archived", "wait-inflight"].includes(v)) ||
-    (runProgress && card.status === "working" && card.next === "dispatch")
-  if (!decision && !dispatch && !progress) return card
-  const kind = decision ? "decision" : dispatch ? "dispatch" : "progress"
-  return { ...card, presentation: await presentationText({ kind, projectRoot, readGuidance, review: decision }) }
+function decisionKind(card) {
+  if (card.kind) return card.kind
+  if (card.intakeFingerprint || card.choices?.some((choice) => choice.grant === "accept-intake")) return "intent"
+  if (card.gateId && !card.choices?.some((choice) => ["rework-rerun", "rework-unfixed", "accept-as-is"].includes(choice.grant))) return "human-gate"
+  return null
+}
+
+function reviewPresentationCard(card) {
+  const kind = decisionKind(card)
+  return !card.stale && (kind === "technical-review" || kind === "human-gate" && (["design-approval", "final-acceptance"].includes(card.gateId) || card.gateId?.startsWith("scoped-final-")))
+}
+
+// 两个 JSON 别名兼容保留；展示以重验列表优先，不能用原始日志投影覆盖已知失效卡。
+function visibleDecisionCards(result) {
+  const nested = result.card ?? result
+  const seen = new Map()
+  const add = (input, state, verified) => {
+    if (!input?.decisionId) return
+    const card = { ...input, question: input.question ?? input.reason, stale: state === "stale" || Boolean(input.stale) }
+    const previous = seen.get(card.decisionId)
+    if (previous) {
+      if (previous.card.question != null && card.question != null && previous.card.question !== card.question ||
+          previous.card.choices && card.choices && !sameValue(previous.card.choices, card.choices) ||
+          previous.verified && verified && previous.card.stale !== card.stale) throw fail("STATE_CORRUPT", "同一卡片的正文、选项或有效性不一致；请先核对事实：" + card.decisionId)
+      if (previous.verified || !verified) return
+    }
+    seen.set(card.decisionId, { card, verified })
+  }
+  const containers = nested === result ? [result] : [nested, result]
+  for (const owner of containers) {
+    for (const card of owner.staleDecisions ?? []) add(card, "stale", true)
+    for (const card of owner.pendingDecisions ?? []) add(card, "pending", card.readiness !== "待核验")
+  }
+  for (const owner of containers) { add(owner, null, Boolean(owner.stale)); add(owner.intakeCard, null, false) }
+  return [...seen.values()].map(({ card }) => card)
 }
 
 // 阶段工作摘要（P4：从 reports/artifacts 自有事实推导，给 Lead 现成的人话素材，
@@ -207,12 +230,14 @@ function stageProgress(task, stageId) {
 async function appendEventsUnlocked(task, events, beforeAppend = null) {
   const file = path.join(task.root, "journal.jsonl")
   const journal = await readFile(file, "utf8")
-  let seq = parseJournal(journal).length
-  const lines = events.map((e) => JSON.stringify({ seq: ++seq, at: new Date().toISOString(), ...e }))
+  const previous = parseJournal(journal)
+  let seq = previous.length
+  const entries = events.map((e) => ({ seq: ++seq, at: new Date().toISOString(), ...e }))
   // 普通决定仍使用既有 decisions.json：先完成日志读取，避免读错后留下已生效的决定视图。
   if (beforeAppend) await beforeAppend()
   const separator = journal.endsWith("\n") ? "" : "\n"
-  await atomicWrite(file, journal + separator + lines.map((l) => `${l}\n`).join(""))
+  await atomicWrite(file, journal + separator + entries.map((event) => JSON.stringify(event) + "\n").join(""))
+  task.journal = [...previous, ...entries]
   return seq
 }
 
@@ -774,6 +799,20 @@ function roleDetailsForCard(task, roles, invalid = []) {
 
 // ── 意图确认门（§3.4）：复用 decisions/journal，不新增存储 ─────────────────────────
 // 旧卡沿用原投影；新版加入实际入口与首派范围，不含时间戳、decisionId 或 profile。
+const sameValue = (a, b) => a === undefined || b === undefined ? a === b : digestValue(a) === digestValue(b)
+const recordObject = (value) => value && typeof value === "object" && !Array.isArray(value)
+
+function parseUserDirection(value, allowAmend = false) {
+  if (value === undefined) return null
+  const dir = parseJsonArg(value, "--user-direction")
+  if (!recordObject(dir) || typeof dir.quote !== "string" || !dir.quote.trim() || !recordObject(dir.fields) ||
+      Object.keys(dir).some((key) => !["quote", "fields", ...(allowAmend ? ["amend"] : [])].includes(key)) ||
+      (dir.amend !== undefined && !recordObject(dir.amend))) {
+    throw fail("USAGE", "--user-direction 需要 {quote, fields}；fields 是字段到用户明确指定的实际值或数组条目的对象，不接受字段名列表。人工门返工可另提供 amend。")
+  }
+  return dir
+}
+
 function intakeSnapshot({ task, roles, packages }) {
   const intent = task.intent ?? {}
   const scope = intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {}
@@ -785,7 +824,8 @@ function intakeSnapshot({ task, roles, packages }) {
         outputs: (task.workflow?.stages?.find((stage) => stage.id === task.scope.entry)?.outputs ?? []).map(String),
       },
       ...(!(Array.isArray(packages) && packages.length) ? { firstWritable: task.scope.firstWritable ?? null } : {}),
-    } : {}),
+    } : (task.scope?.firstWritable ? { firstWritable: task.scope.firstWritable } : {})),
+    ...(task.scope?.writableByStage ? { writableByStage: task.scope.writableByStage } : {}),
     intent: {
       objective: String(intent.objective ?? ""),
       constraints: Array.isArray(intent.constraints) ? intent.constraints.map(String) : [],
@@ -898,21 +938,221 @@ function assertCompleteIntake(task, roles) {
   }
 }
 
+// 换模型卡只允许回滚原卡点名的角色或包，以及卡上冻结的具体旧模型。
+function modelRollbackChange(card) {
+  const fresh = card?.requiresFreshSession
+  const value = canonicalModelRef(fresh?.fromModelRef)
+  if (!value || !ROLE_KEYS.includes(fresh.role)) return null
+  if (fresh.target === "package") {
+    if (fresh.role !== "owner" || typeof fresh.package !== "string" || !validName(fresh.package)) return null
+    return { field: "packages[" + fresh.package + "].model", value }
+  }
+  if ((fresh.target ?? "roles") !== "roles" || fresh.package != null) return null
+  return { field: "roles." + fresh.role, value }
+}
+
+function preparedIntentSource(event, change, journal) {
+  const detail = event?.detail
+  if (detail?.proof?.mode !== "caller-reported" || !Array.isArray(detail.covered) || !detail.covered.some((row) => sameValue(row, change))) return null
+  if (!detail.rollbackDecisionId) {
+    return typeof detail.quote === "string" && detail.quote.trim() ? { seq: event.seq, quote: detail.quote, change } : null
+  }
+  // 原卡选项是授权依据，不伪造用户原话，也不接受备注或其他卡的选择。
+  const related = journal.filter((row) => ["decision-issued", "decided"].includes(row.type) && row.detail?.decisionId === detail.rollbackDecisionId)
+  const [issued, decided] = related
+  if (related.length !== 2 || issued.type !== "decision-issued" || decided.type !== "decided" ||
+      !(issued.seq < decided.seq && decided.seq < event.seq) || decided.detail.grant !== "rollback-model" ||
+      decided.detail.proof?.mode !== "caller-reported" ||
+      !issued.detail.choices?.some((choice) => choice.grant === "rollback-model" && choice.label === decided.detail.choice) ||
+      !sameValue(modelRollbackChange(issued.detail), change)) return null
+  return { seq: event.seq, rollbackDecisionId: detail.rollbackDecisionId, change }
+}
+
 // 重签只以已完整落盘、且快照指纹可核验的最近接受决定为基准。
 // 历史记录缺快照时不能猜测旧值：回退完整卡，等本次确认后再生成增量。
 function latestConfirmedIntake(task) {
-  const confirmed = [...task.journal].reverse().filter((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail)).map((event) => acceptedIntakeFor(task, event.detail)).find(Boolean)
-  if (!confirmed) return null
-  const snapshot = confirmed.intakeSnapshot
-  if (!snapshot || typeof snapshot !== "object" || digestValue(snapshot) !== confirmed.intakeFingerprint) return { decisionId: confirmed.decisionId, unavailable: true }
-  return { decisionId: confirmed.decisionId, fingerprint: confirmed.intakeFingerprint, snapshot }
+  const acceptedById = new Map(task.journal.filter((e) => e.type === "decision-issued" && e.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, e.detail))
+    .map((e) => [e.detail.decisionId, acceptedIntakeFor(task, e.detail)]))
+  let base = null
+  const preparations = new Map()
+  for (const e of task.journal) {
+    if (e.type === "intent-prepared") preparations.set(e.seq, preparations.has(e.seq) ? null : e)
+    if (e.type === "decided" && e.detail?.choice !== "superseded") {
+      const accepted = acceptedById.get(e.detail?.decisionId)
+      if (!accepted) continue
+      const snapshot = accepted.intakeSnapshot
+      base = !recordObject(snapshot) || digestValue(snapshot) !== accepted.intakeFingerprint
+        ? { decisionId: accepted.decisionId, seq: e.seq, unavailable: true }
+        : { decisionId: accepted.decisionId, seq: e.seq, fingerprint: accepted.intakeFingerprint, snapshot }
+    }
+    if (e.type === "intent-authorized") {
+      const d = e.detail
+      if (!Number.isSafeInteger(e.seq) || d?.proof?.mode !== "caller-reported" || !recordObject(d.snapshot) ||
+          !Array.isArray(d.changes) || !Array.isArray(d.sources) || !d.sources.length || d.changes.length !== d.sources.length ||
+          d.sources.some((source, index) => source?.seq <= (base?.seq ?? 0) || source?.seq >= e.seq ||
+            !source || !sameValue(source, preparedIntentSource(preparations.get(source.seq), d.changes[index], task.journal))) || digestValue(d.snapshot) !== d.fingerprint || d.beforeFingerprint !== (base?.fingerprint ?? null)) {
+        // 损坏的新授权不能退回旧授权或冒充已确认；下一张真确认可重建基线。
+        base = { decisionId: base?.decisionId, seq: e.seq, unavailable: true, damaged: true }
+        continue
+      }
+      base = { decisionId: base?.decisionId, cardFingerprint: base?.cardFingerprint ?? base?.fingerprint, direct: true, seq: e.seq, fingerprint: d.fingerprint, snapshot: d.snapshot }
+    }
+  }
+  return base
 }
 
 // 除快照自洽外，新版还要求它对应最新签发并完成的意图卡；历史已接受卡不能复活。
 function currentConfirmedIntake(task) {
   const confirmed = latestConfirmedIntake(task)
+  if (!confirmed || confirmed.unavailable) return null
+  const changed = task.journal.some((e) => e.seq > confirmed.seq && e.type === "intent-prepared" && e.detail?.changes?.length)
   const current = intakeConfirmation(task)
-  return confirmed && !confirmed.unavailable && current?.decisionId === confirmed.decisionId ? confirmed : null
+  return !changed && (confirmed.direct || current?.decisionId === confirmed.decisionId) ? confirmed : null
+}
+
+// 拆成运行事实字段；角色和包模型作为完整实例比较，不让调用方只认领其中一个属性。
+function intakeBusinessFields(snapshot) {
+  const fields = new Map()
+  if (!snapshot) return fields
+  const put = (field, value) => { if (value !== undefined && value !== null) fields.set(field, value) }
+  const intent = snapshot.intent
+  for (const key of ["objective", "rawRequirement", "constraints", "exclusions", "acceptance", "gaps"]) put("intent." + key, intent[key])
+  put("intent.risk", intent.risk)
+  for (const [key, value] of Object.entries(intent.scope ?? {})) {
+    if (!["entry", "outputs"].includes(key) || !sameValue(value, snapshot.scope?.[key])) put("intent.scope." + key, value)
+  }
+  put("scope.entry", snapshot.scope?.entry)
+  put("scope.completion", snapshot.scope?.completion)
+  put("scope.outputs", snapshot.scope?.outputs)
+  put("firstWritable", snapshot.firstWritable)
+  for (const [stage, scope] of Object.entries(snapshot.writableByStage ?? {})) put("writableByStage." + stage, scope)
+  for (const role of ROLE_KEYS) put("roles." + role, snapshot.roles?.[role])
+  put("packages.$order", snapshot.packages.map((pkg) => pkg.id))
+  for (const pkg of snapshot.packages) for (const key of ["model", "writable", "done", "dependsOn"]) put("packages[" + pkg.id + "]." + key, pkg[key])
+  return fields
+}
+
+function intakeFieldChanges(before, after) {
+  const previous = intakeBusinessFields(before), current = intakeBusinessFields(after)
+  return [...new Set([...previous.keys(), ...current.keys()])].flatMap((field) => {
+    const from = previous.get(field), to = current.get(field)
+    return sameValue(from, to) ? [] : [{ field, from: from ?? null, to: to ?? null }]
+  })
+}
+
+function intentObligations(before, after) {
+  return intakeFieldChanges(before, after).flatMap(({ field, from, to }) => {
+    if (!before && (["scope.completion", "scope.outputs"].includes(field) || field === "intent.risk" && to === "normal")) return [] // 入口机械决定产出/结束方式。
+    if (!Array.isArray(to)) {
+      if (field === "firstWritable" && after.packages.length) return [] // 有包时单 Owner 上界不适用。
+      // 删包由显式的 package ID 集合授权；既不逐项授权已不存在的可写，也不把它算成增加。
+      if (field.startsWith("packages[") && !after.packages.some((pkg) => field.startsWith("packages[" + pkg.id + "]."))) return []
+      return [{ field, value: to }]
+    }
+    const old = Array.isArray(from) ? from : []
+    if (field === "packages.$order") return !old.length && !to.length ? [] : [{ field, value: to }]
+    if (old.some((item) => !to.some((entry) => sameValue(entry, item))) ||
+        !sameValue(old, to.filter((item) => old.some((entry) => sameValue(entry, item))))) return [{ field, value: to }]
+    return to.filter((item) => !old.some((entry) => sameValue(entry, item))).map((item) => ({ field, item }))
+  })
+}
+
+function directionClaims(direction, writableField) {
+  const claims = new Map(Object.entries(direction?.fields ?? {}))
+  if (writableField && claims.has("writable")) claims.set(writableField, claims.get("writable"))
+  if (Array.isArray(claims.get("packages"))) {
+    const packages = claims.get("packages")
+    claims.set("packages.$order", packages.map((pkg) => typeof pkg === "string" ? pkg : pkg?.id ?? null))
+    for (const pkg of packages) if (recordObject(pkg) && typeof pkg.id === "string") {
+      for (const key of ["model", "writable", "done", "dependsOn"]) if (Object.hasOwn(pkg, key)) claims.set("packages[" + pkg.id + "]." + key, pkg[key])
+    }
+  }
+  return claims
+}
+
+function normalizedClaim(field, value) {
+  if ((field.startsWith("roles.") || field.endsWith(".model")) && value != null) {
+    try { return typeof value === "string" ? parseRoleAssignment("owner=" + value).modelRef : normalizeModelRef(value) } catch { return undefined }
+  }
+  if (field === "firstWritable" || field.startsWith("writableByStage.") || field.endsWith(".writable")) {
+    if (Array.isArray(value)) return value.map((entry) => typeof entry === "string" ? comparableWritablePath(entry) : entry)
+  }
+  return value
+}
+
+function matchesClaim(obligation, claim) {
+  const normalized = normalizedClaim(obligation.field, claim)
+  if (!Object.hasOwn(obligation, "item")) {
+    const actual = normalizedClaim(obligation.field, obligation.value)
+    if (normalized && actual && (obligation.field.startsWith("roles.") || obligation.field.endsWith(".model"))) {
+      // 模型族是物化时可自动补齐的审计属性；用户显式提交时仍执行精确匹配。
+      return modelRefsEqual(normalized, actual) && (normalized.family === undefined || normalized.family === actual.family)
+    }
+    return sameValue(normalized, actual)
+  }
+  const item = normalizedClaim(obligation.field, [obligation.item])[0]
+  return Array.isArray(normalized) && normalized.some((entry) => sameValue(entry, item))
+}
+
+// 准备事件只记实际规范化值及匹配的具体差异；覆盖依据不横跨写入口或过期候选。
+function intentPreparation(task, before, after, direction, touched, writableField = null) {
+  const changes = intakeFieldChanges(before, after)
+  const base = latestConfirmedIntake(task)
+  const claims = directionClaims(direction, writableField)
+  if (before == null && direction?.quote === after.intent.rawRequirement) claims.set("intent.rawRequirement", direction.quote)
+  const obligations = [...intentObligations(base?.snapshot, after), ...intentObligations(before, after)]
+  const covered = [...new Map(obligations.filter((item) => touched(item.field) && matchesClaim(item, claims.get(item.field)))
+    .map((item) => [digestValue(item), item])).values()]
+  if (!changes.length) {
+    if (!covered.length || base?.snapshot && currentConfirmedIntake(task) && sameValue(base.snapshot, after)) return null
+    const last = task.journal.findLast((event) => event.type === "intent-prepared")?.detail
+    if (last?.fingerprint === digestValue(after) && last.quote === direction?.quote && sameValue(last.covered, covered)) return null
+  }
+  return { type: "intent-prepared", detail: { beforeFingerprint: before ? digestValue(before) : null, fingerprint: digestValue(after), changes,
+    ...(covered.length ? { quote: direction.quote, covered, proof: { mode: "caller-reported" } } : {}) } }
+}
+
+function directIntentEligibility(task, snapshot, staged = []) {
+  const base = latestConfirmedIntake(task)
+  const journal = [...task.journal, ...staged.map((e, i) => ({ ...e, seq: task.journal.length + i + 1 }))]
+  const prepares = journal.filter((e) => e.seq > (base?.seq ?? 0) && e.type === "intent-prepared" && Array.isArray(e.detail?.changes))
+  let obligations = intentObligations(base?.snapshot, snapshot)
+  if (!obligations.length && base?.fingerprint === digestValue(snapshot) && prepares.some((e) => e.detail.changes.length)) {
+    // A→B→A 不用旧指纹复活批准；至少重新取得实际改回值的来源。
+    const current = intakeBusinessFields(snapshot)
+    const lastChanges = new Map(prepares.flatMap((e) => e.detail.changes.map((change) => [change.field, change])))
+    obligations = [...lastChanges.values()].filter((c) => sameValue(current.get(c.field) ?? null, c.to)).map((c) => ({ field: c.field, value: c.to }))
+  }
+  const source = (item) => prepares.findLast((e) => (Array.isArray(e.detail.covered) && e.detail.covered.some((row) => sameValue(row, item))) || e.detail.changes.some((c) => {
+    if (c.field !== item.field) return false
+    if (!Object.hasOwn(item, "item")) return true
+    return [c.from, c.to].filter(Array.isArray).filter((list) => list.some((entry) => sameValue(entry, item.item))).length === 1
+  }))
+  const sources = [], missing = []
+  for (const change of obligations) {
+    const verified = preparedIntentSource(source(change), change, journal)
+    if (verified) sources.push(verified)
+    else missing.push(change)
+  }
+  const gaps = snapshot.intent.gaps.filter((gap) => typeof gap.answer !== "string" || !gap.answer.trim())
+  return { base, missing, gaps, sources, changes: obligations, eligible: !base?.damaged && !missing.length && !gaps.length && sources.length > 0 }
+}
+
+function intentAuthorizationEvent(snapshot, eligibility) {
+  return { type: "intent-authorized", detail: { proof: { mode: "caller-reported" }, beforeFingerprint: eligibility.base?.fingerprint ?? null,
+    fingerprint: digestValue(snapshot), snapshot, changes: eligibility.changes, sources: eligibility.sources } }
+}
+
+function authorizationBinding(accepted) {
+  if (!accepted || accepted.unavailable) return null
+  const { fingerprint, snapshot } = accepted
+  return accepted.direct ? { mode: "direct-intent", seq: accepted.seq, fingerprint, snapshot }
+    : { mode: "confirmed-intake", decisionId: accepted.decisionId, fingerprint, snapshot }
+}
+
+function matchesAuthorization(task, fingerprint, binding) {
+  const accepted = currentConfirmedIntake(task)
+  return accepted?.fingerprint === fingerprint && sameValue(authorizationBinding(accepted), binding)
 }
 
 // 候选确认按恢复卡 ID 单独查询，不能替换当前意图确认，也不能被其他候选重用。
@@ -1009,69 +1249,119 @@ async function intakeState(task) {
 }
 
 // 确认卡正文：固定段序（原始需求 → 目标 → 约束/排除 → 范围/产出 → 角色模型 3 行 → 逐包模型 → gap → 选项）。
-function intakeCardText({ task, workflow, snapshot, details, choices = [], decisionId, diff, baselineUnavailable }) {
-  if (diff) {
-    const lines = ["# 任务意图变更确认", "", "卡片标识：" + decisionId,
-      "相对最近已确认卡 " + diff.baseDecisionId + " 的增量如下；与已确认快照一致（" + diff.unchangedCount + " 项未变），已折叠引用该卡；完整快照仍受 SHA 与卡片 ID 双重校验。", ""]
-    if (!diff.changes.length) lines.push("配置与该已确认快照相同；本次重签仍须确认当前卡。")
-    for (const change of diff.changes) {
-      const label = { added: "新增", removed: "删除", modified: "修改" }[change.kind]
-      lines.push("- " + label + " " + change.path +
-        (change.kind === "added" ? "：" + JSON.stringify(change.after) : change.kind === "removed" ? "：" + JSON.stringify(change.before) : "：" + JSON.stringify(change.before) + " → " + JSON.stringify(change.after)))
-    }
-    if (choices.length) {
-      lines.push("", "## 选项")
-      for (const choice of choices) lines.push(choice.n + ". " + choice.label + (choice.desc ? "——" + choice.desc : ""))
-    }
-    return lines.join("\n")
-  }
-  const lines = []
-  if (baselineUnavailable) lines.push("（最近已确认卡缺少可核验的完整快照，本次展示完整卡作为新基线。）", "")
-  lines.push("# 任务意图确认（intake-approval）", "")
-  if (task.scope?.intakeVersion === 2) lines.push("卡片标识：" + decisionId, "")
-  lines.push("## 你的原始需求（不摘要、不删改）")
-  lines.push(snapshot.intent.rawRequirement || "（未提供原始需求全文；可用 tw intent --task <n> --raw-requirement <原文> 补充）", "")
-  lines.push("## 目标 / 约束 / 排除")
-  lines.push("目标：" + (snapshot.intent.objective || "（未提供）"))
-  lines.push("风险标记：" + snapshot.intent.risk)
-  if (snapshot.intent.constraints.length) lines.push("约束：", ...snapshot.intent.constraints.map((c) => "- " + c))
-  else lines.push("约束：（未提供）")
-  if (snapshot.intent.exclusions.length) lines.push("排除：", ...snapshot.intent.exclusions.map((c) => "- " + c))
-  else lines.push("排除：（未提供）")
-  lines.push("", "## 范围与产出")
-  const entryStage = workflow?.stages?.find((stage) => stage.id === task.scope?.entry)
-  const actualScope = snapshot.scope ?? { entry: task.scope?.entry, completion: task.scope?.completion, outputs: entryStage?.outputs ?? [] }
-  lines.push("入口阶段：" + String(actualScope.entry ?? "未提供") + "；结束方式：" + JSON.stringify(actualScope.completion ?? null))
-  lines.push("预期产出物：" + (actualScope.outputs.map(String).join("、") || "（入口阶段无声明产出物）"))
-  lines.push("意图范围：" + JSON.stringify(snapshot.intent.scope))
-  const scopeNotes = Array.isArray(snapshot.intent.scope?.notes) ? snapshot.intent.scope.notes.map(String) : []
-  if (scopeNotes.length) lines.push("范围补充：", ...scopeNotes.map((note) => "- " + note))
-  if (snapshot.intent.acceptance.length) lines.push("验收：", ...snapshot.intent.acceptance.map((c) => "- " + c))
-  else lines.push("验收：（未提供）")
-  lines.push("", "## 角色模型（3 行，恒定显示）")
-  lines.push("| 角色 | provider | modelName | 推理强度 | family | 档位溯源 |", "| --- | --- | --- | --- | --- | --- |")
-  for (const detail of details) {
-    lines.push("| " + detail.role + " | " + (detail.modelRef?.provider ?? "（unresolved）") + " | " + (detail.modelRef?.modelName ?? "—") + " | " + (detail.modelRef ? (detail.modelRef.effort ?? "省略（不设置）") : "—") + " | " + (detail.modelRef?.family ?? "省略") + " | " + (detail.tierProvenance ?? "未记录") + " |")
-  }
-  const unresolved = details.filter((detail) => !detail.modelRef)
-  if (unresolved.length) lines.push("", "未解析角色：" + unresolved.map((detail) => detail.role + "（" + (detail.reason ?? "未解析") + "）").join("；"))
-  lines.push("", "## 完整分包计划")
-  if (!snapshot.packages.length) {
-    lines.push("未拆包：单 Owner；模型：" + JSON.stringify(snapshot.roles.owner) + "；首派可写范围：" + JSON.stringify(snapshot.firstWritable ?? null) + "；验收：" + JSON.stringify(snapshot.intent.acceptance))
-  } else {
-    for (const pkg of snapshot.packages) lines.push("- id: " + pkg.id + "；model: " + JSON.stringify(pkg.model) + "；writable: " + JSON.stringify(pkg.writable) + "；done: " + JSON.stringify(pkg.done) + "；dependsOn: " + JSON.stringify(pkg.dependsOn))
-  }
-  lines.push("", "## 仍未明确的问题（gap）")
-  if (!snapshot.intent.gaps.length) lines.push("（无：目标、约束、排除、范围与验收均可指回原始需求）")
-  else snapshot.intent.gaps.forEach((gap, index) => {
-    lines.push((index + 1) + ". " + JSON.stringify(gap))
+const INTENT_SECTIONS = ["用户原始需求", "目标 / 约束 / 排除", "范围与产出", "角色模型", "执行分工", "待对齐的信息差"]
+const INTENT_LABELS = { rawRequirement: "原始需求", objective: "目标", constraints: "约束", exclusions: "排除", risk: "风险标记", scope: "意图范围", notes: "范围补充", acceptance: "验收", gaps: "信息差", entry: "入口阶段", completion: "结束方式", outputs: "预期产出物", firstWritable: "首派可写范围", writableByStage: "阶段可写范围", owner: "Owner", challenger: "Challenger", expert: "Expert", provider: "提供方", modelName: "模型名称", effort: "推理强度", family: "模型族", packages: "执行包", "$order": "执行包次序", model: "模型", writable: "可写范围", done: "完成标准", dependsOn: "依赖", question: "待对齐问题", whyItMatters: "影响", proposedDefault: "建议", answer: "答复" }
+
+// 纯文本围栏长度由内容确定，原话中的标题、围栏或选项不会进入卡面结构。
+function intentTextBlock(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2)
+  let width = 3
+  for (const match of text.matchAll(/~+/g)) width = Math.max(width, match[0].length + 1)
+  const fence = "~".repeat(width)
+  return fence + "text\n" + text + "\n" + fence
+}
+
+function intentFieldTitle(field) {
+  const pkg = field.match(/^packages\[([^\]]+)\](?:\.(.*))?$/)
+  if (pkg) return "包 " + pkg[1] + (pkg[2] ? " · " + intentFieldTitle(pkg[2]) : "")
+  return field.replace(/^intent\./, "").split(".").map((key) => {
+    const match = key.match(/^([^[]+)(?:\[(\d+)\])?$/)
+    return match ? (INTENT_LABELS[match[1]] ?? match[1]) + (match[2] == null ? "" : "第 " + (Number(match[2]) + 1) + " 项") : key
+  }).join(" · ")
+}
+
+function intentSection(field) {
+  if (field === "intent.rawRequirement") return 0
+  if (/^intent\.(objective|constraints|exclusions|risk)/.test(field)) return 1
+  if (/^(scope|intent\.(scope|acceptance))/.test(field)) return 2
+  if (field.startsWith("roles")) return 3
+  if (/^(packages|firstWritable|writableByStage)/.test(field)) return 4
+  return 5
+}
+
+function coveredVisibleChange(change, sources) {
+  return sources.some(({ change: c }) => {
+    if (Object.hasOwn(c, "item")) return change.kind === "added" && (change.path === c.field || change.path.startsWith(c.field + "[")) && sameValue(change.after, c.item)
+    return (change.path === c.field || change.path.startsWith(c.field + ".")) && change.kind !== "removed"
   })
-  lines.push("")
-  if (unresolved.length) lines.push("（角色模型 unresolved：本卡不提供“确认开始”；修复配置后 tw roles --resolve 重签）")
-  if (choices.length) {
-    lines.push("", "## 选项")
-    for (const choice of choices) lines.push(choice.n + ". " + choice.label + (choice.desc ? "——" + choice.desc : ""))
+}
+
+// 卡只在签发时生成，展示与答复共用冻结正文，模板版本不参与完整合同摘要。
+function intakeCardText({ task, workflow, snapshot, details, choices, decisionId, diff, baselineUnavailable, eligibility }) {
+  const lines = [diff ? "# 任务意图变更确认" : "# 任务意图确认（intake-approval）", "", "任务：" + task.name + "；卡片标识：" + decisionId]
+  const block = (label, value, empty = "（未提供）") => lines.push(label, value == null || value === "" || Array.isArray(value) && !value.length ? empty : intentTextBlock(value))
+  if (diff) {
+    lines.push("", "## 变更原因和基准", "实际执行内容与已确认快照不同，以下展示本次待确认差异。")
+    lines.push("基准卡：" + diff.baseDecisionId + (diff.effectiveBase ? "；包含其后已登记的用户补充（日志 #" + diff.effectiveBase.seq + "）。" : "。"))
+    if (eligibility.sources.length) lines.push("已有明确来源的匹配值不作为待确认项重复列示；选项仍绑定实际完整快照。")
+    lines.push("", "## 本次变更")
+    const changes = diff.changes.filter((change) => !coveredVisibleChange(change, eligibility.sources))
+    for (const [index, title] of INTENT_SECTIONS.entries()) {
+      const group = changes.filter((change) => intentSection(change.path) === index)
+      if (!group.length) continue
+      lines.push("### " + title)
+      for (const change of group) {
+        const label = { added: "新增", removed: "删除", modified: "修改" }[change.kind]
+        lines.push("- " + label + "「" + intentFieldTitle(change.path) + "」")
+        if (change.kind !== "added") block("原值", change.before)
+        if (change.kind !== "removed") block("当前值", change.after)
+      }
+    }
+    if (!changes.length) lines.push("配置与该已确认快照相同；仍须确认当前卡，不沿用已失效的旧卡。")
+  } else {
+    if (baselineUnavailable) lines.unshift("（最近已确认卡缺少可核验的完整快照，本次展示完整卡作为新基线。）", "")
+    if (eligibility.base?.direct) lines.push("此前已按明确用户方向登记（日志 #" + eligibility.base.seq + "）；本卡完整展示实际合同，只决定新差异。")
+    lines.push("", "## 你的原始需求（不摘要、不删改）")
+    block("用户原话", snapshot.intent.rawRequirement)
+    const quotes = [...new Set(eligibility.sources.map((row) => row.quote))].filter((quote) => quote && quote !== snapshot.intent.rawRequirement)
+    for (const quote of quotes) block("用户补充指令", quote)
+    lines.push("", "## 目标 / 约束 / 排除")
+    block("目标", snapshot.intent.objective)
+    block("风险标记", snapshot.intent.risk)
+    block("约束", snapshot.intent.constraints)
+    block("排除", snapshot.intent.exclusions)
+    lines.push("", "## 范围与产出")
+    const scope = snapshot.scope ?? { entry: task.scope.entry, completion: task.scope.completion, outputs: workflow.stages.find((s) => s.id === task.scope.entry)?.outputs ?? [] }
+    block("入口阶段", scope.entry)
+    block("结束方式", scope.completion?.mode === "through-stage" ? "完成 " + scope.completion.stage + " 阶段后验收" : "走完整工作流")
+    block("预期产出物", scope.outputs)
+    block("意图范围", Object.fromEntries(Object.entries(snapshot.intent.scope).filter(([key]) => key !== "notes")))
+    block("范围补充", snapshot.intent.scope.notes)
+    block("验收", snapshot.intent.acceptance)
+    lines.push("", "## 角色模型（3 行，恒定显示）")
+    const inline = (value) => String(value).replace(/[\\|<>*_\x60\[\]]/g, "\\$&").replace(/[\r\n]+/g, " ↵ ")
+    lines.push("| 角色 | provider | modelName | 推理强度 | family | 档位溯源 |", "| --- | --- | --- | --- | --- | --- |")
+    for (const d of details) lines.push("| " + [d.role, d.modelRef?.provider ?? "未解析", d.modelRef?.modelName ?? "—", d.modelRef?.effort ?? "不设置", d.modelRef?.family ?? "—", d.tierProvenance ?? "未记录"].map(inline).join(" | ") + " |")
+    lines.push("", "## 完整分包计划（执行分工）")
+    if (snapshot.packages.length) for (const pkg of snapshot.packages) {
+      lines.push("### 包 " + pkg.id)
+      block("model · 模型", describeModelRef(pkg.model))
+      block("writable · 可写范围", pkg.writable)
+      block("done · 完成标准", pkg.done)
+      block("dependsOn · 依赖", pkg.dependsOn, "（无依赖）")
+    } else {
+      lines.push("未拆包：单 Owner")
+      block("模型", describeModelRef(snapshot.roles.owner))
+      const stage = currentStageOf(task.journal, task.scope)
+      block(stage === task.scope.entry ? "首派可写范围" : "当前阶段可写范围", stageWritable(snapshot, task.scope.entry, stage))
+      block("验收", snapshot.intent.acceptance)
+    }
   }
+  lines.push("", "## 待对齐的信息差")
+  if (!eligibility.gaps.length && !eligibility.missing.length) lines.push("无待对齐项。")
+  for (const gap of eligibility.gaps) {
+    block("待对齐问题", gap.question)
+    if (gap.whyItMatters) block("现状 / 证据及影响", gap.whyItMatters)
+    if (gap.proposedDefault) block("候选建议", gap.proposedDefault)
+  }
+  if (eligibility.missing.length) {
+    if (diff) for (const quote of new Set(eligibility.sources.map((row) => row.quote).filter(Boolean))) block("相关用户原话", quote)
+    lines.push("以下实际值没有完全匹配的用户来源，请核对是否接受当前补全或修正：" + [...new Set(eligibility.missing.map(({ field }) => intentFieldTitle(field)))].join("、") + "。")
+    lines.push("影响：一旦确认，后续派单按本卡绑定的目标、范围、模型和分工执行。")
+  }
+  if (diff) lines.push("", "## 未变更项", "共 " + diff.unchangedCount + " 项，已折叠引用该卡" + (diff.effectiveBase ? "及其后已登记的补充" : "") + "。")
+  lines.push("", "## 选项")
+  for (const choice of choices) lines.push(choice.n + ". " + choice.label + (choice.desc ? "——" + choice.desc : ""))
   return lines.join("\n")
 }
 
@@ -1094,9 +1384,15 @@ async function signIntakeApproval({ task, workflow, roles, details, profile, sou
   if (!unresolved.length) choices.push({ n: ++number, label: "确认开始", desc: "按以上意图、角色模型与逐包模型进入执行", grant: "accept-intake" })
   choices.push({ n: ++number, label: "我先修改", desc: "用 tw intent / tw roles / tw plan 修改后重出确认卡", grant: "revise-intake" })
   choices.push({ n: ++number, label: "终止任务", desc: "以当前形态终止并归档", grant: "stop-task" })
-  const base = latestConfirmedIntake(task)
-  const diff = base && !base.unavailable ? intakeDiff(base.snapshot, snapshot, base) : null
-  const question = intakeCardText({ task, workflow, snapshot, details, choices, decisionId, diff, baselineUnavailable: base?.unavailable })
+  const eligibility = directIntentEligibility(task, snapshot)
+  const base = eligibility.base
+  const diff = base?.decisionId && !base.unavailable ? intakeDiff(base.snapshot, snapshot, base) : null
+  if (diff && base.direct) {
+    diff.baseFingerprint = base.cardFingerprint
+    diff.effectiveBase = { seq: base.seq, fingerprint: base.fingerprint }
+  }
+  const template = { version: 1, form: diff ? "incremental" : "full" }
+  const question = intakeCardText({ task, workflow, snapshot, details, choices, decisionId, diff, baselineUnavailable: base?.unavailable, eligibility })
   const intake = {
     rawRequirement: snapshot.intent.rawRequirement,
     objective: snapshot.intent.objective,
@@ -1115,23 +1411,43 @@ async function signIntakeApproval({ task, workflow, roles, details, profile, sou
     profile: profile ?? "unresolved",
     source: source ?? "unresolved",
   }
-  events.push({ type: "decision-issued", detail: { decisionId, gateId: INTAKE_GATE, reason: question, choices, intakeFingerprint: fingerprint, intake, ...(recoveryAuthorization ? { recoveryAuthorization } : {}), ...(task.scope?.intakeVersion === 2 ? { intakeVersion: 2 } : {}) } })
+  events.push({ type: "decision-issued", detail: { decisionId, kind: "intent", template, gateId: INTAKE_GATE, reason: question, choices, intakeFingerprint: fingerprint, intake, ...(recoveryAuthorization ? { recoveryAuthorization } : {}), ...(task.scope?.intakeVersion === 2 ? { intakeVersion: 2 } : {}) } })
   await appendEventsUnlocked(task, events)
-  return { decisionId, question, choices, intakeFingerprint: fingerprint, intake, ...(unresolved.length ? { code: "INTAKE_ROLES_UNRESOLVED", unresolved: unresolved.map((detail) => detail.role) } : {}) }
+  return { kind: "intent", template, gateId: INTAKE_GATE, decisionId, question, choices, intakeFingerprint: fingerprint, intake, ...(unresolved.length ? { code: "INTAKE_ROLES_UNRESOLVED", unresolved: unresolved.map((detail) => detail.role) } : {}) }
 }
 
 // 派发前的确认门：只在"本任务签发过确认卡"时生效（旧任务不补卡、不静止，§3.4.5）。
 // 已确认指纹与当前稳定投影不一致（意图/roles/packages 变化）→ 作废旧卡并重签，停止派发。
+async function authorizePreparedIntake(task, info) {
+  const pending = pendingDecisionsOf(task).open.filter((c) => c.kind === "intent" && !c.detail.recoveryAuthorization)
+  const eligibility = directIntentEligibility(task, info.snapshot)
+  if (!eligibility.eligible) return null
+  const events = pending.map(({ detail }) => ({ type: "decided", detail: { decisionId: detail.decisionId, choice: "superseded", reason: "用户明确方向已覆盖实际意图；未代答原卡。" } }))
+  await appendEventsUnlocked(task, [...events, intentAuthorizationEvent(info.snapshot, eligibility)])
+  return { next: "dispatch", authorization: { mode: "caller-reported", seq: task.journal.at(-1).seq, fingerprint: info.fingerprint }, note: "用户明确方向已按实际值登记；各独立待决卡仍须按原卡答复。" }
+}
+
+async function reconcilePreparedIntake(task) {
+  const base = latestConfirmedIntake(task)
+  const issued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
+  if (!base && !issued) return null // 首次推进才冻结完整首派合同。
+  const info = await intakeState(task)
+  if (!readyToSignIntake(task, info.roles)) return null
+  return authorizePreparedIntake(task, info)
+}
+
 async function intakeGateCard({ task, workflow, state }) {
   const issued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail))
-  if (!issued && task.scope?.intakeVersion !== 2) return null
+  if (!issued && task.scope?.intakeVersion !== 2 && !task.scope.firstWritable && !task.scope.writableByStage) return null
   const pending = pendingDecisionDetail(task.journal)
   if (pending && pending.gateId !== INTAKE_GATE) return null
   const stateInfo = await intakeState(task)
   assertCompleteIntake(task, stateInfo.roles)
-  if (pending?.intakeFingerprint === stateInfo.fingerprint) return { ok: true, task: task.name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, intakeFingerprint: pending.intakeFingerprint, intake: pending.intake }
-  const accepted = intakeConfirmation(task)
-  if (accepted && accepted.intakeFingerprint === stateInfo.fingerprint) return null
+  if (pending?.recoveryAuthorization) return null // 仅其恢复卡可消费候选计划。
+  const accepted = currentConfirmedIntake(task)
+  if (!pending && accepted?.fingerprint === stateInfo.fingerprint) return null
+  if (await authorizePreparedIntake(task, stateInfo)) return null
+  if (pending?.intakeFingerprint === stateInfo.fingerprint) return { ok: true, task: task.name, stage: state.stage, status: "awaiting-user", kind: "intent", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, intakeFingerprint: pending.intakeFingerprint, intake: pending.intake }
   const details = roleDetailsForCard(task, stateInfo.roles, stateInfo.invalid)
   const card = await signIntakeApproval({ task, workflow, roles: stateInfo.roles, details, profile: profileOf(task), source: "role-registry" })
   return {
@@ -1206,9 +1522,9 @@ async function materializePackages({ task }) {
     next.push({ ...rest, model: modelRef })
     materialized.push({ id: pkg.id, modelRef, from: pkg.tier ? "tier" : "roles.owner" })
   }
+  await appendEventsUnlocked(task, [{ type: "packages-model-materialized", detail: { packages: materialized, items: next } }])
   await atomicJson(path.join(task.root, "packages.json"), { items: next })
   task.packages = next
-  await appendEventsUnlocked(task, [{ type: "packages-model-materialized", detail: { packages: materialized } }])
   return { packages: next, materialized }
 }
 
@@ -1285,7 +1601,7 @@ async function freshSessionGate({ task, state, cards }) {
     // 包波的模型来自 packages[].model（包级优先）；无包波来自 roles[role]。回滚对象随来源而定。
     const rollbackTarget = card.package != null ? "package" : "roles"
     const rollbackLabel = rollbackTarget === "package" ? "回滚包模型到旧值" : "回滚 roles 到旧值"
-    const rollbackDesc = rollbackTarget === "package" ? "包 " + card.package + " 的 model 恢复为首派模型并重签确认卡" : "角色模型恢复为首派模型并重签确认卡"
+    const rollbackDesc = (rollbackTarget === "package" ? "将包 " + card.package + " 的模型恢复为首派模型" : "将角色模型恢复为首派模型") + "；只确认本项回滚"
     const reason = "模型变更确认（已有会话不可热替换模型）：续派会话 " + sessionId + "（" + card.role + (card.package ? " · 包 " + card.package : "") + "）首派模型 " + describeModelRef(from) + "，当前配置 " + describeModelRef(card.modelRef) + "。请选择：保留原会话按旧模型继续 / 作废当前波并重开会话（全新上下文）/ " + rollbackLabel + "。"
     const choices = [
       { n: 1, label: "保留原会话", desc: "按首派模型继续，之后不再重复出卡", grant: "keep-session" },
@@ -1461,7 +1777,7 @@ function dispatchCard(task, stageDef, wave, detail, memberRules = "", model = nu
 
 // 开任务（§3.1/§3.4）：initTask 写 intent → 锁内解析三角色 ModelRef 写 agents.json.roles
 // → journal roles-initialized；首次推进才签发完整意图确认卡。
-async function cmdOpen({ projectRoot, name, objective, entry, risk, rawRequirement, constraints = [], exclusions = [], scopeNotes = [], acceptance = [], gaps = [] }) {
+async function cmdOpen({ projectRoot, direction, name, objective, entry, risk, rawRequirement, constraints = [], exclusions = [], scopeNotes = [], acceptance = [], gaps = [] }) {
   if (!name || !objective) throw fail("OPEN_INPUT_REQUIRED", "open 需要 --name 与 --objective")
   if (risk && !['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical（只升 owner 角色档；包级模型由 tw plan 显式指定）")
   const { workflow, policy } = await loadDefinitions(projectRoot)
@@ -1502,7 +1818,9 @@ async function cmdOpen({ projectRoot, name, objective, entry, risk, rawRequireme
     const resolved = await resolveRoleModels({ task, workflow, policy })
     const unresolved = ROLE_KEYS.filter((role) => !resolved.roles[role])
     await updateAgents(task, (agents) => { agents.roles = resolved.roles })
-    await appendEventsUnlocked(task, [{ type: "roles-initialized", detail: { roles: resolved.details, source: resolved.source, profile: resolved.profile, entryId: resolved.entryId, ...(unresolved.length ? { unresolved } : {}) } }])
+    const snapshot = intakeSnapshot({ task, roles: resolved.roles, packages: task.packages })
+    const preparation = intentPreparation(task, null, snapshot, direction, () => true)
+    await appendEventsUnlocked(task, [{ type: "roles-initialized", detail: { roles: resolved.details, source: resolved.source, profile: resolved.profile, entryId: resolved.entryId, ...(unresolved.length ? { unresolved } : {}) } }, ...[preparation].filter(Boolean)])
     const baseNote = entry ? `任务从 ${entry} 介入，将运行到该阶段验收` : "任务将运行完整工作流"
     const riskNote = risk && risk !== 'normal' ? `；按 ${risk} 档运行：owner 角色档解析为 ${risk === 'critical' ? 'expert' : 'senior'}` : ""
     const unresolvedNote = unresolved.length ? '；角色模型 unresolved（' + unresolved.join('、') + '）：补齐配置后 tw roles --resolve 重建' : ''
@@ -1510,7 +1828,7 @@ async function cmdOpen({ projectRoot, name, objective, entry, risk, rawRequireme
       ok: true, task: name, stage: resolvedEntry, status: "preparing", next: "dispatch",
       roles: resolved.roles,
       ...(unresolved.length ? { unresolved } : {}),
-      note: baseNote + riskNote + '；准备角色与分包后首次推进签发完整确认卡，确认前不派发' + unresolvedNote,
+      note: baseNote + riskNote + '；角色与分工准备完成后，首次推进核对用户方向，只有存在待对齐内容才签意图卡' + unresolvedNote,
     }
   })
 }
@@ -1565,8 +1883,8 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
     return { ok: true, task: name, stage: state.stage, status: "completed", next: "archive", transition: "complete", note: "任务完成。可 tw archive --task 归档（用户确认后）" }
   }
   if (state.next.kind === "dispatch") {
-    if (task.scope?.intakeVersion === 2 && !task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)) {
-      return { ok: true, task: name, stage: state.stage, status: "preparing", next: "dispatch", note: "准备完成后由首次推进签发完整确认卡，确认前不派发。" }
+    if (task.scope?.intakeVersion === 2 && !latestConfirmedIntake(task) && !task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)) {
+      return { ok: true, task: name, stage: state.stage, status: "preparing", next: "dispatch", note: "准备完成后由首次推进核对明确授权；仍有内容待对齐时才签卡。" }
     }
     if (!state.next.wave) {
       // 门失败且非人工阻塞（如裁决/指纹失效且无法自动重派）：呈现 blocker 卡（I5；只读推导）
@@ -1576,10 +1894,10 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
     const wave = state.next.wave
     // 只读检查（run 零写入）：确认未完成或配置已变化时只给重签指引，签发归 dispatch 通道。
     const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail))
-    if (intakeIssued) {
+    if (intakeIssued || latestConfirmedIntake(task)?.direct) {
       const stateInfo = await intakeState(task)
-      const accepted = intakeConfirmation(task)
-      if (!accepted || accepted.intakeFingerprint !== stateInfo.fingerprint) {
+      const accepted = currentConfirmedIntake(task)
+      if (!accepted || accepted.fingerprint !== stateInfo.fingerprint) {
         return { ok: true, task: name, stage: state.stage, status: "working", next: "dispatch", wave: { kind: wave.kind, role: wave.role, round: wave.round }, note: "意图确认未完成或配置已变化：调 tw-dispatch（或 tw dispatch-plan）重签确认卡并等待用户确认；确认前不派发" }
       }
     }
@@ -1635,6 +1953,10 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
       }
     }
     const pending = state.next.pending ?? null
+    if (pending?.kind === "round-limit") {
+      const { stale } = inspectRoundLimit(task, pending)
+      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: stale ? "re-sign" : "decide", transition: "await-decision", ...roundLimitCard(pending), ...(stale ? { stale, note: "原额度卡已失效：可按原 ID 安全结束，或重新推进签卡。" } : {}) }
+    }
     const multiList = Array.isArray(state.next.pendingDecisions) && state.next.pendingDecisions.length ? state.next.pendingDecisions : null
     if (!pending && multiList) {
       return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", ...await pendingCardLists(projectRoot, task, state.stage, multiList), ...(state.next.duplicateIssued?.length ? { duplicateIssued: state.next.duplicateIssued } : {}), ...(progressText ? { progress: progressText } : {}), note: "当前有多张待决卡：用 --decision-id 指定实际答复的卡片（列表见 pendingDecisions）。" }
@@ -1670,7 +1992,7 @@ async function runStatusCard({ projectRoot, name, task, state, workflow, policy 
           return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "re-sign", transition: "await-decision", decisionId: pending.decisionId, stale: true, question: pending.reason, note: "换模型确认卡已失效（角色/包模型在签发后变化）：调 tw-dispatch（或 tw dispatch-plan）重签后再决定" }
         }
       }
-      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(Array.isArray(state.next.pendingDecisions) && state.next.pendingDecisions.length ? { pendingDecisions: await describePendingCards(projectRoot, task, state.stage, state.next.pendingDecisions), ...(blockedEvidenceOf(task, state.stage).length ? { blockedPackages: blockedEvidenceOf(task, state.stage) } : {}), ...(state.next.pendingDecisions.length > 1 ? { needsDecisionId: true } : {}) } : {}), ...(state.next.duplicateIssued?.length ? { duplicateIssued: state.next.duplicateIssued } : {}), ...(progressText ? { progress: progressText } : {}) }
+      return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, kind: pending.kind, gateId: pending.gateId, question: pending.reason, choices: pending.choices, ...(Array.isArray(state.next.pendingDecisions) && state.next.pendingDecisions.length ? { pendingDecisions: await describePendingCards(projectRoot, task, state.stage, state.next.pendingDecisions), ...(blockedEvidenceOf(task, state.stage).length ? { blockedPackages: blockedEvidenceOf(task, state.stage) } : {}), ...(state.next.pendingDecisions.length > 1 ? { needsDecisionId: true } : {}) } : {}), ...(state.next.duplicateIssued?.length ? { duplicateIssued: state.next.duplicateIssued } : {}), ...(progressText ? { progress: progressText } : {}) }
     }
     // 路由类 blocker（pending 之后——routeBlocker 在场时 derive 不会静止）：只读呈现路由指引
     const routeBlocker = (state.gate?.blockers ?? []).find((b) => b.route && b.awaitingUser)
@@ -1712,9 +2034,9 @@ async function ensureE2ePackages(task) {
     done: entry.completionCriteria ?? [],
     dependsOn: entry.dependsOn ?? [],
   }))
+  await appendEventsUnlocked(task, [{ type: 'packages-planned', detail: { packages: items.map((p) => p.id), items, source: 'e2eTemplate' } }])
   await atomicJson(path.join(task.root, 'packages.json'), { items })
   task.packages = items
-  await appendEventsUnlocked(task, [{ type: 'packages-planned', detail: { packages: items.map((p) => p.id), source: 'e2eTemplate' } }])
   return true
 }
 
@@ -1747,7 +2069,7 @@ function dispatchedDetail(dispatch, wave, writable, extras = {}) {
     // B3：评审/裁决派单冻结被审基线身份（reviewBaseline）
     ...(extras.reviewBaseline ? { reviewBaseline: extras.reviewBaseline } : {}),
     ...(dispatch.waveId ? { waveId: dispatch.waveId } : {}),
-    ...(wave.causeDecisionId ? { causeDecisionId: wave.causeDecisionId } : {}),  // F5：respond 派发抄写返工决定（runtime 抄写，P4）
+    ...(wave.causeDecisionId ? { causeDecisionId: wave.causeDecisionId, reworkAuthorizationId: wave.reworkAuthorizationId } : {}),
     // 新派发一律写 modelRef + 来源（package/roles）；历史 modelHint 只在读取时映射，不重写。
     ...(dispatch.modelRef ? { modelRef: dispatch.modelRef, modelSource: dispatch.modelSource ?? 'roles' } : {}),
     // §4.1 冻结派单正文与摘要：该 key 首次实际生成的派单正文（含全量变体）随 dispatched 事件
@@ -1780,7 +2102,40 @@ function pendingDecisionDetail(journal) {
 // 僵局卡对既有 converge-user choices 的扩展——「追加一轮」对僵局包会立即再判僵局（用户可见空转），不得沿用；
 // blocked 卡用专用两选项「重派 respond（新绑定波）/ 结束任务」——不沿用「追加一轮」
 // （extra-round 无派发路径、绑定波报告仍 blocked → 空转循环，实证修正）。
+function maybeRoundLimit(card) {
+  return card?.kind === "round-limit" || Boolean(card && !card.kind && !card.gateId && card.fingerprints && card.choices?.some((c) => c.grant === "extra-round"))
+}
+
+// 只略过正在回答的卡。其他卡仍可令任务静止；报告、计划和制品绑定都用当前事实重新计算。
+function inspectRoundLimit(task, pending) {
+  const journal = task.journal.filter((e) => !(e.type === "decision-issued" && e.detail?.decisionId === pending.decisionId))
+  const state = deriveTask({ ...task, journal })
+  if (state.next.pending || state.next.pendingDecisions?.length) return { prerequisite: true }
+  const current = state.wave?.roundLimit
+  if (!current || current.exhausted.some((row) => !row.instance)) return { stale: true }
+  const artifactFingerprint = currentArtifactFpOf(task, state)
+  const binding = { ...current, artifactFingerprint }
+  if (pending.kind === "round-limit") return digestValue(pending.roundLimit) === digestValue(binding) ? { binding } : { stale: true }
+  // 历史未决卡仅在原阶段、同一指纹且唯一耗尽包可核验时沿用原 ID；不按问句猜类型。
+  const seq = task.journal.find((e) => e.type === "decision-issued" && e.detail?.decisionId === pending.decisionId)?.seq
+  const reviewFp = currentReviewFpOf(task, state, task.workflow, task.policy)
+  const same = seq > current.stageEntrySeq && current.exhausted.length === 1 &&
+    current.baselines.every(([, , , commit]) => commit != null && commit < seq) &&
+    current.feedback.every(([, , commit]) => commit > 0 && commit < seq) &&
+    !task.journal.some((e) => e.seq > seq && ["packages-planned", "re-planned", "packages-model-materialized"].includes(e.type)) &&
+    humanDecisionFresh({ decided: pending.fingerprints, artifactFp: artifactFingerprint, reviewFp })
+  return same ? { binding } : { stale: true }
+}
+
+function roundLimitCard(detail) {
+  return { kind: "round-limit", decisionId: detail.decisionId, question: detail.reason, choices: detail.choices, roundLimit: detail.roundLimit }
+}
+
 function decisionChoicesFor({ state, human }) {
+  if (state.wave.kind === "round-limit") return [
+    { n: 1, label: "追加一轮", desc: "每个列出的耗尽包各追加一轮，其他包额度不变", grant: "extra-round" },
+    { n: 2, label: "结束任务", desc: "以当前形态终止并归档" },
+  ]
   const isStalemate = Array.isArray(state.next.reworkStalemate)
   const isBlocked = Boolean(state.next.reworkBlocked)
   return isStalemate
@@ -1914,7 +2269,13 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
         }
         const o = wave.owners?.[0]
         // --writable none = 无产物派单（纯调查/回应，outputs 为空的阶段）；其余按 路径:kind 解析
-        const decl = writable.length === 1 && writable[0] === 'none' ? [] : writable.map(parseWritableEntry)
+        const decl = parseWritableScope(writable)
+        const authorized = currentConfirmedIntake(task)
+        const approved = stageWritable(authorized?.snapshot, task.scope.entry, state.stage)
+        if (!approved || !writableIncludes(parseWritableScope(approved), decl)) {
+          throw fail("INTAKE_UNCONFIRMED", "当前阶段没有覆盖实际派单的可核验范围；请核对路径、类型及用户授权后继续，已冻结派单不变。")
+        }
+        await verifyWritablePaths(projectRoot, writable)
         decls = [{ key: newKey(), waveId, package: null, round: o?.round ?? wave.round, continuation: o?.continuation ?? false, writable: decl }]
       }
       // 惰性：仅到达真正派发点才解析规则
@@ -1923,6 +2284,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       for (const d of decls) {
         const model = dispatchModelFor(task, prepared.roles, state, 'owner', d.package)
         if (model.errorCard) return model.errorCard
+        if (pkgItems) await verifyWritablePaths(projectRoot, pkgItems.find((pkg) => pkg.id === d.package)?.writable ?? [])
         cards.push(dispatchCard({ ...task, policy }, stageDef, wave, d, rules.get('owner') ?? "", model).dispatch)
       }
       // 已有会话换模型门：续派前检测首派与当前配置差异（§3.6），命中则停止并签发换模型卡。
@@ -2039,6 +2401,22 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
     const currentReviewFp = currentReviewFpOf(task, state, workflow, policy)
     // 僵局/blocked/人工门/默认四类选择表（仅首签生成；重渲染一律用账本 pending.choices）
     const human = state.gate?.humanGate ?? state.next.gateId ?? null
+    if (pending && maybeRoundLimit(pending)) {
+      const checked = inspectRoundLimit(task, pending)
+      if (checked.binding || pending.kind === "round-limit" && checked.prerequisite) {
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", ...roundLimitCard(pending) }
+      }
+      // 旧样式确实是技术升级的仍用原卡；类型化额度卡失效后只作废自己。
+      if (pending.kind === "round-limit" || deriveTask({ ...task, journal: task.journal.filter((event) => event.detail?.decisionId !== pending.decisionId) }).wave?.kind !== "converge-user") {
+        await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: "superseded", reason: "原额度卡无法与当前返工绑定" } }])
+        return { transition: "re-sign" }
+      }
+    }
+    if (!pending && state.wave.kind === "round-limit" && state.wave.roundLimit.exhausted.some((row) => !row.instance)) {
+      // 历史只有包名时不推测连续性；以当前完整计划登记可核验起点，再重算卡片。
+      await appendEventsUnlocked(task, [{ type: "re-planned", detail: { items: task.packages ?? [], source: "round-limit-baseline" } }])
+      return { transition: "re-sign" }
+    }
     const cardChoices = decisionChoicesFor({ state, human })
     if (pending) {
       if (["artifact-refresh", "package-recovery"].includes(pending.kind)) {
@@ -2079,13 +2457,17 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       } else {
         // 已签发未失效：同钉渲染账本原卡（卡面=账本=decide 依据；再调 dispatch 返回同一张卡——签发幂等）
         // §6.2.2 多卡输出：pendingDecisions 全列表（机器消费），单卡别名保留
-        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, question: pending.reason, choices: pending.choices, ...(Array.isArray(state.next.pendingDecisions) && state.next.pendingDecisions.length ? { pendingDecisions: await describePendingCards(projectRoot, task, state.stage, state.next.pendingDecisions), ...(blockedEvidenceOf(task, state.stage).length ? { blockedPackages: blockedEvidenceOf(task, state.stage) } : {}), ...(state.next.pendingDecisions.length > 1 ? { needsDecisionId: true } : {}) } : {}), ...(state.next.duplicateIssued?.length ? { duplicateIssued: state.next.duplicateIssued } : {}), ...(progressText ? { progress: progressText } : {}) }
+        return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId: pending.decisionId, kind: pending.kind, gateId: pending.gateId, question: pending.reason, choices: pending.choices, ...(Array.isArray(state.next.pendingDecisions) && state.next.pendingDecisions.length ? { pendingDecisions: await describePendingCards(projectRoot, task, state.stage, state.next.pendingDecisions), ...(blockedEvidenceOf(task, state.stage).length ? { blockedPackages: blockedEvidenceOf(task, state.stage) } : {}), ...(state.next.pendingDecisions.length > 1 ? { needsDecisionId: true } : {}) } : {}), ...(state.next.duplicateIssued?.length ? { duplicateIssued: state.next.duplicateIssued } : {}), ...(progressText ? { progress: progressText } : {}) }
       }
     }
     const decisionId = `dec-${randomBytes(3).toString("hex")}`
+    const kind = state.wave.kind === "round-limit" ? "round-limit" : state.wave.technicalDecision ? "technical-review" : Array.isArray(state.next.reworkStalemate) ? "stalemate" : state.next.reworkBlocked ? "rework-blocked" : human ? "human-gate" : "converge"
+    const roundLimit = kind === "round-limit" ? { ...state.wave.roundLimit, artifactFingerprint: currentArtifactFp } : null
     await appendEventsUnlocked(task, [{ type: "decision-issued", detail: {
-      decisionId, gateId: human,
-      reason: state.next.reason ?? `人工门 ${human}`,
+      decisionId, kind, gateId: human, stage: state.stage, stageEntrySeq: stageEntrySeqOf(task.journal),
+      ...(roundLimit ? { roundLimit } : {}),
+      ...(state.next.causeDecisionId ? { causeDecisionId: state.next.causeDecisionId } : {}),
+      reason: state.next.reason ?? `人工门 ${human}：是否接受交付？`,
       choices: cardChoices,
       fingerprints: { artifactFingerprint: currentArtifactFp, reviewFingerprint: currentReviewFp },
       ...(Array.isArray(state.next.reworkStalemate) ? { reworkStalemate: state.next.reworkStalemate.map(String) } : {}),
@@ -2093,7 +2475,7 @@ async function runTransition({ projectRoot, name, writable, workflow, policy, ta
       // 不得回退人工门默认选项）
       ...(state.next.reworkBlocked ? { reworkBlocked: true } : {}),
     } }])
-    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
+    return { ok: true, task: name, stage: state.stage, status: "awaiting-user", next: "decide", transition: "await-decision", decisionId, kind, gateId: human, ...(roundLimit ? { roundLimit } : {}), question: state.next.reason ?? `人工门 ${human}：是否接受交付？`, choices: cardChoices, ...(progressText ? { progress: progressText } : {}) }
   }
   if (state.next.kind === "blocked") {
     return { ok: true, task: name, stage: state.stage, status: "blocked", next: "none", transition: "blocked", blockers: [{ message: state.next.reason, recovery: state.next.reason }] }
@@ -2108,7 +2490,6 @@ async function describePendingCards(projectRoot, task, stage, cards) {
   let info = null
   try { info = await intakeState(task) } catch {}
   const readBytes = await import("./persistence/file-artifact-repository.mjs")
-  const accepted = currentConfirmedIntake(task)
   const baselines = deliverBaselines({ journal: task.journal, reports: task.reports.filter((r) => r.stage === stage) })
   return Promise.all((cards ?? []).map(async (card) => {
     const blockers = []
@@ -2118,6 +2499,11 @@ async function describePendingCards(projectRoot, task, stage, cards) {
         blockers.push({ code: "PREREQUISITE", decisionId: prerequisite.detail.decisionId, message: "先处理迁移或意图确认卡" })
       }
     }
+    if (card.kind === "round-limit") {
+      const checked = inspectRoundLimit(task, detail)
+      if (checked.prerequisite) blockers.push({ code: "PREREQUISITE", message: "先处理其余待决卡，再重验额度卡" })
+      if (checked.stale) blockers.push({ code: "STALE_ROUND_LIMIT", message: "返工依据或包实例已变化；原卡不可追加额度" })
+    }
     if (card.kind === "human-gate" && !verification.ok) for (const mismatch of verification.mismatches) blockers.push({ code: "ARTIFACT_MISMATCH", ...mismatch })
     if (card.kind === "artifact-refresh") {
       const refresh = detail.refresh ?? {}
@@ -2125,8 +2511,8 @@ async function describePendingCards(projectRoot, task, stage, cards) {
       const baseline = baselines.get(detail.package ?? null)?.report
       if ((baseline?.reportId ?? null) !== (refresh.previousReportId ?? null) || (baseline?.ver ?? 1) !== (refresh.previousVer ?? 1)) blockers.push({ code: "STALE_REPORT", message: "有效报告已变化" })
       const auth = refresh.intakeConfirmedAtIssue
-      if (!info || (auth?.mode !== "confirmed-intake" && auth?.mode !== "legacy-range")) blockers.push({ code: "INTAKE_UNCONFIRMED", message: "刷新卡授权快照无法验证" })
-      else if (auth.mode === "confirmed-intake" && (!accepted || accepted.fingerprint !== info.fingerprint || accepted.fingerprint !== auth.fingerprint || accepted.decisionId !== auth.decisionId)) blockers.push({ code: "STALE_AUTHORIZATION", message: "刷新卡绑定的意图确认已变化，须取消或重签" })
+      if (!info || !["confirmed-intake", "direct-intent", "legacy-range"].includes(auth?.mode)) blockers.push({ code: "INTAKE_UNCONFIRMED", message: "刷新卡授权快照无法验证" })
+      else if (auth.mode !== "legacy-range" && !matchesAuthorization(task, info.fingerprint, auth)) blockers.push({ code: "STALE_AUTHORIZATION", message: "刷新卡绑定的完整意图授权已变化，须取消或重签" })
       if (auth?.mode === "legacy-range" && info) {
         const multi = Array.isArray(task.packages) && task.packages.length > 0
         const writable = multi ? (task.packages.find((p) => p.id === detail.package)?.writable ?? []).map(parseWritableEntry) : (lastOwnerWritable(task, stage) ?? [])
@@ -2144,7 +2530,8 @@ async function describePendingCards(projectRoot, task, stage, cards) {
       if (rec.currentPlanDigest !== digestValue(task.packages ?? null)) blockers.push({ code: "STALE_PLAN", message: "恢复卡绑定的计划已变化" })
       const blocked = effectiveBlockedSetOf(task, stage).get(detail.package ?? null)
       if (!blocked || blocked.dispatchKey !== rec.dispatchKey || (blocked.ver ?? 1) !== (rec.reportVersion ?? 1)) blockers.push({ code: "STALE_BLOCKED", message: "绑定的 blocked 报告已变化" })
-      if (Array.isArray(rec.plan) && info && digestValue(rec.plan) !== digestValue(task.packages ?? null)) {
+      if (rec.intakeConfirmedAtIssue && (!info || !matchesAuthorization(task, info.fingerprint, rec.intakeConfirmedAtIssue))) blockers.push({ code: "STALE_AUTHORIZATION", message: "恢复卡绑定的完整意图授权已变化，须取消或重签" })
+      if (Array.isArray(rec.plan) && !rec.candidateDirection && info && digestValue(rec.plan) !== digestValue(task.packages ?? null)) {
         const expected = digestValue(intakeSnapshot({ task, roles: info.roles, packages: rec.plan }))
         if (candidateConfirmedIntake(task, detail.decisionId)?.fingerprint !== expected) blockers.push({ code: "CANDIDATE_UNCONFIRMED", message: "候选计划尚未获意图确认" })
       }
@@ -2169,6 +2556,7 @@ function cardPurpose(card) {
   if (kind === "package-recovery") return "按包解除 blocked 恢复确认"
   if (kind === "migrate") return "迁移冲突选择"
   if (kind === "intent") return "意图确认"
+  if (kind === "round-limit") return "自主轮次上限"
   if (kind === "model-change") return "换模型确认"
   if (kind === "stalemate") return "返工僵局仲裁"
   if (kind === "rework-blocked") return "返工 blocked 仲裁"
@@ -2206,9 +2594,8 @@ async function decideRefreshCard({ projectRoot, task, name, pending, picked, not
   // 刷新卡绑定确认时的完整授权；修改意图、角色或计划后，旧确认不能授权新事实。
   const authorization = refresh.intakeConfirmedAtIssue
   const currentInfo = await intakeState(task)
-  if (authorization?.mode === "confirmed-intake") {
-    const accepted = currentConfirmedIntake(task)
-    if (!accepted || accepted.unavailable || accepted.decisionId !== authorization.decisionId || accepted.fingerprint !== authorization.fingerprint || accepted.fingerprint !== currentInfo.fingerprint || digestValue(authorization.snapshot) !== accepted.fingerprint) {
+  if (["confirmed-intake", "direct-intent"].includes(authorization?.mode)) {
+    if (!matchesAuthorization(task, currentInfo.fingerprint, authorization)) {
       throw fail("DECISION_STALE", "刷新卡绑定的意图确认已变化或无法验证：仅可取消旧卡，先重新确认当前意图后准备新刷新卡。")
     }
   } else if (authorization?.mode === "legacy-range") {
@@ -2360,7 +2747,8 @@ async function decidePackageRecoveryCard({ projectRoot, task, name, pending, pic
     await appendEventsUnlocked(task, [{ type: "decided", detail: { decisionId: pending.decisionId, choice: picked.label, grant: "cancel", ...(note ? { note } : {}) } }])
     return { ok: true, task: name, decisionId: pending.decisionId, choice: picked.label, next: "run", note: "恢复卡已取消：该包保持 blocked，其他卡不受影响。" }
   }
-  // R3-9：共享先决条件——未决意图/迁移卡在场时，肯定性恢复被阻止（仅安全取消可用）；计划变更须先过意图确认。
+  let directCandidate = null
+  // 未决意图/迁移卡在场时，肯定性恢复被阻止；候选计划变更仍须有独立意图依据。
   if (picked.grant === "retry" || picked.grant === "remove") {
     const { open: openRec } = pendingDecisionsOf({ journal: task.journal })
     const blocking = openRec.filter((c) => c.detail?.decisionId !== pending.decisionId && (c.detail?.migrate || c.detail?.gateId === INTAKE_GATE))
@@ -2368,16 +2756,25 @@ async function decidePackageRecoveryCard({ projectRoot, task, name, pending, pic
       throw fail("USAGE", "存在未决前置卡（" + blocking.map((c) => c.detail.decisionId + (c.detail.migrate ? "（迁移冲突）" : "（意图确认）")).join("、") + "）：按包恢复不得绕过先决条件。先处理前置卡，或取消本恢复卡。")
     }
     // 计划变更类恢复（retry 带候选 / remove）要求当前存在与计划一致的有效意图确认
-    const hasIntake = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail))
-    if (rec.plan || picked.grant === "remove" || hasIntake) {
+    const hasIntake = Boolean(latestConfirmedIntake(task)) || task.scope?.intakeVersion === 2
+    if (rec.plan || picked.grant === "remove" || hasIntake || rec.intakeConfirmedAtIssue) {
       const stateInfo = await intakeState(task)
       const targetPlan = rec.plan ?? (picked.grant === "remove" ? (Array.isArray(task.packages) ? task.packages.filter((p) => p.id !== pkg) : null) : task.packages)
       const changed = digestValue(targetPlan ?? null) !== digestValue(task.packages ?? null)
+      if (rec.intakeConfirmedAtIssue && !matchesAuthorization(task, stateInfo.fingerprint, rec.intakeConfirmedAtIssue)) throw fail("DECISION_STALE", "恢复卡绑定的完整意图授权已变化：取消原卡或重新准备，不能复用原批准。")
       const accepted = changed ? candidateConfirmedIntake(task, pending.decisionId) : currentConfirmedIntake(task)
-      const targetFingerprint = changed ? digestValue(intakeSnapshot({ task, roles: stateInfo.roles, packages: targetPlan })) : stateInfo.fingerprint
+      const target = intakeSnapshot({ task, roles: stateInfo.roles, packages: targetPlan })
+      const targetFingerprint = digestValue(target)
+      if (changed && rec.candidateDirection && rec.intakeConfirmedAtIssue) {
+        const preparation = { type: "intent-prepared", detail: rec.candidateDirection }
+        const eligibility = directIntentEligibility(task, target, [{ type: "decided" }, preparation])
+        if (eligibility.eligible && rec.candidateDirection.fingerprint === targetFingerprint && rec.candidateDirection.beforeFingerprint === stateInfo.fingerprint) {
+          directCandidate = [preparation, intentAuthorizationEvent(target, eligibility)]
+        }
+      }
       const acceptedCard = task.journal.find((e) => e.type === "decision-issued" && e.detail?.decisionId === accepted?.decisionId)?.detail
       const candidateBound = !changed || (acceptedCard?.recoveryAuthorization?.decisionId === pending.decisionId && acceptedCard.recoveryAuthorization.currentFingerprint === stateInfo.fingerprint && acceptedCard.recoveryAuthorization.planDigest === digestValue(targetPlan))
-      if (!accepted || accepted.unavailable || accepted.fingerprint !== targetFingerprint || !candidateBound) {
+      if (!directCandidate && (!accepted || accepted.unavailable || accepted.fingerprint !== targetFingerprint || !candidateBound)) {
         throw fail("USAGE", "候选计划尚未获得与当前事实一致的意图确认：重新准备恢复卡，先确认其对应的候选计划意图卡，再决定恢复。")
       }
     }
@@ -2423,6 +2820,8 @@ async function decidePackageRecoveryCard({ projectRoot, task, name, pending, pic
   } else {
     throw fail("DECISION_STALE", "包恢复卡只接受 retry/remove/取消 选项")
   }
+  // 候选方向只在恢复卡本身获准时生效：已提交决定、计划、授权同批出现。
+  if (directCandidate) events.splice(1, 0, ...directCandidate)
   await appendEventsUnlocked(task, events)
   if (planToWrite) await atomicJson(path.join(task.root, "packages.json"), { items: planToWrite })
   return { ok: true, task: name, decisionId: pending.decisionId, choice: picked.label, changed: planToWrite !== null, next: "run", note: "包 " + (pkg ?? "（单 owner）") + " 的 blocked 已按用户确认解除（绑定 " + rec.dispatchKey + "#v" + (rec.reportVersion ?? 1) + "）" + planNote + "；正常推进后按新范围派发。" }
@@ -2432,7 +2831,7 @@ function effectiveBlockedSetOf(task, stageId) {
   return effectiveBlockedSet({ journal: task.journal, reports: task.reports.filter((r) => r.stage === stageId), packages: Array.isArray(task.packages) && task.packages.length ? task.packages : null })
 }
 
-async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
+async function cmdDecide({ projectRoot, name, choice, note, decisionId, direction }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task0 = await loadTask(projectRoot, name, { workflow, policy })
   return withOwnerLock(path.join(task0.root, "locks", "task.lock"), async () => {
@@ -2470,7 +2869,7 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
     }
     if (openCards.length === 0) throw fail("DECISION_STALE", "当前没有等待中的决定")
     const mustHaveId = openCards.length > 1
-      || ["artifact-refresh", "package-recovery"].includes(openCards[0].kind)
+      || ["artifact-refresh", "package-recovery", "round-limit"].includes(openCards[0].kind)
       || openCards[0].detail?.gateId === INTAKE_GATE
     let card = null
     if (decisionId !== undefined && decisionId !== null && decisionId !== "") {
@@ -2489,11 +2888,27 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
     const options = pending.choices ?? []
     const picked = options.find((o) => o.n === choice)
     if (!picked) throw fail("DECISION_STALE", `选项序号 ${choice} 不在卡片 ${pending.decisionId} 中。合法选项：${options.map((o) => `${o.n}=${o.label}`).join("、")}`)
+    if (direction && (!direction.amend || picked.label !== "rework" || card.kind !== "human-gate" || !decisionId)) {
+      throw fail("USAGE", "决定只允许在实际展示的人工门返工卡上附带 --user-direction.amend；其他选择和 --note 不授予意图修改。")
+    }
     // —— §6.2.1/§6.3 刷新卡与包恢复卡的确认分支（原子提交，不走通用 decide 路径）——
     if (card.kind === "artifact-refresh" || pending.kind === "artifact-refresh") return decideRefreshCard({ projectRoot, task, name, pending, picked, choice, note })
     if (card.kind === "package-recovery" || pending.kind === "package-recovery") return decidePackageRecoveryCard({ projectRoot, task, name, pending, picked, choice, note })
 
     const stageId = deriveTask(task).stage
+    if (maybeRoundLimit(pending)) {
+      const checked = inspectRoundLimit(task, pending)
+      if (pending.kind === "round-limit" || checked.binding) {
+        if (!decisionId) throw fail("DECISION_STALE", "轮次上限须使用实际展示卡的 --decision-id。")
+        const extra = picked.grant === "extra-round"
+        if (extra && !checked.binding) throw fail(checked.prerequisite ? "USAGE" : "DECISION_STALE", checked.prerequisite ? "先处理其他待决前置卡，不能越过它们追加额度。" : "返工依据或包实例已变化：该卡不能追加额度，可安全结束或重新推进签卡。")
+        const events = [{ type: "decided", detail: { decisionId, kind: "round-limit", choice: picked.label, ...(extra ? { grant: picked.grant, roundLimit: checked.binding } : {}), proof: { mode: "caller-reported" }, ...(note ? { note } : {}) } }]
+        if (!extra) events.push({ type: "task-completed", detail: { stage: stageId, by: "user", form: "partial" } })
+        await appendEventsUnlocked(task, events)
+        return { ok: true, task: name, decisionId, choice: picked.label, next: "run" }
+      }
+      if (picked.grant === "extra-round" && (checked.prerequisite || deriveTask({ ...task, journal: task.journal.filter((event) => event.detail?.decisionId !== pending.decisionId) }).wave?.kind !== "converge-user")) throw fail("DECISION_STALE", "历史额度卡缺少可核验的绑定，请按当前事实重签。")
+    }
     const current = task.artifacts.items.filter((item) => item.stage === stageId)
     // F5/F6 指纹（决定落盘与 gate 判定共用同一导出纯函数；R4 同源）
     const stageDef = task.workflow.stages.find((st) => st.id === stageId)
@@ -2581,6 +2996,9 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
     const decision = {
       decisionId: pending.decisionId,
       gateId: pending.gateId ?? null,
+      ...(pending.kind ? { kind: pending.kind } : {}),
+      ...(pending.gateId && pending.gateId !== INTAKE_GATE ? { stage: stageId, stageEntrySeq: stageEntrySeqOf(task.journal) } : {}),
+      ...(pending.causeDecisionId ? { causeDecisionId: pending.causeDecisionId } : {}),
       choice: picked.label,
       ...(picked.grant ? { grant: picked.grant } : {}),
       ...(picked.batchKey ? { batchKey: picked.batchKey } : {}),
@@ -2610,14 +3028,31 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
       events.push({ type: "session-reset", detail: { role: fresh.role, package: fresh.package ?? null, scene: fresh.scene ?? stageId, reason: "用户选择作废当前波、重开会话（全新上下文）", decisionId: pending.decisionId, fromModelRef: fresh.fromModelRef, toModelRef: fresh.toModelRef } })
     }
     if (fresh && picked.grant === "rollback-model") {
-      if (fresh.target === "package" && fresh.package != null) {
-        // 包级模型变更：回滚 packages[package].model（roles 未被改动，不动角色配置）。
-        const restored = (Array.isArray(task.packages) ? task.packages : []).map((pkg) => pkg.id === fresh.package ? { ...pkg, model: normalizeModelRef(fresh.fromModelRef, "requiresFreshSession.fromModelRef") } : pkg)
-        restorePackage = restored
-        events.push({ type: "re-planned", detail: { packages: restored.map((pkg) => pkg.id), items: restored, source: "fresh-session-rollback", package: fresh.package, modelRef: fresh.fromModelRef, decisionId: pending.decisionId } })
+      const authorized = modelRollbackChange(pending)
+      if (!authorized) throw fail("DECISION_STALE", "无法核对原卡的回滚目标或旧模型，请重新推进签卡。")
+      const { roles, snapshot: before } = await intakeState(task)
+      if (fresh.target === "package") {
+        // 同批登记完整包计划；不改其他包或角色模型。
+        restorePackage = (task.packages ?? []).map((pkg) => pkg.id === fresh.package ? { ...pkg, model: authorized.value } : pkg)
+        events.push({ type: "re-planned", detail: { packages: restorePackage.map((pkg) => pkg.id), items: restorePackage, source: "fresh-session-rollback", package: fresh.package, modelRef: authorized.value, decisionId: pending.decisionId } })
       } else {
         restoreRole = fresh
-        events.push({ type: "role-models-changed", detail: { changes: [{ role: fresh.role, from: fresh.toModelRef, to: fresh.fromModelRef, reason: "用户选择回滚 roles 到首派模型", decisionId: pending.decisionId }] } })
+        roles[fresh.role] = authorized.value
+        events.push({ type: "role-models-changed", detail: { changes: [{ role: fresh.role, from: fresh.toModelRef, to: authorized.value, reason: "用户选择回滚 roles 到首派模型", decisionId: pending.decisionId }] } })
+      }
+      const after = intakeSnapshot({ task, roles, packages: restorePackage ?? task.packages })
+      const changes = intakeFieldChanges(before, after)
+      if (changes.length !== 1 || changes[0].field !== authorized.field || !sameValue(changes[0].to, authorized.value)) {
+        throw fail("DECISION_STALE", "原卡只授权回滚其所列模型，实际回滚值已变化，请重新推进签卡。")
+      }
+      // 不代答独立的意图差异；完整快照有缺口时，保留本项来源等候后续确认。
+      Object.assign(events[0].detail, { grant: picked.grant, proof: decision.proof })
+      events.push({ type: "intent-prepared", detail: { beforeFingerprint: digestValue(before), fingerprint: digestValue(after), changes,
+        rollbackDecisionId: pending.decisionId, covered: [authorized], proof: decision.proof } })
+      const eligibility = directIntentEligibility(task, after, events)
+      if (eligibility.eligible) {
+        for (const { detail } of openCards.filter((c) => c.kind === "intent" && !c.detail.recoveryAuthorization)) events.push({ type: "decided", detail: { decisionId: detail.decisionId, choice: "superseded", reason: "实际配置已回滚，完整差异已有明确授权。" } })
+        events.push(intentAuthorizationEvent(after, eligibility))
       }
     }
     // F9 四类恢复：异 digest 多报告 → 用户选择保留一版，其余波写 dispatch-superseded（未经评审的内容不得混入收敛基线）
@@ -2630,6 +3065,20 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
         events.push({ type: "dispatch-superseded", detail: { waveId: cand.waveId, reason: `迁移恢复：用户选择保留 ${kept.key} 的版本` } })
       }
     }
+    let amended = null
+    if (direction?.amend) {
+      const before = (await intakeState(task)).snapshot
+      const update = intentAmendment(task, before, parseIntentAmendment(direction.amend), direction)
+      if (update.event) {
+        amended = update.intent
+        const eligibility = directIntentEligibility(task, update.after, [...events, update.event])
+        events.push(update.event)
+        if (eligibility.eligible) {
+          for (const { detail } of openCards.filter((c) => c.kind === "intent" && !c.detail.recoveryAuthorization)) events.push({ type: "decided", detail: { decisionId: detail.decisionId, choice: "superseded", reason: "人工门答复中的明确要求已覆盖本意图。" } })
+          events.push(intentAuthorizationEvent(update.after, eligibility))
+        }
+      }
+    }
     await appendEventsUnlocked(task, events, async () => {
       if (task.artifactsRebuilt) await atomicJson(path.join(task.root, "artifacts.json"), task.artifacts)
       await atomicJson(file, existing)
@@ -2640,6 +3089,7 @@ async function cmdDecide({ projectRoot, name, choice, note, decisionId }) {
     })
     // 决定与完整回滚计划先在 journal 同批提交；packages.json 只是可重建视图。
     if (restorePackage) await atomicJson(path.join(task.root, "packages.json"), { items: restorePackage })
+    if (amended) await atomicJson(path.join(task.root, "intent.json"), amended)
     return { ok: true, task: name, decisionId: decision.decisionId, choice: decision.choice, next: "run" }
   })
 }
@@ -2821,9 +3271,11 @@ async function cmdRefreshArtifacts({ projectRoot, name, pkg = null, pathsJson = 
     if (!multiPackage && pkg != null) throw fail("USAGE", "单 Owner 任务没有包概念，省略 --package")
     if (multiPackage && !task.packages.some((p) => p.id === pkg)) throw fail("USAGE", "包 " + pkg + " 不在当前计划中；可选包：" + task.packages.map((p) => p.id).join("、"))
     // 已批准可写范围：多包 = 该包 packages.json writable；单 Owner = 该阶段 owner 派单可写集。
+    const accepted = currentConfirmedIntake(task)
+    const legacy = task.scope?.intakeVersion !== 2 && !latestConfirmedIntake(task)
     const approvedWritable = multiPackage
       ? (task.packages.find((p) => p.id === pkg)?.writable ?? []).map(parseWritableEntry)
-      : (lastOwnerWritable(task, stageId) ?? [])
+      : (legacy ? lastOwnerWritable(task, stageId) ?? [] : parseWritableScope(stageWritable(accepted?.snapshot, task.scope.entry, stageId)))
     // B7：已批准范围为空 = 无可依赖的授权边界——任何非空候选清单都拒绝（不能凭"无范围可查"放行
     // 任意路径；--paths 为空同理无意义）。先由 Lead 经正常流程（首派 writable / plan 包定义）建立范围。
     if (approvedWritable.length === 0) {
@@ -2832,14 +3284,12 @@ async function cmdRefreshArtifacts({ projectRoot, name, pkg = null, pathsJson = 
     // 新任务绑定可核验的已有意图确认；从未签过意图卡的旧任务则将可证范围完整放入
     // 本刷新卡，让用户明确确认旧范围与候选清单，不能把旧数据缺证据伪称新意图已确认。
     const stateInfo = await intakeState(task)
-    const accepted = currentConfirmedIntake(task)
-    const everIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail))
     let intakeAuthorization
-    if (!everIssued && task.scope?.intakeVersion !== 2) {
+    if (legacy) {
       const snapshot = legacyRefreshBinding(task, stateInfo, stageId, approvedWritable)
       intakeAuthorization = { mode: "legacy-range", fingerprint: digestValue(snapshot), snapshot }
     } else if (accepted && !accepted.unavailable && accepted.fingerprint === stateInfo.fingerprint) {
-      intakeAuthorization = { mode: "confirmed-intake", decisionId: accepted.decisionId, fingerprint: accepted.fingerprint, snapshot: accepted.snapshot }
+      intakeAuthorization = authorizationBinding(accepted)
     } else {
       throw fail("USAGE", "当前没有与意图/角色/计划一致的有效确认：先由用户确认当前意图卡，再准备刷新。")
     }
@@ -3263,67 +3713,100 @@ async function cmdRoute({ projectRoot, name, route, decision, basis }) {
 
 // 意图修订（§3.5）：新增 rawRequirement/scope/acceptance/gaps 与 gap 答复；改值后确认指纹变化，
 // 确认卡在下次 tw-dispatch / tw plan 时作废重签（这里只提示，不抢先签发第二张卡）。
-async function cmdIntent({ projectRoot, name, objective, risk, rawRequirement, addConstraint = [], addExclusion = [], acceptance = [], scopeNotes = [], gaps = [], answerGap = null, answer = null }) {
-  const { workflow, policy } = await loadDefinitions(projectRoot)
-  const task = await loadTask(projectRoot, name, { workflow, policy })
-  if (deriveTask(task).status === "completed") {
-    return { ok: false, code: "TASK_COMPLETED", message: "任务已完成；目标变更请开新任务并引用归档名", fix: "tw open --name <new> --objective <...>" }
+// 修订规则由独立 intent 命令与人工门返工答复共同使用。
+function reviseIntent(original, { objective, risk, rawRequirement, addConstraint = [], addExclusion = [], acceptance = [], scopeNotes = [], gaps = [], answerGap = null, answer = null }) {
+  const intent = structuredClone(original)
+  const change = {}
+  if (risk) {
+    if (!['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical")
+    intent.risk = risk
+    change.risk = risk
   }
-  const file = path.join(task.root, "intent.json")
-  return withOwnerLock(path.join(task.root, "locks", "task.lock"), async () => {
+  if (objective) { intent.objective = objective; change.objective = objective }
+  if (typeof rawRequirement === "string" && rawRequirement.trim()) { intent.rawRequirement = rawRequirement; change.rawRequirement = "更新（原文已保留）" }
+  if (!Array.isArray(intent.constraints)) intent.constraints = []
+  for (const c of addConstraint) if (!intent.constraints.includes(c)) intent.constraints.push(c)
+  if (addConstraint.length) change.addConstraints = addConstraint
+  if (!Array.isArray(intent.exclusions)) intent.exclusions = []
+  for (const x of addExclusion) if (!intent.exclusions.includes(x)) intent.exclusions.push(x)
+  if (addExclusion.length) change.addExclusions = addExclusion
+  if (acceptance.length) {
+    if (!Array.isArray(intent.acceptance)) intent.acceptance = []
+    for (const a of acceptance) if (!intent.acceptance.includes(a)) intent.acceptance.push(a)
+    change.acceptance = acceptance
+  }
+  if (scopeNotes.length) {
+    const scope = intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {}
+    const notes = Array.isArray(scope.notes) ? scope.notes : []
+    for (const noteText of scopeNotes) if (!notes.includes(noteText)) notes.push(noteText)
+    intent.scope = { ...scope, notes }
+    change.scope = { notes: scopeNotes }
+  }
+  if (gaps.length) {
+    if (!Array.isArray(intent.gaps)) intent.gaps = []
+    for (const gap of gaps) {
+      if (!gap || typeof gap.question !== "string" || !gap.question.trim()) throw fail("USAGE", "--add-gap 需要 JSON 对象且 question 为非空字符串")
+      intent.gaps.push({
+        id: typeof gap.id === "string" && gap.id.trim() ? gap.id.trim() : "g" + (intent.gaps.length + 1),
+        question: gap.question.trim(),
+        whyItMatters: typeof gap.whyItMatters === "string" ? gap.whyItMatters : "",
+        proposedDefault: typeof gap.proposedDefault === "string" ? gap.proposedDefault : "",
+        answer: typeof gap.answer === "string" && gap.answer.trim() ? gap.answer : null,
+      })
+    }
+    change.addGaps = gaps.length
+  }
+  if (answerGap) {
+    if (!Array.isArray(intent.gaps)) intent.gaps = []
+    const target = intent.gaps.find((gap) => gap.id === answerGap)
+    if (!target) throw fail("USAGE", "未知 gap id：" + answerGap + "（可用 tw run / 确认卡查看现有 gap）")
+    if (typeof answer !== "string" || !answer.trim()) throw fail("USAGE", "--answer-gap 需要 --answer <答复文本>")
+    target.answer = answer.trim()
+    change.answeredGaps = [answerGap]
+  }
+  if (sameValue(intent, original)) return null
+  intent.revisions = Array.isArray(intent.revisions) ? intent.revisions : []
+  intent.revisions.push({ seq: intent.revisions.length + 1, at: new Date().toISOString(), change })
+  return intent
+}
+
+function intentAmendment(task, before, params, direction) {
+  const intent = reviseIntent(task.intent, params)
+  const after = intent ? intakeSnapshot({ task: { ...task, intent }, roles: before.roles, packages: task.packages }) : before
+  const fields = { objective: "intent.objective", risk: "intent.risk", rawRequirement: "intent.rawRequirement", addConstraint: "intent.constraints", addExclusion: "intent.exclusions", acceptance: "intent.acceptance", scopeNotes: "intent.scope.notes", gaps: "intent.gaps", answerGap: "intent.gaps", answer: "intent.gaps" }
+  const touched = new Set(Object.keys(params).filter((key) => params[key] != null && (!Array.isArray(params[key]) || params[key].length)).map((key) => fields[key]))
+  let event = intentPreparation(task, before, after, direction, (field) => touched.has(field))
+  if (intent) {
+    event ??= { type: "intent-prepared", detail: { fingerprint: digestValue(after), changes: [] } }
+    event.detail.intent = intent
+  }
+  return { intent: intent ?? task.intent, after, event }
+}
+
+function parseIntentAmendment(amend) {
+  const scalar = ["objective", "risk", "rawRequirement", "answerGap", "answer"]
+  const list = ["addConstraint", "addExclusion", "acceptance", "scopeNotes", "gaps"]
+  if (!recordObject(amend) || !Object.keys(amend).length || Object.entries(amend).some(([key, value]) =>
+    scalar.includes(key) ? typeof value !== "string" || !value.trim() : !list.includes(key) || !Array.isArray(value) ||
+      (key !== "gaps" && value.some((item) => typeof item !== "string" || !item.trim())))) {
+    throw fail("USAGE", "人工门返工的 amend 使用意图修订字段：objective/risk/rawRequirement/addConstraint/addExclusion/acceptance/scopeNotes/gaps/answerGap/answer。");
+  }
+  return amend
+}
+
+async function cmdIntent({ projectRoot, name, direction, ...params }) {
+  const { workflow, policy } = await loadDefinitions(projectRoot)
+  const initial = await loadTask(projectRoot, name, { workflow, policy })
+  return withOwnerLock(path.join(initial.root, "locks", "task.lock"), async () => {
     const task = await loadTask(projectRoot, name, { workflow, policy, repair: true })
-    const intent = JSON.parse(await readFile(file, "utf8"))
-    const change = {}
-    if (risk) {
-      if (!['normal', 'high', 'critical'].includes(risk)) throw fail("USAGE", "--risk 只能是 normal | high | critical")
-      intent.risk = risk
-      change.risk = risk
-    }
-    if (objective) { intent.objective = objective; change.objective = objective }
-    if (typeof rawRequirement === "string" && rawRequirement.trim()) { intent.rawRequirement = rawRequirement; change.rawRequirement = "更新（原文已保留）" }
-    if (!Array.isArray(intent.constraints)) intent.constraints = []
-    for (const c of addConstraint) if (!intent.constraints.includes(c)) intent.constraints.push(c)
-    if (addConstraint.length) change.addConstraints = addConstraint
-    if (!Array.isArray(intent.exclusions)) intent.exclusions = []
-    for (const x of addExclusion) if (!intent.exclusions.includes(x)) intent.exclusions.push(x)
-    if (addExclusion.length) change.addExclusions = addExclusion
-    if (acceptance.length) {
-      if (!Array.isArray(intent.acceptance)) intent.acceptance = []
-      for (const a of acceptance) if (!intent.acceptance.includes(a)) intent.acceptance.push(a)
-      change.acceptance = acceptance
-    }
-    if (scopeNotes.length) {
-      const scope = intent.scope && typeof intent.scope === "object" && !Array.isArray(intent.scope) ? intent.scope : {}
-      const notes = Array.isArray(scope.notes) ? scope.notes : []
-      for (const noteText of scopeNotes) if (!notes.includes(noteText)) notes.push(noteText)
-      intent.scope = { ...scope, notes }
-      change.scope = { notes: scopeNotes }
-    }
-    if (gaps.length) {
-      if (!Array.isArray(intent.gaps)) intent.gaps = []
-      for (const gap of gaps) {
-        if (!gap || typeof gap.question !== "string" || !gap.question.trim()) throw fail("USAGE", "--add-gap 需要 JSON 对象且 question 为非空字符串")
-        intent.gaps.push({
-          id: typeof gap.id === "string" && gap.id.trim() ? gap.id.trim() : "g" + (intent.gaps.length + 1),
-          question: gap.question.trim(),
-          whyItMatters: typeof gap.whyItMatters === "string" ? gap.whyItMatters : "",
-          proposedDefault: typeof gap.proposedDefault === "string" ? gap.proposedDefault : "",
-          answer: typeof gap.answer === "string" && gap.answer.trim() ? gap.answer : null,
-        })
-      }
-      change.addGaps = gaps.length
-    }
-    if (answerGap) {
-      if (!Array.isArray(intent.gaps)) intent.gaps = []
-      const target = intent.gaps.find((gap) => gap.id === answerGap)
-      if (!target) throw fail("USAGE", "未知 gap id：" + answerGap + "（可用 tw run / 确认卡查看现有 gap）")
-      if (typeof answer !== "string" || !answer.trim()) throw fail("USAGE", "--answer-gap 需要 --answer <答复文本>")
-      target.answer = answer.trim()
-      change.answeredGaps = [answerGap]
-    }
-    intent.revisions = Array.isArray(intent.revisions) ? intent.revisions : []
-    intent.revisions.push({ seq: intent.revisions.length + 1, at: new Date().toISOString(), change })
-    await atomicJson(file, intent)
+    if (deriveTask(task).status === "completed") return { ok: false, code: "TASK_COMPLETED", message: "任务已完成；目标变更请开新任务并引用归档名", fix: "tw open --name <new> --objective <...>" }
+    const before = (await intakeState(task)).snapshot
+    const { intent, event } = intentAmendment(task, before, params, direction)
+    if (event) await appendEventsUnlocked(task, [event])
+    if (intent !== task.intent) await atomicJson(path.join(task.root, "intent.json"), intent)
+    task.intent = intent
+    const authorized = await reconcilePreparedIntake(task)
+    if (authorized) return { ok: true, task: name, objective: intent.objective, constraints: intent.constraints, ...authorized }
     const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE)
     // 多卡按 ID 独立答复；意图变更立即重签，不以其他待决卡为由延后确认。
     if (intakeIssued) {
@@ -3361,11 +3844,12 @@ async function cmdGate({ projectRoot, name }) {
   // 只读提示（§6 批 B）：意图确认状态与当前稳定投影是否一致（不签发、不写盘）。
   const intakeIssued = task.journal.some((event) => event.type === "decision-issued" && event.detail?.gateId === INTAKE_GATE && effectiveIntakeIssued(task, event.detail))
   const stateInfo = await intakeState(task)
-  const accepted = intakeConfirmation(task)
+  const accepted = currentConfirmedIntake(task)
   const intake = {
     issued: intakeIssued,
-    confirmed: Boolean(accepted && accepted.intakeFingerprint === stateInfo.fingerprint),
-    ...(intakeIssued ? { fingerprint: stateInfo.fingerprint } : {}),
+    confirmed: accepted?.fingerprint === stateInfo.fingerprint,
+    ...(intakeIssued || accepted?.direct ? { fingerprint: stateInfo.fingerprint } : {}),
+    ...(accepted?.direct ? { authorizationSeq: accepted.seq } : {}),
   }
   if (state.gate) return { ok: true, task: name, stage: state.stage, passed: state.gate.passed, blockers: state.gate.blockers, intake }
   const gate = gateCheck({ workflow, policy, stageId: state.stage, scope: task.scope, artifacts: task.artifacts, reports: task.reports.filter((r) => r.stage === state.stage), decisions: task.decisions, journal: task.journal, packages: Array.isArray(task.packages) && task.packages.length ? task.packages : null, artifactVerification })
@@ -3683,7 +4167,7 @@ async function validatePlanItems({ task, workflow, policy, packagesJson }) {
 // 候选计划尚未生效：复用意图卡确认其完整快照，同时绑定旧计划与恢复卡。
 async function recoveryIntakeCard(task, workflow, recoveryCard) {
   const rec = recoveryCard.recovery
-  if (!Array.isArray(rec?.plan) || digestValue(rec.plan) === digestValue(task.packages ?? null)) return null
+  if (!Array.isArray(rec?.plan) || digestValue(rec.plan) === digestValue(task.packages ?? null) || rec.candidateDirection) return null
   const stateInfo = await intakeState(task)
   const snapshot = intakeSnapshot({ task, roles: stateInfo.roles, packages: rec.plan })
   const fingerprint = digestValue(snapshot)
@@ -3701,7 +4185,7 @@ async function recoveryIntakeCard(task, workflow, recoveryCard) {
   return signIntakeApproval({ task: candidateTask, workflow, roles: stateInfo.roles, details, profile: profileOf(task), source: "recovery-candidate", recoveryAuthorization: { decisionId: recoveryCard.decisionId, planDigest: digestValue(rec.plan), currentPlanDigest: digestValue(task.packages ?? null), currentFingerprint: stateInfo.fingerprint } })
 }
 
-async function cmdPlan({ projectRoot, name, packagesJson, resolveBlocked = null, blockedRef = null }) {
+async function cmdPlan({ projectRoot, name, direction, packagesJson, resolveBlocked = null, blockedRef = null }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   // —— §6.3 按包恢复卡准备：--resolve-blocked '<JSON>' --blocked-ref <展示的阻塞引用> ——
   // 每次只准备一个包（单 owner 省略 package）；不提交计划、不解除 blocked——签发 kind=package-recovery
@@ -3752,12 +4236,21 @@ async function cmdPlan({ projectRoot, name, packagesJson, resolveBlocked = null,
       const planDigest = candidatePlan ? digestValue(candidatePlan) : null
       // B11：绑定当前计划版本（确认时重核，计划变化即过期）
       const currentPlanDigest = digestValue(Array.isArray(task.packages) ? task.packages : null)
+      const stateInfo = await intakeState(task)
+      const accepted = currentConfirmedIntake(task)
+      const intakeConfirmedAtIssue = accepted?.fingerprint === stateInfo.fingerprint ? authorizationBinding(accepted) : null
+      let candidateDirection = null
+      if (candidatePlan && direction && intakeConfirmedAtIssue) {
+        const target = intakeSnapshot({ task, roles: stateInfo.roles, packages: candidatePlan })
+        const event = intentPreparation(task, stateInfo.snapshot, target, direction, (field) => field.startsWith("packages"))
+        if (event && directIntentEligibility(task, target, [event]).eligible) candidateDirection = event.detail
+      }
       // 幂等：相同候选（包+key/ver+action+计划摘要）重复准备返回同一卡
       const settled = new Set(task.journal.filter((e) => e.type === 'decided').map((e) => e.detail?.decisionId).filter(Boolean))
       for (const e of [...task.journal].reverse()) {
         if (e.type !== 'decision-issued' || e.detail?.kind !== 'package-recovery') continue
         if (settled.has(e.detail.decisionId)) continue
-        if ((e.detail.package ?? null) === pkg && e.detail.recovery?.dispatchKey === refKey && (e.detail.recovery?.reportVersion ?? 1) === refVer && e.detail.recovery?.action === action && (e.detail.recovery?.planDigest ?? null) === planDigest) {
+        if ((e.detail.package ?? null) === pkg && e.detail.recovery?.dispatchKey === refKey && (e.detail.recovery?.reportVersion ?? 1) === refVer && e.detail.recovery?.action === action && (e.detail.recovery?.planDigest ?? null) === planDigest && sameValue(e.detail.recovery?.intakeConfirmedAtIssue ?? null, intakeConfirmedAtIssue) && sameValue(e.detail.recovery?.candidateDirection ?? null, candidateDirection)) {
           const intakeCard = await recoveryIntakeCard(task, workflow, e.detail)
           return { ok: true, task: name, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId: e.detail.decisionId, kind: 'package-recovery', ...(pkg != null ? { package: pkg } : {}), question: e.detail.reason, choices: e.detail.choices, recovery: e.detail.recovery, ...(intakeCard ? { intakeCard } : {}), note: '相同候选的恢复卡已签发；先完成候选计划意图确认，再按该卡 decisionId 决定' }
         }
@@ -3772,12 +4265,12 @@ async function cmdPlan({ projectRoot, name, packagesJson, resolveBlocked = null,
         { n: 1, label: action === 'retry' ? '确认恢复（retry）' : '确认移除（remove）', desc: action === 'retry' ? '解除该包 blocked；如有候选计划一并提交' : '将该包移出计划并解除 blocked', grant: action },
         { n: 2, label: '取消', desc: '收口本卡，该包保持 blocked', grant: 'cancel' },
       ]
-      const recovery = { dispatchKey: refKey, reportVersion: refVer, action, planDigest, currentPlanDigest, ...(candidatePlan ? { plan: candidatePlan } : {}) }
+      const recovery = { dispatchKey: refKey, reportVersion: refVer, action, planDigest, currentPlanDigest, ...(intakeConfirmedAtIssue ? { intakeConfirmedAtIssue } : {}), ...(candidateDirection ? { candidateDirection } : {}), ...(candidatePlan ? { plan: candidatePlan } : {}) }
       const recoveryCard = { decisionId, kind: 'package-recovery', gateId: null, package: pkg, stage: state.stage, reason: question, choices, recovery }
       await appendEventsUnlocked(task, [{ type: 'decision-issued', detail: recoveryCard }])
       const updated = await loadTask(projectRoot, name, { workflow, policy })
       const intakeCard = await recoveryIntakeCard(updated, workflow, recoveryCard)
-      return { ok: true, task: name, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, kind: 'package-recovery', ...(pkg != null ? { package: pkg } : {}), question, choices, recovery, ...(intakeCard ? { intakeCard } : {}), note: '恢复卡已签发（未解除 blocked、未提交计划）：先确认候选计划意图，再以实际展示的 decision-id 确认恢复。' }
+      return { ok: true, task: name, status: 'awaiting-user', next: 'decide', transition: 'await-decision', decisionId, kind: 'package-recovery', ...(pkg != null ? { package: pkg } : {}), question, choices, recovery, ...(intakeCard ? { intakeCard } : {}), note: intakeCard ? '先确认候选计划意图，再以实际展示的 decision-id 确认恢复。' : '恢复卡已签发（未解除 blocked、未提交计划）：用户须按本卡 ID 确认。' }
     })
   }
   const acceptance = planAcceptanceItems(packagesJson)
@@ -3790,7 +4283,8 @@ async function cmdPlan({ projectRoot, name, packagesJson, resolveBlocked = null,
     // 意图确认卡是例外（§3.4.3）：拆包会改变逐包模型，允许先 plan，随后自动重签确认卡。
     const state = deriveTask(task)
     const pendingIntake = state.status === 'awaiting-user' && state.next.pending?.gateId === INTAKE_GATE
-    if (state.status === 'awaiting-user' && !Array.isArray(state.next.produceBlocked) && !pendingIntake) throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
+    const roundLimit = state.wave?.kind === 'round-limit' || state.next.pending?.kind === 'round-limit'
+    if (state.status === 'awaiting-user' && !Array.isArray(state.next.produceBlocked) && !pendingIntake && !roundLimit) throw fail('PLAN_REJECTED', '当前有待决用户卡片（' + (state.next.reason ?? '人工门') + '），禁止重拆；decide 后再试')
     // F3：在途判定统一走 waves.inflightBatch（与 derive/重建/提示同源；superseded 波不在在途）
     const inflight = inflightBatch({ journal: task.journal, reports: task.reports })
     if (inflight) throw fail('PLAN_REJECTED', '存在在途派发（' + inflight.open.map((d) => d.key).join('、') + '），禁止重拆；等成员交付或补派完成后再试')
@@ -3806,14 +4300,24 @@ async function cmdPlan({ projectRoot, name, packagesJson, resolveBlocked = null,
       return out
     }) })
     const samePlan = had && task.packages != null && normalizePlan(task.packages) === normalizePlan(persisted)
+    // 重拆也是旧坏计划的恢复入口，不能先要求原计划通过当前机械校验。
+    const roles = normalizeRoleEntries((await readRegistry(task)).roles).roles
+    const before = intakeSnapshot({ task, roles, packages: task.packages })
+    const after = intakeSnapshot({ task, roles, packages: persisted })
+    const preparation = intentPreparation(task, before, after, direction, (field) => field.startsWith("packages"))
     if (samePlan) {
+      if (preparation) await appendEventsUnlocked(task, [preparation])
+      const authorized = await reconcilePreparedIntake(task)
+      if (authorized) return { ok: true, task: name, changed: false, ...authorized }
       return { ok: true, task: name, changed: false, packages: persisted.map((p) => ({ id: p.id, model: p.model, dependsOn: p.dependsOn ?? [] })), next: 'dispatch', ...(tagWarn ? { warnings: [tagWarn] } : {}), note: '计划与当前登记内容相同（未变更）：零写入返回，不产生 re-planned 事实，不改变任何 blocked 状态。' }
     }
     // B11：journal 单次原子提交完整计划（items 进事件）→ packages.json 视图随后重建
-    await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: persisted.map((p) => p.id), items: persisted, models: persisted.map((p) => ({ id: p.id, modelRef: p.model })) } }])
+    await appendEventsUnlocked(task, [{ type: had ? 're-planned' : 'packages-planned', detail: { packages: persisted.map((p) => p.id), items: persisted, models: persisted.map((p) => ({ id: p.id, modelRef: p.model })) } }, ...[preparation].filter(Boolean)])
     await atomicJson(path.join(task.root, 'packages.json'), { items: persisted })
     task.packages = persisted
-    // 已有确认卡：包模型变化 → 作废旧卡并重签（§3.4.3/§3.4.4）。
+    const authorized = await reconcilePreparedIntake(task)
+    if (authorized) return { ok: true, task: name, changed: true, packages: persisted.map((p) => ({ id: p.id, model: p.model, dependsOn: p.dependsOn ?? [] })), replanned: had, ...authorized }
+    // 已有确认卡时保留重签回执；旧会话冲突或其他待决卡按自己的门处理。
     const intakeIssued = task.journal.some((event) => event.type === 'decision-issued' && event.detail?.gateId === INTAKE_GATE)
     if (intakeIssued) {
       const stateInfo = await intakeState(task)
@@ -3862,7 +4366,11 @@ function parseRoleAssignment(spec) {
   return { role, modelRef }
 }
 
-async function cmdRoles({ projectRoot, name, sets = [], clears = [], resolve = false }) {
+function equalRoleChanges(changes, before, after) {
+  return [...new Set(changes.map((c) => c.role))].flatMap((role) => sameValue(before[role], after[role]) ? [] : [{ ...changes.findLast((c) => c.role === role), from: before[role], to: after[role] }])
+}
+
+async function cmdRoles({ projectRoot, name, direction, sets = [], clears = [], resolve = false }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   const task = await loadTask(projectRoot, name, { workflow, policy })
   const registry = await readRegistry(task)
@@ -3890,6 +4398,7 @@ async function cmdRoles({ projectRoot, name, sets = [], clears = [], resolve = f
     const locked = await loadTask(projectRoot, name, { workflow, policy, repair: true })
     const lockedRegistry = await readRegistry(locked)
     const roles = { ...normalizeRoleEntries(lockedRegistry.roles).roles }
+    const before = intakeSnapshot({ task: locked, roles, packages: locked.packages })
     const resolvedTiers = await resolveTiers()
     const changes = []
     const warnings = []
@@ -3930,8 +4439,14 @@ async function cmdRoles({ projectRoot, name, sets = [], clears = [], resolve = f
       const session = latestSessionForRole(locked, lockedRegistry.mappings, change.role)
       if (session) warnings.push("角色 " + change.role + " 已有会话（" + session.sessionId + "）：会话模型不可热替换，下一轮续派（tw-dispatch）将出换模型确认卡")
     }
-    await updateAgents(locked, (agents) => { agents.roles = roles })
-    if (changes.length) await appendEventsUnlocked(locked, [{ type: "role-models-changed", detail: { changes, source: resolve ? "resolve" : "explicit" } }])
+    const after = intakeSnapshot({ task: locked, roles, packages: locked.packages })
+    const preparation = intentPreparation(locked, before, after, direction, (field) => changes.some((c) => field === "roles." + c.role))
+    const actualChanges = equalRoleChanges(changes, before.roles, after.roles)
+    if (actualChanges.length || lockedRegistry.corrupt) await updateAgents(locked, (agents) => { agents.roles = roles })
+    const events = [...(actualChanges.length ? [{ type: "role-models-changed", detail: { changes: actualChanges, source: resolve ? "resolve" : "explicit" } }] : []), ...[preparation].filter(Boolean)]
+    if (events.length) await appendEventsUnlocked(locked, events)
+    const authorized = await reconcilePreparedIntake(locked)
+    if (authorized) return { ok: true, task: name, roles, changes: actualChanges, unresolved: ROLE_KEYS.filter((r) => !roles[r]), ...(warnings.length ? { warnings } : {}), ...authorized }
     locked.roles = roles
     const unresolved = ROLE_KEYS.filter((role) => !roles[role])
     // 写盘后重载：角色溯源（role-models-changed）与 agents.json.roles 都必须是新事实。
@@ -3990,13 +4505,16 @@ function stopHumanLines(stop, card, extra = {}) {
   const lines = ['任务 ' + (card?.task ?? '') + ' · 阶段 ' + (card?.stage ?? '-') + ' · 状态：' + stop]
   const nl = String.fromCharCode(10)
   if (stop === 'awaiting-user') {
-    if (card?.question) lines.push('待用户决定：' + card.question)
-    for (const c of card?.choices ?? []) lines.push('  ' + c.n + '. ' + c.label + (c.desc ? '——' + c.desc : ''))
-    for (const pending of [...(card?.pendingDecisions ?? []), ...(card?.staleDecisions ?? [])]) {
-      lines.push('待决卡 ' + pending.decisionId + '（' + pending.kind + '）：' + pending.question)
-      for (const choice of pending.choices ?? []) lines.push('  ' + choice.n + '. ' + choice.label + (choice.desc ? '——' + choice.desc : ''))
-      if (pending.binding) lines.push('  绑定：' + JSON.stringify(pending.binding))
-      if (pending.blockers?.length) lines.push('  阻碍：' + JSON.stringify(pending.blockers))
+    const cards = visibleDecisionCards(extra.card ? extra : { ...extra, card })
+    if (!cards.length && !card?.decisionId && card?.question) lines.push('待用户决定：' + card.question)
+    for (const pending of cards) {
+      const frozen = decisionKind(pending) === "intent" && (pending.template || pending.question?.includes("\n## 选项\n"))
+      if (frozen) lines.push(pending.question)
+      else {
+        lines.push((pending.stale ? '失效卡 ' : '待决卡 ') + pending.decisionId + '：' + (pending.question ?? ''))
+        for (const choice of pending.choices ?? []) lines.push('  ' + choice.n + '. ' + choice.label + (choice.desc ? '——' + choice.desc : ''))
+      }
+      if (pending.blockers?.length) lines.push('  阻碍：' + pending.blockers.map((blocker) => blocker.message).join('；'))
     }
     if (card?.blocked) lines.push('blocked 包：' + (Array.isArray(card.blocked) ? card.blocked.map(String).join('、') : String(card.blocked)))
     if (card?.note) lines.push(card.note)
@@ -4023,7 +4541,64 @@ function stopHumanLines(stop, card, extra = {}) {
 
 // dispatch-plan（§1.1）：编排脚本的唯一输入。锁内追非派发转移（advance/complete/人工门卡片）
 // 直到派发点或 stop；派发点注册 dispatched 事件并导出机器可读波次（prompt + tier→模型解析）。
-async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false }) {
+function parseWritableScope(declared) {
+  return (declared ?? []).filter((entry) => entry !== "none").map((entry) => {
+    const parsed = parseWritableEntry(entry)
+    return { ...parsed, path: comparableWritablePath(parsed.path) }
+  })
+}
+
+function stageWritable(snapshot, entry, stage) {
+  return stage === entry ? snapshot?.firstWritable : snapshot?.writableByStage?.[stage]
+}
+
+async function verifyWritablePaths(projectRoot, declarations) {
+  for (const { path: rel } of parseWritableScope(declarations)) {
+    let current = projectRoot
+    const segments = rel.split("/").filter(Boolean)
+    for (const [index, segment] of segments.entries()) {
+      current = path.join(current, segment)
+      const stat = await lstat(current).catch((error) => { if (error.code !== "ENOENT") throw error; return null })
+      if (!stat) break // 允许合法的新产物路径。
+      if (stat.isSymbolicLink()) throw fail("USAGE", "可写范围 " + rel + " 含符号链接；请用实际项目相对路径，不通过别名派发。")
+      if ((index < segments.length - 1 || rel.endsWith("/")) && !stat.isDirectory()) throw fail("USAGE", "可写目录 " + rel + " 与现有文件冲突。")
+      if (index === segments.length - 1 && !rel.endsWith("/") && stat.isDirectory()) throw fail("USAGE", "可写文件 " + rel + " 实为目录；请明确目录授权或指定文件。")
+    }
+  }
+}
+
+async function prepareOwnerWritable(task, stage, requested, direction, projectRoot) {
+  if (!(Array.isArray(requested) && (!requested.length || requested.length === 1 && requested[0] === "none" || requested.every(validWritableSpec)))) {
+    throw fail("DISPATCH_INPUT_REQUIRED", "可写声明须为项目内相对路径:产物类型，或单独使用 none。")
+  }
+  const entry = task.scope.entry
+  const field = stage === entry ? "firstWritable" : "writableByStage." + stage
+  const before = (await intakeState(task)).snapshot
+  const accepted = currentConfirmedIntake(task) ?? latestConfirmedIntake(task)
+  const approved = stageWritable(accepted?.snapshot, entry, stage)
+  const prepared = stageWritable(before, entry, stage)
+  const selected = requested.length ? requested : prepared ?? approved ?? []
+  if (!selected.length) return selected
+  await verifyWritablePaths(projectRoot, selected)
+  const allowed = approved && writableIncludes(parseWritableScope(approved), parseWritableScope(selected))
+  // 待决首选范围尚未获批，改下一个候选即替换；后续新增则保留已有适用上界。
+  const first = !task.journal.some((event) => event.type === "dispatched")
+  const candidate = allowed ? approved : approved && !first
+    ? [...new Set([...approved.filter((item) => item !== "none"), ...selected.filter((item) => item !== "none")])]
+    : selected
+  const scope = stage === entry ? { ...task.scope, firstWritable: candidate }
+    : { ...task.scope, writableByStage: { ...task.scope.writableByStage, [stage]: candidate } }
+  const after = intakeSnapshot({ task: { ...task, scope }, roles: before.roles, packages: task.packages })
+  const preparation = intentPreparation(task, before, after, requested.length ? direction : null, (key) => key === field, field)
+  if (!sameValue(task.scope, scope)) {
+    await atomicJson(path.join(task.root, "scope.json"), scope)
+    task.scope = scope
+  }
+  if (preparation) await appendEventsUnlocked(task, [preparation])
+  return selected
+}
+
+async function cmdDispatchPlan({ projectRoot, name, direction, writable = [], json = false }) {
   const { workflow, policy } = await loadDefinitions(projectRoot)
   if (!await taskExists(projectRoot, name)) {
     const archived = await archivedCard(projectRoot, name)
@@ -4048,22 +4623,21 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
     // 派发模型本身来自 roles/packages，不依赖本次调用快照。
     const warnings = []
     if (settled) warnings.push("已收口 " + settled + " 张历史升档审批卡（decided:superseded，升档审批机制已删除）")
-    const planStop = (stop, card, extra = {}) => {
+    const planStop = (stop, card, extra = {}, taskNow = lockedTask) => {
       // B9/§6.2.2：awaiting-user 时顶层携带完整待决卡列表（机器消费方不解析 card 也能拿到全部卡），
       // 与 run/derive 共用 pendingDecisionsOf 同一投影；损坏账本（同 ID 多正文）时停止并提示修复。
       let pendingList = null
       let corruptIds = null
       if (stop === "awaiting-user") {
-        const taskNow = lockedTask
         const dup = duplicateIssuedIds(taskNow.journal)
         if (dup.length) corruptIds = dup
         else {
           const { open } = pendingDecisionsOf({ journal: taskNow.journal })
-          if (open.length) pendingList = open.map(cardOf)
+          if (card.pendingDecisions || card.staleDecisions) pendingList = card.pendingDecisions ?? []
+          else if (open.length) pendingList = open.map(cardOf).filter((item) => !(card.stale && card.decisionId === item.decisionId))
         }
       }
       const plan = { ok: true, task: name, stage: card.stage ?? null, stop, waves: [], card, ...(pendingList?.length ? { pendingDecisions: pendingList, ...(pendingList.length > 1 ? { needsDecisionId: true } : {}) } : {}), ...(corruptIds?.length ? { duplicateIssued: corruptIds, note: "决定卡账本损坏（同 ID 多正文），已停止派发：人工核对 journal 后修复或重签" } : {}), ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}), ...extra }
-      if (!json) plan.human = stopHumanLines(stop, card, extra)
       return plan
     }
     for (let hop = 0; hop <= workflow.stages.length + 2; hop += 1) {
@@ -4082,22 +4656,17 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       let state = deriveTask({ ...task, artifactVerification })
       const firstDispatch = !task.journal.some((event) => event.type === "dispatched")
       let effectiveWritable = writable
-      if (task.scope?.intakeVersion === 2 && firstDispatch && !(Array.isArray(task.packages) && task.packages.length) && (!pendingBefore || pendingBefore.gateId === INTAKE_GATE)) {
-        if (writable.length) {
-          const valid = writable.length === 1 && writable[0] === "none" || writable.every(validWritableSpec)
-          if (!valid) throw fail("DISPATCH_INPUT_REQUIRED", "首派可写声明须为项目内相对路径:产物类型，或单独使用 none。")
-          if (digestValue(task.scope.firstWritable ?? null) !== digestValue(writable)) {
-            task.scope = { ...task.scope, firstWritable: [...writable] }
-            await atomicJson(path.join(task.root, "scope.json"), task.scope)
-          }
-        }
-        if (!writable.length && Array.isArray(task.scope.firstWritable)) effectiveWritable = task.scope.firstWritable
-      }
-      // 首卡在任何推进之前签发；已待决的同一意图卡按相同投影重显或失效重签。
       const pending = pendingDecisionDetail(task.journal)
-      if (task.scope?.intakeVersion === 2 && (firstDispatch || pending?.gateId === INTAKE_GATE) && (!pending || pending.gateId === INTAKE_GATE)) {
+      const standardIntake = pending?.gateId === INTAKE_GATE && !pending.recoveryAuthorization
+      const single = !task.packages?.length
+      const ownerReady = state.next.kind === "dispatch" && state.wave?.role === "owner"
+      if (single && (ownerReady || standardIntake && writable.length) && (!pending || standardIntake)) {
+        effectiveWritable = await prepareOwnerWritable(task, state.stage, writable, direction, projectRoot)
+      }
+      // 静止、在途补发不重冻派单；未决意图卡可由本次精确用户方向作废并重新推导。
+      if ((task.scope?.intakeVersion === 2 && firstDispatch && !pending) || standardIntake) {
         const prepared = await prepareDispatch({ task, workflow, policy, state })
-        if (prepared.card) return planStop(prepared.card.transition === "await-decision" ? "awaiting-user" : "blocked", prepared.card)
+        if (prepared.card) return planStop(prepared.card.transition === "await-decision" ? "awaiting-user" : "blocked", prepared.card, {}, task)
         state = deriveTask(task)
       }
       // 派发链零配置反查（§3.8）：roles/packages 缺失由 runTransition 返回可恢复卡。
@@ -4168,7 +4737,7 @@ async function cmdDispatchPlan({ projectRoot, name, writable = [], json = false 
       if (card.transition === "re-sign") continue // 旧升档卡已收口（decided:superseded）；锁内重推导
       if (card.transition === "complete") return planStop("completed", card)
       if (card.transition === "wait-inflight") return planStop("wait-inflight", card, { dispatchKey: card.dispatchKey, inflight: card.inflight ?? [] })
-      if (card.transition === "await-decision" || card.transition === "await-route") return planStop("awaiting-user", card)
+      if (card.transition === "await-decision" || card.transition === "await-route") return planStop("awaiting-user", card, {}, task)
       return planStop("blocked", card)
     }
     throw fail("STATE_CORRUPT", "dispatch-plan 推进循环超界（阶段图可能成环）")
@@ -4412,7 +4981,7 @@ async function helpCard({ projectRoot = process.cwd() } = {}) {
       plan: "tw plan --task <n> --packages <JSON数组>：登记拆分并物化逐包 ModelRef（{id, model?} | {id, tier?} | {id}；机械验收：互斥/无环/完成标准；语义质量归 Lead）。同内容重复 plan 零写入（changed:false，不产生 re-planned，也不解除任何 blocked）；解除按包 blocked 用 --resolve-blocked '{\"package\":\"a\",\"action\":\"retry\",\"reason\":\"用户方向\"}' --blocked-ref <run 卡 blockedPackages 列出的 ref> 准备 package-recovery 卡（action 可选 retry 或 remove；有候选计划时先处理意图确认卡），用户确认后仅解除所选包",
       "agent-map": "tw agent-map --task <n> --key <派单key> --agent <平台subagentId>：登记派单→成员续派映射（tw-dispatch 按派单 modelRef 创建）",
       roles: "tw roles --task <n> [--set <role>=<provider>/<model>[@<effort>] | <role>=tier:<junior|senior|expert>[@<effort>]] [--clear <role>] [--resolve]：任务角色模型的唯一读写入口（agents.json.roles）",
-      open: "tw open --name <n> --objective <o> [--entry <stage>] [--risk normal|high|critical] [--raw-requirement <原文>] [--constraint <文本>]... [--exclusion <文本>]... [--scope-note <文本>]... [--acceptance <文本>]... [--gap <JSON>]...：开任务并返回准备回执；补齐原文和计划后由首次推进签发完整确认卡",
+      open: "tw open --name <n> --objective <o> [--entry <stage>] [--risk normal|high|critical] [--raw-requirement <原文>] [--constraint <文本>]... [--exclusion <文本>]... [--scope-note <文本>]... [--acceptance <文本>]... [--gap <JSON>]...：开任务并返回准备回执；补齐原文和计划后由首次推进核对明确授权或签意图卡",
       run: "tw run --task <n>：只读查状态（当前状态卡 + 下一步指引；不写任务事实。推进用 tw-dispatch / dispatch-plan）",
       "dispatch-plan": "tw dispatch-plan --task <n> [--json] [--writable <路径>:<kind> ...]：推进一步——推进到派发点或 stop 卡，输出波次计划（prompt + modelRef + modelSource）；路径以 / 结尾 = 目录授权；无 --json 输出人读 human 字段",
       decide: "tw decide --task <n> --choice <序号> --decision-id <卡片标识> [--note <...>]：按 decisionId 任意审批有效卡片（多卡时缺 ID 同步拒绝并列出全部卡 ID/用途）；仅一张普通历史卡可省略 ID，意图卡/刷新卡/包恢复卡必须携带实际向用户展示且被答复的卡片 ID；重复相同 ID/选项幂等重放原结果",
@@ -4435,7 +5004,8 @@ async function helpCard({ projectRoot = process.cwd() } = {}) {
       "模型数据链：默认档只来自 team-work/policies/default.json；tw open 把三角色解析成 ModelRef 存 agents.json.roles；tw plan 把每包解析成 packages.json[].model；派发直接读 pkg.model ?? roles[role]，不在派发期查配置",
       'ModelRef={provider, modelName, effort?, family?}：effort 只在配置了合法枚举时出现，不设置时省略字段（宿主实测 "" 与 "none" 均被拒绝）；宿主字段映射只在绑定层 toHostTarget 一处发生',
       '配置来源为当前 profile 的 team-work-dsh.tiers；宿主每次调用提供 TW_DSH_CONFIG JSON={tiers,entryId:"team-work-dsh",profile:<来源或 unresolved>} 快照。无宿主终端由调用方显式提供相同输入；缺失、损坏或缺档返回 unresolved，不读取旧配置文件或写缓存',
-      "新任务先准备原始需求、角色和完整分包（或首派可写范围），首次推进签发一张完整意图确认卡；确认前不派发。无歧义确认直接携展示卡 ID 决定，有歧义先澄清；实际配置变化后重签。",
+      "open、intent、roles、plan、dispatch-plan 可用 --user-direction JSON 报告用户原话 quote 和 fields（字段到实际值的映射，例如 intent.objective、scope.entry、roles.owner、writable、packages[包ID].writable）；数组可只认领明确条目，模型用 provider/model[@effort] 或完整 ModelRef，不接受字段名列表。",
+      "实际合同完全匹配时直接登记；有补全、纠偏或待对齐项才签发意图确认卡，按实际展示卡 ID 作答。人工门选择返工时可附 amend（例如 addConstraint 数组），fields 仍须认领实际值；自由备注不授权。",
     ],
   }
 }
@@ -4446,11 +5016,16 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
   for (let i = 0; i < rest.length; i += 2) args[rest[i].replace(/^--/, "")] = rest[i + 1]
   const flag = (key) => argv.filter((a) => a === `--${key}`).length ? [argv[argv.indexOf(`--${key}`) + 1]] : []
   const common = { projectRoot }
-  checkFlags(cmd, rest)
   try {
+    checkFlags(cmd, rest)
+    const directions = collectFlags(argv, "user-direction")
+    if (argv.includes("--user-direction") && (directions.length !== 1 || !["open", "roles", "intent", "plan", "dispatch-plan", "decide"].includes(cmd))) {
+      throw fail("USAGE", "--user-direction 是 open/roles/intent/plan/dispatch-plan/decide 的唯一 JSON 参数。")
+    }
+    const direction = parseUserDirection(directions[0], cmd === "decide")
     switch (cmd) {
       case "open": return await cmdOpen({
-        ...common, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk,
+        ...common, direction, name: args.name, objective: args.objective, entry: args.entry, risk: args.risk,
         rawRequirement: args["raw-requirement"],
         constraints: collectFlags(argv, "constraint"),
         exclusions: collectFlags(argv, "exclusion"),
@@ -4458,7 +5033,7 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
         acceptance: collectFlags(argv, "acceptance"),
         gaps: collectFlags(argv, "gap").map((value) => parseJsonArg(value, "--gap")),
       })
-      case "roles": return await cmdRoles({ ...common, name: args.task, sets: collectFlags(argv, "set"), clears: collectFlags(argv, "clear"), resolve: argv.includes("--resolve") })
+      case "roles": return await cmdRoles({ ...common, direction, name: args.task, sets: collectFlags(argv, "set"), clears: collectFlags(argv, "clear"), resolve: argv.includes("--resolve") })
       case "run": {
         // run 只读化（§7.2）：--writable 是旧推进时代的参数，显式拒绝并指路 dispatch 通道（防旧习惯误用）
         const legacyWritable = collectWritable(argv)
@@ -4467,9 +5042,9 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
         }
         return await cmdRun({ ...common, name: args.task, writable: [] })
       }
-      case "decide": return await cmdDecide({ ...common, name: args.task, choice: Number(args.choice), note: args.note, decisionId: args["decision-id"] })
+      case "decide": return await cmdDecide({ ...common, direction, name: args.task, choice: Number(args.choice), note: args.note, decisionId: args["decision-id"] })
       case "intent": return await cmdIntent({
-        ...common, name: args.task, objective: args.objective, risk: args.risk,
+        ...common, direction, name: args.task, objective: args.objective, risk: args.risk,
         rawRequirement: args["raw-requirement"],
         addConstraint: collectFlags(argv, "add-constraint"),
         addExclusion: collectFlags(argv, "add-exclusion"),
@@ -4486,9 +5061,9 @@ async function twInner(argv, { projectRoot = process.cwd(), stdout = process.std
       case "migrate": return await cmdMigrate({ ...common, name: args.task })
       case "gate": return await cmdGate({ ...common, name: args.task })
       case "archive": return await cmdArchive({ ...common, name: args.task })
-      case "plan": return await cmdPlan({ ...common, name: args.task, packagesJson: args.packages, resolveBlocked: args["resolve-blocked"] ?? null, blockedRef: args["blocked-ref"] ?? null })
+      case "plan": return await cmdPlan({ ...common, direction, name: args.task, packagesJson: args.packages, resolveBlocked: args["resolve-blocked"] ?? null, blockedRef: args["blocked-ref"] ?? null })
       case "agent-map": return await cmdAgentMap({ ...common, name: args.task, key: args.key, agent: args.agent, modelHint: args["model-hint"] })
-      case "dispatch-plan": return await cmdDispatchPlan({ ...common, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
+      case "dispatch-plan": return await cmdDispatchPlan({ ...common, direction, name: args.task, writable: collectWritable(argv), json: argv.includes("--json") })
       case "models": return await cmdModels(common)
       case "init": return await cmdInit({ ...common, force: argv.includes("--force"), userRulesRoot })
       case "help": return await helpCard({ projectRoot })
@@ -4540,27 +5115,25 @@ async function markTreeReadOnly(rootDir) {
 // 成员侧只有业务正文一块：规则已全部进派单卡 prompt（锁定契约 + 可 DIY 三段），不再追加第二块投影。
 // Lead 侧在本出口按呈现时点反吐 lead/<时点>/ 规则与明晰必读段（决定点加审阅段）。
 export async function tw(argv, opts = {}) {
-  let result = await twInner(argv, opts)
-  if (!result || typeof result !== "object" || Array.isArray(result)) return result
-  const projectRoot = opts.projectRoot ?? process.cwd()
-  const readGuidance = createClarityGuidanceReader()
-  if (result.card && typeof result.card === "object") {
-    if (result.stop === null && result.waves?.length) {
-      result.presentation = await presentationText({ kind: "dispatch", projectRoot, readGuidance })
-    } else result.card = await attachPresentation(result.card, readGuidance, result.stop, false, projectRoot)
-  } else result = await attachPresentation(result, readGuidance, null, argv[0] === "run", projectRoot)
-  if (argv[0] === "dispatch-plan" && !argv.includes("--json")) {
-    // 人读通道独立可用：业务正文在 waves/inflight 里原样给，规则只反吐给 Lead。
-    if (!result.human) result.human = stopHumanLines(result.stop, result.card ?? result, result)
-    const presentation = result.presentation ?? result.card?.presentation
-    if (presentation) {
-      const position = result.human.push(presentation) - 1
-      const route = presentation.split("\n\n")[0] + "\n完整呈现规则见 human[" + position + "]。"
-      if (result.presentation) result.presentation = route
-      else result.card.presentation = route
-    }
+  const result = await twInner(argv, opts)
+  if (!recordObject(result) || result.ok === false) return result
+  const card = result.card ?? result
+  try {
+    const cards = visibleDecisionCards(result)
+    const review = cards.filter(reviewPresentationCard)
+    const dispatch = result.stop === null && result.waves?.length
+    const progress = argv[0] !== "run" && ["advance", "complete"].includes(card.transition)
+    const kind = review.length ? "decision" : !cards.length && dispatch ? "dispatch" : !cards.length && progress ? "progress" : null
+    const terminal = argv[0] === "dispatch-plan" && !argv.includes("--json")
+    if (terminal && !result.human) result.human = stopHumanLines(result.stop, card, result)
+    if (!kind) return result
+    const text = await presentationText({ kind, projectRoot: opts.projectRoot ?? process.cwd(), decisions: cards.length > review.length ? review.map((c) => c.decisionId) : [] })
+    if (!text) return result
+    const dest = dispatch ? result : card
+    dest.presentation = terminal ? "完整呈现规则见 human[" + (result.human.push(text) - 1) + "]。" : text
+    return result
+  } catch (error) {
+    if (error.card) return error.card
+    throw error
   }
-  return result
 }
-
-export { cmdOpen, cmdRun, cmdDecide, cmdIntent, cmdGate, cmdArchive }

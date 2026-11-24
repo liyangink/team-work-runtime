@@ -10,6 +10,13 @@ export function writableMatch(writable, rel) {
   return null
 }
 
+// 派单范围对账是包含关系，不是重叠；文件授权不能扩大为目录，类型也必须一致。
+export function writableIncludes(approved, requested) {
+  return (requested ?? []).every(({ path, artifactKind }) =>
+    (approved ?? []).some((entry) => entry.artifactKind === artifactKind &&
+      (entry.path.endsWith("/") ? path.startsWith(entry.path) : entry.path === path)))
+}
+
 // 覆盖域重叠（plan 包间互斥判定）：路径相等，或互为祖先路径组件（含尾斜杠目录条目与其下路径）。
 // 同一路径只一个 inode：docs 与 docs/、docs 与 docs/x 都判重叠（同名文件/目录在文件系统互斥）；
 // 兄弟前缀不重叠（docs/ 与 docs-x/）。两条目归一为"目录形"后按前缀判定，尾斜杠与无斜杠语义统一。

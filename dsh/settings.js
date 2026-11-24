@@ -51,7 +51,15 @@ export function readDshConfigSnapshot(ctx, config = {}) {
 }
 
 export function decisionTableText() {
-  return ["team-work 工具分工：", "- 正式任务的波次成员派发和续派仅由 Lead 执行：tw-dispatch（自动登记）。", "- 正式派发的模型来自任务级 agents.json.roles（tw roles 查看/显式修改）与包级 packages.json[].model（tw plan 落盘）；新任务首步先出意图确认卡，确认前不派发；改意图/角色/包模型后确认卡会重签；已有会话换模型会另出换模型确认卡。", "- 普通委派、用户指定档位、成员内部只读助手：原生 subagent；继承历史用 subagent_fork。成员助手仅查本职责内的限定小问题，junior、可写为空、不得继续委托，不重建审查团队；发起者核验整合，不能替代正式交付与评审。", "- 续聊已有子会话：原生 send_message；使用支持续聊的原生后端，返回的 subagentId 是会话 ID。参数以当前工具 schema 为准，不补造模式字段。", "- 开任务、拆包、推进与决定由 Lead 通过 tw 操作；成员通过 tw 交付、评审，门禁查询和补登记仍用 tw。收到带角色、范围与交付指令的派单时按成员职责执行，总目标仅作背景。", "- 普通精准选模先查 list_subagent_models；目录未列出不代表禁止，应以 provider+model 精确查询，区分权限拒绝、解析失败和可用。选模开关与允许列表约束原生工具，旧会话权限可能需新建会话后生效。", "- 原生工具参数为 reasoning_effort；tiers 的 effort 到调用时转换。缺档明确 unresolved，请配置或运行 tw models，禁止猜默认模型。"].join("\n")
+  return [
+    "team-work 工具分工：",
+    "- 正式波次由 Lead 用 tw-dispatch 派发或恢复，模型来自任务角色和包级计划；已有会话换模型走专用卡。用户明确且无信息差的方向可直接登记；确有需对齐的事项才原样呈现已签意图卡。",
+    "- 普通委派、用户指定档位、成员内部只读助手：原生 subagent；继承历史用 subagent_fork。成员助手仅查本职责内的限定小问题，junior、可写为空、不得继续委托，不重建审查团队；发起者核验整合，不能替代正式交付与评审。",
+    "- 续聊已有子会话用原生 send_message，Lead 问询、纠偏和叫停不受影响。正式成员用 tw deliver/review 登记，不主动播报或另发交卷摘要；必要答询和紧急协调仍可发送。",
+    "- 开任务、拆包、推进和决定由 Lead 执行；收到正式派单的成员只做派单内工作，总目标仅作背景。",
+    "- 普通精准选模先查 list_subagent_models；目录未列出不代表禁止，应以 provider+model 精确查询，区分权限拒绝、解析失败和可用。选模开关与允许列表约束原生工具，旧会话权限可能需新建会话后生效。",
+    "- 原生工具参数为 reasoning_effort；tiers 的 effort 到调用时转换。缺档明确 unresolved，请配置或运行 tw models，禁止猜默认模型。",
+  ].join("\n")
 }
 
 export function systemPromptSection(ctx, config) {

@@ -88,6 +88,24 @@ test("新版并发 open：同名独占创建最多一个成功，完整任务不
   assert.equal((await tw(args, { projectRoot })).code, "TASK_EXISTS")
 })
 
+test("并发复用明确指令只登记一次授权和一条派单", async () => {
+  const root = await makeProject()
+  const name = "concurrent-direction"
+  const call = caller(root)
+  const quote = "按指定模型核对报告，只写报告本身。"
+  const fields = (values) => ["--user-direction", JSON.stringify({ quote, fields: values })]
+  await call(["open", "--name", name, "--entry", "code-review", "--objective", "核对报告", "--raw-requirement", quote, ...fields({ "scope.entry": "code-review", "intent.objective": "核对报告" })])
+  await call(["roles", "--task", name, "--set", "owner=示例/甲", "--set", "challenger=示例/乙", "--set", "expert=示例/丙", ...fields({ "roles.owner": "示例/甲", "roles.challenger": "示例/乙", "roles.expert": "示例/丙" })])
+  const dispatch = () => call(["dispatch-plan", "--task", name, "--writable", "R.md:code-review", ...fields({ writable: ["R.md:code-review"] }), "--json"])
+  const results = await Promise.all([dispatch(), dispatch(), dispatch()])
+  assert.equal(results.filter((r) => r.stop === null).length, 1)
+  assert.equal(results.filter((r) => r.stop === "wait-inflight").length, 2)
+  const task = await loadTask(root, name, { workflow: FIX_WORKFLOW, policy: FIX_POLICY })
+  assert.equal(task.journal.filter((e) => e.type === "intent-authorized").length, 1)
+  assert.equal(task.journal.filter((e) => e.type === "dispatched").length, 1)
+  assert.equal(task.journal.filter((e) => e.type === "decision-issued").length, 0)
+})
+
 test("新版并发首卡：相同准备只签一次且不派发", async () => {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "tw-first-card-"))
   const call = (args) => tw(args, { projectRoot })

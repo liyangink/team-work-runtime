@@ -8,6 +8,8 @@
 // 波有实体身份 waveId（wv1/wv2/…，F1）；轮次无实体、唯一算法 = 每包 max(已交付报告 round)（F2）；
 // 在途 = 存在未 superseded 的未结波（F1/F3 守卫，波与波永远串行）；superseded 波在投影/在途/回溯统一排除（F3）。
 
+import { digestValue } from "./domain/digests.mjs"
+
 // 场景策略：场景级 ownerTier/challengerTier 优先，缺省回退 policy.roles 兜底段。
 // E3：选模链不保留任何字面量默认档——场景与 roles 都没给即 null（调用方标 unresolved 并给修复指引），
 // 避免 skill 之外的隐含默认值与伪报档位溯源。档位只用于 open 期一次性解析与展示，
@@ -326,17 +328,130 @@ export function inflightBatch({ journal = [], reports = [] }) {
   return null
 }
 
+// 只认完整合同；仅记包名的旧事件会切断可证明的连续性。
+export const isPackagePlanEvent = (event) => ["packages-planned", "re-planned", "packages-model-materialized"].includes(event.type)
+
+export function packageInstancesOf(journal, packages, stageEntrySeq) {
+  const contract = (p) => digestValue({ model: p.model ?? null, writable: p.writable, done: p.done, dependsOn: p.dependsOn ?? [] })
+  const ids = packages?.length ? packages.map((p) => p.id) : [null]
+  let current = new Map([[null, { planStartSeq: journal.find((e) => e.type === "task-opened")?.seq ?? 0, fingerprint: null }]])
+  for (const event of journal) {
+    if (!isPackagePlanEvent(event)) continue
+    const items = event.detail?.items
+    if (!Array.isArray(items) || !Number.isSafeInteger(event.seq) || event.seq < 1 ||
+        items.some((p) => !p || typeof p.id !== "string" || !Array.isArray(p.writable) || !Array.isArray(p.done)) ||
+        new Set(items.map((p) => p.id)).size !== items.length) { current = new Map(); continue }
+    const contracts = items.length ? items.map((p) => [p.id, contract(p)]) : [[null, null]]
+    current = new Map(contracts.map(([id, fingerprint]) => {
+      const previous = current.get(id)
+      return [id, previous?.fingerprint === fingerprint ? previous : { planStartSeq: event.seq, fingerprint }]
+    }))
+  }
+  return new Map(ids.flatMap((id) => {
+    const entry = current.get(id)
+    const expected = id == null ? null : contract(packages.find((p) => p.id === id))
+    return entry?.fingerprint === expected ? [[id, { stageEntrySeq, package: id, planStartSeq: entry.planStartSeq }]] : []
+  }))
+}
+
+// 人工返工抵扣只取卡片、决定、派发、有效交付能按提交序闭合的因果链。
+function humanReworkRounds({ journal, reports, decisions, stage, stageEntrySeq, rounds }) {
+  const issued = new Map(), committed = new Map(), dispatches = new Map(), commits = new Map()
+  const putUnique = (map, key, event) => map.set(key, map.has(key) ? null : event)
+  for (const event of journal) {
+    const d = event.detail ?? {}
+    if (event.type === "decision-issued") putUnique(issued, d.decisionId, event)
+    if (event.type === "decided") putUnique(committed, d.decisionId, event)
+    if (event.type === "dispatched") putUnique(dispatches, d.key, event)
+    if (["report-accepted", "report-committed"].includes(event.type)) putUnique(commits, d.reportId + "\u0000" + (d.ver ?? 1), event)
+  }
+  const authorization = (decision) => {
+    const card = issued.get(decision.decisionId), answer = committed.get(decision.decisionId)
+    if (!card || !answer || !decision.gateId || !(card.seq > stageEntrySeq && answer.seq > card.seq) ||
+        (card.detail.stage != null && card.detail.stage !== stage) || (decision.stageEntrySeq != null && decision.stageEntrySeq !== stageEntrySeq) ||
+        card.detail.gateId !== decision.gateId || answer.detail.choice !== decision.choice ||
+        !card.detail.choices?.some((c) => c.label === decision.choice && (c.grant ?? null) === (decision.grant ?? null))) return null
+    return { card, answer, decision }
+  }
+  const valid = new Map()
+  for (const d of decisions) {
+    if (d.choice !== "rework" && !["rework-rerun", "rework-unfixed"].includes(d.grant)) continue
+    const auth = authorization(d)
+    if (auth) putUnique(valid, d.decisionId, auth)
+  }
+  const excluded = supersededKeys(journal)
+  const credited = new Map()
+  const consumed = new Map()
+  for (const r of [...reports].sort(reportOrderComparator(journal))) {
+    const pkg = r.package ?? null
+    if (r.role !== "owner" || r.kind !== "deliver" || r.payload?.outcome !== "delivered" ||
+        r.origin === "user-authorized-lead-refresh" || excluded.has(r.dispatchKey) ||
+        !Number.isSafeInteger(r.round) || r.round < 1 || r.round > (rounds.get(pkg) ?? 0)) continue
+    const dispatch = dispatches.get(r.dispatchKey), report = commits.get(r.reportId + "\u0000" + (r.ver ?? 1))
+    const d = dispatch?.detail
+    if (!d || !(report?.seq > dispatch.seq) || d.kind !== "respond" || d.role !== "owner" ||
+        d.round !== r.round || (d.package ?? null) !== pkg || (d.stage != null && d.stage !== stage)) continue
+    const origin = valid.get(d.causeDecisionId)
+    if (!origin || origin.decision.choice !== "rework" || !(dispatch.seq > origin.answer.seq)) continue
+    const earlier = [...dispatches.values()].filter((e) => e && !excluded.has(e.detail.key) && e.seq < dispatch.seq &&
+      e.detail.causeDecisionId === d.causeDecisionId && (e.detail.package ?? null) === pkg).sort((a, b) => b.seq - a.seq)[0]
+    const followups = [...valid.values()].filter((a) => a && a.decision.decisionId !== d.causeDecisionId &&
+      a.decision.gateId === origin.decision.gateId && (a.card.detail.causeDecisionId ?? d.causeDecisionId) === d.causeDecisionId &&
+      a.card.seq > (earlier?.seq ?? origin.answer.seq) && a.answer.seq < dispatch.seq &&
+      (a.decision.grant !== "rework-unfixed" || a.decision.packages?.includes(pkg) || a.card.detail.reworkStalemate?.includes(String(pkg))))
+    const auth = d.reworkAuthorizationId != null
+      ? (d.reworkAuthorizationId === d.causeDecisionId && !earlier ? origin : followups.find((a) => a.decision.decisionId === d.reworkAuthorizationId))
+      : (earlier ? (followups.length === 1 ? followups[0] : null) : (followups.length === 0 ? origin : null))
+    if (!auth) continue
+    if (!credited.has(pkg)) { credited.set(pkg, new Set()); consumed.set(pkg, new Set()) }
+    if (consumed.get(pkg).has(auth.decision.decisionId) || credited.get(pkg).has(r.round)) continue
+    consumed.get(pkg).add(auth.decision.decisionId)
+    credited.get(pkg).add(r.round)
+  }
+  return credited
+}
+
+function roundLimits({ journal, decisions, reports, packages, stage, stageEntrySeq, rounds, maxRounds }) {
+  const instances = packageInstancesOf(journal, packages, stageEntrySeq)
+  const credits = humanReworkRounds({ journal, reports, decisions, stage, stageEntrySeq, rounds })
+  const legacy = new Set(decisions.filter((d) => d.grant === "extra-round" && !d.kind && !d.roundLimit && d.decisionId &&
+    !journal.some((e) => e.detail?.decisionId === d.decisionId && (e.detail?.roundLimit != null || e.detail?.kind != null || e.type === "decided" && e.detail?.choice === "superseded"))).map((d) => d.decisionId))
+  const floors = new Map()
+  const issued = new Map()
+  const counted = new Set()
+  for (const event of journal) {
+    const d = event.detail ?? {}
+    if (event.type === "decision-issued") issued.set(d.decisionId, issued.has(d.decisionId) ? null : event)
+    if (event.type !== "decided" || d.kind !== "round-limit" || d.grant !== "extra-round" || counted.has(d.decisionId)) continue
+    counted.add(d.decisionId)
+    const card = issued.get(d.decisionId)
+    const binding = d.roundLimit
+    if (!card || !(card.seq < event.seq) || binding?.stage !== stage || binding?.stageEntrySeq !== stageEntrySeq ||
+        !card.detail.choices?.some((c) => c.label === d.choice && c.grant === "extra-round") ||
+        (card.detail.kind === "round-limit" && digestValue(card.detail.roundLimit) !== digestValue(binding)) || !Array.isArray(binding.exhausted)) continue
+    for (const row of binding.exhausted) {
+      const instance = instances.get(row?.package)
+      if (!instance || digestValue(instance) !== digestValue(row.instance) ||
+          !Number.isSafeInteger(row.used) || !Number.isSafeInteger(row.limit) || row.used < row.limit ||
+          !Number.isSafeInteger(Math.max(row.limit, row.used) + 1)) continue
+      const lowerBound = Math.max(row.limit, row.used) + 1
+      floors.set(row.package, Math.max(floors.get(row.package) ?? 0, lowerBound))
+    }
+  }
+  return (pkg) => ({ package: pkg, instance: instances.get(pkg) ?? null, round: rounds.get(pkg) ?? 0,
+    used: (rounds.get(pkg) ?? 0) - (credits.get(pkg)?.size ?? 0), limit: Math.max(maxRounds + legacy.size, floors.get(pkg) ?? 0) })
+}
+
 // 返回波组描述符：
 //   {kind:"produce"|"respond", role:"owner", round, owners:[{package,round,continuation}]}
 //   {kind:"review",  role:"challenger", round, scope?, continuation}   // 多包组合评审 scope="consolidation"
 //   {kind:"verdict", role:"expert", round, continuation}  // continuation = 已有 expert 报告（重裁续派，台账门槛 3）
 //   {kind:"gate"} | {kind:"converge-user", reason}
 // owners 的 package 为 null 表示单 owner 匿名包；continuation = 该包该角色已有报告（增量续派）。
-export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages = null, journal = [] }) {
+export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages = null, journal = [], decisions = [], stage = null, stageEntrySeq = 0 }) {
   const items = Array.isArray(packages) ? packages : null
   const ids = items ? items.map((p) => p.id) : [null]
   const depsOf = (id) => items?.find((p) => p.id === id)?.dependsOn ?? []
-  const maxRounds = sp.maxRounds + extraRounds
 
   // F2 唯一算法：轮次 = 每包 max(已交付报告 round) 投影；报告计数口径删除。
   // lead-refresh 报告不推高投影轮（§6.2.1），但形成待评审基线（delivered 判定含 refresh）。
@@ -474,31 +589,33 @@ export function nextWave({ scenePolicy: sp, reports, extraRounds = 0, packages =
   }
   const active = ids.filter((id) => !doneP.has(id))
 
-  // —— converge-user 判定（F2 按包触发，轮次按投影真实轮消耗）——
-  const exhausted = [...reworkP].filter((id) => roundOf(id) >= maxRounds)
-  if (exhausted.length) {
-    const names = exhausted.map((id) => id ?? "（单 owner）").join("、")
-    const reason = items
-      ? `包 ${names} 已达自主轮次上限（${maxRounds}）仍未收敛`
-      : `challenger 第 ${roundOf(exhausted[0])} 轮仍要求返工，已达自主轮次上限`
-    return { kind: "converge-user", reason }
-  }
   if (escalateP.length || (sp.core && expert && verdictFresh && !["accept", "rework"].includes(verdictOutcome))) {
     const reason = escalateP.length
-      ? (items ? `包 ${escalateP.map((id) => id ?? "（单 owner）").join("、")} 的挑战者建议升级用户裁决` : "challenger 建议升级用户裁决")
-      : `expert 结论 ${verdictOutcome ?? "unknown"} 需要用户或 Lead 裁决`
-    return { kind: "converge-user", reason }
+      ? (items ? "包 " + escalateP.map((id) => id ?? "（单 Owner）").join("、") + " 的挑战者建议升级用户裁决" : "challenger 建议升级用户裁决")
+      : "expert 结论 " + (verdictOutcome ?? "unknown") + " 需要用户或 Lead 裁决"
+    return { kind: "converge-user", reason, technicalDecision: true }
   }
 
-  // —— 波选择（优先级：评审反馈优先消化，收敛期不开新范围）——
-  // 1) 先消化已明确的返工，避免未覆盖包的评审反复抢占被点名包的修复机会。
-  // 有效 blocked 包不自动重派；用户明确方向后按报告引用确认恢复。
-  const reworkTodo = [...reworkP].filter((id) => active.includes(id) && !blockedP.has(id)
-    && (!pendingRetries.has(id) || (depsSatisfied(id) && depsOf(id).every((dep) => !blockedP.has(dep) && !pendingRetries.has(dep)))))
+  // 先找真正可派的 respond；等待依赖或未解除 blocked 不构成额度耗尽。
+  const reworkTodo = [...reworkP].filter((id) => active.includes(id) && !blockedP.has(id) &&
+    depsSatisfied(id) && depsOf(id).every((dep) => !blockedP.has(dep) && !pendingRetries.has(dep)))
   if (reworkTodo.length) {
     const owners = reworkTodo.map((id) => ({ package: id, round: roundOf(id) + 1, continuation: true }))
+    const budgetOf = roundLimits({ journal, decisions, reports, packages: items, stage, stageEntrySeq, rounds, maxRounds: sp.maxRounds + extraRounds })
+    const exhausted = reworkTodo.map(budgetOf).filter((b) => b.used >= b.limit)
+    if (exhausted.length) {
+      const names = exhausted.map(({ package: id, round, used, limit }) => (id ?? "单 Owner") + "（展示第 " + round + " 轮，自主 " + used + "/" + limit + "）").join("、")
+      const feedback = [challenger, ...(sp.core && verdictFresh ? [expert] : [])].filter(Boolean).map((r) => [r.reportId, r.ver ?? 1, journalSeqOf(journal, r)])
+      const baselinesIdentity = reworkTodo.map((id) => {
+        const base = baselines.get(id)
+        return [id, base?.report.reportId ?? null, base?.report.ver ?? null, base?.seq ?? null]
+      })
+      return { kind: "round-limit", reason: "已达自主轮次上限且仍需返工：" + names + "。追加只给列出的耗尽包各一轮；也可结束任务。",
+        roundLimit: { stage, stageEntrySeq, exhausted, targets: reworkTodo, feedback, baselines: baselinesIdentity, planFingerprint: digestValue(items) }, owners }
+    }
     return { kind: "respond", role: "owner", round: Math.max(...owners.map((o) => o.round)), owners }
   }
+
   // 2) 已交付、未过评审、且未被 rework 点名（点名包走 respond 修复，不重复评审）→ 组合评审；
   // 有效 blocked 的包不进评审（其当前事实是待恢复，旧基线评审已消费，见 B10/§6.1）
   const awaitingReview = active.filter((id) => byId.get(id).delivered && !accepted.has(id) && !reworkP.has(id) && !blockedP.has(id))

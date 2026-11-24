@@ -91,11 +91,11 @@ function layerDir(rulesDir, ...segments) {
 // 读某一层的单条规则：返回 { state: "ok" | "missing" | "failed", text }。
 //   missing（ENOENT）= 该层没有这条，静默；ok = 文本（可能是空串，属"用户显式清空"）；
 //   failed = 条目在场但读不了：用户层警告后回退包内默认，项目层警告后跳过该条追加，包内层静默跳过。
-async function readRuleFile(rulesDir, segments, { layer = null } = {}) {
+async function readRuleFile(rulesDir, segments, { layer = null, normalize = (text) => text.trim() } = {}) {
   if (!rulesDir) return { state: "missing", text: "" }
   const file = path.join(rulesDir, ...segments)
   try {
-    return { state: "ok", text: (await readFile(file, "utf8")).trim() }
+    return { state: "ok", text: normalize(await readFile(file, "utf8")) }
   } catch (error) {
     if (error?.code === "ENOENT") return { state: "missing", text: "" }
     const reason = error?.code ?? error?.message
@@ -107,10 +107,10 @@ async function readRuleFile(rulesDir, segments, { layer = null } = {}) {
 
 // 基线层取值：用户公共目录同名文件优先（存在即整份采用，含用户清空后的空文件），
 // 不存在或读取失败时回退包内出厂默认。
-async function readBaseline(userRulesDir, packageRulesDirPath, segments) {
-  const userFile = await readRuleFile(userRulesDir, segments, { layer: "user" })
+async function readBaseline(userRulesDir, packageRulesDirPath, segments, normalize) {
+  const userFile = await readRuleFile(userRulesDir, segments, { layer: "user", normalize })
   if (userFile.state === "ok") return userFile.text
-  const packageFile = await readRuleFile(packageRulesDirPath, segments)
+  const packageFile = await readRuleFile(packageRulesDirPath, segments, { normalize })
   return packageFile.state === "ok" ? packageFile.text : ""
 }
 
@@ -304,8 +304,13 @@ export async function resolveLeadGeneralRules({ projectRoot = null, packageRoot 
 
 // Lead 规则解析：按呈现时点读 lead/<kind>/ 下 .md（kind = dispatch|decision|progress，见方案第二节 4）。
 // Lead 通道整文件读取、不套三标题：lead/ 下文件是成篇的操作要求，不是可分段拼接的成员条目。
-// 三层口径与成员通道一致（用户公共层优先、包内默认回退、项目追加，忽略旁路副本），
-// 差异只有两条：lead/ 根级文件（含 README.md）不在此读取；正文不做三标题解析。
+// 先选基线（用户公共层优先、包内默认回退），再对同名项目正文精确去重；不同仍在基线之后追加。
+// 只统一 CRLF 与去除文件外层空行；不消除缩进、行尾硬换行、行内差异。旁路副本及 Lead 总纲不在此读取。
+function leadRuleBody(text) {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, "")
+  return /\S/.test(normalized) ? normalized : ""
+}
+
 // 返回 [{ source: "lead", name, text }]。
 export async function resolveLeadRules({ kind, projectRoot = null, packageRoot = PACKAGE_ROOT, userRulesRoot = DEFAULT_USER_RULES_ROOT() } = {}) {
   const point = requireSegment(kind, "kind")
@@ -318,9 +323,9 @@ export async function resolveLeadRules({ kind, projectRoot = null, packageRoot =
   const rules = []
   for (const fileName of names) {
     const segments = ["lead", point, fileName]
-    const baseline = await readBaseline(userRulesDir, packageRulesDirPath, segments)
-    const projectFile = await readRuleFile(projectRulesDir, segments, { layer: "project" })
-    const text = [baseline, projectFile.state === "ok" ? projectFile.text : ""].filter(Boolean).join("\n\n")
+    const baseline = await readBaseline(userRulesDir, packageRulesDirPath, segments, leadRuleBody)
+    const projectFile = await readRuleFile(projectRulesDir, segments, { layer: "project", normalize: leadRuleBody })
+    const text = [baseline, projectFile.text !== baseline ? projectFile.text : ""].filter(Boolean).join("\n\n")
     if (text) rules.push({ source: "lead", name: segments.join("/"), text })
   }
   return rules
@@ -332,6 +337,7 @@ export async function resolveLeadRules({ kind, projectRoot = null, packageRoot =
 // 项目）都改不动它；内容不读盘，纯常量拼装。
 const WORKFLOW_CONTRACT_TITLE = "## 工作流职责（TWR 固定契约）"
 const WORKFLOW_CONTRACT_LOCKED = "本段由 TWR 包内代码固定生成，不读取任何外部规则目录，也不被用户公共目录或项目规则覆盖或修改。"
+const WORKFLOW_CONTRACT_REPORTING = "开工、过程进度、测试计数和交卷结论留给正式 deliver/review 或最终结束语，不另发预告或摘要；Lead 主动问询照常答，确需立即协调、纠偏、叫停或处理阻塞时可发消息并说明请求。"
 const WORKFLOW_CONTRACT_HELPER = "需要辅助时只可委托 junior 只读助手：可写范围为空、不作完整审查、不替代正式 deliver/review、不得继续委托；助手不得读取项目外目录，结果由你自行核验整合；转发消息同样带完整职责边界，不得把总目标直接复制成助手派单。"
 const WORKFLOW_CONTRACT_ROLES = {
   owner: {
@@ -363,46 +369,61 @@ export function lockedWorkflowContract(role) {
     WORKFLOW_CONTRACT_LOCKED,
     contract.dispute,
     contract.tool,
+    WORKFLOW_CONTRACT_REPORTING,
     WORKFLOW_CONTRACT_HELPER,
   ]
   return [WORKFLOW_CONTRACT_TITLE, "", ...bullets.map((line) => "- " + line)].join("\n")
 }
 
-// 明晰必读段提取器：成员卡不再消费，
-// 只随 Lead 反吐出现；正文来自根包 clarity 技能文件的唯一必读标记，避免静态副本。
+// 保留独立技能的原必读段；TWR 人工审阅只自动读取同源短节选，成员、意图与机械卡均不读取。
 const REQUIRED_BEGIN = "<!-- clarity:required:begin -->"
 const REQUIRED_END = "<!-- clarity:required:end -->"
+const SHORT_REVIEW_BEGIN = "<!-- clarity:review-short:begin -->"
+const SHORT_REVIEW_END = "<!-- clarity:review-short:end -->"
 const CLARITY_RESOURCES = {
   public: "skills/clarity-guidance/output-standard.md",
   review: "skills/clarity-review/references/review-rules.md",
 }
 
-export function requiredClarityText(text) {
-  const starts = text.split(REQUIRED_BEGIN).length - 1
-  const ends = text.split(REQUIRED_END).length - 1
-  const begin = text.indexOf(REQUIRED_BEGIN) + REQUIRED_BEGIN.length
-  const end = text.indexOf(REQUIRED_END)
-  if (starts !== 1 || ends !== 1 || end < begin || !text.slice(begin, end).trim()) {
-    throw new Error("必读标记须唯一配对、顺序正确且正文非空")
+function markedClarityText(text, startMarker, endMarker, label) {
+  const start = text.indexOf(startMarker)
+  const end = text.indexOf(endMarker)
+  const begin = start + startMarker.length
+  const body = text.slice(begin, end)
+  if (start === -1 || end < begin || text.indexOf(startMarker, begin) !== -1 || text.indexOf(endMarker, end + endMarker.length) !== -1 || !body.trim()) {
+    throw new Error(label + "标记须唯一配对、顺序正确且正文非空")
   }
-  return text.slice(begin, end)
+  return body
+}
+
+export function requiredClarityText(text) {
+  return markedClarityText(text, REQUIRED_BEGIN, REQUIRED_END, "必读")
+}
+
+export function shortReviewClarityText(text) {
+  const body = markedClarityText(text, SHORT_REVIEW_BEGIN, SHORT_REVIEW_END, "审阅短节选").trim()
+  if ([...body].length > 160) throw new Error("审阅短节选超过 160 字符")
+  return body
 }
 
 // 每次工具操作新建读取器：同一操作共享读取结果，下一操作重新读取。
 // 参数仅用于隔离文件系统测试，不是项目配置或宿主技能选源接口。
 export function createClarityGuidanceReader({ packageRoot = PACKAGE_ROOT, read = readFile } = {}) {
   const loaded = new Map()
-  const section = (kind) => {
-    if (!loaded.has(kind)) loaded.set(kind, (async () => {
-      const source = path.join(packageRoot, CLARITY_RESOURCES[kind])
-      try {
-        const text = await read(source, "utf8")
-        return "## clarity " + (kind === "public" ? "公共必读" : "审阅必读") + "\n" + requiredClarityText(text) + "\n详细规范（仅限读取此文件，不扩展扫描权限）：" + source
-      } catch (error) {
-        return "clarity 规则未带入：" + source + "（" + (error?.code ?? error?.message) + "）。恢复：核对当前根包资源及唯一必读标记，修复或重新安装完整根包后重试；本次原流程保持，不将诊断视为批准。"
-      }
-    })())
-    return loaded.get(kind)
+  const section = async (kind, short = false) => {
+    const source = path.join(packageRoot, CLARITY_RESOURCES[kind])
+    try {
+      if (!loaded.has(source)) loaded.set(source, Promise.resolve().then(() => read(source, "utf8")))
+      const text = await loaded.get(source)
+      const title = short ? "审阅短节选" : kind === "public" ? "公共必读" : "审阅必读"
+      const body = short ? shortReviewClarityText(text) : requiredClarityText(text)
+      return "## clarity " + title + "\n" + body + "\n详细规范（仅限读取此文件，不扩展扫描权限）：" + source
+    } catch (error) {
+      if (short) return "clarity 审阅短节选未带入（" + (error?.code ?? error?.message) + "），详见 " + source
+      return "clarity 规则未带入：" + source + "（" + (error?.code ?? error?.message) + "）。恢复：核对当前根包资源及唯一必读标记，修复或重新安装完整根包后重试；本次原流程保持，不将诊断视为批准。"
+    }
   }
-  return async ({ review = false } = {}) => (await Promise.all([section("public"), ...(review ? [section("review")] : [])])).join("\n\n")
+  return async ({ review = false, shortReview = false } = {}) => shortReview
+    ? section("review", true)
+    : (await Promise.all([section("public"), ...(review ? [section("review")] : [])])).join("\n\n")
 }

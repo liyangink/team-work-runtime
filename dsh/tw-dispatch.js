@@ -54,7 +54,7 @@ export function deterministicSessionId(task, key) {
 export function twDispatchToolDescription() {
   return [
     "team-work 正式成员派发：按每个 key 先持投递锁、再短持任务锁重验波状态和映射，不持任务锁等待宿主；按派单 modelRef 创建并拼接展示标签。正文必须是可验证的冻结版本，重算 SHA-256 并逐块核对同父会话收单；内容冲突、停写未确认或身份与状态不确定时保留原会话及文件并返回 recover。模型来自任务 roles 与包级 model；人工门停止派发。",
-    'wait-children 只表示核实本轮正文已被宿主接收，不代表成员已完成或通知一定可达；活会话未见本轮正文时，仅有可靠旧轮活动与通知证据才返回 wait-prior-turn，否则 recover。冷会话补投或同 ID 补建按用户裁决执行，但日志缺项和 stat 未命中不能证明旧调用不会迟到，存在重复投递风险，需隔离宿主验证。确需同步等待时 sleep 首次会有确认引导；人工等待不轮询，主动续聊用原生 send_message，不承诺跨崩溃恰好一次。新任务先展示意图确认卡，换模型须沿用已有确认卡；多张待决卡按实际 decisionId 答复。',
+    'wait-children 只表示核实本轮正文已被宿主接收，不代表成员已完成或通知一定可达；活会话未见本轮正文时，仅有可靠旧轮活动与通知证据才返回 wait-prior-turn，否则 recover。冷会话补投或同 ID 补建按用户裁决执行，但日志缺项和 stat 未命中不能证明旧调用不会迟到，存在重复投递风险，需隔离宿主验证。确需同步等待时 sleep 首次会有确认引导；人工等待不轮询，主动续聊用原生 send_message，不承诺跨崩溃恰好一次。明确且无信息差的用户方向可登记后直接推进；有意图卡就原样呈现已签正文，按实际卡片 ID 答复；已有会话换模型仍按专用卡处理。',
     decisionTableText(),
   ].join("\n")
 }
@@ -149,21 +149,22 @@ function runTwChild(executable, args, cwd, snapshot, timeoutMs = TW_TIMEOUT_MS) 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [executable, ...args], { cwd, env: { ...process.env, TW_DSH_CONFIG: JSON.stringify(snapshot) } })
     let done = false
-    let out = ""
-    let err = ""
+    const outChunks = []
+    const errChunks = []
     const timer = setTimeout(() => {
       if (done) return
       done = true
       child.kill("SIGKILL")
       resolve({ ok: false, code: "TW_DISPATCH_TIMEOUT", message: "tw " + args[0] + " 超时（" + timeoutMs + "ms）被终止" })
     }, timeoutMs)
-    child.stdout.on("data", (chunk) => { out += chunk })
-    child.stderr.on("data", (chunk) => { err += chunk })
+    child.stdout.on("data", (chunk) => { outChunks.push(chunk) })
+    child.stderr.on("data", (chunk) => { errChunks.push(chunk) })
     child.on("close", () => {
       if (done) return
       done = true
       clearTimeout(timer)
-      const text = (out || err || "").trim()
+      // 管道可能从 UTF-8 字符中间切块，合并同一流的字节后再解码。
+      const text = (Buffer.concat(outChunks).toString("utf8") || Buffer.concat(errChunks).toString("utf8")).trim()
       let card = null
       try { card = JSON.parse(text) } catch { card = { ok: false, code: "TW_OUTPUT_UNPARSEABLE", message: text.slice(0, 400) } }
       resolve(card)
@@ -196,6 +197,11 @@ export function twDispatchDefinition(ctx, deps = {}) {
       properties: {
         task: { type: "string", description: "任务名（tw open 的名字）" },
         note: { type: "string", description: "可选简述（标签展示；≤4 个中文词，不含 #。缺省自动生成 任务名-角色-轮次）" },
+        userDirection: {
+          type: "object", description: "调用方报告用户明确指定的方向；原样透传 --user-direction，未覆盖的改动不能免确认。",
+          properties: { quote: { type: "string", description: "本次用户原话" }, fields: { description: "原话明确覆盖的字段及条目；格式见 tw help" } },
+          required: ["quote", "fields"],
+        },
         writables: {
           type: "array",
           description: "可写范围，透传 dispatch-plan（路径以 / 结尾 = 目录授权）",
@@ -238,6 +244,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
 
       const args = ["dispatch-plan", "--task", task, "--json"]
       for (const w of writables ?? []) args.push("--writable", w.path.trim() + ":" + w.kind.trim())
+      if (params?.userDirection !== undefined) args.push("--user-direction", JSON.stringify(params.userDirection))
       const plan = await runTw(args, cwd)
       const isDispatchPlan = plan?.ok === true && plan.stop === null && Array.isArray(plan.waves) && plan.waves.length > 0
       const isInflight = plan?.ok === true && plan.stop === "wait-inflight" && Array.isArray(plan.inflight)
@@ -338,6 +345,10 @@ export function twDispatchDefinition(ctx, deps = {}) {
               if (!checkMapping(mapping, id) || (item.registered && mapping.idempotent !== true)) return { error: mappingFailure(mapping, id) }
               return { mapping }
             }
+            const trackMember = (current, receipt) => deps.memberGuard?.trackDispatch({
+              cwd, task, key, sessionId: id, leadId: exec?.agent?.id, role: current.role,
+              promptDigest: current.promptDigest, promptFullDigest: current.promptFullDigest,
+            }, receipt?.currentAdmitted === true)
             const waitForReceipt = () => ({ ok: true, ...base, sessionId: id, registered: true, reused: true, receiptVerified: true, action: "wait", ...(priorAgentId ? { priorAgentId } : {}), message: "已核实宿主收单（仅证明宿主收单，不保证活动或通知可达），等待成员完成通知。" })
             const liveUnreceived = async (observation) => {
               // 当前 DSH 版本未证实暴露此类活动证明；仅显式标记同时存在时才采用。
@@ -381,6 +392,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
                 if (!firstRead.receipt.currentReceived) return liveUnreceived(state)
                 const registered = await ensureMapping()
                 if (registered.error) return registered.error
+                trackMember(item, firstRead.receipt)
                 return waitForReceipt()
               }
               if (frozenTarget.error) return errorCard("TW_DISPATCH_MODEL_REF_UNRESOLVED", "无法验证派单的精确模型：" + frozenTarget.error + "；未投递。", { sessionId: id })
@@ -394,9 +406,14 @@ export function twDispatchDefinition(ctx, deps = {}) {
               if (beforeSend.status !== "live" && beforeSend.status !== "ours") return errorCard("TW_SUB_SESSION_UNKNOWN", "续投前会话状态或归属已变化；保留映射，未发送。", { sessionId: id })
               const latestRead = await readReceipt(beforeSend, now)
               if (latestRead.error) return latestRead.error
-              if (beforeSend.status === "live") return latestRead.receipt.currentReceived ? waitForReceipt() : liveUnreceived(beforeSend)
+              if (beforeSend.status === "live") {
+                if (!latestRead.receipt.currentReceived) return liveUnreceived(beforeSend)
+                trackMember(now, latestRead.receipt)
+                return waitForReceipt()
+              }
               if ((firstRead.receipt.currentReceived && !latestRead.receipt.currentReceived) || (firstRead.receipt.received && !latestRead.receipt.received)) return errorCard("TW_SUB_SESSION_UNKNOWN", "续投前日志回退，无法判定收单；保留映射，未发送。", { sessionId: id })
               const followup = coldResumePrompt(latestRead.receipt, now.prompt, now.promptFull ?? now.prompt)
+              trackMember(now, latestRead.receipt)
               hostAttempted = true
               const sent = await followupChild({ subagents: subagentsSvc, parent: exec?.agent, signal: exec?.signal }, id, followup.text)
               if (!sent.ok) return errorCard(sent.code, sent.message, { sessionId: id, registered: true })
@@ -405,6 +422,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
               const afterRead = await readReceipt(afterSend, now)
               if (afterRead.error) return { ...afterRead.error, registered: true, accepted: true, messageId: sent.messageId }
               if (!afterRead.receipt.currentReceived) return errorCard("TW_SUB_RECEIPT_UNCONFIRMED", "续投回执已收到，但本轮正文尚未确认；保留 ID 核对，不把回执冒充收单。", { sessionId: id, registered: true, accepted: true, messageId: sent.messageId })
+              trackMember(now, afterRead.receipt)
               return { ok: true, ...base, sessionId: id, registered: true, receiptVerified: true, action: "followup", resume: followup.resume, refollowed: true, messageId: sent.messageId, ...(priorAgentId ? { priorAgentId } : {}), message: "已核实宿主收单；仅表示收单，不保证成员完成或通知可达。" }
             }
 
@@ -416,6 +434,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             if (checked.error) return checked.error
             const now = checked.now
             const createPrompt = item.continuation ? now.promptFull : now.prompt
+            trackMember(now)
             hostAttempted = true
             const created = await createSubagent(ctx, coreDeps, { description: label, prompt: createPrompt, modelRef: now.modelRef, sessionId: id, dispatchKey: key, allowCreate: true, exec })
             if (!created || created.ok !== true || created.sessionId !== id) {
@@ -426,6 +445,7 @@ export function twDispatchDefinition(ctx, deps = {}) {
             const afterRead = await readReceipt(afterCreate, now)
             if (afterRead.error) return { ...afterRead.error, registered: true, accepted: true, messageId: created.messageId }
             if (!afterRead.receipt.currentReceived) return errorCard("TW_SUB_RECEIPT_UNCONFIRMED", "创建回执已收到，但冻结正文尚未在日志确认；保留原 ID。", { sessionId: id, registered: true, accepted: true, messageId: created.messageId })
+            trackMember(now, afterRead.receipt)
             const action = priorAgentId ? "fresh_rebuilt" : item.registered ? "recreated" : "wait"
             return { ok: true, ...base, sessionId: id, registered: true, accepted: true, receiptVerified: true, action, messageId: created.messageId, provider: created.provider, model: created.model, ...(created.effort ? { effort: created.effort } : {}), ...(priorAgentId ? { priorAgentId, continuation: true, recovered: true, freshRebuilt: true } : {}), message: "已核实宿主收单（仅证明收单，不保证活动或通知可达），等待成员完成通知。" }
           })
